@@ -1,0 +1,1108 @@
+[
+  {
+    "brand": "Supermicro",
+    "series": "X13",
+    "family": "X13DRG",
+    "models": [
+      {
+        "model": "X13DRG-H",
+        "uuid": "8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c",
+        "form_factor": "EATX",
+        "dimensions": {
+          "length_mm": 330,
+          "width_mm": 305,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 6,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 4,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ],
+          "specialty_slots": [
+            {
+              "type": "OCP 3.0",
+              "count": 1,
+              "pcie_lanes": 16,
+              "pcie_generation": 5
+            }
+          ],
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 2,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["1U", "2U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR2U-E16", "RSC-R2UW-E16"]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "form_factor_support": ["1U", "2U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR2U-E8"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 4,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 280
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "sas": {
+            "ports": 4,
+            "controller": "Broadcom 3908",
+            "raid_support": [0, 1, 5, 6, 10, 50, 60]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ],
+          "energy_efficiency_features": [
+            "Dynamic Power Management",
+            "Advanced Power States",
+            "Power Capping"
+          ]
+        },
+        "cooling": {
+          "fan_headers": 8,
+          "fan_zones": 4,
+          "thermal_sensors": 12,
+          "heatsink_mounting": "Integrated Retention Mechanism"
+        },
+        "usb": {
+          "internal_headers": [
+            {
+              "type": "USB 3.2 Gen2",
+              "count": 2,
+              "ports_per_header": 2
+            },
+            {
+              "type": "USB 2.0",
+              "count": 2,
+              "ports_per_header": 2
+            }
+          ],
+          "external_ports": [
+            {
+              "type": "USB 3.2 Gen2 Type-A",
+              "count": 4
+            },
+            {
+              "type": "USB 3.2 Gen2 Type-C",
+              "count": 2
+            }
+          ]
+        },
+        "other_connectors": [
+          {
+            "type": "COM Port",
+            "count": 1
+          },
+          {
+            "type": "TPM Header",
+            "count": 1
+          },
+          {
+            "type": "System Fan Headers",
+            "count": 8
+          },
+          {
+            "type": "Front Panel Header",
+            "count": 1
+          }
+        ],
+        "bios": {
+          "type": "AMI UEFI",
+          "size_MB": 256,
+          "secure_boot": true,
+          "secure_erase": true,
+          "tpm_support": "2.0",
+          "backup_bios": true
+        },
+        "certification": [
+          "80 PLUS Platinum Certified",
+          "ENERGY STAR Compliant",
+          "RoHS Compliant",
+          "FCC Class A"
+        ],
+        "compatible_memory": [
+          {
+            "type": "DDR5 RDIMM",
+            "capacities_GB": [8, 16, 32, 64, 128],
+            "frequencies_MHz": [4000, 4400, 4800],
+            "recommended_configurations": [
+              {
+                "description": "Basic",
+                "modules": "16x 32GB DDR5-4800",
+                "total_capacity_GB": 512,
+                "performance_notes": "Good balance of capacity and performance"
+              },
+              {
+                "description": "High Performance",
+                "modules": "32x 64GB DDR5-4800",
+                "total_capacity_GB": 2048,
+                "performance_notes": "Optimal performance for memory-intensive workloads"
+              }
+            ]
+          },
+          {
+            "type": "DDR5 LRDIMM",
+            "capacities_GB": [128, 256],
+            "frequencies_MHz": [4000, 4400, 4800],
+            "recommended_configurations": [
+              {
+                "description": "Maximum Capacity",
+                "modules": "32x 256GB DDR5-4800 LRDIMM",
+                "total_capacity_GB": 8192,
+                "performance_notes": "Maximum memory capacity for high-end database workloads"
+              }
+            ]
+          }
+        ],
+        "compatible_storage": [
+          {
+            "type": "M.2 NVMe SSD",
+            "interface": "PCIe 5.0 x4",
+            "form_factors": ["M.2 2280", "M.2 22110"],
+            "recommended_models": [
+              "Samsung PM1743",
+              "Intel P5510",
+              "Micron 7450"
+            ]
+          },
+          {
+            "type": "U.2 SSD",
+            "interface": "PCIe 5.0 x4",
+            "recommended_models": [
+              "Samsung PM1733",
+              "Intel P5316",
+              "Micron 9400"
+            ]
+          },
+          {
+            "type": "SAS HDD",
+            "interface": "12Gb/s SAS",
+            "recommended_models": [
+              "Seagate Exos X20",
+              "Western Digital Ultrastar DC HC650"
+            ]
+          }
+        ],
+        "use_cases": [
+          "High-Performance Computing",
+          "AI/ML Workloads",
+          "Enterprise Virtualization",
+          "Mission-Critical Database Servers"
+        ]
+      },
+      {
+        "model": "X13DRi-N",
+        "uuid": "7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d",
+        "form_factor": "EATX",
+        "dimensions": {
+          "length_mm": 330,
+          "width_mm": 305,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 4,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 4,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ],
+          "specialty_slots": [
+            {
+              "type": "OCP 3.0",
+              "count": 1,
+              "pcie_lanes": 16,
+              "pcie_generation": 5
+            }
+          ],
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 2,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR2U-E16", "RSC-R2UW-E16"]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR2U-E8"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 4,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 280
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "sas": {
+            "ports": 2,
+            "controller": "Broadcom 3516",
+            "raid_support": [0, 1, 5, 10]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "brand": "GIGABYTE",
+    "series": "MZ",
+    "family": "MZ93",
+    "models": [
+      {
+        "model": "MZ93-FS0",
+        "uuid": "6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c",
+        "form_factor": "EATX",
+        "dimensions": {
+          "length_mm": 330,
+          "width_mm": 305,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 148
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 6,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 3,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ],
+          "specialty_slots": [
+            {
+              "type": "OCP 3.0",
+              "count": 1,
+              "pcie_lanes": 16,
+              "pcie_generation": 5
+            }
+          ],
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 3,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["GIGABYTE PCIe Riser x16"]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["GIGABYTE PCIe Riser x8"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 5,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 280
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "sas": {
+            "ports": 4,
+            "controller": "Broadcom 3908",
+            "raid_support": [0, 1, 5, 6, 10, 50, 60]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ]
+         
+        }
+      }
+    ]
+  },
+  {
+    "brand": "ASRock Rack",
+    "series": "ROMED",
+    "family": "ROMED8",
+    "models": [
+      {
+        "model": "ROMED8-9001",
+        "uuid": "4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b",
+        "form_factor": "EATX",
+        "dimensions": {
+          "length_mm": 330,
+          "width_mm": 305,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "SP5",
+          "count": 2,
+          "spacing_mm": 150
+        },
+        "chipset": "AMD SP5 Integrated",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 6,
+          "slots": 24,
+          "channels": 12,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 5,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 2,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 1,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ],
+          "specialty_slots": [
+            {
+              "type": "OCP 3.0",
+              "count": 1,
+              "pcie_lanes": 16,
+              "pcie_generation": 5
+            }
+          ],
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 3,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["ASRock Rack PCIe Riser x16"]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U", "3U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["ASRock Rack PCIe Riser x8"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 5,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 280
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "AMD Integrated"
+          },
+          "sas": {
+            "ports": 4,
+            "controller": "Broadcom 3908",
+            "raid_support": [0, 1, 5, 6, 10, 50, 60]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57414",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "brand": "Supermicro",
+    "series": "SYS-1U",
+    "family": "SYS-1029U",
+    "models": [
+      {
+        "model": "SYS-1029U-TR4",
+        "uuid": "9d2e4f6a-7b8c-4d9e-8f1a-6c3d5e7f9a2b",
+        "form_factor": "Proprietary 1U",
+        "dimensions": {
+          "length_mm": 430,
+          "width_mm": 260,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 140
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "max_capacity_TB": 4,
+          "slots": 16,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 2,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR1U-E16", "RSC-R1UW-E16"]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "riser_card_required": true,
+              "supported_riser_models": ["RSC-RR1U-E8"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 2,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 150
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 4,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": ["M.2 2280"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 4,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 12,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 2
+            }
+          ]
+        },
+        "cooling": {
+          "fan_headers": 6,
+          "fan_zones": 2,
+          "thermal_sensors": 8,
+          "heatsink_mounting": "1U Low Profile"
+        },
+        "use_cases": [
+          "Dense Rack Deployment",
+          "Edge Computing",
+          "Virtualization Host"
+        ]
+      }
+    ]
+  },
+  {
+    "brand": "Dell",
+    "series": "PowerEdge",
+    "family": "R760",
+    "models": [
+      {
+        "model": "PowerEdge R760",
+        "uuid": "5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b",
+        "form_factor": "2U Rack",
+        "dimensions": {
+          "length_mm": 482,
+          "width_mm": 434,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 3,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 2,
+              "lanes": 8,
+              "bifurcation_support": true
+            }
+          ],
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 3,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": [
+                "Dell Riser Config 1A",
+                "Dell Riser Config 2A"
+              ]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 3,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 350
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 6, 10, 50, 60],
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "sas": {
+            "ports": 8,
+            "controller": "Broadcom 3916",
+            "raid_support": [0, 1, 5, 6, 10, 50, 60]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 8,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57416",
+              "ports": 4,
+              "speed": "10GbE",
+              "connector": "RJ45"
+            }
+          ],
+          "management": {
+            "type": "iDRAC 9",
+            "controller": "Dedicated iDRAC",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            }
+          ],
+          "energy_efficiency_features": [
+            "Dynamic Power Management",
+            "Fresh Air Cooling",
+            "Power Capping"
+          ]
+        },
+        "cooling": {
+          "fan_headers": 8,
+          "fan_zones": 4,
+          "thermal_sensors": 16,
+          "heatsink_mounting": "Tool-less Mounting"
+        },
+        "use_cases": [
+          "Enterprise Data Center",
+          "Virtualization",
+          "Database Workloads",
+          "AI/ML Training"
+        ]
+      }
+    ]
+  },
+  {
+    "brand": "HPE",
+    "series": "ProLiant",
+    "family": "DL385",
+    "models": [
+      {
+        "model": "ProLiant DL385 Gen11",
+        "uuid": "3f8d6b2e-9a4c-7e1f-5b3d-8a2c6f4e9d7b",
+        "form_factor": "2U Rack",
+        "dimensions": {
+          "length_mm": 470,
+          "width_mm": 445,
+          "height_mm": 3.5
+        },
+        "socket": {
+          "type": "SP5",
+          "count": 2,
+          "spacing_mm": 150
+        },
+        "chipset": "AMD SP5 Integrated",
+        "memory": {
+          "type": "DDR5",
+          "module_types": ["RDIMM", "LRDIMM"],
+          "max_capacity_TB": 6,
+          "slots": 24,
+          "channels": 12,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "riser_slots": [
+            {
+              "type": "PCIe 5.0 x16 Riser",
+              "count": 4,
+              "lanes": 16,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": [
+                "HPE PCIe Riser Kit 1",
+                "HPE PCIe Riser Kit 2"
+              ]
+            },
+            {
+              "type": "PCIe 5.0 x8 Riser",
+              "count": 2,
+              "lanes": 8,
+              "pcie_generation": 5,
+              "form_factor_support": ["2U"],
+              "max_height_mm": 106.68,
+              "bifurcation_support": true,
+              "riser_card_required": true,
+              "supported_riser_models": ["HPE PCIe Riser Kit 3"]
+            }
+          ],
+          "riser_compatibility": {
+            "max_risers": 6,
+            "slot_spacing_mm": 20.32,
+            "available_mounting_length_mm": 370
+          }
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "raid_support": [0, 1, 5, 10],
+            "sata_controller": "AMD Integrated"
+          },
+          "sas": {
+            "ports": 8,
+            "controller": "Broadcom 3916",
+            "raid_support": [0, 1, 5, 6, 10, 50, 60]
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": ["M.2 2280", "M.2 22110"],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 10,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57508",
+              "ports": 2,
+              "speed": "25GbE",
+              "connector": "SFP28"
+            }
+          ],
+          "management": {
+            "type": "iLO 6",
+            "controller": "Dedicated iLO",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            }
+          ],
+          "energy_efficiency_features": [
+            "HPE Power Regulator",
+            "Dynamic Power Capping",
+            "Sea of Sensors"
+          ]
+        },
+        "cooling": {
+          "fan_headers": 8,
+          "fan_zones": 4,
+          "thermal_sensors": 20,
+          "heatsink_mounting": "Tool-less Quick Release"
+        },
+        "use_cases": [
+          "Virtualization",
+          "Software Defined Storage",
+          "HPC Workloads",
+          "Database Consolidation"
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,46 @@
+{
+    "storage_types": [
+      {
+        "type": "HDD",
+        "subtypes": [
+          {
+            "name": "SATA HDD",
+            "form_factors": ["2.5-inch", "3.5-inch"]
+          },
+          {
+            "name": "SAS HDD",
+            "form_factors": ["2.5-inch", "3.5-inch"]
+          }
+        ]
+      },
+      {
+        "type": "SSD",
+        "subtypes": [
+          {
+            "name": "SATA SSD",
+            "form_factors": ["2.5-inch", "3.5-inch"]
+          },
+          {
+            "name": "M.2 SATA SSD",
+            "form_factors": ["M.2 2230", "M.2 2242", "M.2 2260", "M.2 2280", "M.2 22110"]
+          },
+          {
+            "name": "M.2 NVMe SSD",
+            "form_factors": ["M.2 2230", "M.2 2242", "M.2 2260", "M.2 2280", "M.2 22110"]
+          },
+          {
+            "name": "U.2 SSD",
+            "form_factors": ["2.5-inch"]
+          },
+          {
+            "name": "U.3 SSD",
+            "form_factors": ["2.5-inch"]
+          },
+          {
+            "name": "SAS SSD",
+            "form_factors": ["2.5-inch", "3.5-inch"]
+          }
+        ]
+      }
+    ]
+}

@@ -1,0 +1,94 @@
+{
+    "storage_specifications": [
+      {
+        "name": "SATA HDD",
+        "interface": "SATA III",
+        "capacity_GB": [500, 1000, 2000, 4000, 8000],
+        "rpm": [5400, 7200],
+        "cache_MB": [32, 64, 256],
+        "transfer_speed_MBps": 150,
+        "power_consumption_W": { "idle": 3.2, "active": 6.8 },
+        "serial_number": "",
+        "sys_score": ""
+      },
+      {
+        "name": "SAS HDD",
+        "interface": "SAS",
+        "capacity_GB": [600, 1200, 2400, 4000, 8000],
+        "rpm": [7200, 10000, 15000],
+        "cache_MB": [64, 128, 256],
+        "transfer_speed_MBps": 300,
+        "power_consumption_W": { "idle": 4.5, "active": 10.5 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "SATA SSD",
+        "interface": "SATA III",
+        "capacity_GB": [120, 240, 500, 1000, 2000, 4000],
+        "read_speed_MBps": 550,
+        "write_speed_MBps": 520,
+        "power_consumption_W": { "idle": 0.5, "active": 3.2 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "M.2 SATA SSD",
+        "interface": "SATA III",
+        "capacity_GB": [120, 240, 500, 1000, 2000, 4000],
+        "read_speed_MBps": 550,
+        "write_speed_MBps": 520,
+        "power_consumption_W": { "idle": 0.3, "active": 2.5 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "M.2 NVMe SSD",
+        "interface": "NVMe PCIe 4.0",
+        "capacity_GB": [256, 512, 1000, 2000, 4000, 8000],
+        "read_speed_MBps": 7000,
+        "write_speed_MBps": 5000,
+        "power_consumption_W": { "idle": 0.5, "active": 5 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "U.2 SSD",
+        "interface": "PCIe NVMe 3.0",
+        "capacity_GB": [800, 1600, 3200, 6400],
+        "read_speed_MBps": 3500,
+        "write_speed_MBps": 3000,
+        "power_consumption_W": { "idle": 1.2, "active": 7 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "U.3 SSD",
+        "interface": "PCIe NVMe 4.0",
+        "capacity_GB": [800, 1600, 3200, 6400, 12800],
+        "read_speed_MBps": 7500,
+        "write_speed_MBps": 5000,
+        "power_consumption_W": { "idle": 1.5, "active": 8 },
+        "serial_number": "",
+        "sys_score": ""
+
+      },
+      {
+        "name": "SAS SSD",
+        "interface": "SAS",
+        "capacity_GB": [400, 800, 1600, 3200],
+        "read_speed_MBps": 2200,
+        "write_speed_MBps": 1800,
+        "power_consumption_W": { "idle": 2.0, "active": 8.0 },
+        "serial_number": "",
+        "sys_score": ""
+
+      }
+    ]
+  }
+  

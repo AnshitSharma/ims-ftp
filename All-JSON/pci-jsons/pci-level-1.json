@@ -1,0 +1,173 @@
+[
+  {
+    "component_subtype": "HBA Card",
+    "description": "Host Bus Adapters for SAS/SATA storage connectivity",
+    "brands": [
+      {
+        "brand": "Broadcom",
+        "series": [
+          {
+            "name": "HBA 9400",
+            "description": "12Gb/s SAS HBA controllers for enterprise storage",
+            "interface": "PCIe 3.0",
+            "ports": "8-16 internal/external",
+            "form_factors": ["Low Profile", "Standard Height"]
+          },
+          {
+            "name": "HBA 9300",
+            "description": "12Gb/s SAS HBA controllers for mainstream applications",
+            "interface": "PCIe 3.0",
+            "ports": "4-8 internal/external",
+            "form_factors": ["Low Profile", "Standard Height"]
+          }
+        ]
+      },
+      {
+        "brand": "LSI",
+        "series": [
+          {
+            "name": "SAS 9207",
+            "description": "6Gb/s SAS HBA controllers for legacy systems",
+            "interface": "PCIe 2.0",
+            "ports": "4-8 internal/external",
+            "form_factors": ["Low Profile", "Standard Height"]
+          }
+        ]
+      },
+      {
+        "brand": "Adaptec",
+        "series": [
+          {
+            "name": "HBA 1000",
+            "description": "SAS/SATA HBA controllers with advanced features",
+            "interface": "PCIe 3.0",
+            "ports": "8-16 internal",
+            "form_factors": ["Low Profile", "Standard Height"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "description": "NVMe storage adaptors and connectors for high-speed storage",
+    "brands": [
+      {
+        "brand": "Supermicro",
+        "series": [
+          {
+            "name": "M.2 to PCIe",
+            "description": "M.2 NVMe to PCIe adapter cards",
+            "interface": "PCIe 3.0/4.0",
+            "slots": "1-4 M.2 slots",
+            "form_factors": ["HHHL", "FHFL"]
+          },
+          {
+            "name": "U.2 Adaptor",
+            "description": "U.2 NVMe drive adapter cards",
+            "interface": "PCIe 3.0/4.0",
+            "connectors": "1-2 U.2 connectors",
+            "form_factors": ["HHHL", "FHFL"]
+          }
+        ]
+      },
+      {
+        "brand": "Intel",
+        "series": [
+          {
+            "name": "P4000 Series",
+            "description": "High-performance NVMe add-in cards",
+            "interface": "PCIe 3.1",
+            "capacity": "375GB-8TB",
+            "form_factors": ["HHHL", "FHFL"]
+          }
+        ]
+      },
+      {
+        "brand": "ASUS",
+        "series": [
+          {
+            "name": "HYPER M.2",
+            "description": "Multi-M.2 NVMe adapter cards",
+            "interface": "PCIe 3.0/4.0",
+            "slots": "2-4 M.2 slots",
+            "form_factors": ["HHHL", "FHFL"]
+          }
+        ]
+      },
+      {
+        "brand": "StarTech",
+        "series": [
+          {
+            "name": "M.2 PCIe",
+            "description": "Single and dual M.2 to PCIe adapters",
+            "interface": "PCIe 3.0",
+            "slots": "1-2 M.2 slots",
+            "form_factors": ["Low Profile", "HHHL"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "description": "PCIe slot extension and angle conversion cards",
+    "brands": [
+      {
+        "brand": "Supermicro",
+        "series": [
+          {
+            "name": "RSC-R1UU",
+            "description": "1U riser cards for low-profile expansion",
+            "slots": "1-2 PCIe slots",
+            "slot_types": ["x8", "x16"],
+            "angle": "90 degree"
+          },
+          {
+            "name": "RSC-R2UU",
+            "description": "2U riser cards for standard expansion",
+            "slots": "2-3 PCIe slots",
+            "slot_types": ["x8", "x16"],
+            "angle": "90 degree"
+          }
+        ]
+      },
+      {
+        "brand": "Chenbro",
+        "series": [
+          {
+            "name": "Riser Card",
+            "description": "Server chassis riser cards",
+            "slots": "1-4 PCIe slots",
+            "slot_types": ["x4", "x8", "x16"],
+            "angle": "90 degree"
+          }
+        ]
+      },
+      {
+        "brand": "iStarUSA",
+        "series": [
+          {
+            "name": "DD Series",
+            "description": "Flexible riser cards for various chassis",
+            "slots": "1-2 PCIe slots",
+            "slot_types": ["x8", "x16"],
+            "angle": "45-90 degree"
+          }
+        ]
+      },
+      {
+        "brand": "Generic",
+        "series": [
+          {
+            "name": "PCIe Extender",
+            "description": "Standard PCIe slot extenders",
+            "slots": "1 PCIe slot",
+            "slot_types": ["x1", "x4", "x8", "x16"],
+            "angle": "90 degree"
+          }
+        ]
+      }
+    ]
+  }
+]

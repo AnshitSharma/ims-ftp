@@ -1,0 +1,149 @@
+[
+  {
+    "brand": "Seagate",
+    "series": "Exos",
+    "models": [
+      {
+        "storage_type": "HDD",
+        "subtype": "SATA HDD",
+        "form_factor": "3.5-inch",
+        "interface": "SATA III",
+        "capacity_GB": 8000,
+        "specifications": {
+          "rpm": 7200,
+          "cache_MB": 256,
+          "transfer_speed_MBps": 150
+        },
+        "power_consumption_W": {
+          "idle": 3.2,
+          "active": 6.8
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "e1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6"
+      },
+      {
+        "storage_type": "HDD",
+        "subtype": "SAS HDD",
+        "form_factor": "2.5-inch",
+        "interface": "SAS",
+        "capacity_GB": 2400,
+        "specifications": {
+          "rpm": 10000,
+          "cache_MB": 256,
+          "transfer_speed_MBps": 300
+        },
+        "power_consumption_W": {
+          "idle": 4.5,
+          "active": 10.5
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "f2b3c4d5-e6f7-a8b9-c0d1-e2f3a4b5c6d7"
+      }
+    ]
+  },
+  {
+    "brand": "Samsung",
+    "series": "Data Center",
+    "models": [
+      {
+        "storage_type": "SSD",
+        "subtype": "SATA SSD",
+        "form_factor": "2.5-inch",
+        "interface": "SATA III",
+        "capacity_GB": 1000,
+        "specifications": {
+          "read_speed_MBps": 550,
+          "write_speed_MBps": 520
+        },
+        "power_consumption_W": {
+          "idle": 0.5,
+          "active": 3.2
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8"
+      },
+      {
+        "storage_type": "SSD",
+        "subtype": "M.2 NVMe SSD",
+        "form_factor": "M.2 2280",
+        "interface": "NVMe PCIe 4.0",
+        "capacity_GB": 20,
+        "specifications": {
+          "read_speed_MBps": 7000,
+          "write_speed_MBps": 5000
+        },
+        "power_consumption_W": {
+          "idle": 0.5,
+          "active": 5
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9"
+      },
+      {
+        "storage_type": "SSD",
+        "subtype": "U.2 SSD",
+        "form_factor": "2.5-inch",
+        "interface": "PCIe NVMe 3.0",
+        "capacity_GB": 6400,
+        "specifications": {
+          "read_speed_MBps": 3500,
+          "write_speed_MBps": 3000
+        },
+        "power_consumption_W": {
+          "idle": 1.2,
+          "active": 7
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "c5d6e7f8-a9b0-c1d2-e3f4-a5b6c7d8e9f0"
+      },
+      {
+        "storage_type": "SSD",
+        "subtype": "SAS SSD",
+        "form_factor": "2.5-inch",
+        "interface": "SAS",
+        "capacity_GB": 3200,
+        "specifications": {
+          "read_speed_MBps": 2200,
+          "write_speed_MBps": 1800
+        },
+        "power_consumption_W": {
+          "idle": 2.0,
+          "active": 8.0
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "d6e7f8a9-b0c1-d2e3-f4a5-b6c7d8e9f0a1"
+      }
+    ]
+  },
+  {
+    "brand": "Intel",
+    "series": "Optane",
+    "models": [
+      {
+        "storage_type": "SSD",
+        "subtype": "U.3 SSD",
+        "form_factor": "2.5-inch",
+        "interface": "PCIe NVMe 4.0",
+        "capacity_GB": 800,
+        "specifications": {
+          "read_speed_MBps": 7500,
+          "write_speed_MBps": 5000
+        },
+        "power_consumption_W": {
+          "idle": 1.5,
+          "active": 8
+        },
+        "serial_numbers": [],
+        "sys_score": "",
+        "uuid": "e7f8a9b0-c1d2-e3f4-a5b6-c7d8e9f0a1b2"
+      }
+    ]
+  }
+]
+

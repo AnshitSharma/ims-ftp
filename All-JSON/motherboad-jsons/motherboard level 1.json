@@ -1,0 +1,112 @@
+[
+    {
+      "brand": "Supermicro",
+      "series": [
+        {
+          "name": "X13",
+          "platforms": ["Intel 4th Gen Xeon Scalable"],
+          "form_factors": ["EATX", "SSI EEB", "SSI CEB"],
+          "socket_types": ["LGA 4189"],
+          "chipsets": ["Intel C741", "Intel C621A"],
+          "max_memory_capacity": "8TB",
+          "memory_slots": "32"
+        },
+        {
+          "name": "H13",
+          "platforms": ["AMD EPYC 9004"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["SP5"],
+          "chipsets": ["AMD SP5 Integrated"],
+          "max_memory_capacity": "6TB",
+          "memory_slots": "24"
+        },
+        {
+          "name": "X12",
+          "platforms": ["Intel 3rd Gen Xeon Scalable"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["LGA 4189"],
+          "chipsets": ["Intel C621A", "Intel C627"],
+          "max_memory_capacity": "6TB",
+          "memory_slots": "32"
+        },
+        {
+          "name": "H12",
+          "platforms": ["AMD EPYC 7003"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["SP3"],
+          "chipsets": ["AMD SP3 Integrated"],
+          "max_memory_capacity": "4TB",
+          "memory_slots": "16"
+        }
+      ]
+    },
+    {
+      "brand": "ASUS",
+      "series": [
+        {
+          "name": "Pro WS",
+          "platforms": ["Intel 4th Gen Xeon Scalable", "Intel 3rd Gen Xeon Scalable"],
+          "form_factors": ["EATX", "SSI CEB"],
+          "socket_types": ["LGA 4189"],
+          "chipsets": ["Intel W790", "Intel W680"],
+          "max_memory_capacity": "8TB",
+          "memory_slots": "16"
+        },
+        {
+          "name": "Pro WS AMD",
+          "platforms": ["AMD EPYC 9004", "AMD EPYC 7003"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["SP5", "SP3"],
+          "chipsets": ["AMD SP5 Integrated", "AMD SP3 Integrated"],
+          "max_memory_capacity": "6TB",
+          "memory_slots": "24"
+        }
+      ]
+    },
+    {
+      "brand": "GIGABYTE",
+      "series": [
+        {
+          "name": "MZ",
+          "platforms": ["Intel 4th Gen Xeon Scalable", "Intel 3rd Gen Xeon Scalable"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["LGA 4189"],
+          "chipsets": ["Intel C741", "Intel C621A"],
+          "max_memory_capacity": "8TB",
+          "memory_slots": "32"
+        },
+        {
+          "name": "MC",
+          "platforms": ["AMD EPYC 9004", "AMD EPYC 7003"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["SP5", "SP3"],
+          "chipsets": ["AMD SP5 Integrated", "AMD SP3 Integrated"],
+          "max_memory_capacity": "6TB",
+          "memory_slots": "24"
+        }
+      ]
+    },
+    {
+      "brand": "ASRock Rack",
+      "series": [
+        {
+          "name": "ROMED",
+          "platforms": ["AMD EPYC 9004", "AMD EPYC 7003"],
+          "form_factors": ["EATX", "SSI CEB"],
+          "socket_types": ["SP5", "SP3"],
+          "chipsets": ["AMD SP5 Integrated", "AMD SP3 Integrated"],
+          "max_memory_capacity": "6TB",
+          "memory_slots": "24"
+        },
+        {
+          "name": "ROMLEY",
+          "platforms": ["Intel 4th Gen Xeon Scalable", "Intel 3rd Gen Xeon Scalable"],
+          "form_factors": ["EATX", "SSI EEB"],
+          "socket_types": ["LGA 4189"],
+          "chipsets": ["Intel C741", "Intel C621A"],
+          "max_memory_capacity": "8TB",
+          "memory_slots": "32"
+        }
+      ]
+    }
+  ]

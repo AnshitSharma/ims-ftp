@@ -1,0 +1,28 @@
+[22-May-2025 10:30:54 UTC] PHP Warning:  Undefined variable $mysqli in /home/shubhams/public_html/bdc_ims/api/login/user.php on line 9
+[22-May-2025 10:30:54 UTC] PHP Fatal error:  Uncaught Error: Call to a member function prepare() on null in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php:14
+Stack trace:
+#0 /home/shubhams/public_html/bdc_ims/api/login/user.php(9): isUserLoggedIn(NULL)
+#1 {main}
+  thrown in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php on line 14
+[22-May-2025 11:03:12 UTC] PHP Warning:  Undefined variable $mysqli in /home/shubhams/public_html/bdc_ims/api/login/user.php on line 9
+[22-May-2025 11:03:12 UTC] PHP Fatal error:  Uncaught Error: Call to a member function prepare() on null in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php:14
+Stack trace:
+#0 /home/shubhams/public_html/bdc_ims/api/login/user.php(9): isUserLoggedIn(NULL)
+#1 {main}
+  thrown in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php on line 14
+[22-May-2025 17:39:19 UTC] PHP Warning:  Undefined variable $mysqli in /home/shubhams/public_html/bdc_ims/api/login/login.php on line 49
+[22-May-2025 17:39:19 UTC] PHP Fatal error:  Uncaught Error: Call to a member function close() on null in /home/shubhams/public_html/bdc_ims/api/login/login.php:49
+Stack trace:
+#0 {main}
+  thrown in /home/shubhams/public_html/bdc_ims/api/login/login.php on line 49
+[22-May-2025 17:47:51 UTC] PHP Warning:  Undefined variable $mysqli in /home/shubhams/public_html/bdc_ims/api/login/login.php on line 49
+[22-May-2025 17:47:51 UTC] PHP Fatal error:  Uncaught Error: Call to a member function close() on null in /home/shubhams/public_html/bdc_ims/api/login/login.php:49
+Stack trace:
+#0 {main}
+  thrown in /home/shubhams/public_html/bdc_ims/api/login/login.php on line 49
+[23-May-2025 17:07:38 UTC] PHP Warning:  Undefined variable $mysqli in /home/shubhams/public_html/bdc_ims/api/login/user.php on line 9
+[23-May-2025 17:07:38 UTC] PHP Fatal error:  Uncaught Error: Call to a member function prepare() on null in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php:14
+Stack trace:
+#0 /home/shubhams/public_html/bdc_ims/api/login/user.php(9): isUserLoggedIn(NULL)
+#1 {main}
+  thrown in /home/shubhams/public_html/bdc_ims/includes/BaseFunctions.php on line 14

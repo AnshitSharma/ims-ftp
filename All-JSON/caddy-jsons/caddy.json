@@ -1,0 +1,64 @@
+{
+    "caddies": [
+      {
+        "type": "2.5-inch HDD/SSD Caddy",
+        "dimensions": { "width": "70mm", "height": "9.5mm", "depth": "100mm" },
+        "weight": "50g"
+ 
+      },
+      {
+        "type": "2.5-inch HDD/SSD Caddy",
+        "dimensions": { "width": "70mm", "height": "12.7mm", "depth": "100mm" },
+        "weight": "55g"
+
+      },
+      {
+        "type": "3.5-inch HDD Caddy",
+        "dimensions": { "width": "102mm", "height": "25.4mm", "depth": "147mm" },
+        "weight": "120g"
+
+      },
+      {
+        "type": "2.5-inch Universal Caddy",
+        "dimensions": { "width": "70mm", "height": "7mm", "depth": "100mm" },
+        "weight": "45g"
+
+      },
+      {
+        "type": "Gaming Laptop HDD Caddy",
+        "dimensions": { "width": "70mm", "height": "9.5mm", "depth": "100mm" },
+        "weight": "52g"
+
+      },
+      {
+        "type": "SATA Optical Drive Caddy",
+        "dimensions": { "width": "70mm", "height": "12.7mm", "depth": "100mm" },
+        "weight": "58g"
+
+      },
+      {
+        "type": "Slim 2.5-inch Caddy",
+        "dimensions": { "width": "70mm", "height": "5mm", "depth": "100mm" },
+        "weight": "40g"
+
+      },
+      {
+        "type": "Workstation 3.5-inch HDD Caddy",
+        "dimensions": { "width": "102mm", "height": "25.4mm", "depth": "147mm" },
+        "weight": "130g"
+
+      },
+      {
+        "type": "Enterprise 2.5-inch HDD Caddy",
+        "dimensions": { "width": "70mm", "height": "15mm", "depth": "100mm" },
+        "weight": "60g"
+
+      },
+      {
+        "type": "NVMe SSD Caddy",
+        "dimensions": { "width": "70mm", "height": "9.5mm", "depth": "100mm" },
+        "weight": "48g"
+      }
+    ]
+  }
+  

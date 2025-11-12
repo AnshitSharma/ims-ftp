@@ -1,0 +1,239 @@
+[
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Broadcom",
+    "series": "HBA 9400",
+    "generations": [
+      {
+        "name": "9400-16i",
+        "release_year": 2018,
+        "families": [
+          {
+            "name": "HBA 9400-16i",
+            "port_configurations": [
+              {"internal_ports": 16, "external_ports": 0, "qty_available": 15},
+              {"internal_ports": 8, "external_ports": 8, "qty_available": 12}
+            ],
+            "data_rate": "12Gb/s per lane",
+            "recommended_for": ["High-density storage", "Enterprise servers"]
+          }
+        ],
+        "interface": "PCIe 3.0 x8",
+        "power_consumption": "14.8W",
+        "form_factor": "Low Profile/Standard Height",
+        "operating_temperature": "0°C to 55°C",
+        "qty_available": 27
+      },
+      {
+        "name": "9400-8i",
+        "release_year": 2018,
+        "families": [
+          {
+            "name": "HBA 9400-8i",
+            "port_configurations": [
+              {"internal_ports": 8, "external_ports": 0, "qty_available": 22},
+              {"internal_ports": 4, "external_ports": 4, "qty_available": 18}
+            ],
+            "data_rate": "12Gb/s per lane",
+            "recommended_for": ["Medium-density storage", "Workstation servers"]
+          }
+        ],
+        "interface": "PCIe 3.0 x8",
+        "power_consumption": "12.5W",
+        "form_factor": "Low Profile/Standard Height",
+        "operating_temperature": "0°C to 55°C",
+        "qty_available": 40
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "LSI",
+    "series": "SAS 9207",
+    "generations": [
+      {
+        "name": "9207-8i",
+        "release_year": 2014,
+        "families": [
+          {
+            "name": "SAS 9207-8i",
+            "port_configurations": [
+              {"internal_ports": 8, "external_ports": 0, "qty_available": 35}
+            ],
+            "data_rate": "6Gb/s per lane",
+            "recommended_for": ["Legacy systems", "Cost-effective storage"]
+          }
+        ],
+        "interface": "PCIe 2.0 x8",
+        "power_consumption": "10.2W",
+        "form_factor": "Low Profile/Standard Height",
+        "operating_temperature": "0°C to 55°C",
+        "qty_available": 35
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "Supermicro",
+    "series": "M.2 to PCIe",
+    "generations": [
+      {
+        "name": "AOM-SNG-4M2P",
+        "release_year": 2020,
+        "families": [
+          {
+            "name": "Quad M.2 NVMe",
+            "slot_configurations": [
+              {"m2_slots": 4, "max_capacity_per_slot": "8TB", "qty_available": 18}
+            ],
+            "interface_speed": "PCIe 3.0 x16",
+            "recommended_for": ["High-performance storage", "Database servers"]
+          }
+        ],
+        "interface": "PCIe 3.0 x16",
+        "power_consumption": "25W max",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "m2_form_factors_supported": ["2242", "2260", "2280", "22110"],
+        "qty_available": 18
+      },
+      {
+        "name": "AOM-SNG-2M2P",
+        "release_year": 2019,
+        "families": [
+          {
+            "name": "Dual M.2 NVMe",
+            "slot_configurations": [
+              {"m2_slots": 2, "max_capacity_per_slot": "8TB", "qty_available": 25}
+            ],
+            "interface_speed": "PCIe 3.0 x8",
+            "recommended_for": ["Medium-performance storage", "Workstation servers"]
+          }
+        ],
+        "interface": "PCIe 3.0 x8",
+        "power_consumption": "15W max",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "m2_form_factors_supported": ["2242", "2260", "2280"],
+        "qty_available": 25
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "Intel",
+    "series": "P4000 Series",
+    "generations": [
+      {
+        "name": "P4610",
+        "release_year": 2019,
+        "families": [
+          {
+            "name": "Intel SSD DC P4610",
+            "capacity_configurations": [
+              {"capacity": "1.6TB", "endurance": "2.92 DWPD", "qty_available": 12},
+              {"capacity": "3.2TB", "endurance": "1.46 DWPD", "qty_available": 8},
+              {"capacity": "6.4TB", "endurance": "0.73 DWPD", "qty_available": 6}
+            ],
+            "interface_speed": "PCIe 3.1 x4",
+            "recommended_for": ["Enterprise storage", "High-performance computing"]
+          }
+        ],
+        "interface": "PCIe 3.1 x4",
+        "power_consumption": "22W max",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "sequential_read": "3200 MB/s",
+        "sequential_write": "2000 MB/s",
+        "qty_available": 26
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Supermicro",
+    "series": "RSC-R1UU",
+    "generations": [
+      {
+        "name": "RSC-R1UU-E8R",
+        "release_year": 2020,
+        "families": [
+          {
+            "name": "1U Single Slot x8",
+            "slot_configurations": [
+              {"pcie_slots": 1, "slot_type": "x8", "low_profile": true, "qty_available": 32}
+            ],
+            "pcie_generation": "PCIe 3.0/4.0",
+            "recommended_for": ["1U servers", "Space-constrained installations"]
+          }
+        ],
+        "interface": "PCIe 3.0/4.0",
+        "form_factor": "1U Low Profile",
+        "cable_length": "150mm",
+        "operating_temperature": "0°C to 60°C",
+        "qty_available": 32
+      },
+      {
+        "name": "RSC-R1UU-2E8R",
+        "release_year": 2020,
+        "families": [
+          {
+            "name": "1U Dual Slot x8",
+            "slot_configurations": [
+              {"pcie_slots": 2, "slot_type": "x8", "low_profile": true, "qty_available": 28}
+            ],
+            "pcie_generation": "PCIe 3.0/4.0",
+            "recommended_for": ["1U servers", "Multi-card installations"]
+          }
+        ],
+        "interface": "PCIe 3.0/4.0",
+        "form_factor": "1U Low Profile",
+        "cable_length": "150mm",
+        "operating_temperature": "0°C to 60°C",
+        "qty_available": 28
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Supermicro",
+    "series": "RSC-R2UU",
+    "generations": [
+      {
+        "name": "RSC-R2UU-E16R",
+        "release_year": 2021,
+        "families": [
+          {
+            "name": "2U Single Slot x16",
+            "slot_configurations": [
+              {"pcie_slots": 1, "slot_type": "x16", "low_profile": false, "qty_available": 20}
+            ],
+            "pcie_generation": "PCIe 3.0/4.0",
+            "recommended_for": ["2U servers", "High-performance cards"]
+          }
+        ],
+        "interface": "PCIe 3.0/4.0",
+        "form_factor": "2U Standard Height",
+        "cable_length": "200mm",
+        "operating_temperature": "0°C to 60°C",
+        "qty_available": 20
+      },
+      {
+        "name": "RSC-R2UU-2E8R",
+        "release_year": 2021,
+        "families": [
+          {
+            "name": "2U Dual Slot x8",
+            "slot_configurations": [
+              {"pcie_slots": 2, "slot_type": "x8", "low_profile": false, "qty_available": 24}
+            ],
+            "pcie_generation": "PCIe 3.0/4.0",
+            "recommended_for": ["2U servers", "Multiple expansion cards"]
+          }
+        ],
+        "interface": "PCIe 3.0/4.0",
+        "form_factor": "2U Standard Height",
+        "cable_length": "200mm",
+        "operating_temperature": "0°C to 60°C",
+        "qty_available": 24
+      }
+    ]
+  }
+]
