@@ -2,7 +2,7 @@
 
 **Complete BDC IMS API Endpoint Catalog**
 
-> **Base URL**: `http://your-domain.com/bdc_ims/api/api.php`
+> **Base URL**: `https://shubham.staging.cloudmate.in/bdc_ims_dev/api/api.php`
 >
 > **Request Method**: POST (unless specified otherwise)
 >

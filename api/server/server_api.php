@@ -367,12 +367,14 @@ function handleAddComponent($serverBuilder, $user) {
         $configUuid = $_POST['config_uuid'] ?? '';
         $componentType = $_POST['component_type'] ?? '';
         $componentUuid = $_POST['component_uuid'] ?? '';
+        $serialNumber = $_POST['serial_number'] ?? null; // CRITICAL: Accept serial_number to identify specific physical component
         $quantity = (int)($_POST['quantity'] ?? 1);
         $slotPosition = $_POST['slot_position'] ?? null;
         $notes = $_POST['notes'] ?? '';
         $override = filter_var($_POST['override'] ?? false, FILTER_VALIDATE_BOOLEAN);
-    
-    error_log("Parsed parameters - Config: $configUuid, Type: $componentType, UUID: $componentUuid, Qty: $quantity");
+
+    $serialInfo = $serialNumber ? " Serial: $serialNumber" : "";
+    error_log("Parsed parameters - Config: $configUuid, Type: $componentType, UUID: $componentUuid$serialInfo, Qty: $quantity");
     
     if (empty($configUuid) || empty($componentType) || empty($componentUuid)) {
         error_log("Missing required parameters");
@@ -825,6 +827,7 @@ function handleAddComponent($serverBuilder, $user) {
         // Use original component addition method
         $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, [
             'quantity' => $quantity,
+            'serial_number' => $serialNumber, // CRITICAL: Pass serial_number to identify specific physical component
             'slot_position' => $slotPosition,
             'notes' => $notes,
             'override_used' => $override
@@ -1798,15 +1801,23 @@ function handleGetCompatible($serverBuilder, $user) {
         ];
         
         $table = $tableMap[$componentType];
-        $whereClause = $availableOnly ? "WHERE Status = 1" : "WHERE Status IN (1, 2)";
-        
-        // Get components with optimized query (limit to 100 for performance)
+
+        // Build WHERE clause based on available_only parameter
+        // When available_only=true: Only query Status=1 (available)
+        // When available_only=false: Query all statuses (0=failed, 1=available, 2=in_use)
+        if ($availableOnly) {
+            $whereClause = "WHERE Status = 1"; // Only available components
+        } else {
+            $whereClause = "WHERE Status IN (0, 1, 2)"; // All statuses
+        }
+
+        // Get components with optimized query (limit to 200 for performance)
         $stmt = $pdo->prepare("
             SELECT UUID, SerialNumber, Status, Location, Notes, ServerUUID
             FROM $table
             $whereClause
             ORDER BY Status ASC, SerialNumber ASC
-            LIMIT 100
+            LIMIT 200
         ");
         $stmt->execute();
         $allComponents = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -2015,10 +2026,17 @@ function handleGetCompatible($serverBuilder, $user) {
                 }
 
                 // Include component with compatibility information
+                // ENHANCED: Add available_for_use flag to clearly indicate if component can be added
+                $componentStatus = (int)$component['Status'];
+                $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
+
                 $compatibleComponent = [
                     'uuid' => $component['UUID'],
                     'serial_number' => $component['SerialNumber'],
-                    'status' => (int)$component['Status'],
+                    'status' => $componentStatus,
+                    'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
+                    'available_for_use' => ($componentStatus === 1), // Only Status=1 can be added
+                    'server_uuid' => $component['ServerUUID'] ?? null, // Show which server it's assigned to
                     'location' => $component['Location'],
                     'notes' => $component['Notes'],
                     'compatibility_reason' => implode('; ', $compatibilityReasons),
@@ -2068,10 +2086,17 @@ function handleGetCompatible($serverBuilder, $user) {
                     }
                 }
 
+                // ENHANCED: Add available_for_use flag to clearly indicate if component can be added
+                $componentStatus = (int)$component['Status'];
+                $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
+
                 $compatibleComponent = [
                     'uuid' => $component['UUID'],
                     'serial_number' => $component['SerialNumber'],
-                    'status' => (int)$component['Status'],
+                    'status' => $componentStatus,
+                    'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
+                    'available_for_use' => ($componentStatus === 1), // Only Status=1 can be added
+                    'server_uuid' => $component['ServerUUID'] ?? null, // Show which server it's assigned to
                     'location' => $component['Location'],
                     'notes' => $component['Notes'],
                     'compatibility_reason' => $compatibilityReason,
@@ -2084,36 +2109,92 @@ function handleGetCompatible($serverBuilder, $user) {
         }
         
         // Step 5: Build response without base_motherboard dependency
-        $compatibleOnly = array_filter($compatibleComponents, function($comp) { return $comp['is_compatible']; });
-        $incompatibleOnly = array_filter($compatibleComponents, function($comp) { return !$comp['is_compatible']; });
+        // ENHANCED: Show ALL physical components but separate by compatibility and availability
+        $compatibleAndAvailable = array_filter($compatibleComponents, function($comp) {
+            return $comp['is_compatible'] && $comp['available_for_use'];
+        });
+        $compatibleButNotAvailable = array_filter($compatibleComponents, function($comp) {
+            return $comp['is_compatible'] && !$comp['available_for_use'];
+        });
+        $incompatibleOnly = array_filter($compatibleComponents, function($comp) {
+            return !$comp['is_compatible'];
+        });
+
+        // Respect available_only parameter when building response
+        if ($availableOnly) {
+            // When available_only=true, only show compatible AND available components
+            $allCompatibleComponents = array_values($compatibleAndAvailable);
+        } else {
+            // When available_only=false, show all compatible components (available and unavailable)
+            $allCompatibleComponents = array_merge(
+                array_values($compatibleAndAvailable),
+                array_values($compatibleButNotAvailable)
+            );
+        }
 
         $responseData = [
             'config_uuid' => $configUuid,
             'component_type' => $componentType,
-            'compatible_components' => array_values($compatibleOnly),
+            'compatible_components' => $allCompatibleComponents, // Filtered based on available_only parameter
             'incompatible_components' => array_values($incompatibleOnly),
-            'total_compatible' => count($compatibleOnly),
+            'total_compatible' => count($allCompatibleComponents),
+            'total_compatible_and_available' => count($compatibleAndAvailable), // Can actually be added
+            'total_compatible_but_unavailable' => count($compatibleButNotAvailable), // Compatible but in_use or failed
             'total_incompatible' => count($incompatibleOnly),
             'total_found' => count($compatibleComponents),
             'filters_applied' => [
                 'available_only' => $availableOnly,
-                'component_type' => $componentType
+                'component_type' => $componentType,
+                'note' => $availableOnly
+                    ? 'Only available components shown (Status=1 and not assigned to another server).'
+                    : 'All physical components shown. Check available_for_use flag to see which can be added.'
             ],
             'existing_components_summary' => [
                 'total_existing' => count($existingComponentsData),
                 'types' => array_values(array_unique(array_column($existingComponentsData, 'type')))
             ],
             'compatibility_summary' => [
-                'has_compatible' => count($compatibleOnly) > 0,
+                'has_compatible' => count($allCompatibleComponents) > 0,
                 'has_incompatible' => count($incompatibleOnly) > 0,
                 'main_issues' => count($incompatibleOnly) > 0 ?
                     array_slice(array_unique(array_column($incompatibleOnly, 'compatibility_reason')), 0, 3) : []
             ],
             'debug_info' => $debugInfo
         ];
-        
+
+        // ENHANCED: Add inventory summary grouped by UUID to show full inventory counts
+        // This helps users understand when multiple physical components share the same UUID
+        $uuidInventorySummary = [];
+
+        // Query all components of this type (not just available ones) to get full inventory
+        $stmt = $pdo->prepare("
+            SELECT UUID, COUNT(*) as total_count,
+                   SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available_count,
+                   SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use_count,
+                   SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed_count
+            FROM $table
+            GROUP BY UUID
+            HAVING COUNT(*) > 0
+        ");
+        $stmt->execute();
+        $inventoryCounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($inventoryCounts as $inv) {
+            $uuidInventorySummary[$inv['UUID']] = [
+                'total' => (int)$inv['total_count'],
+                'available' => (int)$inv['available_count'],
+                'in_use' => (int)$inv['in_use_count'],
+                'failed' => (int)$inv['failed_count']
+            ];
+        }
+
+        $responseData['inventory_summary'] = [
+            'by_uuid' => $uuidInventorySummary,
+            'note' => 'Multiple physical components can share the same UUID (representing the same model). Use serial_number to identify individual components.'
+        ];
+
         // Determine appropriate message and response
-        if (count($compatibleOnly) > 0) {
+        if (count($allCompatibleComponents) > 0) {
             $message = "Compatible components found";
         } else if (count($incompatibleOnly) > 0) {
             $message = "No compatible components found - all components incompatible";
@@ -4394,9 +4475,20 @@ function validateComponentExists($componentType, $componentUuid) {
         ];
     }
 
-    $stmt = $pdo->prepare("SELECT Status, UUID, SerialNumber, Notes, ServerUUID FROM $tableName WHERE UUID = ?");
+    // CRITICAL FIX: When multiple components share same UUID, prioritize Status=1 (available)
+    // Query for Status=1 first, then fall back to any status if none available
+
+    // Step 1: Try to get an available component (Status=1)
+    $stmt = $pdo->prepare("SELECT Status, UUID, SerialNumber, Notes, ServerUUID, ID FROM $tableName WHERE UUID = ? AND Status = 1 LIMIT 1");
     $stmt->execute([$componentUuid]);
     $component = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Step 2: If no available component, get any component with this UUID for validation
+    if (!$component) {
+        $stmt = $pdo->prepare("SELECT Status, UUID, SerialNumber, Notes, ServerUUID, ID FROM $tableName WHERE UUID = ? LIMIT 1");
+        $stmt->execute([$componentUuid]);
+        $component = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
 
     if (!$component) {
         return [
@@ -4407,10 +4499,17 @@ function validateComponentExists($componentType, $componentUuid) {
         ];
     }
 
+    // Step 3: Count available components with this UUID
+    $stmt = $pdo->prepare("SELECT COUNT(*) as available_count FROM $tableName WHERE UUID = ? AND Status = 1");
+    $stmt->execute([$componentUuid]);
+    $availabilityCheck = $stmt->fetch(PDO::FETCH_ASSOC);
+    $hasAvailableComponent = $availabilityCheck['available_count'] > 0;
+
     return [
         'exists' => true,
         'component' => $component,
-        'available' => $component['Status'] == 1
+        'available' => $hasAvailableComponent,
+        'available_count' => $availabilityCheck['available_count']
     ];
 }
 

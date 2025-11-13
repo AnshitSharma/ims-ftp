@@ -87,6 +87,23 @@ curl -X POST http://localhost:8000/api/api.php \
   -d "password=yourpassword"
 ```
 
+## Testing Credentials
+
+**Staging Server**: `https://shubham.staging.cloudmate.in/bdc_ims_dev/api/api.php`
+
+**Default Admin Credentials**:
+- Username: `superadmin`
+- Password: `password`
+
+**Usage**:
+```bash
+# Login to staging
+curl -s -X POST "https://shubham.staging.cloudmate.in/bdc_ims_dev/api/api.php" \
+  -d "action=auth-login" \
+  -d "username=superadmin" \
+  -d "password=password" | jq -r '.data.tokens.access_token'
+```
+
 **Setup Requirements**:
 1. Import `shubhams_bdc_ims main.sql` to MySQL
 2. Configure `.env` and `includes/db_config.php` with DB credentials

@@ -50,12 +50,17 @@ class ServerBuilder {
                 $cpuConfig = json_decode($configData['cpu_configuration'], true);
                 if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
                     foreach ($cpuConfig['cpus'] as $cpu) {
-                        $components[] = [
+                        $component = [
                             'component_type' => 'cpu',
                             'component_uuid' => $cpu['uuid'] ?? null,
                             'quantity' => $cpu['quantity'] ?? 1,
                             'added_at' => $cpu['added_at'] ?? date('Y-m-d H:i:s')
                         ];
+                        // CRITICAL: Include serial_number to identify specific physical component
+                        if (isset($cpu['serial_number'])) {
+                            $component['serial_number'] = $cpu['serial_number'];
+                        }
+                        $components[] = $component;
                     }
                 }
             } catch (Exception $e) {
@@ -249,7 +254,11 @@ class ServerBuilder {
                     'message' => "Invalid component type: $componentType"
                 ];
             }
-            
+
+            // Phase 1.1: Extract serial_number early for duplicate detection
+            // CRITICAL: Get serial_number from options to identify specific physical component
+            $serialNumber = $options['serial_number'] ?? null;
+
             // Phase 1.5: Validate compatibility with existing components (flexible order)
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
             if (!$compatibilityValidation['success']) {
@@ -257,7 +266,8 @@ class ServerBuilder {
             }
 
             // Phase 2: Check for duplicate component FIRST with cleanup
-            if ($this->isDuplicateComponent($configUuid, $componentUuid)) {
+            // CRITICAL: Pass serial_number to allow multiple components with same UUID but different serials
+            if ($this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
                 // Check if this is an orphaned record (component exists in config table but not properly assigned)
                 $componentDetails = $this->getComponentByUuid($componentType, $componentUuid);
                 if ($componentDetails && $componentDetails['ServerUUID'] !== $configUuid) {
@@ -332,13 +342,19 @@ class ServerBuilder {
             }
             
             // Phase 4: Get component details from inventory
-            $componentDetails = $this->getComponentByUuid($componentType, $componentUuid);
+            // Note: $serialNumber was already extracted in Phase 1.1
+
+            $componentDetails = $this->getComponentByUuidAndSerial($componentType, $componentUuid, $serialNumber);
             if (!$componentDetails) {
+                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
                 return [
                     'success' => false,
-                    'message' => "Component not found in inventory: $componentUuid"
+                    'message' => "Component not found in inventory: $componentUuid$serialInfo"
                 ];
             }
+
+            // Extract the actual serial number from component details (in case it wasn't provided in options)
+            $serialNumber = $componentDetails['SerialNumber'] ?? $serialNumber;
             
             // Phase 5: Chassis-specific validations BEFORE adding
             // Validation already done in Phase 3 for chassis, skip here
@@ -420,11 +436,13 @@ class ServerBuilder {
             // Update component status to "In Use" ONLY for real builds (not test builds)
             if (!$isTest) {
                 // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition);
+                // CRITICAL: Pass serial number to update only the specific physical component
+                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
             }
             
             // Update the main server_configurations table with component info
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add');
+            // CRITICAL: Pass serial_number to store in configuration JSON
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber);
             
             // Update calculated fields (power, compatibility, etc.)
             $this->updateConfigurationMetrics($configUuid);
@@ -468,7 +486,7 @@ class ServerBuilder {
      * Remove component from server configuration
      * UPDATED: Now reads from JSON columns and updates JSON instead of relational table
      */
-    public function removeComponent($configUuid, $componentType, $componentUuid) {
+    public function removeComponent($configUuid, $componentType, $componentUuid, $serialNumber = null) {
         try {
             $this->pdo->beginTransaction();
 
@@ -490,19 +508,34 @@ class ServerBuilder {
             // Check if component exists in configuration by extracting from JSON
             $components = $this->extractComponentsFromJson($config);
             $componentFound = false;
+            $componentSerialNumber = null;
 
             foreach ($components as $comp) {
-                if ($comp['component_type'] === $componentType && $comp['component_uuid'] === $componentUuid) {
+                // Match by serial_number if provided, otherwise fallback to UUID only
+                $isMatch = false;
+                if ($serialNumber !== null && isset($comp['serial_number'])) {
+                    $isMatch = ($comp['component_type'] === $componentType &&
+                                $comp['component_uuid'] === $componentUuid &&
+                                $comp['serial_number'] === $serialNumber);
+                } else {
+                    $isMatch = ($comp['component_type'] === $componentType &&
+                                $comp['component_uuid'] === $componentUuid);
+                }
+
+                if ($isMatch) {
                     $componentFound = true;
+                    // Extract serial number from config if not provided
+                    $componentSerialNumber = $comp['serial_number'] ?? $serialNumber;
                     break;
                 }
             }
 
             if (!$componentFound) {
                 $this->pdo->rollback();
+                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
                 return [
                     'success' => false,
-                    'message' => "Component not found in configuration"
+                    'message' => "Component not found in configuration$serialInfo"
                 ];
             }
 
@@ -525,11 +558,13 @@ class ServerBuilder {
             // Update component status back to "Available" ONLY for real builds (not test builds)
             if (!$isTest) {
                 // Update component status back to "Available" and clear ServerUUID, installation date, and rack position
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid");
+                // CRITICAL: Pass serial number to update only the specific physical component
+                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
             }
 
             // Update the main server_configurations table
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove');
+            // CRITICAL: Pass serial number to remove correct component from JSON
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber);
 
             // Update calculated fields
             $this->updateConfigurationMetrics($configUuid);
@@ -607,12 +642,14 @@ class ServerBuilder {
                     $componentCounts[$type] = 0;
                 }
 
-                // Get serial number from inventory table
+                // Get serial number from inventory table (fallback only)
                 $inventoryDetails = $this->getComponentDetails($type, $uuid);
 
                 $simplifiedComponent = [
                     'uuid' => $uuid,
-                    'serial_number' => $inventoryDetails['SerialNumber'] ?? 'Not Found',
+                    // CRITICAL: Use serial_number from JSON first (already stored when component was added)
+                    // Only fall back to inventory query if not present in JSON
+                    'serial_number' => $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? 'Not Found',
                     'quantity' => $component['quantity'],
                     'added_at' => $component['added_at']
                 ];
@@ -665,11 +702,11 @@ class ServerBuilder {
     /**
      * Update server_configurations table with component information
      */
-    private function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action) {
+    private function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null) {
         try {
             $updateFields = [];
             $updateValues = [];
-            
+
             switch ($componentType) {
                 case 'chassis':
                     // Chassis is tracked in server_configuration_components, not in main table
@@ -677,7 +714,7 @@ class ServerBuilder {
                     break;
 
                 case 'cpu':
-                    $this->updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action);
+                    $this->updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
                     break;
 
                 case 'motherboard':
@@ -727,7 +764,7 @@ class ServerBuilder {
      * Update CPU configuration in JSON format
      * New schema: cpu_configuration as JSON array supporting 1-2 CPUs
      */
-    private function updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action) {
+    private function updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
         try {
             if ($action === 'add') {
                 // Retrieve current CPU configuration
@@ -742,25 +779,46 @@ class ServerBuilder {
                     $cpuData = $decoded['cpus'] ?? [];
                 }
 
-                // Check if CPU already exists (prevent duplicates)
+                // CRITICAL: Check for duplicates by BOTH uuid AND serial_number to prevent same physical component being added twice
                 $cpuExists = false;
-                foreach ($cpuData as $cpu) {
-                    if ($cpu['uuid'] === $componentUuid) {
+                foreach ($cpuData as &$cpu) {
+                    // FIXED: Proper matching logic to support multiple physical components with same UUID
+                    $isMatch = false;
+
+                    if ($serialNumber !== null) {
+                        // When adding with serial_number, ONLY match if existing entry also has serial_number AND both match
+                        // This allows multiple physical CPUs with same UUID (model) but different serial numbers
+                        if (isset($cpu['serial_number'])) {
+                            $isMatch = ($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
+                        }
+                        // If existing CPU doesn't have serial_number, it's NOT a match (different physical component)
+                    } else {
+                        // Legacy: When adding without serial_number, match by UUID only
+                        $isMatch = ($cpu['uuid'] === $componentUuid);
+                    }
+
+                    if ($isMatch) {
                         $cpuExists = true;
                         // Update quantity if CPU already exists
                         $cpu['quantity'] = $quantity;
                         break;
                     }
                 }
+                unset($cpu); // Break reference
 
                 // Add new CPU if it doesn't exist
                 if (!$cpuExists) {
-                    $cpuData[] = [
+                    $newCpu = [
                         'uuid' => $componentUuid,
                         'quantity' => $quantity,
                         'socket' => 'LGA3647', // Default socket - will be overridden by actual specs
                         'added_at' => date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: Store serial_number to identify specific physical component
+                    if ($serialNumber !== null) {
+                        $newCpu['serial_number'] = $serialNumber;
+                    }
+                    $cpuData[] = $newCpu;
                 }
 
                 // Build new JSON structure
@@ -780,9 +838,16 @@ class ServerBuilder {
                     $decoded = json_decode($currentConfig, true);
                     $cpuData = $decoded['cpus'] ?? [];
 
-                    // Remove the specified CPU
-                    $cpuData = array_filter($cpuData, function($cpu) use ($componentUuid) {
-                        return $cpu['uuid'] !== $componentUuid;
+                    // CRITICAL: Remove the specified CPU by matching both UUID and serial_number
+                    $cpuData = array_filter($cpuData, function($cpu) use ($componentUuid, $serialNumber) {
+                        // Match by serial_number if provided, otherwise fallback to uuid only
+                        if ($serialNumber !== null && isset($cpu['serial_number'])) {
+                            // Match by both uuid and serial_number
+                            return !($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
+                        } else {
+                            // Legacy: Match by uuid only
+                            return $cpu['uuid'] !== $componentUuid;
+                        }
                     });
 
                     // Re-index array
@@ -1672,7 +1737,7 @@ class ServerBuilder {
      * Check if component UUID already exists in configuration
      * Now checks in JSON columns instead of relational table
      */
-    private function isDuplicateComponent($configUuid, $componentUuid) {
+    private function isDuplicateComponent($configUuid, $componentUuid, $serialNumber = null) {
         try {
             // Get configuration data
             $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
@@ -1689,7 +1754,24 @@ class ServerBuilder {
             $componentType = null;
 
             foreach ($components as $comp) {
-                if ($comp['component_uuid'] === $componentUuid) {
+                // CRITICAL: Check both UUID and serial_number to identify specific physical component
+                $isMatch = false;
+
+                if ($serialNumber !== null) {
+                    // When serial_number is provided, ONLY match if both UUID and serial_number match
+                    // This allows multiple physical components with same UUID (model) but different serials
+                    if (isset($comp['serial_number'])) {
+                        $isMatch = ($comp['component_uuid'] === $componentUuid &&
+                                   $comp['serial_number'] === $serialNumber);
+                    }
+                    // If existing component doesn't have serial_number, it's NOT a match
+                    // (they're different physical components)
+                } else {
+                    // Legacy: When no serial_number provided, match by UUID only
+                    $isMatch = ($comp['component_uuid'] === $componentUuid);
+                }
+
+                if ($isMatch) {
                     $isDuplicate = true;
                     $componentType = $comp['component_type'];
                     break;
@@ -1697,7 +1779,8 @@ class ServerBuilder {
             }
 
             // Debug logging
-            error_log("Duplicate check: ConfigUUID=$configUuid, ComponentUUID=$componentUuid");
+            $serialInfo = $serialNumber ? " SerialNumber=$serialNumber" : "";
+            error_log("Duplicate check: ConfigUUID=$configUuid, ComponentUUID=$componentUuid$serialInfo");
             error_log("Result: " . ($isDuplicate ? "DUPLICATE FOUND" : "NO DUPLICATE") .
                      ($componentType ? " (Type: $componentType)" : ""));
 
@@ -2103,32 +2186,94 @@ class ServerBuilder {
             error_log("Invalid component type: $componentType");
             return null;
         }
-        
+
         try {
             $table = $this->componentTables[$componentType];
-            
-            // Try exact match first
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ?");
+
+            // CRITICAL FIX: Prioritize available components (Status=1) when multiple components share same UUID
+            // This ensures we select an available component instead of a random one
+
+            // Step 1: Try to get an available component (Status=1) first
+            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? AND Status = 1 LIMIT 1");
             $stmt->execute([$componentUuid]);
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if ($result) {
+                error_log("getComponentByUuid: Found available component (Status=1) for UUID $componentUuid, SerialNumber=" . $result['SerialNumber']);
                 return $result;
             }
-            
-            // Try case-insensitive match for UUID issues
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE TRIM(UPPER(UUID)) = UPPER(TRIM(?))");
+
+            // Step 2: If no available component, try case-insensitive match with Status=1
+            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE TRIM(UPPER(UUID)) = UPPER(TRIM(?)) AND Status = 1 LIMIT 1");
             $stmt->execute([$componentUuid]);
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
+            if ($result) {
+                error_log("getComponentByUuid: Found available component (case-insensitive) for UUID $componentUuid, SerialNumber=" . $result['SerialNumber']);
+                return $result;
+            }
+
+            // Step 3: Fallback - get any component with this UUID for validation/error messages
+            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? LIMIT 1");
+            $stmt->execute([$componentUuid]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($result) {
+                error_log("getComponentByUuid: No available components, returning Status=" . $result['Status'] . " component for UUID $componentUuid");
+                return $result;
+            }
+
+            // Step 4: Final fallback - case-insensitive any status
+            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE TRIM(UPPER(UUID)) = UPPER(TRIM(?)) LIMIT 1");
+            $stmt->execute([$componentUuid]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
             return $result;
-            
+
         } catch (Exception $e) {
             error_log("Error getting component by UUID from {$this->componentTables[$componentType]}: " . $e->getMessage());
             return null;
         }
     }
-    
+
+    /**
+     * Get component by UUID and optionally by SerialNumber
+     * When SerialNumber is provided, returns that specific physical component
+     * When SerialNumber is null, falls back to getComponentByUuid logic
+     */
+    private function getComponentByUuidAndSerial($componentType, $componentUuid, $serialNumber = null) {
+        if (!isset($this->componentTables[$componentType])) {
+            error_log("Invalid component type: $componentType");
+            return null;
+        }
+
+        try {
+            $table = $this->componentTables[$componentType];
+
+            // If serial number is provided, get that specific component
+            if ($serialNumber !== null) {
+                $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? AND SerialNumber = ? LIMIT 1");
+                $stmt->execute([$componentUuid, $serialNumber]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($result) {
+                    error_log("getComponentByUuidAndSerial: Found component UUID=$componentUuid, SerialNumber=$serialNumber, Status=" . $result['Status']);
+                    return $result;
+                }
+
+                error_log("getComponentByUuidAndSerial: Component not found with UUID=$componentUuid and SerialNumber=$serialNumber");
+                return null;
+            }
+
+            // If no serial number provided, fall back to original logic
+            return $this->getComponentByUuid($componentType, $componentUuid);
+
+        } catch (Exception $e) {
+            error_log("Error in getComponentByUuidAndSerial: " . $e->getMessage());
+            return null;
+        }
+    }
+
     /**
      * FIXED: Check component availability with ServerUUID context
      */
@@ -2203,30 +2348,41 @@ class ServerBuilder {
     
     /**
      * Update component status, ServerUUID, location, rack position, and installation date
+     * CRITICAL: Now requires $serialNumber to update only the specific physical component
      */
-    private function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null) {
+    private function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null, $serialNumber = null) {
         if (!isset($this->componentTables[$componentType])) {
             error_log("Cannot update status - invalid component type: $componentType");
             return false;
         }
-        
+
         try {
             $table = $this->componentTables[$componentType];
-            
+
+            // Build WHERE clause - MUST include SerialNumber if provided to target specific physical component
+            $whereClause = "WHERE UUID = ?";
+            $whereParams = [$componentUuid];
+
+            if ($serialNumber !== null) {
+                $whereClause .= " AND SerialNumber = ?";
+                $whereParams[] = $serialNumber;
+            }
+
             // Get current status first for logging
-            $stmt = $this->pdo->prepare("SELECT Status, ServerUUID, Location, RackPosition, InstallationDate FROM $table WHERE UUID = ?");
-            $stmt->execute([$componentUuid]);
+            $stmt = $this->pdo->prepare("SELECT Status, ServerUUID, Location, RackPosition, InstallationDate, SerialNumber FROM $table $whereClause");
+            $stmt->execute($whereParams);
             $current = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if ($current === false) {
-                error_log("Cannot update status - component not found: $componentUuid in $table");
+                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
+                error_log("Cannot update status - component not found: $componentUuid$serialInfo in $table");
                 return false;
             }
-            
+
             // Prepare update fields and values
             $updateFields = ["Status = ?", "ServerUUID = ?", "UpdatedAt = NOW()"];
             $updateValues = [$newStatus, $serverUuid];
-            
+
             // Handle installation date
             if ($newStatus == 2 && $serverUuid !== null) {
                 // Component is being assigned to a server - set installation date to current timestamp
@@ -2235,41 +2391,44 @@ class ServerBuilder {
                 // Component is being released from server - clear installation date
                 $updateFields[] = "InstallationDate = NULL";
             }
-            
+
             // Handle location and rack position updates
             if ($newStatus == 2 && $serverUuid !== null) {
                 // Component is being assigned to a server - always update location and rack position
                 $updateFields[] = "Location = ?";
                 $updateValues[] = $serverLocation; // This can be null if server has no location
-                
+
                 $updateFields[] = "RackPosition = ?";
                 $updateValues[] = $serverRackPosition; // This can be null if server has no rack position
-                
+
             } elseif ($newStatus == 1 && $serverUuid === null) {
                 // Component is being released from server - clear rack position but keep location
                 $updateFields[] = "RackPosition = NULL";
                 // We don't clear location as component still exists in physical location
             }
-            
-            $updateValues[] = $componentUuid;
-            
-            // Execute update
-            $sql = "UPDATE $table SET " . implode(', ', $updateFields) . " WHERE UUID = ?";
+
+            // Add WHERE parameters to update values
+            $updateValues = array_merge($updateValues, $whereParams);
+
+            // Execute update with SerialNumber constraint
+            $sql = "UPDATE $table SET " . implode(', ', $updateFields) . " $whereClause";
             $stmt = $this->pdo->prepare($sql);
             $result = $stmt->execute($updateValues);
-            
+
             if ($result) {
                 $locationInfo = "";
                 if ($serverLocation !== null || $serverRackPosition !== null) {
                     $locationInfo = " Location: '$serverLocation', RackPosition: '$serverRackPosition'";
                 }
-                error_log("Updated component: $componentUuid in $table - Status: {$current['Status']} -> $newStatus, ServerUUID: '{$current['ServerUUID']}' -> '$serverUuid'$locationInfo - $reason");
+                $serialInfo = " SerialNumber: '{$current['SerialNumber']}'";
+                error_log("Updated component: $componentUuid$serialInfo in $table - Status: {$current['Status']} -> $newStatus, ServerUUID: '{$current['ServerUUID']}' -> '$serverUuid'$locationInfo - $reason");
             } else {
-                error_log("Failed to update component: $componentUuid in $table");
+                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
+                error_log("Failed to update component: $componentUuid$serialInfo in $table");
             }
-            
+
             return $result;
-            
+
         } catch (Exception $e) {
             error_log("Error updating component assignment: " . $e->getMessage());
             return false;
