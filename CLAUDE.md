@@ -197,102 +197,58 @@ All endpoints return:
 
 ## Documentation Standards ⚡
 
-**CRITICAL: Create ONE concise documentation file per task**
+**CRITICAL: Only create documentation when:**
+1. **Explicitly requested by user**, OR
+2. **After very detailed analysis** (multi-file audit, architectural review, etc.)
 
-### Folder Organization (MANDATORY)
-```
-documentation/
-├── {folder-name}/              # Use task/chat name
-│   └── README.md              # Single file: findings + implementation + status
-└── {another-task}/
-    └── README.md
-```
+**For simple tasks → Give concise verdict in chat only**
 
-### Single File Structure (`README.md`)
-Each documentation file must include (in order):
+### When Documentation IS Required
 
-1. **📊 Key Findings** (CRITICAL first)
-   - Bold critical items with effort estimates
-   - Max 10-15 bullet points total
-   - Format: `- **Critical:** Finding (impact, effort)`
+**Format:** ONE file per task in `documentation/{task-name}/README.md`
 
-2. **🛠️ Implementation** (if applicable)
-   - Numbered step-by-step approach
-   - Code snippets (before/after) only if needed
-   - Brief technical notes
+**Required Sections:**
+1. **📋 File Changes** (MUST BE FIRST)
+   ```
+   - path/to/file.php:line - What changed
+   - another/file.php:line - What changed
+   ```
 
-3. **📈 Status/Results** (if applicable)
-   - Use tables for metrics
-   - Concise summary of outcomes
-   - No redundant details
+2. **📊 Verdict** (3-5 bullets max)
+   - Critical findings only
+   - Format: `**Issue:** Description (impact)`
 
-### Content Guidelines
-✅ **DO**:
-- Use bold for critical/high-priority items
-- Use bullet points for lists
-- Use tables for data/metrics
-- Keep sentences short and direct
-- Skip unnecessary details
+3. **📈 Status** (if applicable)
+   - Table format: Issue | Status | File
 
-❌ **DON'T**:
-- Create multiple files per task
-- Write verbose paragraphs
-- Repeat information across sections
-- Add files in root folder
-- Create without folder structure
-
-### Example Single-File Documentation
-
+**Example:**
 ```markdown
-# Task: Validation Audit
+# Validation Fix
 
-## 📊 Key Findings
+## 📋 File Changes
+- includes/models/StorageConnectionValidator.php:142 - Added UUID validation
+- includes/models/ServerBuilder.php:89 - Added PCIe slot tracking
 
-**CRITICAL:**
-- **Invalid UUID validation** in StorageConnectionValidator (4h to fix)
-- **Missing PCIe slot tracking** (3h to fix)
-
-**HIGH:**
-- Incomplete error messages in API (2h to fix)
-
-**MEDIUM:**
-- Inconsistent naming conventions (1h to fix)
-
-## 🛠️ Implementation
-
-1. **Fix UUID validation**
-   - Location: includes/models/StorageConnectionValidator.php:142
-   - Change: Add ComponentDataService call before validation
-
-2. **Add PCIe tracking**
-   - Create new tracking array in ServerBuilder.php
-   - Update compatibility checks
-
-3. **Update error messages**
-   - Use send_json_response() with detailed messages
-   - Test all endpoints
+## 📊 Verdict
+- **UUID validation missing** in storage validator (breaks compatibility)
+- **PCIe slots not tracked** (allows over-allocation)
 
 ## 📈 Status
-
-| Issue | Status | Effort |
-|-------|--------|--------|
-| UUID Validation | ✅ Fixed | 4h |
-| PCIe Tracking | ✅ Fixed | 3h |
-| Error Messages | ✅ Fixed | 2h |
-| Naming Conventions | ⏳ Pending | 1h |
-
-**Total: 80% Complete (9h of 10h)**
+| Issue | Status | File |
+|-------|--------|------|
+| UUID validation | ✅ Fixed | StorageConnectionValidator.php |
+| PCIe tracking | ✅ Fixed | ServerBuilder.php |
 ```
 
-### When Creating Documentation
-1. **Create folder:** `documentation/{task-name}/`
-2. **Create single README.md** with all sections
-3. **Use clear headers** and keep formatting consistent
-4. **Review for conciseness** - every line should add value
+### For Simple Tasks (Most Cases)
 
-### Examples of Good Folder Names
-- `documentation/validation-audit/`
-- `documentation/api-endpoints/`
-- `documentation/database-schema/`
-- `documentation/compatibility-engine/`
-- `documentation/authentication-system/`
+**Just respond in chat with:**
+- File paths and line numbers
+- Brief what/why
+- No documentation file needed
+
+**Example chat response:**
+```
+Fixed in StorageConnectionValidator.php:142 - Added UUID check before validation.
+Added PCIe tracking in ServerBuilder.php:89 - Prevents slot over-allocation.
+```
