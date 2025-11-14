@@ -11,7 +11,7 @@ header('Content-Type: application/json');
 // Initialize database connection and authentication
 global $pdo;
 if (!$pdo) {
-    require_once __DIR__ . '/../../includes/db_config.php';
+    require_once __DIR__ . '/../../includes/config.php';
 }
 
 $user = authenticateWithJWT($pdo);

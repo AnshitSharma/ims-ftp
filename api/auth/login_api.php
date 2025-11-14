@@ -1,6 +1,6 @@
 <?php
 
-require_once(__DIR__ . '/../../includes/db_config.php');
+require_once(__DIR__ . '/../../includes/config.php');
 require_once(__DIR__ . '/../../includes/BaseFunctions.php');
 require_once(__DIR__ . '/../../includes/JWTHelper.php');
 require_once(__DIR__ . '/../../includes/ACL.php');

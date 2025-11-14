@@ -28,7 +28,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 // Include required files
 require_once(__DIR__ . '/../includes/config.php');
-require_once(__DIR__ . '/../includes/db_config.php');
 require_once(__DIR__ . '/../includes/BaseFunctions.php');
 
 // Global error handler

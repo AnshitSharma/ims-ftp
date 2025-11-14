@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
-require_once '../../includes/db_config.php';
+require_once '../../includes/config.php';
 require_once '../../includes/BaseFunctions.php';
 require_once '../../includes/models/ChassisManager.php';
 
