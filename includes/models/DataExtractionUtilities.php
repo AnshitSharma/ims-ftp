@@ -11,8 +11,8 @@ class DataExtractionUtilities {
     private $cacheTimeout = 3600; // 1 hour
     private $paths = [
         'storage' => __DIR__ . '/../../All-JSON/storage-jsons/storage-level-3.json',
-        'motherboard' => __DIR__ . '/../../All-JSON/motherboad-jsons/motherboard-level-3.json',
-        'chassis' => __DIR__ . '/../../All-JSON/chasis-jsons/chasis-level-3.json',
+        'motherboard' => __DIR__ . '/../../All-JSON/motherboard-jsons/motherboard-level-3.json',
+        'chassis' => __DIR__ . '/../../All-JSON/chassis-jsons/chassis-level-3.json',
         'cpu' => __DIR__ . '/../../All-JSON/cpu-jsons/Cpu-details-level-3.json',
         'ram' => __DIR__ . '/../../All-JSON/Ram-jsons/ram_detail.json',
         'pciecard' => __DIR__ . '/../../All-JSON/pci-jsons/pci-level-3.json'

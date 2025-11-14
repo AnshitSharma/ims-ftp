@@ -13,7 +13,7 @@ class ChassisManager {
     private $cacheTimeout = 3600; // 1 hour cache
     
     public function __construct() {
-        $this->chassisJsonPath = __DIR__ . '/../../All-JSON/chasis-jsons/chasis-level-3.json';
+        $this->chassisJsonPath = __DIR__ . '/../../All-JSON/chassis-jsons/chassis-level-3.json';
     }
     
     /**

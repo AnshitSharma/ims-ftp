@@ -164,7 +164,7 @@ CREATE TABLE motherboardinventory (
 ) ENGINE=InnoDB;
 ```
 
-**JSON Reference**: `All-JSON/motherboad-jsons/motherboard-level-3.json`
+**JSON Reference**: `All-JSON/motherboard-jsons/motherboard-level-3.json`
 
 ---
 
@@ -230,7 +230,7 @@ CREATE TABLE chassisinventory (
 ) ENGINE=InnoDB;
 ```
 
-**JSON Reference**: `All-JSON/chasis-jsons/chasis-level-3.json`
+**JSON Reference**: `All-JSON/chassis-jsons/chassis-level-3.json`
 
 ---
 

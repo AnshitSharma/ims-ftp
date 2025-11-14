@@ -129,7 +129,7 @@ All-JSON/
 ├── pci-jsons/                 # PCIe card specs (3 levels)
 ├── hbacard-jsons/             # HBA card specs (3 levels)
 ├── caddy-jsons/               # Drive caddy specs
-└── chasis-jsons/              # Chassis specs (3 levels)
+└── chassis-jsons/             # Chassis specs (3 levels)
 ```
 
 ### HYBRID DATA ARCHITECTURE (CRITICAL)

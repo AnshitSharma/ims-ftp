@@ -93,9 +93,9 @@ class ComponentDataLoader {
      */
     public function getJSONFilePaths() {
         return [
-            'chassis' => __DIR__ . '/../../All-JSON/chasis-jsons/chasis-level-3.json',
+            'chassis' => __DIR__ . '/../../All-JSON/chassis-jsons/chassis-level-3.json',
             'cpu' => __DIR__ . '/../../All-JSON/cpu-jsons/Cpu-details-level-3.json',
-            'motherboard' => __DIR__ . '/../../All-JSON/motherboad-jsons/motherboard-level-3.json',
+            'motherboard' => __DIR__ . '/../../All-JSON/motherboard-jsons/motherboard-level-3.json',
             'ram' => __DIR__ . '/../../All-JSON/Ram-jsons/ram_detail.json',
             'storage' => __DIR__ . '/../../All-JSON/storage-jsons/storage-level-3.json',
             'nic' => __DIR__ . '/../../All-JSON/nic-jsons/nic-level-3.json',
@@ -472,7 +472,7 @@ class ComponentDataLoader {
      * @return array|null Motherboard specifications
      */
     public function loadMotherboardSpecs($uuid) {
-        $jsonPath = __DIR__ . '/../../All-JSON/motherboad-jsons/motherboard-level-3.json';
+        $jsonPath = __DIR__ . '/../../All-JSON/motherboard-jsons/motherboard-level-3.json';
 
         if (!file_exists($jsonPath)) {
             error_log("Motherboard JSON file not found: $jsonPath");
@@ -506,7 +506,7 @@ class ComponentDataLoader {
      * @return array|null Chassis specifications
      */
     public function loadChassisSpecs($uuid) {
-        $jsonPath = __DIR__ . '/../../All-JSON/chasis-jsons/chasis-level-3.json';
+        $jsonPath = __DIR__ . '/../../All-JSON/chassis-jsons/chassis-level-3.json';
 
         if (!file_exists($jsonPath)) {
             return null;
@@ -550,7 +550,7 @@ class ComponentDataLoader {
      */
     public function getChassisData($uuid) {
         // Parse chassis JSON to get specifications
-        $chassisJsonPath = __DIR__ . '/../../All-JSON/chasis-jsons/chasis-level-3.json';
+        $chassisJsonPath = __DIR__ . '/../../All-JSON/chassis-jsons/chassis-level-3.json';
 
         if (!isset($this->jsonDataCache[$chassisJsonPath])) {
             if (file_exists($chassisJsonPath)) {

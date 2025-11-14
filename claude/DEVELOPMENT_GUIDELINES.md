@@ -223,8 +223,8 @@ FlexibleCompatibilityValidator.php
 
 // APIs (snake_case_api.php)
 server_api.php
-dashboard_api.php
 compatibility_api.php
+roles_api.php
 
 // Config files (snake_case.php)
 db_config.php

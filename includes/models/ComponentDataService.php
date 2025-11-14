@@ -12,7 +12,7 @@ class ComponentDataService {
 
     private $componentJsonPaths = [
         'cpu' => 'cpu-jsons/Cpu-details-level-3.json',
-        'motherboard' => 'motherboad-jsons/motherboard-level-3.json',
+        'motherboard' => 'motherboard-jsons/motherboard-level-3.json',
         'ram' => 'Ram-jsons/ram_detail.json',
         'storage' => 'storage-jsons/storage-level-3.json',
         'nic' => 'nic-jsons/nic-level-3.json',

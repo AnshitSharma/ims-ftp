@@ -2788,11 +2788,11 @@ class ComponentCompatibility {
                 $result['score_breakdown'] = [
                     'base_score' => 100,
                     'penalty_applied' => -100,
-                    'reason' => 'JSON specifications not found in All-JSON/chasis-jsons/ directory',
+                    'reason' => 'JSON specifications not found in All-JSON/chassis-jsons/ directory',
                     'final_score' => 0,
                     'missing_data' => [
                         'JSON specification file for UUID: ' . $chassisComponent['uuid'],
-                        'Expected location: All-JSON/chasis-jsons/*.json',
+                        'Expected location: All-JSON/chassis-jsons/*.json',
                         'Required fields: form_factor, chassis_type, drive_bays, backplane'
                     ],
                     'validation_status' => 'FAILED',

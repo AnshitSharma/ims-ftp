@@ -6,19 +6,23 @@
 
 ```
 ims ftp/
+├── .claude/                # Claude Code configuration and agents
+├── .vscode/                # VSCode configuration (SFTP, settings)
 ├── api/                    # API endpoints and handlers
 ├── includes/               # Core PHP classes and utilities
 ├── All-JSON/               # Component specification files
 ├── database/               # Database schema and migrations
-├── md files/               # Documentation and reference files
-├── .env                    # Environment configuration
-├── .ftpquota               # FTP quota settings
+├── documentation/          # Project documentation and guides
+├── md files/               # Legacy documentation files
+├── tests/                  # Unit and integration tests
 ├── CLAUDE.md               # Main Claude Code instructions
-├── API_REFERENCE.md        # Complete API documentation
-├── FOLDER_STRUCTURE.md     # This file
-├── DEVELOPMENT_GUIDELINES.md  # Coding standards
-├── DATABASE_SCHEMA.md      # Database documentation
-└── shubhams_bdc_ims main.sql  # Database schema dump
+├── COMPONENT_DEPENDENCY_MATRIX.md  # Component dependency mapping
+├── CLEANUP_REPORT.md       # Code cleanup documentation
+├── CODEBASE_CLEANUP_ANALYSIS.md    # Cleanup analysis
+├── COMPLETION_STATUS.md    # Project completion status
+├── shubhams ims_dev main.sql  # Current database schema dump
+├── setup_acl.php           # ACL initialization script
+└── test_response.json      # Test response reference file
 ```
 
 ---
@@ -31,13 +35,13 @@ ims ftp/
 api/
 ├── api.php                 # ⭐ Main router and entry point
 │
-├── auth/                   # Authentication endpoints
-│   ├── login_api.php
-│   ├── logout_api.php
-│   ├── register_api.php
-│   ├── check_session_api.php
-│   ├── change_password_api.php
-│   └── forgot_password_api.php
+├── auth/                   # Authentication endpoints (JWT-based)
+│   ├── login_api.php       # JWT login handler
+│   ├── logout_api.php      # JWT logout handler
+│   ├── register_api.php    # User registration
+│   ├── check_session_api.php  # Session validation
+│   ├── change_password_api.php # Password change
+│   └── forgot_password_api.php # Password recovery
 │
 ├── server/                 # Server configuration endpoints
 │   ├── server_api.php      # Main server operations (add/remove/validate)
@@ -45,53 +49,25 @@ api/
 │   └── compatibility_api.php  # Compatibility checking operations
 │
 ├── acl/                    # Access control endpoints
-│   ├── roles_api.php
-│   └── permissions_api.php
+│   ├── roles_api.php       # Role management
+│   └── permissions_api.php # Permission management
 │
-├── dashboard/              # Dashboard statistics
-│   └── dashboard_api.php
-│
-├── search/                 # Global search
-│   └── search_api.php
+├── auth/                   # Authentication endpoints (JWT-based - CURRENT)
+│   ├── login_api.php       # JWT login handler
+│   ├── register_api.php    # User registration
+│   ├── forgot_password_api.php # Password recovery
+│   └── (session-based endpoints REMOVED)
 │
 ├── chassis/                # Chassis-specific operations
-│   └── chassis_api.php
+│   └── chassis_api.php     # Chassis management and querying
 │
-├── components/             # Generic component operations
-│   ├── components_api.php
-│   ├── add_form.php
-│   ├── edit_form.php
-│   └── list.php
-│
-└── functions/              # Legacy component-specific functions
-    ├── cpu/
-    │   ├── add_cpu.php
-    │   ├── list_cpu.php
-    │   └── remove_cpu.php
-    ├── ram/
-    │   ├── add_ram.php
-    │   ├── list_ram.php
-    │   └── remove_ram.php
-    ├── storage/
-    │   ├── add_storage.php
-    │   ├── list_storage.php
-    │   └── remove_storage.php
-    ├── motherboard/
-    │   ├── add_motherboard.php
-    │   ├── list_motherboard.php
-    │   └── remove_motherboard.php
-    ├── nic/
-    │   ├── add_nic.php
-    │   ├── list_nic.php
-    │   └── remove_nic.php
-    └── caddy/
-        ├── add_caddy.php
-        ├── list_caddy.php
-        └── remove_caddy.php
+└── components/             # Generic component operations
+    └── components_api.php  # Unified component handler (JWT-protected)
 ```
 
 **Key Files**:
 - `api/api.php` - Main entry point, handles routing, auth, and ACL
+- `api/auth/` - JWT-based authentication system (current standard)
 
 ---
 
@@ -100,35 +76,95 @@ api/
 ```
 includes/
 ├── config.php              # Application configuration constants
+├── config.env              # Environment variables (legacy)
 ├── db_config.php           # Database connection setup
 ├── BaseFunctions.php       # ⭐ Core CRUD and utility functions
 ├── JWTHelper.php           # ⭐ JWT token generation/validation
 ├── JWTAuthFunctions.php    # JWT authentication helpers
 ├── ACL.php                 # ⭐ Access Control List system
 │
+├── cache/                  # Caching system
+│   ├── CacheInterface.php              # ⭐ Cache abstraction interface
+│   ├── ComponentSpecCache.php          # Component spec caching
+│   └── ConfigurationCache.php          # Server config caching
+│
 ├── models/                 # Business logic classes
 │   ├── FlexibleCompatibilityValidator.php  # ⭐ Main compatibility orchestrator
 │   ├── ComponentCompatibility.php          # CPU-MB, RAM-MB compatibility
 │   ├── StorageConnectionValidator.php      # ⭐ Storage/HBA/backplane validation
 │   ├── PCIeSlotTracker.php                 # PCIe slot allocation tracker
-│   ├── ExpansionSlotTracker.php            # Generic slot tracking
+│   ├── UnifiedSlotTracker.php              # Unified slot tracking system
 │   ├── ComponentDataService.php            # ⭐ JSON spec loader/cache
-│   ├── ChassisManager.php                  # Chassis JSON handler
+│   ├── ComponentDataLoader.php             # Component data loading
+│   ├── ComponentDataExtractor.php          # Spec data extraction
 │   ├── DataExtractionUtilities.php         # Spec extraction utilities
+│   ├── DataNormalizationUtils.php          # Data normalization helpers
+│   ├── ChassisManager.php                  # Chassis JSON handler
 │   ├── ServerBuilder.php                   # ⭐ Server config state manager
 │   ├── ServerConfiguration.php             # Config persistence
-│   ├── CompatibilityEngine.php             # Legacy compatibility wrapper
-│   └── OnboardNICHandler.php               # Onboard NIC management
+│   ├── BaseComponentValidator.php          # Base validator class
+│   ├── ComponentValidator.php              # Legacy validator
+│   ├── CPUCompatibilityValidator.php       # CPU-specific validation
+│   ├── ComponentCacheManager.php           # Cache management
+│   ├── ComponentSpecificationAdapter.php   # Spec adaptation
+│   ├── ComponentQueryBuilder.php           # Query building utilities
+│   ├── ValidatorFactory.php                # Validator factory pattern
+│   ├── OnboardNICHandler.php               # Onboard NIC management
+│   └── CompatibilityEngine.php             # Legacy compatibility wrapper
+│
+├── resources/              # Resource pool management
+│   ├── ResourcePoolInterface.php        # ⭐ Pool abstraction interface
+│   ├── ResourceRegistry.php             # Resource pool registry
+│   ├── PoolFactory.php                  # Factory for creating pools
+│   ├── PCIeSlotPool.php                 # PCIe slot allocation pool
+│   ├── PCIeLanePool.php                 # PCIe lane allocation pool
+│   ├── RAMSlotPool.php                  # RAM slot allocation pool
+│   ├── M2SlotPool.php                   # M.2 slot allocation pool
+│   ├── U2SlotPool.php                   # U.2 slot allocation pool
+│   └── SATAPortPool.php                 # SATA port allocation pool
+│
+├── validation/             # Validation context and results
+│   ├── ValidationContext.php            # Validation context object
+│   └── ValidationResult.php             # Validation result object
+│
+├── validators/             # Specialized validators (NEW ARCHITECTURE)
+│   ├── BaseValidator.php                # Base validator class
+│   ├── ValidatorOrchestrator.php        # ⭐ Main validator orchestrator
+│   ├── OrchestratorFactory.php          # Factory for orchestrators
+│   ├── ValidationContext.php            # Validation context
+│   ├── ValidationResult.php             # Validation result
+│   ├── APIIntegrationHelper.php         # API integration helper
+│   ├── ChassisValidator.php             # Chassis validation
+│   ├── ChassisBackplaneValidator.php    # Backplane validation
+│   ├── MotherboardValidator.php         # Motherboard validation
+│   ├── MotherboardStorageValidator.php  # MB storage interface validation
+│   ├── CPUValidator.php                 # CPU validation
+│   ├── RAMValidator.php                 # RAM validation
+│   ├── StorageValidator.php             # Storage device validation
+│   ├── StorageBayValidator.php          # Storage bay validation
+│   ├── NVMeSlotValidator.php            # NVMe slot validation
+│   ├── SocketCompatibilityValidator.php # Socket compatibility
+│   ├── FormFactorValidator.php          # Form factor validation
+│   ├── FormFactorLockValidator.php      # Form factor locking
+│   ├── PCIeCardValidator.php            # PCIe card validation
+│   ├── PCIeAdapterValidator.php         # PCIe adapter validation
+│   ├── HBAValidator.php                 # HBA card validation
+│   ├── HBARequirementValidator.php      # HBA requirement validation
+│   ├── NICValidator.php                 # NIC validation
+│   ├── CaddyValidator.php               # Caddy/adapter validation
+│   └── SlotAvailabilityValidator.php    # Slot availability checking
 │
 └── helpers/                # Helper utilities
-    └── safe_chassis_support.php
+    └── safe_chassis_support.php         # Safe chassis support helpers
 ```
 
 **Key Files**:
 - `BaseFunctions.php` - All component CRUD operations, UUID validation
 - `JWTHelper.php` - Token generation, validation, refresh
 - `ACL.php` - Permission checking, role management
-- `models/FlexibleCompatibilityValidator.php` - Compatibility orchestrator
+- `cache/CacheInterface.php` - New caching abstraction
+- `resources/ResourceRegistry.php` - Resource pool management
+- `validators/ValidatorOrchestrator.php` - New validator orchestrator
 - `models/ComponentDataService.php` - JSON spec loader with caching
 
 ---
@@ -138,31 +174,41 @@ includes/
 ```
 All-JSON/
 ├── cpu-jsons/
-│   └── Cpu-details-level-3.json          # CPU specifications
+│   ├── Cpu base level 1.json             # CPU base level specification
+│   ├── Cpu family level 2.json           # CPU family level specification
+│   └── Cpu-details-level-3.json          # CPU detailed specifications
 │
-├── motherboad-jsons/  [sic - typo in folder name]
-│   └── motherboard-level-3.json          # Motherboard specifications
+├── motherboard-jsons/
+│   ├── motherboard level 1.json          # Motherboard base level
+│   ├── motherboard level 2.json          # Motherboard family level
+│   └── motherboard-level-3.json          # Motherboard detailed specifications
 │
 ├── Ram-jsons/
-│   └── ram_detail.json                   # RAM specifications
+│   ├── info_ram.json                     # RAM information
+│   └── ram_detail.json                   # RAM detailed specifications
 │
 ├── storage-jsons/
-│   └── storage-level-3.json              # Storage device specifications
+│   ├── storage.json                      # Storage base specification
+│   ├── storagedetail.json                # Storage detailed info
+│   └── storage-level-3.json              # Storage level 3 specifications
 │
 ├── nic-jsons/
-│   └── nic-level-3.json                  # NIC specifications
+│   └── nic-level-3.json                  # NIC detailed specifications
 │
 ├── caddy-jsons/
-│   └── caddy_details.json                # Caddy/adapter specifications
+│   └── caddy.json                        # Caddy/adapter specifications
+│   └── caddy_details.json                # Caddy detailed specifications
 │
-├── chasis-jsons/  [sic - typo in folder name]
-│   └── chasis-level-3.json               # Chassis specifications
+├── chassis-jsons/
+│   └── chassis-level-3.json              # Chassis detailed specifications
 │
 ├── pci-jsons/
-│   └── pci-level-3.json                  # PCIe card specifications
+│   ├── pci-level-1.json                  # PCIe base level
+│   ├── pci-level-2.json                  # PCIe family level
+│   └── pci-level-3.json                  # PCIe detailed specifications
 │
 └── hbacard-jsons/
-    └── hbacard-level-3.json              # HBA card specifications
+    └── hbacard-level-3.json              # HBA card detailed specifications
 ```
 
 **Purpose**: Contains JSON specification files for all component types. UUIDs in these files are the **only** valid UUIDs for inventory insertion.
@@ -175,18 +221,39 @@ All-JSON/
 
 ```
 database/
-└── (Database schema files, migrations, backups)
+└── migrations/              # Database migration scripts
+    ├── README.md           # Migration documentation
+    ├── INDEX.md            # Migration index
+    ├── MIGRATION_SUMMARY.md # Summary of all migrations
+    ├── QUICK_REFERENCE.md  # Quick reference for migrations
+    └── 2025_11_09_000001_optimization_phases_1_to_4.sql  # Phase optimization
 ```
 
-**Main Schema**: `shubhams_bdc_ims main.sql` (in root)
+**Main Schema**: `shubhams ims_dev main.sql` (in root)
 
 ---
 
-### `/md files` - Documentation
+### `/documentation` - Project Documentation
+
+```
+documentation/
+├── DEPLOYMENT_GUIDE.md      # Deployment procedures
+├── FILES_MANIFEST.md        # Complete file manifest
+├── PROJECT_SUMMARY.md       # Project overview
+├── VALIDATOR_SYSTEM_README.md  # Validator system documentation
+├── PHASE3_VALIDATORS_SUMMARY.md # Phase 3 validator updates
+└── componentcompatibility-optimization/  # Component compatibility docs
+    └── README.md
+```
+
+**Purpose**: Comprehensive project documentation, guides, and analysis.
+
+---
+
+### `/md files` - Legacy Documentation
 
 ```
 md files/
-├── info.md
 ├── server Api.md
 ├── server_api_guide.md
 └── md/
@@ -196,7 +263,51 @@ md files/
     └── usless2.md
 ```
 
-**Purpose**: Working documentation, development notes, and references.
+**Purpose**: Legacy working documentation and development notes.
+
+---
+
+### `/tests` - Unit and Integration Tests
+
+```
+tests/
+└── unit/
+    └── cache/
+        └── CacheInterfaceTest.php  # Tests for cache interface
+```
+
+**Purpose**: Automated tests for validation and caching systems.
+
+---
+
+### `/.claude` - Claude Code Configuration
+
+```
+.claude/
+├── agents/                  # Custom agent definitions
+│   ├── api-tester.md
+│   ├── code-reviewer.md
+│   ├── database-optimizer.md
+│   ├── frontend-developer.md
+│   ├── php-backend-specialist.md
+│   ├── senior-code-reviewer.md
+│   └── ui-developer.md
+├── settings.local.json      # Local Claude Code settings
+└── (other config files)
+```
+
+**Purpose**: Claude Code integration configuration and custom agents.
+
+---
+
+### `/.vscode` - VSCode Configuration
+
+```
+.vscode/
+└── sftp.json                # SFTP remote connection settings
+```
+
+**Purpose**: VSCode extension and workspace configuration.
 
 ---
 
@@ -344,15 +455,54 @@ md files/
 
 ---
 
-## Deprecated/Legacy Files
+## Deprecated/Legacy Files & Systems
 
-**Legacy Component Functions** (`api/functions/`):
-- Still functional but superseded by unified component handler in `api.php`
-- Consider migrating to centralized `handleComponentOperations()` pattern
+### Superseded by Phase 3 Validator System
 
-**Legacy Login Files** (`api/login/`):
-- Old authentication system
-- Superseded by JWT-based `api/auth/` endpoints
+**Legacy Compatibility Models** (Phase 2):
+- `includes/models/FlexibleCompatibilityValidator.php`
+- `includes/models/StorageConnectionValidator.php`
+- `includes/models/PCIeSlotTracker.php`
+- `includes/models/ComponentCompatibility.php`
+
+**Status**: Functional but superseded by new `includes/validators/` system with ValidatorOrchestrator
+**Migration Path**: Route validation through [includes/validators/ValidatorOrchestrator.php](../includes/validators/ValidatorOrchestrator.php)
+
+### Removed - Legacy Authentication System
+
+**Legacy Authentication** (`api/login/` - DELETED):
+- Old session-based authentication system
+- **Status**: ✅ REMOVED (2025-11-13)
+- **Removed Files**: login.php, logout.php, signup.php, user.php, dashboard.php, error_log
+- **Use Instead**: JWT-based `api/auth/` endpoints
+
+**Legacy Session-Based APIs** (DELETED):
+- `api/dashboard/dashboard_api.php` - Superseded by main API
+- `api/search/search_api.php` - Superseded by main API
+- `api/auth/check_session_api.php` - Session-based session checking
+- `api/auth/logout_api.php` - Session-based logout
+- `api/auth/change_password_api.php` - Session-based password change
+- **Status**: ✅ REMOVED (2025-11-13)
+- **Use Instead**: JWT-based endpoints in `api/api.php`
+
+**Legacy Component UI Files** (DELETED):
+- `api/components/list.php` - Legacy component listing UI
+- `api/components/add_form.php` - Legacy component add form
+- `api/components/edit_form.php` - Legacy component edit form
+- **Status**: ✅ REMOVED (2025-11-13)
+- **Use Instead**: `api/components/components_api.php` with `api/api.php` routing
+
+### Superseded by Phase 3 (Resource Pools)
+
+**Legacy Slot Tracking**:
+- `includes/models/PCIeSlotTracker.php`
+- `includes/models/UnifiedSlotTracker.php`
+
+**Status**: Functional but superseded by resource pool system
+**Use Instead**: [includes/resources/ResourceRegistry.php](../includes/resources/ResourceRegistry.php)
+- PCIe: [includes/resources/PCIeSlotPool.php](../includes/resources/PCIeSlotPool.php)
+- RAM: [includes/resources/RAMSlotPool.php](../includes/resources/RAMSlotPool.php)
+- Storage: [includes/resources/M2SlotPool.php](../includes/resources/M2SlotPool.php), [includes/resources/U2SlotPool.php](../includes/resources/U2SlotPool.php), [includes/resources/SATAPortPool.php](../includes/resources/SATAPortPool.php)
 
 ---
 
@@ -381,14 +531,36 @@ md files/
 
 **Need to modify...**
 
-- **API routing** → `api/api.php`
-- **Component CRUD** → `includes/BaseFunctions.php`
-- **JWT auth** → `includes/JWTHelper.php`
-- **Permissions** → `includes/ACL.php`
-- **CPU-MB compatibility** → `includes/models/ComponentCompatibility.php`
-- **Storage validation** → `includes/models/StorageConnectionValidator.php`
-- **PCIe slots** → `includes/models/PCIeSlotTracker.php`
-- **JSON loading** → `includes/models/ComponentDataService.php`
-- **Server state** → `includes/models/ServerBuilder.php`
-- **Component specs** → `All-JSON/{type}-jsons/*.json`
-- **Database schema** → `shubhams_bdc_ims main.sql`
+### Core System
+- **API routing** → [api/api.php](../api/api.php)
+- **Component CRUD** → [includes/BaseFunctions.php](../includes/BaseFunctions.php)
+- **JWT auth** → [includes/JWTHelper.php](../includes/JWTHelper.php)
+- **Permissions/ACL** → [includes/ACL.php](../includes/ACL.php)
+- **Database config** → [includes/db_config.php](../includes/db_config.php)
+
+### Validation & Compatibility (NEW ARCHITECTURE)
+- **Main validator orchestrator** → [includes/validators/ValidatorOrchestrator.php](../includes/validators/ValidatorOrchestrator.php)
+- **Component-specific validators** → [includes/validators/](../includes/validators/)
+- **Resource pool management** → [includes/resources/ResourceRegistry.php](../includes/resources/ResourceRegistry.php)
+- **Validation context/results** → [includes/validation/](../includes/validation/)
+
+### Legacy Compatibility (Phase 2)
+- **Main compatibility orchestrator** → [includes/models/FlexibleCompatibilityValidator.php](../includes/models/FlexibleCompatibilityValidator.php)
+- **CPU-MB compatibility** → [includes/models/ComponentCompatibility.php](../includes/models/ComponentCompatibility.php)
+- **Storage validation** → [includes/models/StorageConnectionValidator.php](../includes/models/StorageConnectionValidator.php)
+- **PCIe slots** → [includes/models/PCIeSlotTracker.php](../includes/models/PCIeSlotTracker.php)
+- **Unified slot tracking** → [includes/models/UnifiedSlotTracker.php](../includes/models/UnifiedSlotTracker.php)
+
+### Data Management
+- **JSON loading** → [includes/models/ComponentDataService.php](../includes/models/ComponentDataService.php)
+- **Caching system** → [includes/cache/](../includes/cache/)
+- **Component specs** → [All-JSON/{type}-jsons/*.json](../All-JSON/)
+
+### Server Configuration
+- **Server state** → [includes/models/ServerBuilder.php](../includes/models/ServerBuilder.php)
+- **Server persistence** → [includes/models/ServerConfiguration.php](../includes/models/ServerConfiguration.php)
+- **NIC handling** → [includes/models/OnboardNICHandler.php](../includes/models/OnboardNICHandler.php)
+
+### Database & Schema
+- **Database schema** → [shubhams ims_dev main.sql](../shubhams%20ims_dev%20main.sql)
+- **Migrations** → [database/migrations/](../database/migrations/)

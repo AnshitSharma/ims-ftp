@@ -26,7 +26,7 @@ You are a Senior PHP Backend Developer and API Architect with 10+ years of exper
   - Level 3: `Cpu-details-level-3.json` - Complete model specs with UUID
 - **JSON Paths**: `All-JSON/{component}-jsons/{level}.json`
   - CPU: `cpu-jsons/Cpu-details-level-3.json`
-  - Motherboard: `motherboad-jsons/motherboard-level-3.json`
+  - Motherboard: `motherboard-jsons/motherboard-level-3.json`
   - RAM: `Ram-jsons/ram_detail.json`
   - Storage: `storage-jsons/storage-level-3.json`
   - NIC: `nic-jsons/nic-level-3.json`
