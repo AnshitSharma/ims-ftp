@@ -49,10 +49,8 @@ function loadEnvFile($path) {
         putenv("$key=$value");
         $_ENV[$key] = $value;
 
-        // Also define as constant if not already defined
-        if (!defined($key)) {
-            define($key, $value);
-        }
+        // Do NOT define as constants here - let the main config define them
+        // This prevents duplicate constant definition warnings
     }
 
     return true;

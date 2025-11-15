@@ -118,6 +118,7 @@ try {
         case 'chassis':
         case 'pciecard':
         case 'hbacard':
+        case 'sfp':
             handleComponentOperations($module, $operation, $user);
             break;
             
@@ -1019,7 +1020,7 @@ function getDashboardData($pdo, $user) {
     
     try {
         // Get component counts
-        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'chassis', 'hbacard'];
+        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'chassis', 'hbacard', 'sfp'];
         $componentCounts = [];
         $totalComponents = 0;
         
@@ -1091,7 +1092,7 @@ function getDashboardData($pdo, $user) {
  */
 function performGlobalSearch($pdo, $query, $limit, $user) {
     $results = [];
-    $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'chassis', 'hbacard'];
+    $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'chassis', 'hbacard', 'sfp'];
     
     try {
         foreach ($componentTypes as $type) {
@@ -1137,7 +1138,8 @@ function getComponentTableName($type) {
         'nic' => 'nicinventory',
         'caddy' => 'caddyinventory',
         'pciecard' => 'pciecardinventory',
-        'hbacard' => 'hbacardinventory'
+        'hbacard' => 'hbacardinventory',
+        'sfp' => 'sfpinventory'
     ];
 
     return $tableMap[$type] ?? $type;

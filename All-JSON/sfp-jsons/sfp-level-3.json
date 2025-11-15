@@ -1,0 +1,297 @@
+[
+  {
+    "category": "SFP/SFP+ Transceivers",
+    "brand": "Intel",
+    "series": [
+      {
+        "name": "Intel SFP+ SR Series",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "FTLX8571D3BCL-IN",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "850nm",
+            "reach": "300m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.5W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "RoHS Compliant", "Hot-pluggable"],
+            "uuid": "sfp-intel-ftlx8571d3bcl-001"
+          }
+        ]
+      },
+      {
+        "name": "Intel SFP+ LR Series",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "FTLX1471D3BCL-IN",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "1310nm",
+            "reach": "10km",
+            "connector": "LC",
+            "fiber_type": "SMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "RoHS Compliant", "Hot-pluggable"],
+            "uuid": "sfp-intel-ftlx1471d3bcl-001"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "category": "SFP/SFP+ Transceivers",
+    "brand": "Cisco",
+    "series": [
+      {
+        "name": "Cisco 10GBASE-SR SFP+",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "SFP-10G-SR",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "850nm",
+            "reach": "300m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "uuid": "sfp-cisco-sfp10gsr-001"
+          }
+        ]
+      },
+      {
+        "name": "Cisco 10GBASE-LR SFP+",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "SFP-10G-LR",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "1310nm",
+            "reach": "10km",
+            "connector": "LC",
+            "fiber_type": "SMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "uuid": "sfp-cisco-sfp10glr-001"
+          }
+        ]
+      },
+      {
+        "name": "Cisco 1000BASE-SX SFP",
+        "type": "SFP",
+        "generation": "1GbE",
+        "models": [
+          {
+            "model": "GLC-SX-MMD",
+            "type": "SFP",
+            "speed": "1Gbps",
+            "wavelength": "850nm",
+            "reach": "550m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "0.5W",
+            "compatible_interfaces": ["SFP"],
+            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "uuid": "sfp-cisco-glcsxmmd-001"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "category": "SFP/SFP+ Transceivers",
+    "brand": "HP/HPE",
+    "series": [
+      {
+        "name": "HPE X132 10G SFP+",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "J9150A",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "850nm",
+            "reach": "300m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "HPE ProCurve Compatible"],
+            "uuid": "sfp-hpe-j9150a-001"
+          }
+        ]
+      },
+      {
+        "name": "HPE X132 10G SFP+ LR",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "J9151A",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "1310nm",
+            "reach": "10km",
+            "connector": "LC",
+            "fiber_type": "SMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "HPE ProCurve Compatible"],
+            "uuid": "sfp-hpe-j9151a-001"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "category": "SFP/SFP+ Transceivers",
+    "brand": "Dell",
+    "series": [
+      {
+        "name": "Dell 10GBASE-SR SFP+",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "Dell-SFP-10G-SR",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "850nm",
+            "reach": "300m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.5W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "Dell Compatible"],
+            "uuid": "sfp-dell-sfp10gsr-001"
+          }
+        ]
+      },
+      {
+        "name": "Dell 10GBASE-LR SFP+",
+        "type": "SFP+",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "Dell-SFP-10G-LR",
+            "type": "SFP+",
+            "speed": "10Gbps",
+            "wavelength": "1310nm",
+            "reach": "10km",
+            "connector": "LC",
+            "fiber_type": "SMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.0W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["DDM/DOM", "Hot-pluggable", "Dell Compatible"],
+            "uuid": "sfp-dell-sfp10glr-001"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "category": "SFP28 Transceivers",
+    "brand": "Mellanox",
+    "series": [
+      {
+        "name": "Mellanox 25GbE SFP28 SR",
+        "type": "SFP28",
+        "generation": "25GbE",
+        "models": [
+          {
+            "model": "MMA2P00-AS",
+            "type": "SFP28",
+            "speed": "25Gbps",
+            "wavelength": "850nm",
+            "reach": "100m",
+            "connector": "LC",
+            "fiber_type": "MMF",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "1.5W",
+            "compatible_interfaces": ["SFP28"],
+            "features": ["DDM/DOM", "Hot-pluggable", "IEEE 802.3by compliant"],
+            "uuid": "sfp-mellanox-mma2p00as-001"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "category": "SFP/SFP+ DAC Cables",
+    "brand": "Generic",
+    "series": [
+      {
+        "name": "10G SFP+ Direct Attach Copper",
+        "type": "SFP+ DAC",
+        "generation": "10GbE",
+        "models": [
+          {
+            "model": "SFP-10G-DAC-1M",
+            "type": "SFP+ DAC",
+            "speed": "10Gbps",
+            "wavelength": "N/A",
+            "reach": "1m",
+            "connector": "SFP+ to SFP+",
+            "fiber_type": "Copper",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "0.1W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "uuid": "sfp-dac-10g-1m-001"
+          },
+          {
+            "model": "SFP-10G-DAC-3M",
+            "type": "SFP+ DAC",
+            "speed": "10Gbps",
+            "wavelength": "N/A",
+            "reach": "3m",
+            "connector": "SFP+ to SFP+",
+            "fiber_type": "Copper",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "0.1W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "uuid": "sfp-dac-10g-3m-001"
+          },
+          {
+            "model": "SFP-10G-DAC-5M",
+            "type": "SFP+ DAC",
+            "speed": "10Gbps",
+            "wavelength": "N/A",
+            "reach": "5m",
+            "connector": "SFP+ to SFP+",
+            "fiber_type": "Copper",
+            "temperature_range": "0°C to 70°C",
+            "power_consumption": "0.1W",
+            "compatible_interfaces": ["SFP+"],
+            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "uuid": "sfp-dac-10g-5m-001"
+          }
+        ]
+      }
+    ]
+  }
+]

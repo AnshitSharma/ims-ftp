@@ -703,7 +703,7 @@ if (!function_exists('addComponent')) {
 
                 // Map table names to component types (table names are just the component type without 'inventory' suffix)
                 // Only validate UUIDs for components that have JSON specifications
-                $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy'];
+                $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'sfp'];
 
                 if (in_array($type, $componentTypes)) {
                     error_log("Component type '$type' requires UUID validation");

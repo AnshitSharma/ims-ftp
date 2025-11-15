@@ -2552,6 +2552,12 @@ class ComponentCompatibility {
             $motherboardMemoryTypes = $this->dataExtractor->extractSupportedMemoryTypes($motherboardData, 'motherboard');
             $motherboardMaxMemorySpeed = $this->dataExtractor->extractMaxMemorySpeed($motherboardData, 'motherboard');
 
+            // Extract motherboard CPU socket count
+            $motherboardSocketCount = 1; // Default to 1 socket
+            if (isset($motherboardData['socket']) && is_array($motherboardData['socket'])) {
+                $motherboardSocketCount = $motherboardData['socket']['count'] ?? 1;
+            }
+
             // Collect compatibility requirements from existing components
             $compatibilityRequirements = [
                 'required_cpu_socket' => null,
@@ -2559,13 +2565,17 @@ class ComponentCompatibility {
                 'min_memory_speed_required' => 0,
                 'required_form_factors' => [],
                 'required_module_types' => [], // RDIMM, LRDIMM, UDIMM compatibility
-                'sources' => []
+                'sources' => [],
+                'cpu_count' => 0 // Track total CPU count
             ];
 
             foreach ($existingComponents as $existingComp) {
                 $compType = $existingComp['type'];
 
                 if ($compType === 'cpu') {
+                    // Count CPUs in configuration
+                    $compatibilityRequirements['cpu_count']++;
+
                     $cpuCompatResult = $this->analyzeExistingCPUForMotherboard($existingComp, $compatibilityRequirements);
                     if (!$cpuCompatResult['compatible']) {
                         $result['compatible'] = false;
@@ -2590,6 +2600,13 @@ class ComponentCompatibility {
                     }
                     $result['details'] = array_merge($result['details'], $motherboardCompatResult['details']);
                 }
+            }
+
+            // Check CPU socket count before applying other compatibility rules
+            if ($compatibilityRequirements['cpu_count'] > $motherboardSocketCount) {
+                $result['compatible'] = false;
+                $result['issues'][] = "CPU count ({$compatibilityRequirements['cpu_count']}) exceeds motherboard socket capacity ({$motherboardSocketCount})";
+                $result['details'][] = "Configuration has {$compatibilityRequirements['cpu_count']} CPUs but motherboard only supports {$motherboardSocketCount} socket(s)";
             }
 
             // Apply motherboard compatibility logic using collected requirements
@@ -4540,6 +4557,191 @@ class ComponentCompatibility {
             }
         }
         return $maxHeight;
+    }
+
+    /**
+     * Check SFP compatibility with NIC cards
+     * Validates:
+     * 1. Parent NIC exists and has SFP/SFP+ ports
+     * 2. Port is not already occupied
+     * 3. SFP type matches NIC port type (SFP+ in SFP+ port, etc.)
+     * 4. Speed compatibility
+     *
+     * @param array $sfpComponent SFP component with parent_nic_uuid and port_index
+     * @param array $existingComponents All existing components in the configuration
+     * @return array Compatibility result with compatible, issues, warnings, recommendations
+     */
+    public function checkSFPDecentralizedCompatibility($sfpComponent, $existingComponents) {
+        $issues = [];
+        $warnings = [];
+        $recommendations = [];
+
+        // Get SFP specifications
+        $sfpSpecs = $this->dataLoader->getComponentSpecifications('sfp', $sfpComponent['uuid']);
+
+        if (!$sfpSpecs) {
+            return [
+                'compatible' => false,
+                'issues' => ['SFP specifications not found in JSON'],
+                'warnings' => [],
+                'recommendations' => ['Verify SFP UUID exists in sfp-level-3.json'],
+                'compatibility_summary' => 'SFP specifications not found'
+            ];
+        }
+
+        // Check for parent NIC
+        $parentNicUuid = $sfpComponent['parent_nic_uuid'] ?? null;
+        $portIndex = $sfpComponent['port_index'] ?? null;
+
+        if (!$parentNicUuid) {
+            return [
+                'compatible' => false,
+                'issues' => ['SFP must be assigned to a parent NIC card'],
+                'warnings' => [],
+                'recommendations' => ['Specify parent_nic_uuid when adding SFP'],
+                'compatibility_summary' => 'Missing parent NIC assignment'
+            ];
+        }
+
+        if (!$portIndex) {
+            return [
+                'compatible' => false,
+                'issues' => ['SFP must specify which port it will occupy'],
+                'warnings' => [],
+                'recommendations' => ['Specify port_index when adding SFP'],
+                'compatibility_summary' => 'Missing port index'
+            ];
+        }
+
+        // Find parent NIC in existing components
+        $parentNic = null;
+        foreach ($existingComponents as $comp) {
+            if ($comp['type'] === 'nic' && $comp['uuid'] === $parentNicUuid) {
+                $parentNic = $comp;
+                break;
+            }
+        }
+
+        if (!$parentNic) {
+            return [
+                'compatible' => false,
+                'issues' => ["Parent NIC with UUID $parentNicUuid not found in configuration"],
+                'warnings' => [],
+                'recommendations' => ['Add the NIC card before adding SFP modules'],
+                'compatibility_summary' => 'Parent NIC not found'
+            ];
+        }
+
+        // Get NIC specifications
+        $nicSpecs = $this->dataLoader->getComponentSpecifications('nic', $parentNicUuid);
+
+        if (!$nicSpecs) {
+            return [
+                'compatible' => false,
+                'issues' => ["NIC specifications not found for UUID $parentNicUuid"],
+                'warnings' => [],
+                'recommendations' => ['Verify NIC UUID exists in nic-level-3.json'],
+                'compatibility_summary' => 'NIC specifications not found'
+            ];
+        }
+
+        // Validate NIC has SFP+ compatible ports
+        $nicPortType = $nicSpecs['port_type'] ?? '';
+        $compatiblePortTypes = ['SFP+', 'QSFP+', 'QSFP28', 'SFP28', 'SFP'];
+
+        if (!in_array($nicPortType, $compatiblePortTypes)) {
+            return [
+                'compatible' => false,
+                'issues' => ["NIC port type '$nicPortType' does not support SFP modules"],
+                'warnings' => [],
+                'recommendations' => ['SFP modules require SFP+/QSFP+/SFP28 compatible NIC cards'],
+                'compatibility_summary' => "NIC port type incompatible"
+            ];
+        }
+
+        // Validate port index is within NIC port count
+        $nicPortCount = $nicSpecs['ports'] ?? 0;
+        if ($portIndex > $nicPortCount) {
+            return [
+                'compatible' => false,
+                'issues' => ["Port index $portIndex exceeds NIC port count ($nicPortCount)"],
+                'warnings' => [],
+                'recommendations' => ["Choose port index between 1 and $nicPortCount"],
+                'compatibility_summary' => 'Invalid port index'
+            ];
+        }
+
+        // Check if port is already occupied
+        foreach ($existingComponents as $comp) {
+            if ($comp['type'] === 'sfp' &&
+                $comp['uuid'] !== $sfpComponent['uuid'] &&
+                ($comp['parent_nic_uuid'] ?? null) === $parentNicUuid &&
+                ($comp['port_index'] ?? null) == $portIndex) {
+                $issues[] = "Port $portIndex on NIC $parentNicUuid is already occupied by SFP " . ($comp['uuid'] ?? 'unknown');
+            }
+        }
+
+        // Speed compatibility check
+        $sfpSpeed = $sfpSpecs['speed'] ?? '';
+        $nicSpeeds = $nicSpecs['speeds'] ?? [];
+        $nicPrimarySpeed = is_array($nicSpeeds) && !empty($nicSpeeds) ? $nicSpeeds[0] : '';
+
+        // Extract numeric speed values for comparison
+        $sfpSpeedValue = preg_replace('/[^0-9]/', '', $sfpSpeed);
+        $nicSpeedValue = preg_replace('/[^0-9]/', '', $nicPrimarySpeed);
+
+        if ($sfpSpeedValue && $nicSpeedValue && $sfpSpeedValue != $nicSpeedValue) {
+            $warnings[] = "SFP speed ($sfpSpeed) may not match NIC primary speed ($nicPrimarySpeed) - verify compatibility";
+        }
+
+        // Type compatibility check (SFP+ vs SFP28 vs QSFP+)
+        $sfpType = $sfpSpecs['type'] ?? '';
+        if ($sfpType && $nicPortType && $sfpType !== $nicPortType) {
+            // Allow some cross-compatibility
+            $crossCompatible = [
+                'SFP+' => ['SFP'],  // SFP+ ports can accept SFP modules
+                'SFP28' => ['SFP+', 'SFP'],  // SFP28 ports can accept SFP+ and SFP modules
+                'QSFP28' => ['QSFP+']  // QSFP28 can accept QSFP+
+            ];
+
+            $isCompatible = false;
+            if (isset($crossCompatible[$nicPortType]) && in_array($sfpType, $crossCompatible[$nicPortType])) {
+                $isCompatible = true;
+                $warnings[] = "Using $sfpType module in $nicPortType port - cross-compatible but may run at reduced speed";
+            }
+
+            if (!$isCompatible && $nicPortType !== $sfpType) {
+                $issues[] = "SFP type mismatch: $sfpType module requires $sfpType port, but NIC has $nicPortType ports";
+            }
+        }
+
+        // Additional validation for fiber type compatibility
+        $sfpFiberType = $sfpSpecs['fiber_type'] ?? '';
+        if ($sfpFiberType === 'Copper' || strpos($sfpFiberType, 'DAC') !== false) {
+            $recommendations[] = "Using Direct Attach Copper (DAC) cable - ensure cable length is appropriate for distance";
+        } elseif ($sfpFiberType === 'SMF') {
+            $recommendations[] = "Using Single-Mode Fiber - ensure fiber infrastructure is SMF compatible";
+        } elseif ($sfpFiberType === 'MMF') {
+            $recommendations[] = "Using Multi-Mode Fiber - verify fiber distance is within reach limit (" . ($sfpSpecs['reach'] ?? 'N/A') . ")";
+        }
+
+        return [
+            'compatible' => empty($issues),
+            'issues' => $issues,
+            'warnings' => $warnings,
+            'recommendations' => $recommendations,
+            'compatibility_summary' => empty($issues) ?
+                "SFP module compatible with NIC port $portIndex" :
+                "SFP module incompatible - see issues",
+            'details' => [
+                'sfp_type' => $sfpType,
+                'sfp_speed' => $sfpSpeed,
+                'nic_port_type' => $nicPortType,
+                'nic_speed' => $nicPrimarySpeed,
+                'port_index' => $portIndex,
+                'parent_nic' => $parentNicUuid
+            ]
+        ];
     }
 
 

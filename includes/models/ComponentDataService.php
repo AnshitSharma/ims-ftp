@@ -18,7 +18,8 @@ class ComponentDataService {
         'nic' => 'nic-jsons/nic-level-3.json',
         'caddy' => 'caddy-jsons/caddy_details.json',
         'pciecard' => 'pci-jsons/pci-level-3.json',
-        'hbacard' => 'hbacard-jsons/hbacard-level-3.json'
+        'hbacard' => 'hbacard-jsons/hbacard-level-3.json',
+        'sfp' => 'sfp-jsons/sfp-level-3.json'
     ];
 
     private function __construct() {
@@ -366,6 +367,8 @@ class ComponentDataService {
                 return $this->extractNicSpecs($component);
             case 'caddy':
                 return $this->extractCaddySpecs($component);
+            case 'sfp':
+                return $this->extractSfpSpecs($component);
             default:
                 return $component;
         }
@@ -470,6 +473,24 @@ class ComponentDataService {
             'form_factor' => $component['form_factor'] ?? '',
             'compatibility' => $component['compatibility'] ?? [],
             'specifications' => $component['specifications'] ?? []
+        ];
+    }
+
+    private function extractSfpSpecs($component) {
+        return [
+            'uuid' => $component['uuid'] ?? null,
+            'brand' => $component['brand'] ?? '',
+            'model' => $component['model'] ?? '',
+            'type' => $component['type'] ?? '',
+            'speed' => $component['speed'] ?? '',
+            'wavelength' => $component['wavelength'] ?? '',
+            'reach' => $component['reach'] ?? '',
+            'connector' => $component['connector'] ?? '',
+            'fiber_type' => $component['fiber_type'] ?? '',
+            'temperature_range' => $component['temperature_range'] ?? '',
+            'power_consumption' => $component['power_consumption'] ?? '',
+            'compatible_interfaces' => $component['compatible_interfaces'] ?? [],
+            'features' => $component['features'] ?? []
         ];
     }
 

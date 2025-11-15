@@ -382,7 +382,7 @@ function handleAddComponent($serverBuilder, $user) {
     }
 
     // Basic component type validation
-    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'hbacard'];
+    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'hbacard', 'sfp'];
     if (!in_array($componentType, $validComponentTypes)) {
         send_json_response(0, 1, 400, "Invalid component type. Valid types: " . implode(', ', $validComponentTypes));
     }
@@ -498,7 +498,8 @@ function handleAddComponent($serverBuilder, $user) {
                     'nic' => 'nicinventory',
                     'caddy' => 'caddyinventory',
                     'pciecard' => 'pciecardinventory',
-                    'hbacard' => 'hbacardinventory'
+                    'hbacard' => 'hbacardinventory',
+                    'sfp' => 'sfpinventory'
                 ];
 
                 $table = $tableMap[$existing['component_type']];
@@ -541,6 +542,9 @@ function handleAddComponent($serverBuilder, $user) {
                     break;
                 case 'hbacard':
                     $compatibilityResult = $compatibility->checkHBADecentralizedCompatibility($newComponent, $existingComponentsData);
+                    break;
+                case 'sfp':
+                    $compatibilityResult = $compatibility->checkSFPDecentralizedCompatibility($newComponent, $existingComponentsData);
                     break;
                 default:
                     $compatibilityResult = ['compatible' => true, 'warnings' => [], 'recommendations' => []];
