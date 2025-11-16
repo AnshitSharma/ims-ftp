@@ -101,7 +101,8 @@ class ComponentDataLoader {
             'nic' => __DIR__ . '/../../All-JSON/nic-jsons/nic-level-3.json',
             'caddy' => __DIR__ . '/../../All-JSON/caddy-jsons/caddy_details.json',
             'pciecard' => __DIR__ . '/../../All-JSON/pci-jsons/pci-level-3.json',
-            'hbacard' => __DIR__ . '/../../All-JSON/hbacard-jsons/hbacard-level-3.json'
+            'hbacard' => __DIR__ . '/../../All-JSON/hbacard-jsons/hbacard-level-3.json',
+            'sfp' => __DIR__ . '/../../All-JSON/sfp-jsons/sfp-level-3.json',
         ];
     }
 

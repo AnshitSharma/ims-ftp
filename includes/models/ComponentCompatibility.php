@@ -62,6 +62,7 @@ require_once __DIR__ . '/DataNormalizationUtils.php';
 require_once __DIR__ . '/ComponentDataExtractor.php';
 require_once __DIR__ . '/ComponentDataLoader.php';
 require_once __DIR__ . '/ComponentValidator.php';
+require_once __DIR__ . '/NICPortTracker.php';
 
 class ComponentCompatibility {
     private $pdo;                  // Database connection
@@ -192,7 +193,9 @@ class ComponentCompatibility {
             'motherboard-nic' => 'checkMotherboardNICCompatibility',
             'nic-motherboard' => 'checkMotherboardNICCompatibility',
             'storage-caddy' => 'checkStorageCaddyCompatibility',
-            'caddy-storage' => 'checkStorageCaddyCompatibility'
+            'caddy-storage' => 'checkStorageCaddyCompatibility',
+            'sfp-nic' => 'checkSFPNICCompatibility',
+            'nic-sfp' => 'checkSFPNICCompatibility'
         ];
         
         $key = "$type1-$type2";
@@ -4741,6 +4744,90 @@ class ComponentCompatibility {
                 'port_index' => $portIndex,
                 'parent_nic' => $parentNicUuid
             ]
+        ];
+    }
+
+
+    /**
+     * Check SFP-NIC compatibility
+     * Uses NICPortTracker for type and speed validation
+     *
+     * @param array $component1 First component
+     * @param array $component2 Second component
+     * @return array Compatibility result
+     */
+    private function checkSFPNICCompatibility($component1, $component2) {
+        // Determine which is SFP and which is NIC
+        $type1 = $component1['type'] ?? '';
+        $type2 = $component2['type'] ?? '';
+        
+        $sfp = $type1 === 'sfp' ? $component1 : $component2;
+        $nic = $type1 === 'nic' ? $component1 : $component2;
+        
+        // Get NIC specs
+        $nicSpecs = $this->dataLoader->getComponentSpecifications('nic', $nic['uuid']);
+        if (!$nicSpecs) {
+            return [
+                'compatible' => false,
+                'issues' => ['NIC specifications not found'],
+                'warnings' => [],
+                'recommendations' => ['Verify NIC UUID exists in specifications']
+            ];
+        }
+        
+        // Get SFP specs
+        $sfpSpecs = $this->dataLoader->getComponentSpecifications('sfp', $sfp['uuid']);
+        if (!$sfpSpecs) {
+            return [
+                'compatible' => false,
+                'issues' => ['SFP specifications not found'],
+                'warnings' => [],
+                'recommendations' => ['Verify SFP UUID exists in specifications']
+            ];
+        }
+        
+        $nicPortType = strtoupper(trim($nicSpecs['port_type'] ?? ''));
+        $sfpType = strtoupper(trim($sfpSpecs['type'] ?? ''));
+        
+        // Check type compatibility using NICPortTracker
+        $typeCompatible = NICPortTracker::isCompatible($nicPortType, $sfpType);
+        
+        if (!$typeCompatible) {
+            $compatibleTypes = NICPortTracker::getCompatibleSfpTypes($nicPortType);
+            return [
+                'compatible' => false,
+                'issues' => ["SFP type {$sfpType} not compatible with NIC port type {$nicPortType}"],
+                'warnings' => [],
+                'recommendations' => [
+                    'Compatible SFP types for this NIC: ' . implode(', ', $compatibleTypes)
+                ]
+            ];
+        }
+        
+        // Check speed compatibility
+        $nicSpeeds = $nicSpecs['speeds'] ?? [];
+        $nicMaxSpeed = is_array($nicSpeeds) && !empty($nicSpeeds) ? max($nicSpeeds) : '';
+        $sfpSpeed = $sfpSpecs['speed'] ?? '';
+        
+        $speedCompatible = NICPortTracker::validateSpeedCompatibility($nicMaxSpeed, $sfpSpeed);
+        
+        if (!$speedCompatible) {
+            return [
+                'compatible' => false,
+                'issues' => ["SFP speed {$sfpSpeed} exceeds NIC maximum speed {$nicMaxSpeed}"],
+                'warnings' => [],
+                'recommendations' => [
+                    'Use SFP module with speed <= ' + $nicMaxSpeed
+                ]
+            ];
+        }
+        
+        // All checks passed
+        return [
+            'compatible' => true,
+            'issues' => [],
+            'warnings' => [],
+            'recommendations' => []
         ];
     }
 

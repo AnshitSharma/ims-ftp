@@ -193,6 +193,44 @@ class ServerBuilder {
             }
         }
 
+        // SFP configuration (JSON object with sfps array)
+        if (!empty($configData['sfp_configuration'])) {
+            try {
+                $sfpConfig = json_decode($configData['sfp_configuration'], true);
+
+                // Extract assigned SFPs (with parent NIC and port assignments)
+                if (isset($sfpConfig['sfps']) && is_array($sfpConfig['sfps'])) {
+                    foreach ($sfpConfig['sfps'] as $sfp) {
+                        $components[] = [
+                            'component_type' => 'sfp',
+                            'component_uuid' => $sfp['uuid'] ?? null,
+                            'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
+                            'port_index' => $sfp['port_index'] ?? null,
+                            'quantity' => 1,
+                            'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s')
+                        ];
+                    }
+                }
+
+                // Extract unassigned SFPs (added before NIC, awaiting assignment)
+                if (isset($sfpConfig['unassigned_sfps']) && is_array($sfpConfig['unassigned_sfps'])) {
+                    foreach ($sfpConfig['unassigned_sfps'] as $sfp) {
+                        $components[] = [
+                            'component_type' => 'sfp',
+                            'component_uuid' => $sfp['uuid'] ?? null,
+                            'parent_nic_uuid' => null,
+                            'port_index' => null,
+                            'quantity' => 1,
+                            'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s'),
+                            'status' => 'unassigned'
+                        ];
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Error parsing sfp_configuration JSON: " . $e->getMessage());
+            }
+        }
+
         return $components;
     }
 
@@ -442,7 +480,7 @@ class ServerBuilder {
             
             // Update the main server_configurations table with component info
             // CRITICAL: Pass serial_number to store in configuration JSON
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber);
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber, $options);
             
             // Update calculated fields (power, compatibility, etc.)
             $this->updateConfigurationMetrics($configUuid);
@@ -702,7 +740,7 @@ class ServerBuilder {
     /**
      * Update server_configurations table with component information
      */
-    private function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null) {
+    private function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null, $options = []) {
         try {
             $updateFields = [];
             $updateValues = [];
@@ -728,24 +766,31 @@ class ServerBuilder {
                         $updateFields[] = "motherboard_uuid = NULL";
                     }
                     break;
-                    
+
                 case 'ram':
                     $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action);
                     break;
-                    
+
                 case 'storage':
                     $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action);
                     break;
-                    
+
                 case 'nic':
                     $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, $action);
                     break;
-                    
+
                 case 'caddy':
                     $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action);
                     break;
+
+                case 'sfp':
+                    // Extract SFP-specific parameters from options
+                    $parentNicUuid = $options['parent_nic_uuid'] ?? null;
+                    $portIndex = $options['port_index'] ?? null;
+                    $this->updateSfpConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $parentNicUuid, $portIndex);
+                    break;
             }
-            
+
             if (!empty($updateFields)) {
                 $sql = "UPDATE server_configurations SET " . implode(', ', $updateFields) . ", updated_at = NOW() WHERE config_uuid = ?";
                 $updateValues[] = $configUuid;
@@ -1011,13 +1056,80 @@ class ServerBuilder {
             
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET caddy_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($caddyConfig), $configUuid]);
-            
+
         } catch (Exception $e) {
             error_log("Error updating caddy configuration: " . $e->getMessage());
             throw $e;
         }
     }
-    
+
+    /**
+     * Update SFP configuration in JSON format
+     * Stores port assignments with parent NIC and port index
+     */
+    private function updateSfpConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, $parentNicUuid = null, $portIndex = null) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $currentConfig = $stmt->fetchColumn();
+
+            // Decode existing config or create new structure
+            $sfpData = [];
+            if (!empty($currentConfig)) {
+                $decoded = json_decode($currentConfig, true);
+                $sfpData = $decoded['sfps'] ?? [];
+            }
+
+            if ($action === 'add') {
+                // Add new SFP with port assignment
+                $sfpEntry = [
+                    'uuid' => $componentUuid,
+                    'parent_nic_uuid' => $parentNicUuid,
+                    'port_index' => $portIndex,
+                    'added_at' => date('Y-m-d H:i:s')
+                ];
+
+                // Add serial number if provided
+                if ($serialNumber !== null) {
+                    $sfpEntry['serial_number'] = $serialNumber;
+                }
+
+                $sfpData[] = $sfpEntry;
+
+                error_log("Added SFP to configuration: UUID=$componentUuid, NIC=$parentNicUuid, Port=$portIndex");
+
+            } elseif ($action === 'remove') {
+                // Remove SFP by UUID and optionally serial number
+                $sfpData = array_filter($sfpData, function($sfp) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null) {
+                        // Match by both UUID and serial number
+                        return !($sfp['uuid'] === $componentUuid &&
+                                isset($sfp['serial_number']) &&
+                                $sfp['serial_number'] === $serialNumber);
+                    } else {
+                        // Match by UUID only
+                        return $sfp['uuid'] !== $componentUuid;
+                    }
+                });
+                $sfpData = array_values($sfpData); // Re-index array
+
+                error_log("Removed SFP from configuration: UUID=$componentUuid" . ($serialNumber ? ", Serial=$serialNumber" : ""));
+            }
+
+            // Wrap in structure
+            $sfpConfig = ['sfps' => $sfpData];
+
+            $stmt = $this->pdo->prepare("UPDATE server_configurations SET sfp_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
+            $stmt->execute([json_encode($sfpConfig), $configUuid]);
+
+            error_log("SFP configuration updated successfully for config $configUuid");
+
+        } catch (Exception $e) {
+            error_log("Error updating SFP configuration: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
     /**
      * Create onboard NICs from motherboard JSON specifications
      */

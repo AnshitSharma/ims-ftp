@@ -115,8 +115,8 @@ class ComponentDataService {
             }
         }
 
-        // Handle NIC JSON structure: brand -> series -> models (NOT families)
-        if ($componentType === 'nic') {
+        // Handle NIC and SFP JSON structure: brand -> series -> models
+        if ($componentType === 'nic' || $componentType === 'sfp') {
             foreach ($jsonData as $brand) {
                 if (isset($brand['series'])) {
                     foreach ($brand['series'] as $series) {
@@ -255,8 +255,8 @@ class ComponentDataService {
                 return false;
             }
 
-            // Handle NIC JSON structure: [...{brand, series: [{name, models: [...]}]}]
-            if ($componentType === 'nic') {
+            // Handle NIC and SFP JSON structure: [...{brand, series: [{name, models: [...]}]}]
+            if ($componentType === 'nic' || $componentType === 'sfp') {
                 foreach ($jsonData as $brand) {
                     if (isset($brand['series'])) {
                         foreach ($brand['series'] as $series) {
@@ -264,7 +264,7 @@ class ComponentDataService {
                                 foreach ($series['models'] as $model) {
                                     $modelUuid = $this->getOrGenerateUuid($model, $componentType);
                                     if ($modelUuid === $uuid) {
-                                        error_log("UUID validation SUCCESS: $uuid found in NIC JSON");
+                                        error_log("UUID validation SUCCESS: $uuid found in $componentType JSON");
                                         return true;
                                     }
                                 }
@@ -272,7 +272,7 @@ class ComponentDataService {
                         }
                     }
                 }
-                error_log("UUID validation FAILED: $uuid not found in NIC JSON");
+                error_log("UUID validation FAILED: $uuid not found in $componentType JSON");
                 return false;
             }
 
