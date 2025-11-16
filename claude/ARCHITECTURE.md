@@ -10,6 +10,12 @@
 - [Authentication System](#authentication-system)
 - [Authorization (ACL) System](#authorization-acl-system)
 - [Compatibility Engine](#compatibility-engine)
+  - [Phase 2 (Legacy) Architecture](#phase-2-legacy-architecture)
+  - [Phase 3 (New) Validator Architecture](#phase-3-new-validator-architecture)
+  - [Resource Pool System](#resource-pool-system)
+- [Network Component Management](#network-component-management)
+  - [NIC Port Tracking](#nic-port-tracking)
+  - [SFP Transceiver Management](#sfp-transceiver-management)
 - [Component Data Layer](#component-data-layer)
 - [State Management](#state-management)
 - [Caching Strategy](#caching-strategy)
@@ -497,6 +503,158 @@ CPU-MB Check   RAM-MB Check   Storage Valid.  PCIe Alloc.
         │ issues: []            │
         │ warnings: []          │
         └───────────────────────┘
+```
+
+---
+
+### Phase 2 (Legacy) Architecture
+
+The original compatibility engine uses a modular approach:
+
+```
+FlexibleCompatibilityValidator (Orchestrator)
+├─ ComponentCompatibility (CPU-MB, RAM-MB)
+├─ StorageConnectionValidator (Storage validation)
+├─ PCIeSlotTracker (PCIe allocation)
+└─ UnifiedSlotTracker (Multi-slot tracking)
+```
+
+**Status**: Functional but being superseded by Phase 3 validators.
+
+---
+
+### Phase 3 (New) Validator Architecture
+
+New architecture uses specialized validators with a unified orchestrator:
+
+```
+ValidatorOrchestrator (Main Coordinator)
+├─ ChassisValidator
+├─ MotherboardValidator
+├─ CPUValidator
+├─ RAMValidator
+├─ StorageValidator
+├─ NICValidator
+├─ PCIeCardValidator
+├─ HBAValidator
+├─ CaddyValidator
+└─ SFP Module Validators
+```
+
+**Benefits**:
+- Cleaner separation of concerns
+- Easier to extend with new validators
+- Better error reporting and context
+- Component-specific validation logic
+
+**Usage**:
+```php
+$orchestrator = ValidatorOrchestrator::getInstance();
+$result = $orchestrator->validateConfiguration($configUuid);
+```
+
+---
+
+### Resource Pool System
+
+Unified resource allocation and tracking:
+
+```
+ResourceRegistry (Singleton)
+├─ PCIeSlotPool (PCIe slot allocation)
+├─ PCIeLanePool (PCIe lane allocation)
+├─ RAMSlotPool (RAM DIMM slot tracking)
+├─ M2SlotPool (M.2 NVMe slot tracking)
+├─ U2SlotPool (U.2 storage slot tracking)
+└─ SATAPortPool (SATA port allocation)
+```
+
+**Purpose**: Centralized resource allocation preventing conflicts and over-allocation.
+
+**Example**:
+```php
+$registry = ResourceRegistry::getInstance();
+$pciPool = $registry->getPool('pcie_slots', $chassisUuid);
+$available = $pciPool->getAvailableSlots();
+```
+
+---
+
+## Network Component Management
+
+### NIC Port Tracking
+
+**File**: `includes/models/NICPortTracker.php`
+
+**Functionality**:
+- Track available/allocated ports on NIC cards
+- Associate SFP transceivers with ports
+- Validate port configurations
+
+**Workflow**:
+```
+NIC Added to Config
+    ↓
+NICPortTracker Initialized
+    ├─ Load NIC specifications (ports, speed)
+    └─ Initialize port tracking
+    ↓
+SFP Module Assignment
+    ├─ Validate port number
+    ├─ Check compatibility (speed, type)
+    └─ Allocate port to SFP
+    ↓
+Configuration Validation
+    └─ Verify all ports properly configured
+```
+
+---
+
+### SFP Transceiver Management
+
+**Files**:
+- `includes/models/SFPPortTracker.php` - Port-level SFP tracking
+- `includes/models/SFPCompatibilityResolver.php` - SFP compatibility checking
+- `All-JSON/sfp-jsons/` - SFP specifications
+
+**Features**:
+- SFP module inventory management
+- NIC to SFP compatibility validation
+- Speed capability verification
+- Port type compatibility checking
+
+**Compatibility Matrix**:
+```
+NIC Specifications
+├─ Port Count (4, 8, 16, etc.)
+├─ Port Type (SFP+, QSFP+, etc.)
+├─ Speed (1G, 10G, 25G, 40G, 100G)
+└─ Form Factor
+
+SFP Module Specifications
+├─ Type (SFP, SFP+, QSFP, etc.)
+├─ Speed (1G, 10G, 25G, etc.)
+├─ Wavelength (SR, LR, ER, etc.)
+└─ Connector Type (LC, MPO, etc.)
+```
+
+**Workflow**:
+```
+server-add-sfp Request
+    ↓
+Load NIC Specs
+    ↓
+Validate SFP Compatibility
+    ├─ Check speed compatibility
+    ├─ Check port type match
+    ├─ Check form factor
+    └─ Check connector type
+    ↓
+SFPCompatibilityResolver::validateCompatibility()
+    ↓
+Update NICPortTracker
+    ↓
+Mark SFP as allocated
 ```
 
 ---

@@ -2286,9 +2286,10 @@ function handleGetCompatible($serverBuilder, $user) {
                         }
 
                         if (empty($nicPortTypes)) {
-                            // No NICs in configuration
-                            $isCompatible = false;
-                            $compatibilityReasons = ['Add a NIC card with SFP+/QSFP+/SFP28 ports before adding SFP modules'];
+                            // REQUIREMENT #1: No NICs in configuration - ALL SFPs are compatible
+                            // Users can add SFPs before adding NICs (dynamic dependency resolution)
+                            $isCompatible = true;
+                            $compatibilityReasons = ['SFP can be added now - will be assigned when compatible NIC is added'];
                         } else {
                             // Get SFP type from specs
                             $sfpSpecs = $componentDataService->getComponentSpecs('sfp', $component['UUID']);

@@ -37,11 +37,9 @@ api/
 │
 ├── auth/                   # Authentication endpoints (JWT-based)
 │   ├── login_api.php       # JWT login handler
-│   ├── logout_api.php      # JWT logout handler
 │   ├── register_api.php    # User registration
-│   ├── check_session_api.php  # Session validation
-│   ├── change_password_api.php # Password change
-│   └── forgot_password_api.php # Password recovery
+│   ├── forgot_password_api.php # Password recovery
+│   └── (session-based endpoints REMOVED)
 │
 ├── server/                 # Server configuration endpoints
 │   ├── server_api.php      # Main server operations (add/remove/validate)
@@ -51,12 +49,6 @@ api/
 ├── acl/                    # Access control endpoints
 │   ├── roles_api.php       # Role management
 │   └── permissions_api.php # Permission management
-│
-├── auth/                   # Authentication endpoints (JWT-based - CURRENT)
-│   ├── login_api.php       # JWT login handler
-│   ├── register_api.php    # User registration
-│   ├── forgot_password_api.php # Password recovery
-│   └── (session-based endpoints REMOVED)
 │
 ├── chassis/                # Chassis-specific operations
 │   └── chassis_api.php     # Chassis management and querying
@@ -89,7 +81,7 @@ includes/
 │   └── ConfigurationCache.php          # Server config caching
 │
 ├── models/                 # Business logic classes
-│   ├── FlexibleCompatibilityValidator.php  # ⭐ Main compatibility orchestrator
+│   ├── FlexibleCompatibilityValidator.php  # ⭐ Main compatibility orchestrator (Phase 2)
 │   ├── ComponentCompatibility.php          # CPU-MB, RAM-MB compatibility
 │   ├── StorageConnectionValidator.php      # ⭐ Storage/HBA/backplane validation
 │   ├── PCIeSlotTracker.php                 # PCIe slot allocation tracker
@@ -110,6 +102,9 @@ includes/
 │   ├── ComponentQueryBuilder.php           # Query building utilities
 │   ├── ValidatorFactory.php                # Validator factory pattern
 │   ├── OnboardNICHandler.php               # Onboard NIC management
+│   ├── NICPortTracker.php                  # NIC port allocation & tracking
+│   ├── SFPPortTracker.php                  # SFP transceiver port tracking
+│   ├── SFPCompatibilityResolver.php        # SFP compatibility validation
 │   └── CompatibilityEngine.php             # Legacy compatibility wrapper
 │
 ├── resources/              # Resource pool management
@@ -127,12 +122,10 @@ includes/
 │   ├── ValidationContext.php            # Validation context object
 │   └── ValidationResult.php             # Validation result object
 │
-├── validators/             # Specialized validators (NEW ARCHITECTURE)
+├── validators/             # Specialized validators (PHASE 3 - NEW ARCHITECTURE)
 │   ├── BaseValidator.php                # Base validator class
-│   ├── ValidatorOrchestrator.php        # ⭐ Main validator orchestrator
+│   ├── ValidatorOrchestrator.php        # ⭐ Main validator orchestrator (Phase 3)
 │   ├── OrchestratorFactory.php          # Factory for orchestrators
-│   ├── ValidationContext.php            # Validation context
-│   ├── ValidationResult.php             # Validation result
 │   ├── APIIntegrationHelper.php         # API integration helper
 │   ├── ChassisValidator.php             # Chassis validation
 │   ├── ChassisBackplaneValidator.php    # Backplane validation
@@ -151,6 +144,7 @@ includes/
 │   ├── HBAValidator.php                 # HBA card validation
 │   ├── HBARequirementValidator.php      # HBA requirement validation
 │   ├── NICValidator.php                 # NIC validation
+│   ├── SFPValidator.php                 # SFP module validation (NEW)
 │   ├── CaddyValidator.php               # Caddy/adapter validation
 │   └── SlotAvailabilityValidator.php    # Slot availability checking
 │
@@ -173,47 +167,50 @@ includes/
 
 ```
 All-JSON/
-├── cpu-jsons/
+├── cpu-jsons/                  # CPU processor specifications (10 component type)
 │   ├── Cpu base level 1.json             # CPU base level specification
 │   ├── Cpu family level 2.json           # CPU family level specification
 │   └── Cpu-details-level-3.json          # CPU detailed specifications
 │
-├── motherboard-jsons/
+├── motherboard-jsons/          # Server motherboard specifications
 │   ├── motherboard level 1.json          # Motherboard base level
 │   ├── motherboard level 2.json          # Motherboard family level
 │   └── motherboard-level-3.json          # Motherboard detailed specifications
 │
-├── Ram-jsons/
+├── Ram-jsons/                  # Memory module specifications
 │   ├── info_ram.json                     # RAM information
 │   └── ram_detail.json                   # RAM detailed specifications
 │
-├── storage-jsons/
+├── storage-jsons/              # Hard drives & SSD specifications
 │   ├── storage.json                      # Storage base specification
 │   ├── storagedetail.json                # Storage detailed info
 │   └── storage-level-3.json              # Storage level 3 specifications
 │
-├── nic-jsons/
-│   └── nic-level-3.json                  # NIC detailed specifications
+├── nic-jsons/                  # Network interface card specifications
+│   └── nic-level-3.json                  # NIC detailed specifications (4-port, 10-port, etc)
 │
-├── caddy-jsons/
-│   └── caddy.json                        # Caddy/adapter specifications
+├── caddy-jsons/                # HDD/SSD mounting bracket specifications
+│   ├── caddy.json                        # Caddy/adapter specifications
 │   └── caddy_details.json                # Caddy detailed specifications
 │
-├── chassis-jsons/
-│   └── chassis-level-3.json              # Chassis detailed specifications
+├── chassis-jsons/              # Server chassis specifications
+│   └── chassis-level-3.json              # Chassis detailed specs (backplane config)
 │
-├── pci-jsons/
+├── pci-jsons/                  # PCIe expansion card specifications
 │   ├── pci-level-1.json                  # PCIe base level
 │   ├── pci-level-2.json                  # PCIe family level
 │   └── pci-level-3.json                  # PCIe detailed specifications
 │
-└── hbacard-jsons/
-    └── hbacard-level-3.json              # HBA card detailed specifications
+├── hbacard-jsons/              # Host bus adapter (SAS/RAID) specifications
+│   └── hbacard-level-3.json              # HBA card detailed specifications
+│
+└── sfp-jsons/                  # SFP transceiver module specifications (NEW)
+    └── sfp-level-3.json                  # SFP/SFP+/QSFP detailed specs
 ```
 
-**Purpose**: Contains JSON specification files for all component types. UUIDs in these files are the **only** valid UUIDs for inventory insertion.
+**Purpose**: Contains JSON specification files for all 10 component types. UUIDs in these files are the **only** valid UUIDs for inventory insertion.
 
-**Critical**: Component UUIDs must exist in corresponding JSON file before being added to inventory.
+**Critical Rule**: Component UUIDs must exist in corresponding JSON file before being added to inventory. This enforces strict control over what components are allowed in the system.
 
 ---
 
@@ -560,6 +557,12 @@ tests/
 - **Server state** → [includes/models/ServerBuilder.php](../includes/models/ServerBuilder.php)
 - **Server persistence** → [includes/models/ServerConfiguration.php](../includes/models/ServerConfiguration.php)
 - **NIC handling** → [includes/models/OnboardNICHandler.php](../includes/models/OnboardNICHandler.php)
+
+### Network & SFP Management (NEW)
+- **NIC port tracking** → [includes/models/NICPortTracker.php](../includes/models/NICPortTracker.php)
+- **SFP port tracking** → [includes/models/SFPPortTracker.php](../includes/models/SFPPortTracker.php)
+- **SFP compatibility** → [includes/models/SFPCompatibilityResolver.php](../includes/models/SFPCompatibilityResolver.php)
+- **SFP specifications** → [All-JSON/sfp-jsons/sfp-level-3.json](../All-JSON/sfp-jsons/)
 
 ### Database & Schema
 - **Database schema** → [shubhams ims_dev main.sql](../shubhams%20ims_dev%20main.sql)

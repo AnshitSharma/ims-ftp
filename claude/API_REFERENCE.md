@@ -1,22 +1,29 @@
 # API_REFERENCE.md
 
-**Complete BDC IMS API Endpoint Catalog**
+**Complete BDC IMS API Endpoint Catalog (80+ Endpoints)**
 
 > **Base URL**: `https://shubham.staging.cloudmate.in/bdc_ims_dev/api/api.php`
 >
 > **Request Method**: POST (unless specified otherwise)
 >
 > **Authentication**: JWT Bearer token in `Authorization` header (except `auth-*` endpoints)
+>
+> **Total Endpoints**: 80+ covering 10 component types + system operations
 
 ## Table of Contents
 
-- [Authentication](#authentication)
-- [Server Configuration](#server-configuration)
-- [Compatibility Checking](#compatibility-checking)
-- [Component Management](#component-management)
-- [ACL & Permissions](#acl--permissions)
-- [User Management](#user-management)
-- [Dashboard & Search](#dashboard--search)
+- [Authentication](#authentication) (7 endpoints)
+- [Server Configuration](#server-configuration) (25 endpoints)
+  - [Core Configuration](#core-configuration)
+  - [Retrieval & Validation](#retrieval--validation)
+  - [Updates](#updates)
+  - [SFP/Transceiver Management](#sfptransceiver-management)
+  - [NIC Management](#nic-management)
+- [Compatibility Checking](#compatibility-checking) (15 endpoints)
+- [Component Management](#component-management) (54 endpoints - 9 types × 6 operations)
+- [ACL & Permissions](#acl--permissions) (15 endpoints)
+- [User Management](#user-management) (5 endpoints)
+- [Dashboard & Search](#dashboard--search) (2 endpoints)
 
 ---
 
@@ -143,7 +150,46 @@
 
 ---
 
+### auth-forgot_password
+**Purpose**: Initiate password recovery process
+
+**Parameters**:
+- `email` (required): User's email address
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Password reset link sent to email"
+}
+```
+
+**Required Permission**: None (public)
+
+---
+
+### auth-reset_password
+**Purpose**: Reset password with recovery token
+
+**Parameters**:
+- `token` (required): Password reset token
+- `new_password` (required): New password
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Password reset successfully"
+}
+```
+
+**Required Permission**: None (valid reset token)
+
+---
+
 ## Server Configuration
+
+### Core Configuration
 
 ### server-initialize
 **Purpose**: Start new server configuration
@@ -387,9 +433,373 @@
 
 ---
 
+### server-save_draft
+**Purpose**: Save current configuration as draft
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `draft_name` (optional): Name for this draft
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Configuration saved as draft"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-load_draft
+**Purpose**: Load previously saved draft configuration
+
+**Parameters**:
+- `draft_id` (required): Draft ID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "configuration_uuid": "config-abc123",
+    "components": []
+  }
+}
+```
+
+**Required Permission**: `server.view`
+
+---
+
+### server-reset_configuration
+**Purpose**: Reset current configuration to initial state
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Configuration reset successfully"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-clone-config
+**Purpose**: Duplicate existing configuration
+
+**Parameters**:
+- `source_config_uuid` (required): Configuration to clone
+- `new_config_name` (required): Name for cloned config
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "new_configuration_uuid": "config-xyz789",
+    "cloned_from": "config-abc123"
+  }
+}
+```
+
+**Required Permission**: `server.create`
+
+---
+
+### server-update-config
+**Purpose**: Update configuration details
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `name` (optional): New configuration name
+- `description` (optional): Configuration description
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Configuration updated successfully"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-update-location
+**Purpose**: Update component location and propagate changes
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `new_location` (required): New physical location
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Location updated for all components",
+  "data": {
+    "components_updated": 12
+  }
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### Retrieval & Validation
+
+### server-get-available-components
+**Purpose**: Get list of unallocated inventory components
+
+**Parameters**:
+- `component_type` (required): Component type to filter
+- `limit` (optional): Results limit
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "available_components": [
+      {
+        "ID": 15,
+        "UUID": "cpu-xeon-gold-6248r-001",
+        "SerialNumber": "SN123456",
+        "Status": 1
+      }
+    ],
+    "total_count": 25
+  }
+}
+```
+
+**Required Permission**: `server.view`
+
+---
+
+### server-get-statistics
+**Purpose**: Get configuration and inventory statistics
+
+**Parameters**:
+- `config_uuid` (optional): Specific config statistics
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "total_configurations": 45,
+    "draft_configs": 8,
+    "active_configs": 37,
+    "components_in_use": 234,
+    "components_available": 156
+  }
+}
+```
+
+**Required Permission**: `server.view`
+
+---
+
+### server-export-config
+**Purpose**: Export configuration to file
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `format` (optional): Export format (json, csv, xml)
+
+**Response**:
+```
+Binary file download (JSON/CSV/XML)
+```
+
+**Required Permission**: `server.view`
+
+---
+
+### Updates
+
+### SFP/Transceiver Management
+
+### server-add-sfp
+**Purpose**: Add SFP module to NIC
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `nic_uuid` (required): NIC component UUID
+- `sfp_uuid` (required): SFP transceiver UUID
+- `port_number` (required): NIC port number (1-based)
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "SFP module added successfully",
+  "data": {
+    "nic_uuid": "nic-intel-x520-001",
+    "port_number": 1,
+    "sfp_uuid": "sfp-10g-sr-001"
+  }
+}
+```
+
+**Required Permission**: `server.create`
+
+---
+
+### server-remove-sfp
+**Purpose**: Remove SFP module from NIC
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `nic_uuid` (required): NIC component UUID
+- `port_number` (required): NIC port number
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "SFP module removed successfully"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-assign-sfp-to-nic
+**Purpose**: Assign SFP module to specific NIC port
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `sfp_uuid` (required): SFP UUID
+- `nic_uuid` (required): NIC UUID
+- `port_number` (required): Port number
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "SFP assigned to NIC port successfully"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-get-compatible-sfps
+**Purpose**: Get SFP modules compatible with NIC
+
+**Parameters**:
+- `nic_uuid` (required): NIC component UUID
+- `config_uuid` (required): Configuration UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "compatible_sfps": [
+      {
+        "UUID": "sfp-10g-sr-001",
+        "speed": "10G",
+        "type": "SFP+",
+        "compatibility_score": 1.0
+      }
+    ]
+  }
+}
+```
+
+**Required Permission**: `server.view`
+
+---
+
+### NIC Management
+
+### server-replace-onboard-nic
+**Purpose**: Replace motherboard onboard NIC with add-in NIC card
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `motherboard_uuid` (required): Motherboard UUID
+- `nic_uuid` (required): Add-in NIC UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Onboard NIC replaced with add-in NIC",
+  "data": {
+    "disabled_ports": 2,
+    "enabled_ports": 4
+  }
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-fix-onboard-nics
+**Purpose**: Synchronize onboard NIC specifications with motherboard specs
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+- `motherboard_uuid` (required): Motherboard UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Onboard NIC specifications synchronized"
+}
+```
+
+**Required Permission**: `server.edit`
+
+---
+
+### server-debug-motherboard-nics
+**Purpose**: Debug and display motherboard NIC specifications
+
+**Parameters**:
+- `motherboard_uuid` (required): Motherboard UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "motherboard_uuid": "mb-supermicro-x11ssl-001",
+    "onboard_nics": [
+      {
+        "port": 1,
+        "speed": "1G",
+        "type": "Ethernet"
+      }
+    ]
+  }
+}
+```
+
+**Required Permission**: `server.view`
+
+---
+
 ## Compatibility Checking
 
-### compatibility-check
+### compatibility-check-pair
 **Purpose**: Check compatibility between two components
 
 **Parameters**:
@@ -438,6 +848,280 @@
 
 ---
 
+### compatibility-get-compatible-for
+**Purpose**: Get compatible components for a specific component type
+
+**Parameters**:
+- `component_type` (required): Component type to find matches for
+- `reference_type` (required): Reference component type
+- `reference_uuid` (required): Reference component UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "compatible_components": [
+      {
+        "UUID": "component-uuid",
+        "name": "Component Name",
+        "compatibility_score": 0.95
+      }
+    ]
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
+### compatibility-batch-check
+**Purpose**: Perform batch compatibility validation
+
+**Parameters**:
+- `components` (required): Array of component objects
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "pair": ["cpu-uuid", "mb-uuid"],
+        "compatible": true,
+        "score": 1.0
+      }
+    ]
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
+### compatibility-analyze-configuration
+**Purpose**: Full analysis of entire configuration
+
+**Parameters**:
+- `config_uuid` (required): Configuration UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "analysis": {
+      "cpu_count": 2,
+      "ram_count": 12,
+      "storage_count": 8,
+      "potential_issues": [],
+      "warnings": []
+    }
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
+### compatibility-get-rules
+**Purpose**: Retrieve compatibility rules
+
+**Parameters**: None
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "rules": [
+      {
+        "rule_id": 1,
+        "type": "cpu_motherboard",
+        "description": "CPU socket must match motherboard socket"
+      }
+    ]
+  }
+}
+```
+
+**Required Permission**: `compatibility.view_statistics`
+
+---
+
+### compatibility-test-rule
+**Purpose**: Test specific compatibility rule
+
+**Parameters**:
+- `rule_id` (required): Rule ID
+- `component_1` (required): Component 1 UUID
+- `component_2` (required): Component 2 UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "rule_passes": true,
+    "details": "Socket type matches"
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
+### compatibility-get-statistics
+**Purpose**: Get compatibility validation statistics
+
+**Parameters**: None
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "total_checks": 1542,
+    "successful": 1480,
+    "failed": 62,
+    "success_rate": 0.96
+  }
+}
+```
+
+**Required Permission**: `compatibility.view_statistics`
+
+---
+
+### compatibility-clear-cache
+**Purpose**: Clear compatibility cache
+
+**Parameters**: None
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Compatibility cache cleared"
+}
+```
+
+**Required Permission**: `compatibility.manage_rules`
+
+---
+
+### compatibility-benchmark-performance
+**Purpose**: Benchmark compatibility checking performance
+
+**Parameters**: None
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "average_check_time_ms": 45,
+    "cache_hit_rate": 0.78
+  }
+}
+```
+
+**Required Permission**: `compatibility.manage_rules`
+
+---
+
+### compatibility-export-rules
+**Purpose**: Export compatibility rules to file
+
+**Parameters**:
+- `format` (optional): Export format (json, csv)
+
+**Response**:
+```
+Binary file download
+```
+
+**Required Permission**: `compatibility.manage_rules`
+
+---
+
+### compatibility-import-rules
+**Purpose**: Import compatibility rules from file
+
+**Parameters**:
+- `file` (required): Uploaded file with rules
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Rules imported successfully",
+  "data": {
+    "rules_imported": 15
+  }
+}
+```
+
+**Required Permission**: `compatibility.manage_rules`
+
+---
+
+### compatibility-check-storage-direct
+**Purpose**: Direct storage validation (storage→backplane/HBA)
+
+**Parameters**:
+- `storage_uuid` (required): Storage component UUID
+- `chassis_uuid` (required): Chassis UUID
+- `hba_uuid` (optional): HBA card UUID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "compatible": true,
+    "connection_path": "hba_card",
+    "requires_caddy": false
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
+### compatibility-check-storage-recursive
+**Purpose**: Recursive storage validation through connection chain
+
+**Parameters**:
+- `storage_uuid` (required): Storage UUID
+- `chassis_uuid` (required): Chassis UUID
+- `depth` (optional): Max recursion depth
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "compatible": true,
+    "connection_chain": [
+      "storage",
+      "hba_card",
+      "motherboard_slot"
+    ]
+  }
+}
+```
+
+**Required Permission**: `compatibility.check`
+
+---
+
 ## Component Management
 
 ### {component}-list
@@ -472,7 +1156,7 @@
 
 **Required Permission**: `{component}.view`
 
-**Component Types**: `cpu`, `ram`, `storage`, `motherboard`, `nic`, `caddy`, `chassis`, `pciecard`, `hbacard`
+**Component Types**: `cpu`, `ram`, `storage`, `motherboard`, `nic`, `caddy`, `chassis`, `pciecard`, `hbacard`, `sfp`
 
 ---
 
@@ -579,6 +1263,57 @@
 **Required Permission**: `{component}.delete`
 
 **Note**: Cannot delete if component Status = 2 (in_use)
+
+---
+
+### {component}-bulk_update
+**Pattern**: `cpu-bulk_update`, `ram-bulk_update`, etc.
+
+**Purpose**: Update multiple components at once
+
+**Parameters**:
+- `ids` (required): Array of component IDs
+- `Status` (optional): New status
+- `Location` (optional): New location
+- `Notes` (optional): Updated notes
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Components updated successfully",
+  "data": {
+    "updated_count": 5
+  }
+}
+```
+
+**Required Permission**: `{component}.edit`
+
+---
+
+### {component}-bulk_delete
+**Pattern**: `cpu-bulk_delete`, `ram-bulk_delete`, etc.
+
+**Purpose**: Delete multiple components at once
+
+**Parameters**:
+- `ids` (required): Array of component IDs
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Components deleted successfully",
+  "data": {
+    "deleted_count": 3
+  }
+}
+```
+
+**Required Permission**: `{component}.delete`
+
+**Note**: Cannot delete components with Status = 2 (in_use)
 
 ---
 
@@ -815,6 +1550,34 @@
 **Required Permission**: `user.delete`
 
 **Note**: Cannot delete own account
+
+---
+
+### users-get
+**Purpose**: Get specific user details
+
+**Parameters**:
+- `user_id` (required): User ID
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": 5,
+      "username": "operator1",
+      "email": "operator1@example.com",
+      "firstname": "John",
+      "lastname": "Doe",
+      "status": 1,
+      "created_at": "2025-11-05 10:00:00"
+    }
+  }
+}
+```
+
+**Required Permission**: `user.view`
 
 ---
 
