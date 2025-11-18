@@ -1,5 +1,14 @@
 # Ticketing System Implementation Guide
 
+**Complete documentation for implementing the BDC IMS Ticketing System**
+
+## Quick Links to Documentation
+
+- 📋 **[API_ENDPOINTS.md](API_ENDPOINTS.md)** - Complete API reference with all endpoints, request/response examples, and testing guides
+- 💻 **[BACKEND_IMPLEMENTATION.md](BACKEND_IMPLEMENTATION.md)** - Backend code structure, file changes, and implementation details
+- ✅ **[IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md)** - Step-by-step implementation guide organized by phase
+- 📝 **[CODE_EXAMPLES.md](CODE_EXAMPLES.md)** - Complete code examples, frontend integration, and common patterns
+
 ## Table of Contents
 
 1. [System Overview](#1-system-overview)

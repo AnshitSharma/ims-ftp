@@ -631,11 +631,20 @@ function handleAddComponent($serverBuilder, $user) {
             $validationInfo = ["Validation service unavailable - component added without compatibility checks"];
         }
 
-        // NEW: Riser Card Specific Validation (bidirectional checks)
-        if (!class_exists('ComponentCompatibility')) {
-            require_once __DIR__ . '/../../includes/models/ComponentCompatibility.php';
+        // NEW: Riser Card and Motherboard Specific Validation
+        if (!class_exists('ComponentDataExtractor')) {
+            require_once __DIR__ . '/../../includes/models/ComponentDataExtractor.php';
         }
-        $componentCompatibility = new ComponentCompatibility($pdo);
+        if (!class_exists('ComponentDataLoader')) {
+            require_once __DIR__ . '/../../includes/models/ComponentDataLoader.php';
+        }
+        if (!class_exists('ComponentValidator')) {
+            require_once __DIR__ . '/../../includes/models/ComponentValidator.php';
+        }
+
+        $dataExtractor = new ComponentDataExtractor();
+        $dataLoader = new ComponentDataLoader($pdo, $dataExtractor);
+        $componentValidator = new ComponentValidator($pdo, $dataLoader, $dataExtractor);
 
         // Get existing components in config for riser validation
         $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
@@ -643,28 +652,22 @@ function handleAddComponent($serverBuilder, $user) {
 
         if ($componentType === 'pciecard') {
             // Validate adding riser card
-            $riserValidation = $componentCompatibility->validateAddRiserCard(
+            $riserValidation = $componentValidator->validateAddRiserCard(
                 ['uuid' => $componentUuid, 'type' => 'pcie_card'],
                 $existingComponents
             );
 
-            if (!$riserValidation['compatible']) {
-                error_log("Riser card validation failed: " . json_encode($riserValidation['errors']));
+            if (!$riserValidation['valid']) {
+                error_log("Riser card validation failed: " . $riserValidation['error']);
                 send_json_response(0, 1, 400,
                     "Cannot add riser card due to compatibility issues",
                     [
                         'component_type' => $componentType,
                         'component_uuid' => $componentUuid,
                         'validation_status' => 'blocked',
-                        'errors' => $riserValidation['errors'],
-                        'warnings' => $riserValidation['warnings']
+                        'error' => $riserValidation['error']
                     ]
                 );
-            }
-
-            // Add warnings to response if any
-            if (!empty($riserValidation['warnings'])) {
-                $validationWarnings = array_merge($validationWarnings, $riserValidation['warnings']);
             }
         }
 
@@ -745,61 +748,54 @@ function handleAddComponent($serverBuilder, $user) {
         }
 
         if ($componentType === 'motherboard') {
-            // Validate adding motherboard when risers exist
-            $motherboardValidation = $componentCompatibility->validateAddMotherboard(
+            // Validate adding motherboard (check if one already exists)
+            $motherboardValidation = $componentValidator->validateAddMotherboard(
                 ['uuid' => $componentUuid, 'type' => 'motherboard'],
                 $existingComponents
             );
 
-            if (!$motherboardValidation['compatible']) {
-                error_log("Motherboard validation with existing risers failed: " . json_encode($motherboardValidation['errors']));
+            if (!$motherboardValidation['valid']) {
+                error_log("Motherboard validation failed: " . $motherboardValidation['error']);
                 send_json_response(0, 1, 400,
-                    "Cannot add motherboard - incompatible with existing riser cards",
+                    "Cannot add motherboard",
                     [
                         'component_type' => $componentType,
                         'component_uuid' => $componentUuid,
                         'validation_status' => 'blocked',
-                        'errors' => $motherboardValidation['errors'],
-                        'suggestion' => 'Choose a motherboard with sufficient riser slots and mounting space'
+                        'error' => $motherboardValidation['error']
                     ]
                 );
-            }
-
-            // Add warnings if any
-            if (!empty($motherboardValidation['warnings'])) {
-                $validationWarnings = array_merge($validationWarnings, $motherboardValidation['warnings']);
             }
         }
 
         if ($componentType === 'chassis') {
-            // Validate adding chassis when risers exist
-            $chassisValidation = $componentCompatibility->validateAddChassis(
+            // Validate adding chassis (check if one already exists)
+            $chassisValidation = $componentValidator->validateAddChassis(
                 ['uuid' => $componentUuid, 'type' => 'chassis'],
                 $existingComponents
             );
 
-            if (!$chassisValidation['compatible']) {
-                error_log("Chassis validation with existing risers failed: " . json_encode($chassisValidation['errors']));
+            if (!$chassisValidation['valid']) {
+                error_log("Chassis validation failed: " . $chassisValidation['error']);
                 send_json_response(0, 1, 400,
-                    "Cannot add chassis - insufficient height for existing riser cards",
+                    "Cannot add chassis",
                     [
                         'component_type' => $componentType,
                         'component_uuid' => $componentUuid,
                         'validation_status' => 'blocked',
-                        'errors' => $chassisValidation['errors'],
-                        'suggestion' => 'Choose a taller chassis that can accommodate your riser cards'
+                        'error' => $chassisValidation['error']
                     ]
                 );
-            }
-
-            // Add warnings if any
-            if (!empty($chassisValidation['warnings'])) {
-                $validationWarnings = array_merge($validationWarnings, $chassisValidation['warnings']);
             }
         }
 
         if ($componentType === 'hbacard') {
             // Validate adding HBA card - check storage device compatibility and PCIe slots
+            if (!class_exists('ComponentCompatibility')) {
+                require_once __DIR__ . '/../../includes/models/ComponentCompatibility.php';
+            }
+            $componentCompatibility = new ComponentCompatibility($pdo);
+
             $hbaValidation = $componentCompatibility->checkHBADecentralizedCompatibility(
                 ['uuid' => $componentUuid, 'type' => 'hbacard'],
                 array_map(function($comp) {

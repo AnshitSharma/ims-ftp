@@ -121,7 +121,11 @@ try {
         case 'sfp':
             handleComponentOperations($module, $operation, $user);
             break;
-            
+
+        case 'ticket':
+            handleTicketOperations($operation, $user);
+            break;
+
         default:
             error_log("Invalid module requested: $module");
             send_json_response(0, 1, 400, "Invalid module: $module");
@@ -847,6 +851,39 @@ function handleUserOperations($operation, $user) {
         default:
             send_json_response(0, 1, 400, "Invalid user operation: $operation");
     }
+}
+
+/**
+ * Handle ticket operations
+ */
+function handleTicketOperations($operation, $user) {
+    global $pdo, $acl;
+    $user_id = $user['id'];
+
+    // Map operations to endpoint files
+    $endpointMap = [
+        'create' => 'ticket-create.php',
+        'list' => 'ticket-list.php',
+        'get' => 'ticket-get.php',
+        'update' => 'ticket-update.php',
+        'delete' => 'ticket-delete.php'
+    ];
+
+    if (!isset($endpointMap[$operation])) {
+        send_json_response(0, 1, 400, "Invalid ticket operation: $operation");
+        return;
+    }
+
+    $endpointFile = __DIR__ . '/ticket/' . $endpointMap[$operation];
+
+    if (!file_exists($endpointFile)) {
+        error_log("Ticket endpoint file not found: $endpointFile");
+        send_json_response(0, 1, 500, "Ticket endpoint not implemented: $operation");
+        return;
+    }
+
+    // Include and execute the endpoint
+    require $endpointFile;
 }
 
 /**
