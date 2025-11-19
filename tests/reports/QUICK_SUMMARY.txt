@@ -1,0 +1,487 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║              BDC IMS - Server Build Validation Test Suite                ║
+║                       COMPREHENSIVE ANALYSIS REPORT                       ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+Generated: 2025-11-19
+Test File: tests/server_build_validation.php
+Target URL: https://shubham.staging.cloudmate.in/bdc_ims_dev/api/api.php
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+█ DEPLOYMENT STATUS: ⚠️  CRITICAL ISSUE FOUND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM:
+  The staging server is returning PHP errors instead of JSON responses.
+
+  Error: "Failed to open stream: No such file or directory"
+  Missing: /home/shubhams/public_html/bdc_ims_dev/core/helpers/JWTHelper.php
+
+  Root Cause: Code has been refactored from includes/ to core/helpers/ structure,
+  but the deployed version hasn't been updated with the new file paths.
+
+IMPACT:
+  ❌ Cannot execute test suite against staging server
+  ❌ Authentication endpoint failing with PHP error
+  ❌ All subsequent API calls blocked
+
+SOLUTION:
+  1. Deploy latest refactored code to staging
+  2. Verify file structure matches new organization
+  3. Ensure database connection and credentials work
+  4. Re-run tests after deployment
+
+
+█ TEST SUITE OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Test File: server_build_validation.php (739 lines)
+
+The test suite comprises 4 main classes designed to comprehensively validate
+the server build workflow:
+
+1. IMSApiClient (Lines 14-178)
+   └─ HTTP communication with the API
+   └─ JWT authentication handling
+   └─ Error handling and response parsing
+
+2. TestLogger (Lines 180-282)
+   └─ Structured logging system
+   └─ Console output with color codes
+   └─ File-based audit trails
+   └─ Performance metrics tracking
+
+3. ServerConfigurationBuilder (Lines 284-523)
+   └─ Server build orchestration
+   └─ Component compatibility checking
+   └─ Configuration state management
+   └─ Riser slot and onboard NIC handling
+
+4. ServerBuildValidator (Lines 525-712)
+   └─ 3 distinct test scenarios
+   └─ Chassis/motherboard selection
+   └─ Component inventory management
+   └─ Results aggregation
+
+
+█ TEST SCENARIOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Scenario 1: Standard Full Server Build
+  ✓ Creates basic server configuration
+  ✓ Tests all component types
+  ✓ Validates standard workflow
+  ✓ Ensures compatibility engine works
+  ✓ Tests configuration finalization
+  ✓ Verifies component cleanup
+
+Scenario 2: Riser Slot Edge Case (Advanced)
+  ✓ Finds motherboards with riser-only slots
+  ✓ Tests riser card installation
+  ✓ Verifies PCIe slot unlocking
+  ✓ Adds components to riser slots
+  ✓ Tests complex slot allocation
+  ✓ Validates riser compatibility
+
+Scenario 3: Onboard NIC Detection (Advanced)
+  ✓ Finds motherboards with integrated NICs
+  ✓ Verifies automatic onboard detection
+  ✓ Tests add-on NIC compatibility
+  ✓ Prevents slot conflicts
+  ✓ Validates onboard transparency
+  ✓ Tests mixed add-on/onboard scenarios
+
+
+█ API ENDPOINTS TESTED (11 Total)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Authentication (1 endpoint):
+  POST auth-login
+    └─ JWT token generation
+    └─ User profile retrieval
+    └─ Token expiry setup
+
+Component Listing (9 endpoints):
+  POST cpu-list, ram-list, storage-list, motherboard-list
+  POST nic-list, caddy-list, chassis-list, pciecard-list, hbacard-list
+    └─ Inventory enumeration
+    └─ JSON spec validation
+    └─ Status tracking
+
+Server Management (4 endpoints):
+  POST server-create
+    └─ Configuration initialization
+    └─ Chassis/motherboard validation
+
+  POST server-get-config
+    └─ Configuration state retrieval
+    └─ Component tree loading
+    └─ Onboard component detection
+
+  POST server-get-compatibility
+    └─ Compatible component querying
+    └─ Slot availability calculation
+    └─ Compatibility reason reporting
+
+  POST server-add-component
+    └─ Component inventory updates
+    └─ Slot tracking
+    └─ UUID validation
+
+  POST server-validate-config
+    └─ Full configuration validation
+    └─ Compatibility checking
+    └─ Power budget validation
+    └─ Error reporting
+
+  POST server-finalize-config
+    └─ Configuration locking
+    └─ Component status finalization
+    └─ Deployment readiness
+
+  POST server-delete-config
+    └─ Configuration removal
+    └─ Component status reset
+    └─ Inventory reconciliation
+
+
+█ COMPONENT TYPES COVERED (9 Total)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CPU (Processors)
+  - Socket compatibility (LGA2011, LGA3647, EPYC, etc.)
+  - TDP calculations
+  - Core/thread specifications
+  - Test: 1-2 units per configuration
+
+RAM (Memory)
+  - Type compatibility (DDR4, DDR5)
+  - Speed matching
+  - Slot allocation
+  - Test: 4 DIMM configurations
+
+Storage (Disk Drives)
+  - Interface types (SATA, SAS, NVMe)
+  - Connection validation
+  - Capacity tracking
+  - Test: 2-4 drive configurations
+
+Motherboard
+  - Socket type
+  - Slot configuration
+  - Onboard components
+  - Test: Standard and riser-only variants
+
+NIC (Network Interfaces)
+  - Onboard NIC detection
+  - Add-on NIC compatibility
+  - Port specifications
+  - Test: With and without onboard NICs
+
+Caddy (Drive Enclosures)
+  - Optional inventory type
+  - Support for external storage
+
+Chassis (Server Enclosures)
+  - Form factor (1U, 2U, 4U)
+  - Slot limits
+  - Test: Multiple chassis types
+
+PCIe Cards (Expansion Cards)
+  - Riser cards (for riser-only slots)
+  - Compatibility with motherboard
+  - Test: Riser installation scenario
+
+HBA Cards (Host Bus Adapters)
+  - Storage connectivity
+  - RAID functionality
+  - Test: Storage compatibility validation
+
+
+█ EDGE CASES & SPECIAL VALIDATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Riser Slot Handling
+   ├─ Identifies riser-only motherboards
+   ├─ Installs riser cards dynamically
+   ├─ Recalculates slot availability
+   ├─ Adds components to riser slots
+   └─ Validates correct state transitions
+
+2. Onboard NIC Detection
+   ├─ Auto-detects integrated network ports
+   ├─ Reserves slots for onboard components
+   ├─ Prevents dual-NIC conflicts
+   ├─ Tests transparent onboard availability
+   └─ Validates mixed scenarios
+
+3. Multi-Quantity Components
+   ├─ CPU: Dual-socket support (up to 2)
+   ├─ RAM: DIMM slot filling (up to 4)
+   ├─ Storage: Multi-drive support (2-4)
+   ├─ Slot decrement validation
+   └─ Quantity-based compatibility
+
+4. Configuration State Management
+   ├─ Initializing → Active → Finalized
+   ├─ Component status tracking
+   ├─ Lock/unlock transitions
+   ├─ Component reuse after deletion
+   └─ Concurrent config isolation
+
+5. Validation Rules
+   ├─ Minimum component requirements
+   ├─ Socket compatibility
+   ├─ Power budget (TDP)
+   ├─ Physical constraints
+   ├─ HBA-Storage compatibility
+   ├─ Onboard conflict detection
+   └─ Error reason reporting
+
+
+█ EXPECTED TEST METRICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Total API Calls:        50-70 (depends on inventory size)
+Expected Duration:      30-60 seconds
+Pass Rate Target:       100%
+Error Rate Target:      0%
+HTTP Status Codes:      200 (success), 400 (bad input), 401 (auth), 500 (error)
+
+Component Availability Requirements:
+  ✓ CPU:         ≥1 type
+  ✓ RAM:         ≥1 type
+  ✓ Storage:     ≥1 type
+  ✓ Motherboard: ≥2 types (≥1 standard, ideally ≥1 riser-only)
+  ✓ NIC:         ≥1 type
+  ✓ Chassis:     ≥3 types
+  ✓ PCIe Card:   ≥1 type (for riser testing)
+  ✓ HBA Card:    ≥1 type (recommended)
+
+
+█ LOG FILES GENERATED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After successful test execution, the following files are created:
+
+1. server_build_validation_YYYY-MM-DD_HH-MM-SS.log
+   └─ Complete execution log with timestamps
+   └─ Color-coded console output
+   └─ API call details (request/response)
+   └─ Configuration summaries
+   └─ Test statistics
+
+2. api_test_YYYY-MM-DD_HH-MM-SS.json
+   └─ Machine-readable results
+   └─ Full response payloads
+   └─ HTTP status codes
+   └─ Success/failure tracking
+   └─ API call timing
+
+Files saved to: tests/reports/
+
+
+█ HOW TO RUN THE TESTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Option 1: Using Windows Batch Script (Easiest)
+  cd "c:\Users\anshi\Downloads\Work\mine\ims ftp"
+  tests\run_server_validation.bat https://your-staging-url
+
+Option 2: Using PHP Directly
+  php tests/server_build_validation.php https://your-staging-url
+
+Option 3: With Custom Base URL
+  php tests/server_build_validation.php http://localhost:8000
+
+Option 4: Default (localhost:8000)
+  php tests/server_build_validation.php
+  OR
+  php tests/server_build_validation.php http://localhost:8000
+
+Example Output:
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║    BDC IMS - Complete Server Configuration Workflow Validation          ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  Base URL: https://your-server.com/api/api.php
+
+  [000.123s] [SUCCESS] Authentication successful. Token: eyJhbGc...
+  [000.456s] [INFO] Found 15 CPU(s)
+  [000.789s] [INFO] Found 12 RAM(s)
+  [001.234s] [SUCCESS] Server created successfully. Config ID: cfg_12345
+  ...
+
+  ════════════════════════════════════════════════════════════════════════════
+  Test Completed: 2025-11-19 14:30:45
+  Total Duration: 45.23s
+  Total API Calls: 67
+  ════════════════════════════════════════════════════════════════════════════
+
+
+█ PREREQUISITES FOR TESTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Server Requirements:
+  ✓ PHP 7.4+ with cURL extension
+  ✓ MySQL 5.7+ database
+  ✓ Network access to staging URL
+
+Database Requirements:
+  ✓ Database schema imported
+  ✓ Tables created (users, components, configurations, etc.)
+  ✓ Test user created (superadmin/password)
+  ✓ Component inventory populated
+
+File Structure:
+  ✓ All-JSON/cpu-jsons/*.json (component specifications)
+  ✓ All-JSON/ram-jsons/*.json
+  ✓ All-JSON/storage-jsons/*.json
+  ✓ All-JSON/motherboard-jsons/*.json
+  ✓ All-JSON/nic-jsons/*.json
+  ✓ All-JSON/chassis-jsons/*.json
+  ✓ All-JSON/pciecard-jsons/*.json
+  ✓ All-JSON/hbacard-jsons/*.json
+  ✓ All-JSON/caddy-jsons/*.json
+
+Code Structure:
+  ✓ api/api.php (main router)
+  ✓ core/config/app.php (configuration)
+  ✓ core/helpers/BaseFunctions.php
+  ✓ core/helpers/JWTHelper.php
+  ✓ Compatibility validation modules
+
+
+█ WHAT THE TEST VALIDATES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ JWT Authentication
+  - Token generation
+  - Token format and structure
+  - User profile retrieval
+  - Token expiry setup
+
+✓ API Response Format
+  - Proper JSON structure
+  - Required fields present
+  - Data type correctness
+  - HTTP status codes
+
+✓ Component Inventory
+  - All 9 types available
+  - Proper JSON spec loading
+  - UUID consistency
+  - Status tracking
+
+✓ Server Build Workflow
+  - Configuration creation
+  - State transitions
+  - Component addition
+  - Configuration locking
+
+✓ Compatibility Engine
+  - Slot availability calculation
+  - Compatible component filtering
+  - Reason reporting
+  - Multi-component validation
+
+✓ Edge Cases
+  - Riser slot handling
+  - Onboard component detection
+  - Multi-quantity components
+  - Concurrent configurations
+
+✓ Data Integrity
+  - Proper inventory updates
+  - Component status changes
+  - Slot decrement tracking
+  - Configuration cleanup
+
+
+█ TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Issue: PHP Fatal Error about missing files
+Solution:
+  1. Check file structure: ls -la core/helpers/
+  2. Verify new paths in api/api.php
+  3. Redeploy code from latest repository
+  4. Clear any PHP opcode caches
+
+Issue: Authentication fails with 401
+Solution:
+  1. Verify credentials: username=superadmin, password=password
+  2. Check user exists in database: SELECT * FROM users WHERE username='superadmin'
+  3. Verify database connection string
+  4. Check JWT configuration in .env or config files
+
+Issue: No components found in inventory
+Solution:
+  1. Verify All-JSON files exist and have content
+  2. Check database tables for component inventory
+  3. Ensure JSON UUIDs match database records
+  4. Verify file permissions (readable by PHP process)
+
+Issue: Compatibility returns no results
+Solution:
+  1. Verify motherboard and chassis specifications
+  2. Check CPU socket compatibility data
+  3. Ensure RAM type/speed specifications set
+  4. Verify compatibility validator logic
+
+Issue: Configuration creation fails
+Solution:
+  1. Verify chassis_uuid and motherboard_uuid are valid
+  2. Check that UUIDs exist in respective inventory tables
+  3. Verify database foreign key relationships
+  4. Check server_configurations table exists
+
+Issue: Tests take longer than expected
+Solution:
+  1. Check database query performance (add indexes if needed)
+  2. Verify network latency to server
+  3. Check server CPU/memory utilization
+  4. Look for long-running compatibility queries
+
+
+█ NEXT STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+IMMEDIATE (To Fix Current Issue):
+  1. Deploy refactored code to staging server
+  2. Verify file structure matches new organization
+  3. Update database schema if needed
+  4. Test authentication endpoint manually
+
+SHORT TERM (After Deployment):
+  1. Run tests against staging server
+  2. Review generated log files
+  3. Fix any failing scenarios
+  4. Document configuration settings
+
+MEDIUM TERM (For Production):
+  1. Load test with concurrent configurations
+  2. Performance optimization
+  3. Security hardening
+  4. ACL permission enforcement testing
+
+LONG TERM (Ongoing):
+  1. Add more edge case tests
+  2. Performance benchmarking
+  3. Integration with monitoring/alerting
+  4. Automated test pipeline
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+This test suite provides comprehensive validation of the BDC IMS server build
+workflow. It ensures the API is functioning correctly, the compatibility engine
+is making proper decisions, and all edge cases are handled appropriately.
+
+Once the staging server is updated with the refactored code, you can run these
+tests to verify everything is working correctly.
+
+For detailed information, see: TEST_ANALYSIS_REPORT.md
+
+═══════════════════════════════════════════════════════════════════════════════

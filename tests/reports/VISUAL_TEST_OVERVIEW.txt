@@ -1,0 +1,431 @@
+
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                    BDC IMS TEST SUITE - VISUAL OVERVIEW                       ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+TEST ARCHITECTURE
+═════════════════════════════════════════════════════════════════════════════════
+
+                          ┌─────────────────────┐
+                          │  ServerBuildValidator │ (Lines 525-712)
+                          │  Main Orchestrator   │
+                          └──────────┬──────────┘
+                                     │
+                  ┌──────────────────┼──────────────────┐
+                  │                  │                  │
+         ┌────────▼─────────┐  ┌────▼──────────┐  ┌───▼──────────┐
+         │Configuration 1   │  │ Config 2      │  │ Config 3     │
+         │Standard Build    │  │ Riser Slots   │  │ Onboard NIC  │
+         └────────┬─────────┘  └────┬──────────┘  └───┬──────────┘
+                  │                  │                  │
+                  └──────────────────┼──────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │ServerConfigurationBuilder      │ (Lines 284-523)
+                    │ Orchestrates build workflow    │
+                    └────────────────┬────────────────┘
+                                     │
+                  ┌──────────────────┼──────────────────┐
+                  │                  │                  │
+          ┌───────▼────────┐ ┌──────▼─────────┐ ┌─────▼────────┐
+          │ buildServer()  │ │checkOnboard()  │ │installRiser()│
+          │ Component add  │ │Detect NIC      │ │ Add riser    │
+          └────────────────┘ └────────────────┘ └──────────────┘
+                  │                  │                  │
+                  └──────────────────┼──────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │      IMSApiClient                │ (Lines 14-178)
+                    │   HTTP Communication Layer      │
+                    └────────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │     REMOTE API SERVER            │
+                    │ https://shubham.staging..../api │
+                    └─────────────────────────────────┘
+
+
+COMPONENT FLOW DIAGRAM
+═════════════════════════════════════════════════════════════════════════════════
+
+User / Test Script
+        │
+        ▼
+    ┌────────────────┐
+    │ IMSApiClient   │──────────────┐
+    │  - HTTP POST   │              │
+    │  - JWT Headers │              │
+    │  - JSON Parse  │              │
+    └────────────────┘              │
+        │                           │
+        │ makeApiCall()             │ TestLogger
+        │                           │ - Console output
+        ▼                           │ - File logging
+    STAGING SERVER                 ▼
+    ┌──────────────────────────────────────┐
+    │         api/api.php (Router)         │
+    │  - Parse action parameter            │
+    │  - Route to appropriate handler      │
+    │  - JWT validation                    │
+    │  - ACL permission check              │
+    └──────┬───────────────────────────────┘
+           │
+           ├─▶ auth-login          ─▶ Login handler
+           ├─▶ {type}-list         ─▶ Component listing
+           ├─▶ server-create       ─▶ Server creation
+           ├─▶ server-get-config   ─▶ Retrieve config
+           ├─▶ server-get-compatibility ─▶ Compatibility check
+           ├─▶ server-add-component    ─▶ Add component
+           ├─▶ server-validate-config  ─▶ Validation
+           ├─▶ server-finalize-config  ─▶ Finalization
+           └─▶ server-delete-config    ─▶ Deletion
+                │
+                ▼
+    ┌──────────────────────────────────────┐
+    │        Core Handlers                 │
+    │  - Component validators              │
+    │  - Compatibility engine              │
+    │  - State management                  │
+    └──────┬───────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────┐
+    │        MySQL Database                │
+    │  - user inventory                    │
+    │  - component inventory               │
+    │  - server_configurations             │
+    │  - configuration_components          │
+    └──────────────────────────────────────┘
+
+
+API CALL SEQUENCE
+═════════════════════════════════════════════════════════════════════════════════
+
+Execution Flow:
+
+  Call#  API Endpoint              Request Data              Response
+  ────  ──────────────────────────────────────────────────────────────────
+    1   auth-login                username, password    ──▶ access_token
+                                                           user profile
+    ├─
+    2   cpu-list                  (auth)                ──▶ CPU inventory
+    3   ram-list                  (auth)                ──▶ RAM inventory
+    4   storage-list              (auth)                ──▶ Storage inventory
+    5   motherboard-list          (auth)                ──▶ Motherboard inventory
+    6   nic-list                  (auth)                ──▶ NIC inventory
+    7   caddy-list                (auth)                ──▶ Caddy inventory
+    8   chassis-list              (auth)                ──▶ Chassis inventory
+    9   pciecard-list             (auth)                ──▶ PCIe card inventory
+   10   hbacard-list              (auth)                ──▶ HBA card inventory
+    ├─
+   11   server-create             chassis_id,           ──▶ config_id
+                                  motherboard_id,
+                                  server_name
+   12   server-get-config         config_id             ──▶ configuration
+                                                           onboard components
+   13   server-get-compatibility  config_id,            ──▶ compatible
+                                  component_type          components
+                                                           available slots
+   14   server-add-component      config_id,            ──▶ success/error
+                                  component_type,
+                                  component_uuid,
+                                  quantity
+   15-30 [Repeat 13-14 for each component type]
+    ├─
+   31   server-get-config         config_id             ──▶ updated config
+    ├─
+   32   server-validate-config    config_id             ──▶ is_valid
+                                                           errors (if any)
+    ├─
+   33   server-finalize-config    config_id             ──▶ status: finalized
+    ├─
+   34   server-delete-config      config_id             ──▶ config deleted
+                                                           components freed
+
+
+TEST SCENARIO BREAKDOWN
+═════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SCENARIO 1: STANDARD FULL SERVER BUILD                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: Setup                                                             │
+│    • Select 1st available chassis                                         │
+│    • Select 1st available motherboard                                     │
+│                                                                             │
+│  Step 2: Create Server                                                     │
+│    • POST server-create (chassis + motherboard)                          │
+│    • Receive config_id                                                    │
+│                                                                             │
+│  Step 3: Check Onboard Components                                         │
+│    • GET server-get-config                                                │
+│    • Detect onboard NICs (if any)                                        │
+│                                                                             │
+│  Step 4: Add Components                                                    │
+│    • For each type (cpu, ram, storage, nic, etc.):                       │
+│      1. GET server-get-compatibility                                      │
+│      2. Select compatible component                                       │
+│      3. POST server-add-component (with quantity)                        │
+│                                                                             │
+│  Step 5: Validate                                                          │
+│    • POST server-validate-config                                          │
+│    • Receive: is_valid (true/false), errors array                       │
+│                                                                             │
+│  Step 6: Finalize                                                          │
+│    • POST server-finalize-config                                          │
+│    • Configuration locked, ready for deployment                           │
+│                                                                             │
+│  Step 7: Cleanup                                                           │
+│    • POST server-delete-config                                            │
+│    • Components freed for next test                                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SCENARIO 2: RISER SLOT MOTHERBOARD (EDGE CASE)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: Find Riser-Only Motherboard                                      │
+│    • Search for motherboard with:                                         │
+│      - riser_slots: [data] ✓                                             │
+│      - pci_slots: [] (empty) ✓                                           │
+│    • Falls back to standard motherboard if none found                    │
+│                                                                             │
+│  Step 2: Create Server                                                     │
+│    • POST server-create (riser motherboard)                              │
+│                                                                             │
+│  Step 3: Install Riser Card                                               │
+│    • GET server-get-compatibility (component_type=pciecard)            │
+│    • Find riser card from compatible list                               │
+│    • POST server-add-component (riser card)                             │
+│                                                                             │
+│  Step 4: Verify PCIe Slots Available                                      │
+│    • GET server-get-compatibility (nic, hbacard, pciecard)             │
+│    • Should now show compatible components (slots unlocked)            │
+│                                                                             │
+│  Step 5: Add PCIe-Based Components                                        │
+│    • POST server-add-component (devices to riser slots)                 │
+│                                                                             │
+│  Step 6: Validate & Cleanup                                               │
+│    • Same as Scenario 1                                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SCENARIO 3: ONBOARD NIC DETECTION (EDGE CASE)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: Find Motherboard with Onboard NIC                                │
+│    • Search for motherboard with:                                         │
+│      - specifications.onboard_nic: true ✓                                │
+│    • Falls back to standard motherboard if none found                    │
+│                                                                             │
+│  Step 2: Create Server                                                     │
+│    • POST server-create (motherboard with onboard NIC)                  │
+│                                                                             │
+│  Step 3: Check Onboard NIC Detection                                      │
+│    • GET server-get-config                                                │
+│    • Verify onboard_components.nic is populated                         │
+│    • Confirm onboard NIC name logged                                     │
+│                                                                             │
+│  Step 4: Verify NIC Slot Allocation                                       │
+│    • GET server-get-compatibility (component_type=nic)                 │
+│    • Check available slots (should be reduced by onboard)              │
+│                                                                             │
+│  Step 5: Add Compatible NICs (if slots available)                        │
+│    • POST server-add-component (add-on NIC)                             │
+│    • Should succeed only if slots remain                                │
+│                                                                             │
+│  Step 6: Validate & Cleanup                                               │
+│    • Same as Scenario 1                                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+COMPONENT ADDITION LOGIC
+═════════════════════════════════════════════════════════════════════════════════
+
+determineQuantity($type, $component, $availableSlots)
+│
+├─ $type = 'cpu'
+│  └─ quantity = min(2, availableSlots)
+│     [Supports dual-socket configurations]
+│
+├─ $type = 'ram'
+│  └─ quantity = min(4, ceil(availableSlots / 2))
+│     [Fills half the RAM slots, up to 4 DIMMs]
+│
+├─ $type = 'storage'
+│  └─ quantity = min(2, availableSlots)
+│     [Adds 2-4 storage devices]
+│
+└─ default
+   └─ quantity = 1
+      [All other types: 1 unit per addition]
+
+
+VALIDATION RULES
+═════════════════════════════════════════════════════════════════════════════════
+
+The server-validate-config endpoint checks:
+
+✓ Minimum Requirements
+  ├─ CPU present
+  ├─ Motherboard present
+  └─ Chassis configured
+
+✓ Component Compatibility
+  ├─ CPU socket matches motherboard
+  ├─ RAM type/speed matches motherboard
+  ├─ Storage interfaces supported
+  ├─ Power budget sufficient
+  └─ Physical slots available
+
+✓ Advanced Constraints
+  ├─ HBA card connects to storage
+  ├─ PCIe cards fit in available slots
+  ├─ Onboard NICs don't conflict
+  ├─ Riser cards properly installed
+  └─ No duplicate component conflicts
+
+Error Response Example:
+{
+  "is_valid": false,
+  "errors": [
+    "CPU socket mismatch: LGA2011 not compatible with LGA3647",
+    "Insufficient power: 1200W required, 850W available",
+    "Storage interface not supported: NVMe requires M.2 slot"
+  ],
+  "warnings": [
+    "Only 2 DIMM slots filled of 16 available"
+  ]
+}
+
+
+EXPECTED OUTPUT STRUCTURE
+═════════════════════════════════════════════════════════════════════════════════
+
+Console Output (Real-time with colors):
+
+  [000.123s] [SUCCESS] Authentication successful. Token: eyJhbGc...
+  [000.456s] [INFO] Found 15 CPU(s)
+  [000.456s] [INFO] Found 12 RAM(s)
+  [000.456s] [INFO] Found 8 Storage(s)
+  [000.456s] [INFO] Found 6 Motherboard(s)
+  [000.456s] [INFO] Found 4 NIC(s)
+  [000.456s] [INFO] Found 2 Chassis(s)
+  [000.456s] [INFO] Found 3 PCIe Cards(s)
+  [000.456s] [INFO] Found 2 HBA Cards(s)
+
+  ════════════════════════════════════════════════════════════════════════
+  CONFIGURATION 1: Standard Full Server Build
+  ════════════════════════════════════════════════════════════════════════
+
+  [001.234s] [INFO] Creating server: Standard Server Build #1
+  [001.345s] [SUCCESS] Server created successfully. Config ID: cfg_12345
+  [001.456s] [INFO] Checking for onboard components...
+  [001.567s] [INFO] No onboard components detected
+  [001.678s] [INFO] Processing component type: cpu
+  [001.789s] [INFO] Found 15 compatible cpu(s)
+  [001.890s] [SUCCESS] Successfully added cpu: Intel Xeon E5-2690 v4
+  [002.000s] [INFO] Processing component type: ram
+  [002.111s] [INFO] Found 12 compatible ram(s)
+  [002.222s] [SUCCESS] Successfully added ram: 32GB DDR4-2400 DIMM
+  ... [more components]
+  [003.456s] [SUCCESS] Configuration validation: PASSED
+  [003.567s] [SUCCESS] Configuration finalized
+  [003.678s] [SUCCESS] Configuration deleted. Components freed for reuse.
+
+  ════════════════════════════════════════════════════════════════════════
+  SERVER CONFIGURATION SUMMARY - Config ID: cfg_12345
+  ════════════════════════════════════════════════════════════════════════
+  Server Name: Standard Server Build #1
+  Status: finalized
+
+  Components:
+    - cpu: 1 item(s)
+        * Intel Xeon E5-2690 v4
+    - ram: 4 item(s)
+        * 32GB DDR4-2400 DIMM
+        * 32GB DDR4-2400 DIMM
+        * 32GB DDR4-2400 DIMM
+        * 32GB DDR4-2400 DIMM
+    - storage: 2 item(s)
+        * 1TB SSD SATA
+        * 2TB HDD SATA
+    - nic: 1 item(s)
+        * 10GbE Network Interface
+  ... [more components]
+
+File Output (tests/reports/server_build_validation_YYYY-MM-DD_HH-MM-SS.log):
+  [Same as console output, without color codes]
+
+JSON Output (tests/reports/api_test_YYYY-MM-DD_HH-MM-SS.json):
+  {
+    "call_num": 1,
+    "action": "auth-login",
+    "http_code": 200,
+    "success": true,
+    "message": "Login successful",
+    "timestamp": "2025-11-19 14:30:00",
+    "full_response": {
+      "success": true,
+      "authenticated": true,
+      "code": 200,
+      "data": {
+        "tokens": { ... },
+        "user": { ... }
+      }
+    }
+  }
+  ... [more calls]
+
+
+ERROR HANDLING
+═════════════════════════════════════════════════════════════════════════════════
+
+CURL Errors:
+  ├─ Connection refused      ──▶ Server offline
+  ├─ Timeout                 ──▶ Network slow
+  └─ SSL certificate error   ──▶ HTTPS issue
+
+JSON Response Errors:
+  ├─ 400 Bad Request         ──▶ Invalid parameters
+  ├─ 401 Unauthorized        ──▶ Authentication failed
+  ├─ 403 Forbidden           ──▶ Permission denied
+  ├─ 404 Not Found           ──▶ Resource doesn't exist
+  └─ 500 Server Error        ──▶ Internal error
+
+Component Addition Failures:
+  ├─ UUID not found          ──▶ Component doesn't exist in inventory
+  ├─ No compatible slots     ──▶ All slots filled
+  ├─ Compatibility conflict  ──▶ Component incompatible
+  └─ Invalid quantity        ──▶ Requested quantity exceeds slots
+
+
+SUCCESS CRITERIA
+═════════════════════════════════════════════════════════════════════════════════
+
+Test passes if ALL of these are true:
+
+  ✓ Authentication successful (returns valid JWT)
+  ✓ All 9 component types return items
+  ✓ All 3 server configurations created
+  ✓ Onboard NIC detection works
+  ✓ Riser card installation succeeds
+  ✓ PCIe slot availability verified after riser
+  ✓ Components added without conflicts
+  ✓ Validation passes for valid configurations
+  ✓ Finalization locks configuration
+  ✓ Deletion frees all components
+  ✓ No CURL errors in HTTP calls
+  ✓ All responses are valid JSON
+  ✓ HTTP status codes correct
+  ✓ Configuration state transitions correct
+
+
+═════════════════════════════════════════════════════════════════════════════════
+Generated: 2025-11-19
+For detailed analysis, see: TEST_ANALYSIS_REPORT.md
+═════════════════════════════════════════════════════════════════════════════════

@@ -27,8 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // Include required files
-require_once(__DIR__ . '/../includes/config.php');
-require_once(__DIR__ . '/../includes/BaseFunctions.php');
+require_once(__DIR__ . '/../core/config/app.php');
+require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
 
 // Global error handler
 set_error_handler(function($severity, $message, $file, $line) {
@@ -181,7 +181,7 @@ function handleServerModule($operation, $user) {
     if (in_array($operation, ['add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components'])) {
         // Use the newer server API implementation
         global $operation;
-        require_once(__DIR__ . '/server/server_api.php');
+        require_once(__DIR__ . '/handlers/server/server_api.php');
     } else {
         // Use the step-by-step server creation implementation
         $actionMap = [
@@ -200,7 +200,7 @@ function handleServerModule($operation, $user) {
         $_POST['action'] = $internalAction;
         $_GET['action'] = $internalAction;
         
-        require_once(__DIR__ . '/server/create_server.php');
+        require_once(__DIR__ . '/handlers/server/create_server.php');
     }
 }
 
@@ -230,7 +230,7 @@ function handleCompatibilityModule($operation, $user) {
     }
     
     // Include compatibility API handler
-    require_once(__DIR__ . '/server/compatibility_api.php');
+    require_once(__DIR__ . '/handlers/server/compatibility_api.php');
 }
 
 /**
@@ -673,7 +673,7 @@ function handleRolesOperations($operation, $user) {
     global $pdo, $acl;
 
     // Include the dedicated roles API handler
-    require_once(__DIR__ . '/acl/roles_api.php');
+    require_once(__DIR__ . '/handlers/acl/roles_api.php');
     exit();
 }
 
@@ -684,7 +684,7 @@ function handlePermissionsOperations($operation, $user) {
     global $pdo, $acl;
 
     // Include the dedicated permissions API handler
-    require_once(__DIR__ . '/acl/permissions_api.php');
+    require_once(__DIR__ . '/handlers/acl/permissions_api.php');
     exit();
 }
 
@@ -874,7 +874,7 @@ function handleTicketOperations($operation, $user) {
         return;
     }
 
-    $endpointFile = __DIR__ . '/ticket/' . $endpointMap[$operation];
+    $endpointFile = __DIR__ . '/handlers/ticket/' . $endpointMap[$operation];
 
     if (!file_exists($endpointFile)) {
         error_log("Ticket endpoint file not found: $endpointFile");
