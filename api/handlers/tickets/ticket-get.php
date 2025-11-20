@@ -44,8 +44,8 @@
 require_once(__DIR__ . '/../../../core/models/tickets/TicketManager.php');
 
 try {
-    // Validate ticket_id parameter
-    $ticketId = $_GET['ticket_id'] ?? null;
+    // Validate ticket_id parameter (accept both POST and GET)
+    $ticketId = $_POST['ticket_id'] ?? $_GET['ticket_id'] ?? null;
 
     if (empty($ticketId) || !is_numeric($ticketId)) {
         send_json_response(false, true, 400, "ticket_id is required and must be numeric", null);
@@ -54,8 +54,9 @@ try {
 
     $ticketId = (int)$ticketId;
 
-    // Get ticket
-    $includeHistory = isset($_GET['include_history']) && $_GET['include_history'] === 'true';
+    // Get ticket (accept both POST and GET for include_history)
+    $includeHistoryParam = $_POST['include_history'] ?? $_GET['include_history'] ?? 'false';
+    $includeHistory = ($includeHistoryParam === 'true' || $includeHistoryParam === '1' || $includeHistoryParam === 1);
     $ticketManager = new TicketManager($pdo);
     $ticket = $ticketManager->getTicketById($ticketId, true, $includeHistory);
 

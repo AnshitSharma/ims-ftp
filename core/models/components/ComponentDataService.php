@@ -23,7 +23,7 @@ class ComponentDataService {
     ];
 
     private function __construct() {
-        $this->jsonBasePath = dirname(__DIR__, 2) . '/resources/specifications/';
+        $this->jsonBasePath = dirname(__DIR__, 3) . '/resources/specifications/';
 
         // Initialize ComponentSpecCache if available
         $cacheFile = __DIR__ . '/../../cache/ComponentSpecCache.php';

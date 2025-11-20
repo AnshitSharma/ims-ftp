@@ -173,7 +173,7 @@ class TicketValidator
         $errors = [];
         $validatedItem = $item;
 
-        $itemLabel = "Item #" . ($index + 1);
+        $itemLabel = "Item #" . ((int)$index + 1);
 
         // Component type validation
         if (empty($item['component_type'])) {
@@ -191,19 +191,33 @@ class TicketValidator
                 $errors[] = "$itemLabel: Invalid component_uuid format";
             } else {
                 // Validate UUID exists in JSON files
-                $uuidValidation = $this->componentDataService->validateComponentUuid(
-                    $item['component_uuid'],
-                    $item['component_type']
-                );
+                try {
+                    $isValid = $this->componentDataService->validateComponentUuid(
+                        $item['component_type'],
+                        $item['component_uuid']
+                    );
 
-                if (!$uuidValidation['valid']) {
-                    $errors[] = "$itemLabel: " . $uuidValidation['error'];
+                    if (!$isValid) {
+                        $errors[] = "$itemLabel: Component UUID not found in specification files";
+                        $validatedItem['is_validated'] = 0;
+                    } else {
+                        // UUID is valid - get component details
+                        $validatedItem['is_validated'] = 1;
+                        try {
+                            $component = $this->componentDataService->findComponentByUuid(
+                                $item['component_type'],
+                                $item['component_uuid']
+                            );
+                            $validatedItem['component_name'] = $component['name'] ?? $component['model'] ?? 'Unknown';
+                            $validatedItem['component_specs'] = json_encode($component);
+                        } catch (Exception $e) {
+                            $validatedItem['component_name'] = 'Unknown';
+                            $validatedItem['component_specs'] = null;
+                        }
+                    }
+                } catch (Exception $e) {
+                    $errors[] = "$itemLabel: UUID validation failed - " . $e->getMessage();
                     $validatedItem['is_validated'] = 0;
-                } else {
-                    // UUID is valid - store component details
-                    $validatedItem['is_validated'] = 1;
-                    $validatedItem['component_name'] = $uuidValidation['component']['name'] ?? 'Unknown';
-                    $validatedItem['component_specs'] = json_encode($uuidValidation['component']);
                 }
             }
         }
@@ -261,7 +275,7 @@ class TicketValidator
             // Load server configuration
             $stmt = $this->pdo->prepare("
                 SELECT * FROM server_configurations
-                WHERE server_uuid = ? AND status != 'deleted'
+                WHERE config_uuid = ?
                 LIMIT 1
             ");
             $stmt->execute([$serverUuid]);
@@ -415,7 +429,7 @@ class TicketValidator
             $stmt = $this->pdo->prepare("
                 SELECT COUNT(*)
                 FROM server_configurations
-                WHERE server_uuid = ? AND status != 'deleted'
+                WHERE config_uuid = ?
             ");
             $stmt->execute([$serverUuid]);
             return $stmt->fetchColumn() > 0;

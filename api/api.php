@@ -881,7 +881,8 @@ function handleTicketOperations($operation, $user) {
             'list' => 'ticket-list.php',
             'get' => 'ticket-get.php',
             'update' => 'ticket-update.php',
-            'delete' => 'ticket-delete.php'
+            'delete' => 'ticket-delete.php',
+            'debug' => 'ticket-debug.php'  // Diagnostic endpoint - REMOVE IN PRODUCTION
         ];
 
         if (!isset($endpointMap[$operation])) {

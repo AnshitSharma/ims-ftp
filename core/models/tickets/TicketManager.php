@@ -266,7 +266,7 @@ class TicketManager
             // Get total count
             $countStmt = $this->pdo->prepare("SELECT COUNT(*) FROM tickets t $whereClause");
             $countStmt->execute($params);
-            $total = $countStmt->fetchColumn();
+            $total = (int)$countStmt->fetchColumn();
 
             // Validate order by
             $validOrderBy = ['id', 'ticket_number', 'title', 'status', 'priority', 'created_at', 'updated_at'];
@@ -688,7 +688,7 @@ class TicketManager
             WHERE DATE(created_at) = CURDATE()
         ");
         $stmt->execute();
-        $count = $stmt->fetchColumn();
+        $count = (int)$stmt->fetchColumn();
 
         // Increment and pad to 4 digits
         $sequence = str_pad($count + 1, 4, '0', STR_PAD_LEFT);

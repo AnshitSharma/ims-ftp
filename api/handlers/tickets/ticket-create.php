@@ -76,6 +76,17 @@ try {
         exit;
     }
 
+    // Ensure items is an array
+    if (!is_array($items)) {
+        send_json_response(false, true, 400, "items must be an array", null);
+        exit;
+    }
+
+    // If items is an associative array (object), wrap it in an array
+    if (!empty($items) && !isset($items[0])) {
+        $items = [$items];
+    }
+
     // Prepare ticket data
     $ticketData = [
         'title' => trim($title),

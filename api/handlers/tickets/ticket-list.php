@@ -54,41 +54,48 @@ try {
         exit;
     }
 
-    // Build filters
+    // Build filters (accept both POST and GET)
     $filters = [];
 
     // Status filter
-    if (isset($_GET['status']) && !empty($_GET['status'])) {
-        $filters['status'] = $_GET['status'];
+    $status = $_POST['status'] ?? $_GET['status'] ?? null;
+    if (!empty($status)) {
+        $filters['status'] = $status;
     }
 
     // Priority filter
-    if (isset($_GET['priority']) && !empty($_GET['priority'])) {
-        $filters['priority'] = $_GET['priority'];
+    $priority = $_POST['priority'] ?? $_GET['priority'] ?? null;
+    if (!empty($priority)) {
+        $filters['priority'] = $priority;
     }
 
     // Created by filter
-    if (isset($_GET['created_by']) && !empty($_GET['created_by'])) {
-        $filters['created_by'] = (int)$_GET['created_by'];
+    $createdBy = $_POST['created_by'] ?? $_GET['created_by'] ?? null;
+    if (!empty($createdBy)) {
+        $filters['created_by'] = (int)$createdBy;
     }
 
     // Assigned to filter
-    if (isset($_GET['assigned_to']) && !empty($_GET['assigned_to'])) {
-        $filters['assigned_to'] = (int)$_GET['assigned_to'];
+    $assignedTo = $_POST['assigned_to'] ?? $_GET['assigned_to'] ?? null;
+    if (!empty($assignedTo)) {
+        $filters['assigned_to'] = (int)$assignedTo;
     }
 
     // Search filter
-    if (isset($_GET['search']) && !empty($_GET['search'])) {
-        $filters['search'] = $_GET['search'];
+    $search = $_POST['search'] ?? $_GET['search'] ?? null;
+    if (!empty($search)) {
+        $filters['search'] = $search;
     }
 
     // Date range filters
-    if (isset($_GET['created_from']) && !empty($_GET['created_from'])) {
-        $filters['created_from'] = $_GET['created_from'];
+    $createdFrom = $_POST['created_from'] ?? $_GET['created_from'] ?? null;
+    if (!empty($createdFrom)) {
+        $filters['created_from'] = $createdFrom;
     }
 
-    if (isset($_GET['created_to']) && !empty($_GET['created_to'])) {
-        $filters['created_to'] = $_GET['created_to'];
+    $createdTo = $_POST['created_to'] ?? $_GET['created_to'] ?? null;
+    if (!empty($createdTo)) {
+        $filters['created_to'] = $createdTo;
     }
 
     // Apply permission-based filtering
@@ -109,13 +116,16 @@ try {
         }
     }
 
-    // Pagination
-    $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-    $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
+    // Pagination (accept both POST and GET)
+    $pageParam = $_POST['page'] ?? $_GET['page'] ?? 1;
+    $page = max(1, (int)$pageParam);
 
-    // Sorting
-    $orderBy = $_GET['order_by'] ?? 'created_at';
-    $orderDir = $_GET['order_dir'] ?? 'DESC';
+    $limitParam = $_POST['limit'] ?? $_GET['limit'] ?? 20;
+    $limit = min(100, max(1, (int)$limitParam));
+
+    // Sorting (accept both POST and GET)
+    $orderBy = $_POST['order_by'] ?? $_GET['order_by'] ?? 'created_at';
+    $orderDir = $_POST['order_dir'] ?? $_GET['order_dir'] ?? 'DESC';
 
     // Get tickets
     $ticketManager = new TicketManager($pdo);
