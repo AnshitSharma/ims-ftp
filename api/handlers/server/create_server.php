@@ -65,7 +65,7 @@ try {
 }
 
 /**
- * UPDATED: Initialize new server creation session - Now includes location, rack_position, notes, and is_test
+ * UPDATED: Initialize new server creation session - Now includes location, rack_position, and notes
  */
 function handleInitializeServerCreation() {
     global $pdo, $user;
@@ -76,7 +76,7 @@ function handleInitializeServerCreation() {
     $location = trim($_POST['location'] ?? '');
     $rackPosition = trim($_POST['rack_position'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
-    $isTest = isset($_POST['is_test']) ? (int)$_POST['is_test'] : 0; // 0=Real Build, 1=Test Build
+
 
     if (empty($serverName)) {
         send_json_response(0, 1, 400, "Server name is required");
@@ -85,18 +85,19 @@ function handleInitializeServerCreation() {
     try {
         $pdo->beginTransaction();
 
-        // Create new server configuration record with additional fields including is_test
+        // Create new server configuration record with additional fields
         $configUuid = generateUUID();
         $stmt = $pdo->prepare("
             INSERT INTO server_configurations (
                 config_uuid, server_name, description, location, rack_position, notes,
-                created_by, created_at, updated_at, configuration_status, is_test
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?)
+                created_by, created_at, updated_at, configuration_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 0)
         ");
         $stmt->execute([
             $configUuid, $serverName, $description,
-            $location, $rackPosition, $notes, $user['id'], $isTest
+            $location, $rackPosition, $notes, $user['id']
         ]);
+
         
         // Log the initialization with enhanced metadata
         logServerBuildAction($pdo, $configUuid, 'initialize', null, null, [
@@ -104,9 +105,9 @@ function handleInitializeServerCreation() {
             'description' => $description,
             'location' => $location,
             'rack_position' => $rackPosition,
-            'notes' => $notes,
-            'is_test' => $isTest
+            'notes' => $notes
         ], $user['id']);
+
 
         $pdo->commit();
 
@@ -116,10 +117,9 @@ function handleInitializeServerCreation() {
             'description' => $description,
             'location' => $location,
             'rack_position' => $rackPosition,
-            'notes' => $notes,
-            'is_test' => $isTest,
-            'build_type' => $isTest ? 'Test Build' : 'Real Build'
+            'notes' => $notes
         ]);
+
         
     } catch (Exception $e) {
         $pdo->rollBack();
@@ -130,7 +130,7 @@ function handleInitializeServerCreation() {
 
 /**
  * Add component in step-by-step process
- * UPDATED: Now passes is_test flag to ServerBuilder
+ * UPDATED: Now passes flag to ServerBuilder
  */
 function handleStepAddComponent() {
     global $pdo, $user;
@@ -149,8 +149,8 @@ function handleStepAddComponent() {
     try {
         $pdo->beginTransaction();
 
-        // Verify ownership, status, and get is_test flag
-        $stmt = $pdo->prepare("SELECT created_by, configuration_status, is_test FROM server_configurations WHERE config_uuid = ? AND created_by = ?");
+        // Verify ownership, status
+        $stmt = $pdo->prepare("SELECT created_by, configuration_status FROM server_configurations WHERE config_uuid = ? AND created_by = ?");
         $stmt->execute([$configUuid, $user['id']]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -162,7 +162,6 @@ function handleStepAddComponent() {
             send_json_response(0, 1, 400, "Cannot modify configuration that has been validated or finalized");
         }
 
-        $isTest = $config['is_test'] ?? 0;
 
         // Check if component is available
         $tableName = $componentType . 'inventory';
@@ -174,17 +173,11 @@ function handleStepAddComponent() {
             send_json_response(0, 1, 404, "Component not found");
         }
 
-        // For test builds, allow Status = 1 or 2 (available or in use)
         // For real builds, only allow Status = 1 (available)
-        if ($isTest) {
-            if ($component['Status'] != 1 && $component['Status'] != 2) {
-                send_json_response(0, 1, 400, "Component is not available (Status: {$component['Status']})");
-            }
-        } else {
-            if ($component['Status'] != 1) {
-                send_json_response(0, 1, 400, "Component is not available (Status: {$component['Status']})");
-            }
+        if ($component['Status'] != 1) {
+            send_json_response(0, 1, 400, "Component is not available (Status: {$component['Status']})");
         }
+
         
         // Use ServerBuilder to handle component addition (which manages JSON updates)
         require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
@@ -202,10 +195,10 @@ function handleStepAddComponent() {
         }
 
         // Update component status to "In Use" ONLY for real builds (not test builds)
-        if (!$isTest) {
-            $stmt = $pdo->prepare("UPDATE $tableName SET Status = 2, ServerUUID = ? WHERE UUID = ?");
-            $stmt->execute([$configUuid, $componentUuid]);
-        }
+        
+        $stmt = $pdo->prepare("UPDATE $tableName SET Status = 2, ServerUUID = ? WHERE UUID = ?");
+        $stmt->execute([$configUuid, $componentUuid]);
+
 
         // Update configuration's updated_by and updated_at
         $stmt = $pdo->prepare("UPDATE server_configurations SET updated_by = ?, updated_at = NOW() WHERE config_uuid = ?");
@@ -215,17 +208,15 @@ function handleStepAddComponent() {
         logServerBuildAction($pdo, $configUuid, 'component_added', $componentType, $componentUuid, [
             'quantity' => $quantity,
             'slot_position' => $slotPosition,
-            'notes' => $notes,
-            'is_test' => $isTest
+            'notes' => $notes
         ], $user['id']);
+
 
         $pdo->commit();
 
         send_json_response(1, 1, 200, "Component added successfully", [
             'component_type' => $componentType,
-            'component_uuid' => $componentUuid,
-            'is_test' => $isTest,
-            'build_type' => $isTest ? 'Test Build' : 'Real Build'
+            'component_uuid' => $componentUuid
         ]);
         
     } catch (Exception $e) {
@@ -237,7 +228,7 @@ function handleStepAddComponent() {
 
 /**
  * Remove component from step-by-step process
- * UPDATED: Now handles is_test flag for test builds
+ * UPDATED: Now handles flag for builds
  */
 function handleStepRemoveComponent() {
     global $pdo, $user;
@@ -253,8 +244,8 @@ function handleStepRemoveComponent() {
     try {
         $pdo->beginTransaction();
 
-        // Verify ownership and get is_test flag
-        $stmt = $pdo->prepare("SELECT created_by, configuration_status, is_test FROM server_configurations WHERE config_uuid = ? AND created_by = ?");
+        // Verify ownership
+        $stmt = $pdo->prepare("SELECT created_by, configuration_status FROM server_configurations WHERE config_uuid = ? AND created_by = ?");
         $stmt->execute([$configUuid, $user['id']]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -266,7 +257,6 @@ function handleStepRemoveComponent() {
             send_json_response(0, 1, 400, "Cannot modify configuration that has been validated or finalized");
         }
 
-        $isTest = $config['is_test'] ?? 0;
 
         // Use ServerBuilder to handle component removal (which manages JSON updates)
         require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
@@ -280,29 +270,27 @@ function handleStepRemoveComponent() {
         }
 
         // Update component status back to "Available" ONLY for real builds (not test builds)
-        if (!$isTest) {
-            $tableName = $componentType . 'inventory';
-            $stmt = $pdo->prepare("UPDATE $tableName SET Status = 1, ServerUUID = NULL WHERE UUID = ?");
-            $stmt->execute([$componentUuid]);
-        }
+        
+        $tableName = $componentType . 'inventory';
+        $stmt = $pdo->prepare("UPDATE $tableName SET Status = 1, ServerUUID = NULL WHERE UUID = ?");
+        $stmt->execute([$componentUuid]);
+
 
         // Update configuration's updated_by and updated_at
         $stmt = $pdo->prepare("UPDATE server_configurations SET updated_by = ?, updated_at = NOW() WHERE config_uuid = ?");
         $stmt->execute([$user['id'], $configUuid]);
 
         // Log the action
-        logServerBuildAction($pdo, $configUuid, 'component_removed', $componentType, $componentUuid, [
-            'is_test' => $isTest
-        ], $user['id']);
+        logServerBuildAction($pdo, $configUuid, 'component_removed', $componentType, $componentUuid, [], $user['id']);
+
 
         $pdo->commit();
 
         send_json_response(1, 1, 200, "Component removed successfully", [
             'component_type' => $componentType,
-            'component_uuid' => $componentUuid,
-            'is_test' => $isTest,
-            'build_type' => $isTest ? 'Test Build' : 'Real Build'
+            'component_uuid' => $componentUuid
         ]);
+
         
     } catch (Exception $e) {
         $pdo->rollBack();
@@ -460,12 +448,13 @@ function handleFinalizeServer() {
     try {
         $pdo->beginTransaction();
 
-        // Verify ownership, current status, and is_test flag
+        // Verify ownership, current status
         $stmt = $pdo->prepare("
-            SELECT created_by, configuration_status, notes, is_test
+            SELECT created_by, configuration_status, notes
             FROM server_configurations
             WHERE config_uuid = ? AND created_by = ?
         ");
+
         $stmt->execute([$configUuid, $user['id']]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -477,11 +466,7 @@ function handleFinalizeServer() {
             send_json_response(0, 1, 400, "Configuration is already finalized");
         }
 
-        // Prevent finalizing test builds
-        $isTest = $config['is_test'] ?? 0;
-        if ($isTest) {
-            send_json_response(0, 1, 400, "Cannot finalize test builds. Test builds are for compatibility testing only and do not occupy components.");
-        }
+
         
         // Validate configuration before finalizing
         require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';

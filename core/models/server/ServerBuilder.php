@@ -455,16 +455,18 @@ class ServerBuilder {
                 }
             }
             
-            // Get server configuration location, rack position, and is_test flag for component assignment
-            $stmt = $this->pdo->prepare("SELECT location, rack_position, is_test FROM server_configurations WHERE config_uuid = ?");
+            // Get server configuration location and rack position for component assignment
+            $stmt = $this->pdo->prepare("SELECT location, rack_position FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $serverConfig = $stmt->fetch(PDO::FETCH_ASSOC);
             $serverLocation = $serverConfig['location'] ?? null;
             $serverRackPosition = $serverConfig['rack_position'] ?? null;
-            $isTest = $serverConfig['is_test'] ?? 0;
+            $serverRackPosition = $serverConfig['rack_position'] ?? null;
+
 
             // Log server configuration data for component assignment
-            error_log("Component assignment: Server $configUuid has Location='$serverLocation', RackPosition='$serverRackPosition', is_test='$isTest'");
+            error_log("Component assignment: Server $configUuid has Location='$serverLocation', RackPosition='$serverRackPosition'");
+
 
             // ALL VALIDATIONS COMPLETE - Begin transaction only after all checks pass
             $this->pdo->beginTransaction();
@@ -477,11 +479,11 @@ class ServerBuilder {
             // No separate server_configuration_components table needed
 
             // Update component status to "In Use" ONLY for real builds (not test builds)
-            if (!$isTest) {
-                // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
-                // CRITICAL: Pass serial number to update only the specific physical component
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
-            }
+            
+            // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
+            // CRITICAL: Pass serial number to update only the specific physical component
+            $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
+
             
             // Update the main server_configurations table with component info
             // CRITICAL: Pass serial_number to store in configuration JSON
@@ -548,7 +550,7 @@ class ServerBuilder {
                 ];
             }
 
-            $isTest = $config['is_test'] ?? 0;
+
 
             // Check if component exists in configuration by extracting from JSON
             $components = $this->extractComponentsFromJson($config);
@@ -601,11 +603,11 @@ class ServerBuilder {
             }
 
             // Update component status back to "Available" ONLY for real builds (not test builds)
-            if (!$isTest) {
-                // Update component status back to "Available" and clear ServerUUID, installation date, and rack position
-                // CRITICAL: Pass serial number to update only the specific physical component
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
-            }
+            
+            // Update component status back to "Available" and clear ServerUUID, installation date, and rack position
+            // CRITICAL: Pass serial number to update only the specific physical component
+            $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
+
 
             // Update the main server_configurations table
             // CRITICAL: Pass serial number to remove correct component from JSON

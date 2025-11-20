@@ -24,8 +24,8 @@ class ServerConfiguration {
 
             $stmt = $pdo->prepare("
                 INSERT INTO server_configurations
-                (config_uuid, server_name, description, created_by, configuration_status, is_test, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+                (config_uuid, server_name, description, created_by, configuration_status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, NOW(), NOW())
             ");
 
             $result = $stmt->execute([
@@ -33,8 +33,7 @@ class ServerConfiguration {
                 $configData['server_name'],
                 $configData['description'] ?? '',
                 $configData['created_by'],
-                $configData['configuration_status'] ?? 0,
-                $configData['is_test'] ?? 0
+                $configData['configuration_status'] ?? 0
             ]);
 
             if ($result) {
@@ -405,12 +404,6 @@ class ServerConfiguration {
 
         $status = $this->data['configuration_status'] ?? 0;
         $statusText = $statusMap[$status] ?? 'Unknown';
-
-        // Add prefix for test builds
-        $isTest = $this->data['is_test'] ?? 0;
-        if ($isTest == 1) {
-            $statusText = 'Test Build - ' . $statusText;
-        }
 
         return $statusText;
     }
