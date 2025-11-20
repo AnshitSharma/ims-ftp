@@ -61,7 +61,7 @@ class TicketValidator
     public function __construct($pdo)
     {
         $this->pdo = $pdo;
-        $this->componentDataService = new ComponentDataService();
+        $this->componentDataService = ComponentDataService::getInstance();
         $this->compatibilityValidator = new ComponentCompatibility($pdo);
     }
 
@@ -125,11 +125,21 @@ class TicketValidator
         $errors = [];
         $validatedItems = [];
 
-        if (empty($items) || !is_array($items)) {
-            $errors[] = "At least one component item is required";
+        // Allow empty items array for draft tickets
+        if (!is_array($items)) {
+            $errors[] = "Items must be an array";
             return [
                 'valid' => false,
                 'errors' => $errors,
+                'validated_items' => []
+            ];
+        }
+
+        // Empty array is allowed - tickets can be created without components
+        if (empty($items)) {
+            return [
+                'valid' => true,
+                'errors' => [],
                 'validated_items' => []
             ];
         }

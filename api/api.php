@@ -857,33 +857,58 @@ function handleUserOperations($operation, $user) {
  * Handle ticket operations
  */
 function handleTicketOperations($operation, $user) {
-    global $pdo, $acl;
-    $user_id = $user['id'];
+    global $pdo;
 
-    // Map operations to endpoint files
-    $endpointMap = [
-        'create' => 'ticket-create.php',
-        'list' => 'ticket-list.php',
-        'get' => 'ticket-get.php',
-        'update' => 'ticket-update.php',
-        'delete' => 'ticket-delete.php'
-    ];
+    try {
+        // Make user_id and acl available to the included handler file
+        $user_id = $user['id'];
+        $GLOBALS['user_id'] = $user_id;
 
-    if (!isset($endpointMap[$operation])) {
-        send_json_response(0, 1, 400, "Invalid ticket operation: $operation");
-        return;
+        // Get or create ACL instance
+        $acl = $GLOBALS['acl'] ?? null;
+
+        if (!$acl) {
+            require_once(__DIR__ . '/../core/auth/ACL.php');
+            $acl = new ACL($pdo);
+        }
+
+        // Make ACL available in global scope for included handler files
+        $GLOBALS['acl'] = $acl;
+
+        // Map operations to endpoint files
+        $endpointMap = [
+            'create' => 'ticket-create.php',
+            'list' => 'ticket-list.php',
+            'get' => 'ticket-get.php',
+            'update' => 'ticket-update.php',
+            'delete' => 'ticket-delete.php'
+        ];
+
+        if (!isset($endpointMap[$operation])) {
+            send_json_response(0, 1, 400, "Invalid ticket operation: $operation");
+            return;
+        }
+
+        $endpointFile = __DIR__ . '/handlers/tickets/' . $endpointMap[$operation];
+
+        if (!file_exists($endpointFile)) {
+            error_log("Ticket endpoint file not found: $endpointFile");
+            send_json_response(0, 1, 500, "Ticket endpoint not implemented: $operation");
+            return;
+        }
+
+        // Include and execute the endpoint
+        require $endpointFile;
+
+    } catch (Exception $e) {
+        error_log("Ticket handler error: " . $e->getMessage());
+        error_log("Stack trace: " . $e->getTraceAsString());
+        send_json_response(0, 1, 500, "Ticket operation failed: " . $e->getMessage());
+    } catch (Error $e) {
+        error_log("Ticket handler fatal error: " . $e->getMessage());
+        error_log("Stack trace: " . $e->getTraceAsString());
+        send_json_response(0, 1, 500, "Ticket operation failed with fatal error: " . $e->getMessage());
     }
-
-    $endpointFile = __DIR__ . '/handlers/ticket/' . $endpointMap[$operation];
-
-    if (!file_exists($endpointFile)) {
-        error_log("Ticket endpoint file not found: $endpointFile");
-        send_json_response(0, 1, 500, "Ticket endpoint not implemented: $operation");
-        return;
-    }
-
-    // Include and execute the endpoint
-    require $endpointFile;
 }
 
 /**

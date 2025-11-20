@@ -99,8 +99,8 @@ try {
             case 'approved':
                 $permissionNeeded = 'ticket.approve';
 
-                // Cannot approve own ticket (separation of duties)
-                if ($ticket['created_by'] == $user_id) {
+                // Cannot approve own ticket (separation of duties) - unless user has manage permission
+                if ($ticket['created_by'] == $user_id && !$acl->hasPermission($user_id, 'ticket.manage')) {
                     $validationErrors[] = "Cannot approve your own ticket (separation of duties)";
                 }
 
