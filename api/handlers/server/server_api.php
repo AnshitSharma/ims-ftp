@@ -62,7 +62,12 @@ switch ($action) {
     case 'server-list-configs':
         handleListConfigurations($serverBuilder, $user);
         break;
-    
+
+    case 'import-virtual':
+    case 'server-import-virtual':
+        handleImportVirtual($serverBuilder, $user);
+        break;
+
     case 'finalize-config':
     case 'server-finalize-config':
         handleFinalizeConfiguration($serverBuilder, $user);
@@ -1694,22 +1699,31 @@ function handleListConfigurations($serverBuilder, $user) {
     $limit = (int)($_GET['limit'] ?? 20);
     $offset = (int)($_GET['offset'] ?? 0);
     $status = $_GET['status'] ?? null;
-    
+    $includeVirtual = $_GET['include_virtual'] ?? 'all'; // 'all', 'true', 'false'
+
     try {
         $whereClause = "WHERE 1=1";
         $params = [];
-        
+
         // Filter by user if no admin permissions
         if (!hasPermission($pdo, 'server.view_all', $user['id'])) {
             $whereClause .= " AND created_by = ?";
             $params[] = $user['id'];
         }
-        
+
         // Filter by status if provided
         if ($status !== null) {
             $whereClause .= " AND configuration_status = ?";
             $params[] = $status;
         }
+
+        // Filter by is_virtual flag
+        if ($includeVirtual === 'true') {
+            $whereClause .= " AND is_virtual = 1";
+        } elseif ($includeVirtual === 'false') {
+            $whereClause .= " AND is_virtual = 0";
+        }
+        // If 'all' or any other value, no filtering on is_virtual
         
         $stmt = $pdo->prepare("
             SELECT sc.*, u.username as created_by_username 
@@ -1728,6 +1742,7 @@ function handleListConfigurations($serverBuilder, $user) {
         // Add configuration status text and component count for each configuration
         foreach ($configurations as &$config) {
             $config['configuration_status_text'] = getConfigurationStatusText($config['configuration_status']);
+            $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0); // Convert to boolean
 
             // Count distinct component types in this configuration
             $components = extractComponentsFromConfigData($config);
@@ -1760,6 +1775,160 @@ function handleListConfigurations($serverBuilder, $user) {
 }
 
 /**
+ * Import virtual server configuration to real configuration
+ * Creates a new real server with available components from the virtual config
+ */
+function handleImportVirtual($serverBuilder, $user) {
+    global $pdo;
+
+    $virtualConfigUuid = $_POST['virtual_config_uuid'] ?? '';
+    $serverName = trim($_POST['server_name'] ?? '');
+    $description = trim($_POST['description'] ?? '');
+    $location = trim($_POST['location'] ?? '');
+    $rackPosition = trim($_POST['rack_position'] ?? '');
+
+    // Validate required parameters
+    if (empty($virtualConfigUuid)) {
+        send_json_response(0, 1, 400, "Virtual configuration UUID is required");
+    }
+
+    if (empty($serverName)) {
+        send_json_response(0, 1, 400, "Server name is required for the real configuration");
+    }
+
+    try {
+        // Step 1: Validate virtual config exists and is actually virtual
+        $virtualConfig = ServerConfiguration::loadByUuid($pdo, $virtualConfigUuid);
+        if (!$virtualConfig) {
+            send_json_response(0, 1, 404, "Virtual configuration not found");
+        }
+
+        if (!$virtualConfig->get('is_virtual')) {
+            send_json_response(0, 1, 400, "Configuration is not a virtual configuration");
+        }
+
+        // Check permissions
+        if ($virtualConfig->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.create', $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions to import this configuration");
+        }
+
+        // Step 2: Get all components from virtual config
+        $components = $serverBuilder->getConfigComponents($virtualConfigUuid);
+        if (!$components || empty($components)) {
+            send_json_response(0, 1, 400, "Virtual configuration has no components to import");
+        }
+
+        // Step 3: Create new real server configuration
+        $pdo->beginTransaction();
+
+        $realConfigUuid = generateUUID();
+        $stmt = $pdo->prepare("
+            INSERT INTO server_configurations (
+                config_uuid, server_name, description, location, rack_position,
+                created_by, created_at, updated_at, configuration_status, is_virtual
+            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, 0)
+        ");
+        $stmt->execute([
+            $realConfigUuid,
+            $serverName,
+            $description,
+            $location,
+            $rackPosition,
+            $user['id']
+        ]);
+
+        // Step 4: Attempt to add each component from virtual to real config
+        $importedComponents = [];
+        $warnings = [];
+
+        foreach ($components as $component) {
+            $componentType = $component['component_type'];
+            $uuid = $component['uuid'];
+
+            // Find available component in inventory
+            $availableComponent = $serverBuilder->findAvailableComponent($componentType, $uuid);
+
+            if ($availableComponent) {
+                // Component is available - add it to real config
+                $options = [
+                    'quantity' => $component['quantity'] ?? 1,
+                    'serial_number' => $availableComponent['SerialNumber'] ?? null
+                ];
+
+                // Add slot_position for PCIe cards if present
+                if (isset($component['slot_position'])) {
+                    $options['slot_position'] = $component['slot_position'];
+                }
+
+                $addResult = $serverBuilder->addComponent(
+                    $realConfigUuid,
+                    $componentType,
+                    $uuid,
+                    $options
+                );
+
+                if ($addResult['success']) {
+                    $importedComponents[] = [
+                        'component_type' => $componentType,
+                        'uuid' => $uuid,
+                        'serial_number' => $availableComponent['SerialNumber'] ?? null,
+                        'status' => 'imported'
+                    ];
+                } else {
+                    // Add component failed due to compatibility or other reasons
+                    $warnings[] = [
+                        'component_type' => $componentType,
+                        'uuid' => $uuid,
+                        'reason' => 'import_failed',
+                        'details' => $addResult['message'] ?? 'Failed to add component to real configuration'
+                    ];
+                }
+            } else {
+                // Component not available in inventory
+                $warnings[] = [
+                    'component_type' => $componentType,
+                    'uuid' => $uuid,
+                    'reason' => 'not_available',
+                    'details' => 'No available components found in inventory'
+                ];
+            }
+        }
+
+        $pdo->commit();
+
+        // Step 5: Prepare summary
+        $totalComponents = count($components);
+        $importedCount = count($importedComponents);
+        $missingCount = count($warnings);
+
+        $message = "Virtual configuration imported successfully";
+        if ($missingCount > 0) {
+            $message .= " with $missingCount component(s) unavailable";
+        }
+
+        send_json_response(1, 1, 200, $message, [
+            'real_config_uuid' => $realConfigUuid,
+            'virtual_config_uuid' => $virtualConfigUuid,
+            'server_name' => $serverName,
+            'imported_components' => $importedComponents,
+            'warnings' => $warnings,
+            'summary' => [
+                'total_components' => $totalComponents,
+                'imported' => $importedCount,
+                'missing' => $missingCount
+            ]
+        ]);
+
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("Error importing virtual configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to import virtual configuration: " . $e->getMessage());
+    }
+}
+
+/**
  * Finalize server configuration
  */
 function handleFinalizeConfiguration($serverBuilder, $user) {
@@ -1777,7 +1946,12 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         if (!$config) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
-        
+
+        // Block finalization of virtual configs
+        if ($config->get('is_virtual')) {
+            send_json_response(0, 1, 400, "Cannot finalize virtual/test configurations. Use server-import-virtual to convert to a real configuration first.");
+        }
+
         // Check permissions
         if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.finalize', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to finalize this configuration");
@@ -1996,7 +2170,12 @@ function handleGetCompatible($serverBuilder, $user) {
         if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.view_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
         }
-        
+
+        // For virtual configs, show ALL components regardless of availability
+        if ($config->get('is_virtual')) {
+            $availableOnly = false;
+        }
+
         // Step 2: Get existing components in configuration for flexible compatibility checking
         $existingComponents = extractComponentsFromConfigData($config->getData());
 

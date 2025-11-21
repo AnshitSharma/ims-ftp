@@ -76,6 +76,7 @@ function handleInitializeServerCreation() {
     $location = trim($_POST['location'] ?? '');
     $rackPosition = trim($_POST['rack_position'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
+    $isVirtual = isset($_POST['is_virtual']) ? (int)$_POST['is_virtual'] : 0;
 
 
     if (empty($serverName)) {
@@ -90,12 +91,12 @@ function handleInitializeServerCreation() {
         $stmt = $pdo->prepare("
             INSERT INTO server_configurations (
                 config_uuid, server_name, description, location, rack_position, notes,
-                created_by, created_at, updated_at, configuration_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 0)
+                created_by, created_at, updated_at, configuration_status, is_virtual
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?)
         ");
         $stmt->execute([
             $configUuid, $serverName, $description,
-            $location, $rackPosition, $notes, $user['id']
+            $location, $rackPosition, $notes, $user['id'], $isVirtual
         ]);
 
         
@@ -105,7 +106,8 @@ function handleInitializeServerCreation() {
             'description' => $description,
             'location' => $location,
             'rack_position' => $rackPosition,
-            'notes' => $notes
+            'notes' => $notes,
+            'is_virtual' => $isVirtual
         ], $user['id']);
 
 
@@ -117,7 +119,8 @@ function handleInitializeServerCreation() {
             'description' => $description,
             'location' => $location,
             'rack_position' => $rackPosition,
-            'notes' => $notes
+            'notes' => $notes,
+            'is_virtual' => (bool)$isVirtual
         ]);
 
         
@@ -915,6 +918,13 @@ function ensureHistoryTableColumns($pdo) {
         if (!$stmt->fetch()) {
             $pdo->exec("ALTER TABLE server_configuration_history ADD COLUMN component_uuid varchar(36) DEFAULT NULL AFTER component_type");
             error_log("Added component_uuid column to server_configuration_history");
+        }
+
+        // Check if metadata column exists
+        $stmt = $pdo->query("SHOW COLUMNS FROM server_configuration_history LIKE 'metadata'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE server_configuration_history ADD COLUMN metadata TEXT DEFAULT NULL COMMENT 'JSON metadata for the action' AFTER component_uuid");
+            error_log("Added metadata column to server_configuration_history");
         }
 
         // Check if created_by column exists

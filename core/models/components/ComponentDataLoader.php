@@ -93,16 +93,16 @@ class ComponentDataLoader {
      */
     public function getJSONFilePaths() {
         return [
-            'chassis' => __DIR__ . '/../../resources/specifications/chassis-jsons/chassis-level-3.json',
-            'cpu' => __DIR__ . '/../../resources/specifications/cpu-jsons/Cpu-details-level-3.json',
-            'motherboard' => __DIR__ . '/../../resources/specifications/motherboard-jsons/motherboard-level-3.json',
-            'ram' => __DIR__ . '/../../resources/specifications/Ram-jsons/ram_detail.json',
-            'storage' => __DIR__ . '/../../resources/specifications/storage-jsons/storage-level-3.json',
-            'nic' => __DIR__ . '/../../resources/specifications/nic-jsons/nic-level-3.json',
-            'caddy' => __DIR__ . '/../../resources/specifications/caddy-jsons/caddy_details.json',
-            'pciecard' => __DIR__ . '/../../resources/specifications/pci-jsons/pci-level-3.json',
-            'hbacard' => __DIR__ . '/../../resources/specifications/hbacard-jsons/hbacard-level-3.json',
-            'sfp' => __DIR__ . '/../../resources/specifications/sfp-jsons/sfp-level-3.json',
+            'chassis' => __DIR__ . '/../../../resources/specifications/chassis/chassis-level-3.json',
+            'cpu' => __DIR__ . '/../../../resources/specifications/cpu/Cpu-details-level-3.json',
+            'motherboard' => __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json',
+            'ram' => __DIR__ . '/../../../resources/specifications/ram/ram_detail.json',
+            'storage' => __DIR__ . '/../../../resources/specifications/storage/storage-level-3.json',
+            'nic' => __DIR__ . '/../../../resources/specifications/nic/nic-level-3.json',
+            'caddy' => __DIR__ . '/../../../resources/specifications/caddy/caddy_details.json',
+            'pciecard' => __DIR__ . '/../../../resources/specifications/pciecard/pci-level-3.json',
+            'hbacard' => __DIR__ . '/../../../resources/specifications/hbacard/hbacard-level-3.json',
+            'sfp' => __DIR__ . '/../../../resources/specifications/sfp/sfp-level-3.json',
         ];
     }
 

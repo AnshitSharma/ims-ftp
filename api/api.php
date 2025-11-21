@@ -168,7 +168,8 @@ function handleServerModule($operation, $user) {
         'reset_configuration' => 'server.edit',
         'get-config' => 'server.view',
         'finalize-config' => 'server.create',
-        'get-available-components' => 'server.view'
+        'get-available-components' => 'server.view',
+        'import-virtual' => 'server.create'
     ];
     
     $requiredPermission = $permissionMap[$operation] ?? 'server.view';
@@ -178,7 +179,7 @@ function handleServerModule($operation, $user) {
     }
     
     // Include appropriate server handler based on operation
-    if (in_array($operation, ['add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components'])) {
+    if (in_array($operation, ['add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components', 'import-virtual'])) {
         // Use the newer server API implementation
         global $operation;
         require_once(__DIR__ . '/handlers/server/server_api.php');

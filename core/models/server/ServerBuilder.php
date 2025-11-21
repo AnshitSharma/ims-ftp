@@ -310,7 +310,8 @@ class ServerBuilder {
 
             // Phase 2: Check for duplicate component FIRST with cleanup
             // CRITICAL: Pass serial_number to allow multiple components with same UUID but different serials
-            if ($this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
+            // Skip duplicate check for virtual configs (allow same component UUID multiple times for testing)
+            if (!$this->isVirtualConfig($configUuid) && $this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
                 // Check if this is an orphaned record (component exists in config table but not properly assigned)
                 $componentDetails = $this->getComponentByUuid($componentType, $componentUuid);
                 if ($componentDetails && $componentDetails['ServerUUID'] !== $configUuid) {
@@ -359,10 +360,14 @@ class ServerBuilder {
                     }
                     $compatibility = new ComponentCompatibility($this->pdo);
 
+                    // Skip JSON validation for virtual configs (they don't need real inventory)
+                    $isVirtual = $this->isVirtualConfig($configUuid);
+
                     // Skip JSON validation for storage, nic, caddy, chassis - database UUIDs don't match JSON UUIDs
                     // Only validate: cpu, motherboard, ram, pciecard, hbacard
+                    // BUT: Skip validation entirely for virtual configs
                     $componentsToValidate = ['cpu', 'motherboard', 'ram', 'pciecard', 'hbacard'];
-                    if (in_array($componentType, $componentsToValidate)) {
+                    if (!$isVirtual && in_array($componentType, $componentsToValidate)) {
                         $existsResult = $compatibility->validateComponentExistsInJSON($componentType, $componentUuid);
                         if (!$existsResult) {
                             return [
@@ -386,14 +391,34 @@ class ServerBuilder {
             
             // Phase 4: Get component details from inventory
             // Note: $serialNumber was already extracted in Phase 1.1
+            // For virtual configs, create dummy component details if not found in inventory
 
             $componentDetails = $this->getComponentByUuidAndSerial($componentType, $componentUuid, $serialNumber);
+
+            // Check if this is a virtual config
+            $isVirtual = $this->isVirtualConfig($configUuid);
+
             if (!$componentDetails) {
-                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
-                return [
-                    'success' => false,
-                    'message' => "Component not found in inventory: $componentUuid$serialInfo"
-                ];
+                if ($isVirtual) {
+                    // For virtual configs, create dummy component details
+                    // Virtual configs don't need real inventory components
+                    $componentDetails = [
+                        'UUID' => $componentUuid,
+                        'SerialNumber' => $serialNumber ?? 'VIRTUAL-' . substr($componentUuid, 0, 8),
+                        'Status' => 1, // Virtual component (always "available")
+                        'ServerUUID' => null,
+                        'Location' => null,
+                        'Notes' => 'Virtual component for testing'
+                    ];
+                    error_log("Virtual config: Created dummy component details for $componentType $componentUuid");
+                } else {
+                    // Real config requires component to exist in inventory
+                    $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
+                    return [
+                        'success' => false,
+                        'message' => "Component not found in inventory: $componentUuid$serialInfo"
+                    ];
+                }
             }
 
             // Extract the actual serial number from component details (in case it wasn't provided in options)
@@ -469,7 +494,11 @@ class ServerBuilder {
 
 
             // ALL VALIDATIONS COMPLETE - Begin transaction only after all checks pass
-            $this->pdo->beginTransaction();
+            // Check if already in transaction (e.g., called from import function)
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+            }
 
             // Extract quantity and slot position from options (component data now stored in JSON columns)
             $quantity = $options['quantity'] ?? 1;
@@ -478,11 +507,13 @@ class ServerBuilder {
             // Note: Component data is now stored in JSON columns in server_configurations table
             // No separate server_configuration_components table needed
 
-            // Update component status to "In Use" ONLY for real builds (not test builds)
-            
-            // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
-            // CRITICAL: Pass serial number to update only the specific physical component
-            $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
+            // Update component status to "In Use" ONLY for real builds (not virtual/test builds)
+            // Virtual configs don't lock components - they're for testing only
+            if (!$this->isVirtualConfig($configUuid)) {
+                // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
+                // CRITICAL: Pass serial number to update only the specific physical component
+                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
+            }
 
             
             // Update the main server_configurations table with component info
@@ -494,8 +525,11 @@ class ServerBuilder {
             
             // Log the action
             $this->logConfigurationAction($configUuid, 'add_component', $componentType, $componentUuid, $options);
-            
-            $this->pdo->commit();
+
+            // Only commit if we started the transaction
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
 
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
@@ -518,7 +552,8 @@ class ServerBuilder {
             return $response;
             
         } catch (Exception $e) {
-            if ($this->pdo->inTransaction()) {
+            // Only rollback if we started the transaction
+            if (isset($ownTransaction) && $ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollback();
             }
             error_log("Error adding component to configuration: " . $e->getMessage());
@@ -837,34 +872,40 @@ class ServerBuilder {
                     $cpuData = $decoded['cpus'] ?? [];
                 }
 
+                // Check if this is a virtual configuration
+                $isVirtual = $this->isVirtualConfig($configUuid);
+
                 // CRITICAL: Check for duplicates by BOTH uuid AND serial_number to prevent same physical component being added twice
+                // Skip duplicate check for virtual configs - allow multiple instances of same component for testing
                 $cpuExists = false;
-                foreach ($cpuData as &$cpu) {
-                    // FIXED: Proper matching logic to support multiple physical components with same UUID
-                    $isMatch = false;
+                if (!$isVirtual) {
+                    foreach ($cpuData as &$cpu) {
+                        // FIXED: Proper matching logic to support multiple physical components with same UUID
+                        $isMatch = false;
 
-                    if ($serialNumber !== null) {
-                        // When adding with serial_number, ONLY match if existing entry also has serial_number AND both match
-                        // This allows multiple physical CPUs with same UUID (model) but different serial numbers
-                        if (isset($cpu['serial_number'])) {
-                            $isMatch = ($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
+                        if ($serialNumber !== null) {
+                            // When adding with serial_number, ONLY match if existing entry also has serial_number AND both match
+                            // This allows multiple physical CPUs with same UUID (model) but different serial numbers
+                            if (isset($cpu['serial_number'])) {
+                                $isMatch = ($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
+                            }
+                            // If existing CPU doesn't have serial_number, it's NOT a match (different physical component)
+                        } else {
+                            // Legacy: When adding without serial_number, match by UUID only
+                            $isMatch = ($cpu['uuid'] === $componentUuid);
                         }
-                        // If existing CPU doesn't have serial_number, it's NOT a match (different physical component)
-                    } else {
-                        // Legacy: When adding without serial_number, match by UUID only
-                        $isMatch = ($cpu['uuid'] === $componentUuid);
-                    }
 
-                    if ($isMatch) {
-                        $cpuExists = true;
-                        // Update quantity if CPU already exists
-                        $cpu['quantity'] = $quantity;
-                        break;
+                        if ($isMatch) {
+                            $cpuExists = true;
+                            // Update quantity if CPU already exists
+                            $cpu['quantity'] = $quantity;
+                            break;
+                        }
                     }
+                    unset($cpu); // Break reference
                 }
-                unset($cpu); // Break reference
 
-                // Add new CPU if it doesn't exist
+                // Add new CPU if it doesn't exist (or always add for virtual configs)
                 if (!$cpuExists) {
                     $newCpu = [
                         'uuid' => $componentUuid,
@@ -873,7 +914,11 @@ class ServerBuilder {
                         'added_at' => date('Y-m-d H:i:s')
                     ];
                     // CRITICAL: Store serial_number to identify specific physical component
-                    if ($serialNumber !== null) {
+                    // For virtual configs, generate unique serial to differentiate multiple instances
+                    if ($isVirtual) {
+                        $virtualIndex = count($cpuData) + 1;
+                        $newCpu['serial_number'] = 'VIRTUAL-CPU-' . $virtualIndex . '-' . time();
+                    } elseif ($serialNumber !== null) {
                         $newCpu['serial_number'] = $serialNumber;
                     }
                     $cpuData[] = $newCpu;
@@ -2400,9 +2445,216 @@ class ServerBuilder {
     }
 
     /**
+     * Check if a server configuration is virtual/test mode
+     */
+    private function isVirtualConfig($configUuid) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT is_virtual FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $result ? (bool)$result['is_virtual'] : false;
+        } catch (Exception $e) {
+            error_log("Error checking is_virtual: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Get all components from a server configuration (all JSON columns)
+     * Used for importing virtual configs to real configs
+     */
+    public function getConfigComponents($configUuid) {
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT
+                    cpu_configuration, ram_configuration, storage_configuration,
+                    caddy_configuration, nic_config, pciecard_configurations,
+                    hbacard_uuid, sfp_configuration, motherboard_uuid, chassis_uuid
+                FROM server_configurations
+                WHERE config_uuid = ?
+            ");
+            $stmt->execute([$configUuid]);
+            $config = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$config) {
+                return null;
+            }
+
+            $components = [];
+
+            // Parse CPU configuration
+            if (!empty($config['cpu_configuration'])) {
+                $cpus = json_decode($config['cpu_configuration'], true);
+                if (isset($cpus['cpus']) && is_array($cpus['cpus'])) {
+                    foreach ($cpus['cpus'] as $cpu) {
+                        $components[] = [
+                            'component_type' => 'cpu',
+                            'uuid' => $cpu['uuid'],
+                            'quantity' => $cpu['quantity'] ?? 1,
+                            'serial_number' => $cpu['serial_number'] ?? null
+                        ];
+                    }
+                }
+            }
+
+            // Parse RAM configuration
+            if (!empty($config['ram_configuration'])) {
+                $rams = json_decode($config['ram_configuration'], true);
+                if (is_array($rams)) {
+                    foreach ($rams as $ram) {
+                        $components[] = [
+                            'component_type' => 'ram',
+                            'uuid' => $ram['uuid'],
+                            'quantity' => $ram['quantity'] ?? 1,
+                            'serial_number' => $ram['serial_number'] ?? null
+                        ];
+                    }
+                }
+            }
+
+            // Parse Storage configuration
+            if (!empty($config['storage_configuration'])) {
+                $storages = json_decode($config['storage_configuration'], true);
+                if (is_array($storages)) {
+                    foreach ($storages as $storage) {
+                        $components[] = [
+                            'component_type' => 'storage',
+                            'uuid' => $storage['uuid'],
+                            'quantity' => $storage['quantity'] ?? 1,
+                            'serial_number' => $storage['serial_number'] ?? null
+                        ];
+                    }
+                }
+            }
+
+            // Parse Caddy configuration
+            if (!empty($config['caddy_configuration'])) {
+                $caddies = json_decode($config['caddy_configuration'], true);
+                if (is_array($caddies)) {
+                    foreach ($caddies as $caddy) {
+                        $components[] = [
+                            'component_type' => 'caddy',
+                            'uuid' => $caddy['uuid'],
+                            'quantity' => $caddy['quantity'] ?? 1,
+                            'serial_number' => $caddy['serial_number'] ?? null
+                        ];
+                    }
+                }
+            }
+
+            // Parse PCIe Card configuration
+            if (!empty($config['pciecard_configurations'])) {
+                $pciCards = json_decode($config['pciecard_configurations'], true);
+                if (is_array($pciCards)) {
+                    foreach ($pciCards as $card) {
+                        $components[] = [
+                            'component_type' => 'pciecard',
+                            'uuid' => $card['uuid'],
+                            'quantity' => $card['quantity'] ?? 1,
+                            'serial_number' => $card['serial_number'] ?? null,
+                            'slot_position' => $card['slot_position'] ?? null
+                        ];
+                    }
+                }
+            }
+
+            // Parse HBA Card (single instance)
+            if (!empty($config['hbacard_uuid'])) {
+                $components[] = [
+                    'component_type' => 'hbacard',
+                    'uuid' => $config['hbacard_uuid'],
+                    'quantity' => 1
+                ];
+            }
+
+            // Parse Motherboard (single instance)
+            if (!empty($config['motherboard_uuid'])) {
+                $components[] = [
+                    'component_type' => 'motherboard',
+                    'uuid' => $config['motherboard_uuid'],
+                    'quantity' => 1
+                ];
+            }
+
+            // Parse Chassis (single instance)
+            if (!empty($config['chassis_uuid'])) {
+                $components[] = [
+                    'component_type' => 'chassis',
+                    'uuid' => $config['chassis_uuid'],
+                    'quantity' => 1
+                ];
+            }
+
+            // Parse NIC configuration (complex structure)
+            if (!empty($config['nic_config'])) {
+                $nicConfig = json_decode($config['nic_config'], true);
+                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
+                    foreach ($nicConfig['nics'] as $nic) {
+                        // Only add component NICs, not onboard NICs
+                        if (isset($nic['source_type']) && $nic['source_type'] === 'component') {
+                            $components[] = [
+                                'component_type' => 'nic',
+                                'uuid' => $nic['uuid'],
+                                'quantity' => 1,
+                                'serial_number' => $nic['serial_number'] ?? null
+                            ];
+                        }
+                    }
+                }
+            }
+
+            return $components;
+
+        } catch (Exception $e) {
+            error_log("Error getting config components: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Find first available component with matching UUID (Status=1)
+     * Returns component details or null if not found
+     */
+    public function findAvailableComponent($componentType, $uuid) {
+        try {
+            $tableName = $this->getComponentInventoryTable($componentType);
+            if (!$tableName) {
+                return null;
+            }
+
+            $stmt = $this->pdo->prepare("
+                SELECT * FROM $tableName
+                WHERE UUID = ? AND Status = 1
+                LIMIT 1
+            ");
+            $stmt->execute([$uuid]);
+            $component = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            return $component ?: null;
+
+        } catch (Exception $e) {
+            error_log("Error finding available component: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * FIXED: Check component availability with ServerUUID context
+     * UPDATED: Bypass availability check for virtual configs
      */
     private function checkComponentAvailability($componentDetails, $configUuid, $options = []) {
+        // Virtual configs don't need availability checks
+        if ($this->isVirtualConfig($configUuid)) {
+            return [
+                'available' => true,
+                'status' => $componentDetails['Status'] ?? null,
+                'server_uuid' => $componentDetails['ServerUUID'] ?? null,
+                'message' => 'Virtual configuration - availability checks bypassed',
+                'can_override' => false,
+                'is_virtual' => true
+            ];
+        }
+
         $status = (int)$componentDetails['Status'];
         $serverUuid = $componentDetails['ServerUUID'] ?? null;
         
