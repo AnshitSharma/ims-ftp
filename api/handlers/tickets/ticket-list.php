@@ -102,10 +102,10 @@ try {
     if (!$canViewAll && !$canManage) {
         // User can only view own tickets or assigned tickets
         if ($canViewOwn && $canViewAssigned) {
-            // Can view both own and assigned - need custom query (handled in TicketManager)
-            // For now, we'll apply created_by filter if no other user filter is set
+            // Can view both own and assigned - use OR filter
+            // Only apply if no specific user filter is requested
             if (!isset($filters['created_by']) && !isset($filters['assigned_to'])) {
-                $filters['created_by'] = $user_id;
+                $filters['user_id_or'] = $user_id;
             }
         } elseif ($canViewOwn) {
             // Can only view own tickets

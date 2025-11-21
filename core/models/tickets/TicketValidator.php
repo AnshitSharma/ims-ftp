@@ -16,47 +16,13 @@
 
 require_once(__DIR__ . '/../components/ComponentDataService.php');
 require_once(__DIR__ . '/../compatibility/ComponentCompatibility.php');
+require_once(__DIR__ . '/../../config/WorkflowConfig.php');
 
 class TicketValidator
 {
     private $pdo;
     private $componentDataService;
     private $compatibilityValidator;
-
-    /**
-     * Valid ticket statuses
-     */
-    const VALID_STATUSES = ['draft', 'pending', 'approved', 'in_progress', 'deployed', 'completed', 'rejected', 'cancelled'];
-
-    /**
-     * Valid priorities
-     */
-    const VALID_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
-
-    /**
-     * Valid component types
-     */
-    const VALID_COMPONENT_TYPES = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'hbacard'];
-
-    /**
-     * Valid item actions
-     */
-    const VALID_ACTIONS = ['add', 'remove', 'replace'];
-
-    /**
-     * Status transition rules
-     * Format: current_status => [allowed_next_statuses]
-     */
-    const STATUS_TRANSITIONS = [
-        'draft' => ['pending', 'cancelled'],
-        'pending' => ['approved', 'rejected', 'cancelled'],
-        'approved' => ['in_progress', 'rejected', 'cancelled'],
-        'in_progress' => ['deployed', 'rejected'],
-        'deployed' => ['completed'],
-        'rejected' => ['pending', 'cancelled'],
-        'completed' => [],  // Final state
-        'cancelled' => []   // Final state
-    ];
 
     public function __construct($pdo)
     {
@@ -91,8 +57,8 @@ class TicketValidator
 
         // Priority validation
         if (isset($data['priority'])) {
-            if (!in_array($data['priority'], self::VALID_PRIORITIES)) {
-                $errors[] = "Invalid priority. Must be one of: " . implode(', ', self::VALID_PRIORITIES);
+            if (!in_array($data['priority'], WorkflowConfig::getValidPriorities())) {
+                $errors[] = "Invalid priority. Must be one of: " . implode(', ', WorkflowConfig::getValidPriorities());
             }
         }
 
@@ -178,8 +144,8 @@ class TicketValidator
         // Component type validation
         if (empty($item['component_type'])) {
             $errors[] = "$itemLabel: component_type is required";
-        } elseif (!in_array($item['component_type'], self::VALID_COMPONENT_TYPES)) {
-            $errors[] = "$itemLabel: Invalid component_type. Must be one of: " . implode(', ', self::VALID_COMPONENT_TYPES);
+        } elseif (!in_array($item['component_type'], WorkflowConfig::getValidComponentTypes())) {
+            $errors[] = "$itemLabel: Invalid component_type. Must be one of: " . implode(', ', WorkflowConfig::getValidComponentTypes());
         }
 
         // Component UUID validation
@@ -235,8 +201,8 @@ class TicketValidator
 
         // Action validation
         if (isset($item['action'])) {
-            if (!in_array($item['action'], self::VALID_ACTIONS)) {
-                $errors[] = "$itemLabel: Invalid action. Must be one of: " . implode(', ', self::VALID_ACTIONS);
+            if (!in_array($item['action'], WorkflowConfig::getValidActions())) {
+                $errors[] = "$itemLabel: Invalid action. Must be one of: " . implode(', ', WorkflowConfig::getValidActions());
             }
         } else {
             $validatedItem['action'] = 'add'; // Default
@@ -288,21 +254,62 @@ class TicketValidator
                 ];
             }
 
-            // Use FlexibleCompatibilityValidator for detailed checking
-            // This is a simplified check - full compatibility requires server builder context
-            $componentSpecs = json_decode($item['component_specs'], true);
-
-            // Basic compatibility check based on component type
-            $notes = "Component validated";
-            $compatible = true;
-
-            // You can enhance this with actual compatibility logic from FlexibleCompatibilityValidator
-            // For now, we'll mark as compatible if UUID is valid
-
-            return [
-                'compatible' => $compatible,
-                'notes' => $notes
+            // Get all existing components from server
+            $existingComponents = $this->getServerComponents($server);
+            
+            // Prepare new component for check
+            $newComponent = [
+                'type' => $item['component_type'],
+                'uuid' => $item['component_uuid']
             ];
+
+            $issues = [];
+            $warnings = [];
+            $checkedCount = 0;
+
+            // Check compatibility against all existing components
+            foreach ($existingComponents as $existingComponent) {
+                // Skip if comparing against itself (unlikely but possible)
+                if ($existingComponent['type'] === $newComponent['type'] && 
+                    $existingComponent['uuid'] === $newComponent['uuid']) {
+                    continue;
+                }
+
+                // Check if these types interact
+                if ($this->compatibilityValidator->canComponentTypesBeCompatible($newComponent['type'], $existingComponent['type'])) {
+                    $result = $this->compatibilityValidator->checkComponentPairCompatibility($newComponent, $existingComponent);
+                    $checkedCount++;
+
+                    if (!$result['compatible']) {
+                        foreach ($result['issues'] as $issue) {
+                            $issues[] = "Conflict with {$existingComponent['type']}: $issue";
+                        }
+                    }
+                    
+                    if (!empty($result['warnings'])) {
+                        foreach ($result['warnings'] as $warning) {
+                            $warnings[] = "Warning with {$existingComponent['type']}: $warning";
+                        }
+                    }
+                }
+            }
+
+            // If no specific checks ran (e.g. first component), it's compatible
+            if (empty($issues)) {
+                $notes = "Compatible";
+                if (!empty($warnings)) {
+                    $notes .= " (Warnings: " . implode('; ', $warnings) . ")";
+                }
+                return [
+                    'compatible' => true,
+                    'notes' => $notes
+                ];
+            } else {
+                return [
+                    'compatible' => false,
+                    'notes' => implode('; ', $issues)
+                ];
+            }
 
         } catch (Exception $e) {
             error_log("Compatibility check error: " . $e->getMessage());
@@ -311,6 +318,106 @@ class TicketValidator
                 'notes' => 'Compatibility check failed: ' . $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * Extract all components from server configuration
+     * 
+     * @param array $server Server configuration row
+     * @return array List of ['type' => string, 'uuid' => string]
+     */
+    private function getServerComponents($server)
+    {
+        $components = [];
+
+        // 1. Motherboard
+        if (!empty($server['motherboard_uuid'])) {
+            $components[] = ['type' => 'motherboard', 'uuid' => $server['motherboard_uuid']];
+        }
+
+        // 2. Chassis
+        if (!empty($server['chassis_uuid'])) {
+            $components[] = ['type' => 'chassis', 'uuid' => $server['chassis_uuid']];
+        }
+
+        // 3. CPU (JSON object with 'cpus' array)
+        if (!empty($server['cpu_configuration'])) {
+            $cpuConfig = json_decode($server['cpu_configuration'], true);
+            if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
+                foreach ($cpuConfig['cpus'] as $cpu) {
+                    if (!empty($cpu['uuid'])) {
+                        $components[] = ['type' => 'cpu', 'uuid' => $cpu['uuid']];
+                    }
+                }
+            }
+        }
+
+        // 4. RAM (JSON array)
+        if (!empty($server['ram_configuration'])) {
+            $ramConfig = json_decode($server['ram_configuration'], true);
+            if (is_array($ramConfig)) {
+                foreach ($ramConfig as $ram) {
+                    if (!empty($ram['uuid'])) {
+                        $components[] = ['type' => 'ram', 'uuid' => $ram['uuid']];
+                    }
+                }
+            }
+        }
+
+        // 5. Storage (JSON array)
+        if (!empty($server['storage_configuration'])) {
+            $storageConfig = json_decode($server['storage_configuration'], true);
+            if (is_array($storageConfig)) {
+                foreach ($storageConfig as $storage) {
+                    if (!empty($storage['uuid'])) {
+                        $components[] = ['type' => 'storage', 'uuid' => $storage['uuid']];
+                    }
+                }
+            }
+        }
+
+        // 6. NIC (JSON object with 'nics' array)
+        if (!empty($server['nic_config'])) {
+            $nicConfig = json_decode($server['nic_config'], true);
+            if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
+                foreach ($nicConfig['nics'] as $nic) {
+                    if (!empty($nic['uuid'])) {
+                        $components[] = ['type' => 'nic', 'uuid' => $nic['uuid']];
+                    }
+                }
+            }
+        }
+
+        // 7. Caddy (JSON array)
+        if (!empty($server['caddy_configuration'])) {
+            $caddyConfig = json_decode($server['caddy_configuration'], true);
+            if (is_array($caddyConfig)) {
+                foreach ($caddyConfig as $caddy) {
+                    if (!empty($caddy['uuid'])) {
+                        $components[] = ['type' => 'caddy', 'uuid' => $caddy['uuid']];
+                    }
+                }
+            }
+        }
+
+        // 8. HBA Card
+        if (!empty($server['hbacard_uuid'])) {
+            $components[] = ['type' => 'hbacard', 'uuid' => $server['hbacard_uuid']];
+        }
+
+        // 9. PCIe Cards (JSON array)
+        if (!empty($server['pciecard_configurations'])) {
+            $pcieConfig = json_decode($server['pciecard_configurations'], true);
+            if (is_array($pcieConfig)) {
+                foreach ($pcieConfig as $card) {
+                    if (!empty($card['uuid'])) {
+                        $components[] = ['type' => 'pciecard', 'uuid' => $card['uuid']];
+                    }
+                }
+            }
+        }
+
+        return $components;
     }
 
     /**
@@ -323,7 +430,7 @@ class TicketValidator
     public function validateStatusTransition($currentStatus, $newStatus)
     {
         // Check if new status is valid
-        if (!in_array($newStatus, self::VALID_STATUSES)) {
+        if (!in_array($newStatus, WorkflowConfig::getValidStatuses())) {
             return [
                 'valid' => false,
                 'error' => "Invalid status: $newStatus"
@@ -331,7 +438,7 @@ class TicketValidator
         }
 
         // Check if transition is allowed
-        $allowedTransitions = self::STATUS_TRANSITIONS[$currentStatus] ?? [];
+        $allowedTransitions = WorkflowConfig::getStatusTransitions()[$currentStatus] ?? [];
 
         if (!in_array($newStatus, $allowedTransitions)) {
             return [

@@ -4,28 +4,34 @@
  *
  * Main business logic for ticketing system
  * - Create, read, update, delete tickets
- * - Manage ticket items
- * - Track history/audit trail
+ * - Manage ticket items (via TicketItemService)
+ * - Track history/audit trail (via TicketHistoryService)
  * - Handle status transitions
  * - Generate ticket numbers
  *
  * @package BDC_IMS
  * @subpackage Ticketing
- * @version 2.1
- * @date 2025-11-18
+ * @version 2.2
+ * @date 2025-11-22
  */
 
 require_once(__DIR__ . '/TicketValidator.php');
+require_once(__DIR__ . '/TicketHistoryService.php');
+require_once(__DIR__ . '/TicketItemService.php');
 
 class TicketManager
 {
     private $pdo;
     private $validator;
+    private $historyService;
+    private $itemService;
 
     public function __construct($pdo)
     {
         $this->pdo = $pdo;
         $this->validator = new TicketValidator($pdo);
+        $this->historyService = new TicketHistoryService($pdo);
+        $this->itemService = new TicketItemService($pdo);
     }
 
     /**
@@ -84,8 +90,8 @@ class TicketManager
 
             $stmt->execute([
                 $ticketNumber,
-                $data['title'],
-                $data['description'],
+                htmlspecialchars($data['title'], ENT_QUOTES, 'UTF-8'),
+                htmlspecialchars($data['description'], ENT_QUOTES, 'UTF-8'),
                 'draft', // Always start as draft
                 $data['priority'] ?? 'medium',
                 $data['target_server_uuid'] ?? null,
@@ -94,13 +100,13 @@ class TicketManager
 
             $ticketId = $this->pdo->lastInsertId();
 
-            // Insert ticket items
+            // Insert ticket items via service
             foreach ($itemsValidation['validated_items'] as $item) {
-                $this->insertTicketItem($ticketId, $item);
+                $this->itemService->insertTicketItem($ticketId, $item);
             }
 
-            // Log creation in history
-            $this->logHistory(
+            // Log creation in history via service
+            $this->historyService->logHistory(
                 $ticketId,
                 'created',
                 null,
@@ -159,14 +165,14 @@ class TicketManager
                 return null;
             }
 
-            // Get items
+            // Get items via service
             if ($includeItems) {
-                $ticket['items'] = $this->getTicketItems($ticketId);
+                $ticket['items'] = $this->itemService->getTicketItems($ticketId);
             }
 
-            // Get history
+            // Get history via service
             if ($includeHistory) {
-                $ticket['history'] = $this->getTicketHistory($ticketId);
+                $ticket['history'] = $this->historyService->getTicketHistory($ticketId);
             }
 
             return $ticket;
@@ -203,6 +209,7 @@ class TicketManager
 
     /**
      * List tickets with filters and pagination
+     * Optimized to avoid N+1 queries
      *
      * @param array $filters Filters (status, priority, created_by, assigned_to, search)
      * @param int $page Page number (1-indexed)
@@ -239,6 +246,13 @@ class TicketManager
             if (!empty($filters['assigned_to'])) {
                 $where[] = "t.assigned_to = ?";
                 $params[] = $filters['assigned_to'];
+            }
+            
+            // OR filter for user (created_by OR assigned_to) - used for "My Tickets" view
+            if (!empty($filters['user_id_or'])) {
+                $where[] = "(t.created_by = ? OR t.assigned_to = ?)";
+                $params[] = $filters['user_id_or'];
+                $params[] = $filters['user_id_or'];
             }
 
             // Search filter (title, description, ticket_number)
@@ -279,12 +293,13 @@ class TicketManager
             // Calculate offset
             $offset = ($page - 1) * $limit;
 
-            // Get tickets
+            // Get tickets with item count in single query (Fix N+1)
             $stmt = $this->pdo->prepare("
                 SELECT
                     t.*,
                     creator.username as created_by_username,
-                    assignee.username as assigned_to_username
+                    assignee.username as assigned_to_username,
+                    (SELECT COUNT(*) FROM ticket_items WHERE ticket_id = t.id) as item_count
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN users assignee ON t.assigned_to = assignee.id
@@ -295,11 +310,6 @@ class TicketManager
 
             $stmt->execute(array_merge($params, [$limit, $offset]));
             $tickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            // Get item counts for each ticket
-            foreach ($tickets as &$ticket) {
-                $ticket['item_count'] = $this->getTicketItemCount($ticket['id']);
-            }
 
             return [
                 'tickets' => $tickets,
@@ -335,8 +345,11 @@ class TicketManager
         try {
             $this->pdo->beginTransaction();
 
-            // Get current ticket
-            $ticket = $this->getTicketById($ticketId, false, false);
+            // Get current ticket with LOCK (FOR UPDATE) to prevent race conditions
+            $stmt = $this->pdo->prepare("SELECT * FROM tickets WHERE id = ? FOR UPDATE");
+            $stmt->execute([$ticketId]);
+            $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
+
             if (!$ticket) {
                 $this->pdo->rollBack();
                 return [
@@ -380,8 +393,8 @@ class TicketManager
                         break;
                 }
 
-                // Log status change
-                $this->logHistory(
+                // Log status change via service
+                $this->historyService->logHistory(
                     $ticketId,
                     'status_changed',
                     $ticket['status'],
@@ -394,42 +407,42 @@ class TicketManager
             // Handle field updates
             if (isset($updates['title'])) {
                 $setFields[] = "title = ?";
-                $params[] = $updates['title'];
-                $this->logHistory($ticketId, 'title_changed', $ticket['title'], $updates['title'], $userId);
+                $params[] = htmlspecialchars($updates['title'], ENT_QUOTES, 'UTF-8');
+                $this->historyService->logHistory($ticketId, 'title_changed', $ticket['title'], $updates['title'], $userId);
             }
 
             if (isset($updates['description'])) {
                 $setFields[] = "description = ?";
-                $params[] = $updates['description'];
-                $this->logHistory($ticketId, 'description_changed', null, null, $userId, 'Description updated');
+                $params[] = htmlspecialchars($updates['description'], ENT_QUOTES, 'UTF-8');
+                $this->historyService->logHistory($ticketId, 'description_changed', null, null, $userId, 'Description updated');
             }
 
             if (isset($updates['priority'])) {
                 $setFields[] = "priority = ?";
                 $params[] = $updates['priority'];
-                $this->logHistory($ticketId, 'priority_changed', $ticket['priority'], $updates['priority'], $userId);
+                $this->historyService->logHistory($ticketId, 'priority_changed', $ticket['priority'], $updates['priority'], $userId);
             }
 
             if (isset($updates['assigned_to'])) {
                 $setFields[] = "assigned_to = ?";
                 $params[] = $updates['assigned_to'];
-                $this->logHistory($ticketId, 'assigned', $ticket['assigned_to'], $updates['assigned_to'], $userId, 'Ticket assigned');
+                $this->historyService->logHistory($ticketId, 'assigned', $ticket['assigned_to'], $updates['assigned_to'], $userId, 'Ticket assigned');
             }
 
             // Handle extra data fields
             if (!empty($extraData['rejection_reason'])) {
                 $setFields[] = "rejection_reason = ?";
-                $params[] = $extraData['rejection_reason'];
+                $params[] = htmlspecialchars($extraData['rejection_reason'], ENT_QUOTES, 'UTF-8');
             }
 
             if (!empty($extraData['deployment_notes'])) {
                 $setFields[] = "deployment_notes = ?";
-                $params[] = $extraData['deployment_notes'];
+                $params[] = htmlspecialchars($extraData['deployment_notes'], ENT_QUOTES, 'UTF-8');
             }
 
             if (!empty($extraData['completion_notes'])) {
                 $setFields[] = "completion_notes = ?";
-                $params[] = $extraData['completion_notes'];
+                $params[] = htmlspecialchars($extraData['completion_notes'], ENT_QUOTES, 'UTF-8');
             }
 
             // Always update updated_at
@@ -488,7 +501,13 @@ class TicketManager
 
             if ($hardDelete) {
                 // Hard delete - remove from database
-                // History and items will be cascade deleted
+                // Items and history should be deleted first or via cascade
+                // We'll delete them manually to be safe
+                $this->itemService->deleteTicketItems($ticketId);
+                
+                $stmt = $this->pdo->prepare("DELETE FROM ticket_history WHERE ticket_id = ?");
+                $stmt->execute([$ticketId]);
+                
                 $stmt = $this->pdo->prepare("DELETE FROM tickets WHERE id = ?");
                 $stmt->execute([$ticketId]);
             } else {
@@ -500,7 +519,7 @@ class TicketManager
                 ");
                 $stmt->execute([$ticketId]);
 
-                $this->logHistory($ticketId, 'deleted', $ticket['status'], 'cancelled', $userId, 'Ticket cancelled/deleted');
+                $this->historyService->logHistory($ticketId, 'deleted', $ticket['status'], 'cancelled', $userId, 'Ticket cancelled/deleted');
             }
 
             $this->pdo->commit();
@@ -517,157 +536,6 @@ class TicketManager
                 'success' => false,
                 'errors' => ['Failed to delete ticket: ' . $e->getMessage()]
             ];
-        }
-    }
-
-    /**
-     * Get ticket items
-     *
-     * @param int $ticketId Ticket ID
-     * @return array Ticket items
-     */
-    private function getTicketItems($ticketId)
-    {
-        try {
-            $stmt = $this->pdo->prepare("
-                SELECT * FROM ticket_items
-                WHERE ticket_id = ?
-                ORDER BY id ASC
-            ");
-            $stmt->execute([$ticketId]);
-            return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {
-            error_log("TicketManager::getTicketItems error: " . $e->getMessage());
-            return [];
-        }
-    }
-
-    /**
-     * Get ticket item count
-     *
-     * @param int $ticketId Ticket ID
-     * @return int Item count
-     */
-    private function getTicketItemCount($ticketId)
-    {
-        try {
-            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM ticket_items WHERE ticket_id = ?");
-            $stmt->execute([$ticketId]);
-            return (int)$stmt->fetchColumn();
-        } catch (Exception $e) {
-            error_log("TicketManager::getTicketItemCount error: " . $e->getMessage());
-            return 0;
-        }
-    }
-
-    /**
-     * Get ticket history
-     *
-     * @param int $ticketId Ticket ID
-     * @return array History entries
-     */
-    private function getTicketHistory($ticketId)
-    {
-        try {
-            $stmt = $this->pdo->prepare("
-                SELECT
-                    h.*,
-                    u.username as changed_by_username,
-                    u.email as changed_by_email
-                FROM ticket_history h
-                LEFT JOIN users u ON h.changed_by = u.id
-                WHERE h.ticket_id = ?
-                ORDER BY h.created_at DESC
-            ");
-            $stmt->execute([$ticketId]);
-            return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {
-            error_log("TicketManager::getTicketHistory error: " . $e->getMessage());
-            return [];
-        }
-    }
-
-    /**
-     * Insert ticket item
-     *
-     * @param int $ticketId Ticket ID
-     * @param array $item Item data
-     * @return int Item ID
-     */
-    private function insertTicketItem($ticketId, $item)
-    {
-        $stmt = $this->pdo->prepare("
-            INSERT INTO ticket_items (
-                ticket_id,
-                component_type,
-                component_uuid,
-                quantity,
-                action,
-                component_name,
-                component_specs,
-                is_validated,
-                is_compatible,
-                compatibility_notes,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ");
-
-        $stmt->execute([
-            $ticketId,
-            $item['component_type'],
-            $item['component_uuid'],
-            $item['quantity'] ?? 1,
-            $item['action'] ?? 'add',
-            $item['component_name'] ?? 'Unknown',
-            $item['component_specs'] ?? null,
-            $item['is_validated'] ?? 0,
-            $item['is_compatible'] ?? 0,
-            $item['compatibility_notes'] ?? null
-        ]);
-
-        return $this->pdo->lastInsertId();
-    }
-
-    /**
-     * Log history entry
-     *
-     * @param int $ticketId Ticket ID
-     * @param string $action Action performed
-     * @param mixed $oldValue Old value
-     * @param mixed $newValue New value
-     * @param int $userId User ID
-     * @param string|null $notes Additional notes
-     */
-    private function logHistory($ticketId, $action, $oldValue, $newValue, $userId, $notes = null)
-    {
-        try {
-            $stmt = $this->pdo->prepare("
-                INSERT INTO ticket_history (
-                    ticket_id,
-                    action,
-                    old_value,
-                    new_value,
-                    changed_by,
-                    notes,
-                    ip_address,
-                    user_agent,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
-
-            $stmt->execute([
-                $ticketId,
-                $action,
-                $oldValue,
-                $newValue,
-                $userId,
-                $notes,
-                $_SERVER['REMOTE_ADDR'] ?? null,
-                $_SERVER['HTTP_USER_AGENT'] ?? null
-            ]);
-        } catch (Exception $e) {
-            error_log("TicketManager::logHistory error: " . $e->getMessage());
-            // Don't throw - history logging shouldn't break main operation
         }
     }
 
