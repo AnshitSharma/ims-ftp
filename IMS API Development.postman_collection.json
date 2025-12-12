@@ -1,0 +1,2279 @@
+{
+	"info": {
+		"_postman_id": "17a052db-841f-437e-9b1b-533506990050",
+		"name": "IMS API Development",
+		"description": "# 🚀 Get started here\n\nThis template guides you through CRUD operations (GET, POST, PUT, DELETE), variables, and tests.\n\n## 🔖 **How to use this template**\n\n#### **Step 1: Send requests**\n\nRESTful APIs allow you to perform CRUD operations using the POST, GET, PUT, and DELETE HTTP methods.\n\nThis collection contains each of these [request](https://learning.postman.com/docs/sending-requests/requests/) types. Open each request and click \"Send\" to see what happens.\n\n#### **Step 2: View responses**\n\nObserve the response tab for status code (200 OK), response time, and size.\n\n#### **Step 3: Send new Body data**\n\nUpdate or add new data in \"Body\" in the POST request. Typically, Body data is also used in PUT request.\n\n```\n{\n    \"name\": \"Add your name in the body\"\n}\n\n ```\n\n#### **Step 4: Update the variable**\n\nVariables enable you to store and reuse values in Postman. We have created a [variable](https://learning.postman.com/docs/sending-requests/variables/) called `base_url` with the sample request [https://postman-api-learner.glitch.me](https://postman-api-learner.glitch.me). Replace it with your API endpoint to customize this collection.\n\n#### **Step 5: Add tests in the \"Scripts\" tab**\n\nAdding tests to your requests can help you confirm that your API is working as expected. You can write test scripts in JavaScript and view the output in the \"Test Results\" tab.\n\n<img src=\"https://content.pstmn.io/fa30ea0a-373d-4545-a668-e7b283cca343/aW1hZ2UucG5n\" width=\"2162\" height=\"1530\">\n\n## 💪 Pro tips\n\n- Use folders to group related requests and organize the collection.\n    \n- Add more [scripts](https://learning.postman.com/docs/writing-scripts/intro-to-scripts/) to verify if the API works as expected and execute workflows.\n    \n\n## 💡Related templates\n\n[API testing basics](https://go.postman.co/redirect/workspace?type=personal&collectionTemplateId=e9a37a28-055b-49cd-8c7e-97494a21eb54&sourceTemplateId=ddb19591-3097-41cf-82af-c84273e56719)  \n[API documentation](https://go.postman.co/redirect/workspace?type=personal&collectionTemplateId=e9c28f47-1253-44af-a2f3-20dce4da1f18&sourceTemplateId=ddb19591-3097-41cf-82af-c84273e56719)  \n[Authorization methods](https://go.postman.co/redirect/workspace?type=personal&collectionTemplateId=31a9a6ed-4cdf-4ced-984c-d12c9aec1c27&sourceTemplateId=ddb19591-3097-41cf-82af-c84273e56719)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "34197478",
+		"_collection_link": "https://ims-team-2226.postman.co/workspace/IMS-TEAM-Workspace~efb92586-b77a-4389-876d-b5ce65719d03/collection/34197478-17a052db-841f-437e-9b1b-533506990050?action=share&source=collection_link&creator=34197478"
+	},
+	"item": [
+		{
+			"name": "ACL API'S",
+			"item": [
+				{
+					"name": "Get All Roles",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "acl-get_all_roles",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Permission",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "acl-get_user_permissions",
+									"type": "text"
+								},
+								{
+									"key": "user_id",
+									"value": "38",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create New Role",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "roles-create",
+									"type": "text"
+								},
+								{
+									"key": "name",
+									"value": "media_manager",
+									"type": "text"
+								},
+								{
+									"key": "display_name",
+									"value": "Media Manager",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "Manages all media operation",
+									"type": "text"
+								},
+								{
+									"key": "basic_permissions",
+									"value": "true",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Permissions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "permissions-get_all",
+									"type": "text"
+								},
+								{
+									"key": "grouped",
+									"value": "true",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Role Permissions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "roles-update_permissions",
+									"type": "text"
+								},
+								{
+									"key": "role_id",
+									"value": "3806",
+									"type": "text"
+								},
+								{
+									"key": "permissions[40]",
+									"value": "1",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Assign Role to user",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "acl-assign_role",
+									"type": "text"
+								},
+								{
+									"key": "user_id",
+									"value": "39",
+									"type": "text"
+								},
+								{
+									"key": "role_id",
+									"value": "3806",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Role from User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "acl-remove_role",
+									"type": "text"
+								},
+								{
+									"key": "user_id",
+									"value": "39",
+									"type": "text"
+								},
+								{
+									"key": "role_id",
+									"value": "3806",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Role Details with Permissions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "roles-get",
+									"type": "text"
+								},
+								{
+									"key": "id",
+									"value": "3806",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Role Details",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "roles-update",
+									"type": "text"
+								},
+								{
+									"key": "id",
+									"value": "3806",
+									"type": "text"
+								},
+								{
+									"key": "display_name",
+									"value": "Media Managers",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "is_default",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Search Api's",
+			"item": [
+				{
+					"name": "Global Component Search",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "search-components",
+									"type": "text"
+								},
+								{
+									"key": "q",
+									"value": "intel",
+									"type": "text"
+								},
+								{
+									"key": "type",
+									"value": "all",
+									"type": "text"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Component Type Search",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "search-components",
+									"type": "text"
+								},
+								{
+									"key": "q",
+									"value": "32GB",
+									"type": "text"
+								},
+								{
+									"key": "type",
+									"value": "ram",
+									"type": "text"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Server Api",
+			"item": [
+				{
+					"name": "server-create-start",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-create-start",
+									"type": "text"
+								},
+								{
+									"key": "server_name",
+									"value": "My Production Server",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "Web server for production workloads",
+									"type": "text"
+								},
+								{
+									"key": "start_with",
+									"value": "cpu",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-add-component",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{JWT-TOKEN}}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-add-component",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "fc4aff55-4e79-46df-b6e6-d95d3202b9a6",
+									"type": "text"
+								},
+								{
+									"key": "component_type",
+									"value": "cpu",
+									"type": "text"
+								},
+								{
+									"key": "component_uuid",
+									"value": "545e143b-57b3-419e-86e5-1df6f7aa8fg4",
+									"type": "text"
+								},
+								{
+									"key": "quantity",
+									"value": "1",
+									"type": "text"
+								},
+								{
+									"key": "slot_position",
+									"value": "CPU_1",
+									"type": "text"
+								},
+								{
+									"key": "override",
+									"value": "false",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get-compatible-component",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-get-compatible",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "1538a01f-a05a-4273-b0ec-fcc7807081cf",
+									"type": "text"
+								},
+								{
+									"key": "component_type",
+									"value": "motherboard",
+									"type": "text"
+								},
+								{
+									"key": "available_only",
+									"value": "true",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-get-config",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-get-config",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "ecacafb3-090c-4e20-8013-f2cadb5f-e31d-42f5-9cc6-449666d96e5a",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						},
+						"description": "## API Endpoint Description\n\nThis endpoint is designed to submit a configuration action and retrieve the associated configuration details. It accepts a POST request with specific parameters and returns a JSON response indicating the success of the operation along with detailed configuration data.\n\n### Request Parameters\n\nThe request body must be sent in `form-data` format and includes the following parameters:\n\n- **action** (string): Specifies the type of action to be performed. This parameter is required for the operation.\n    \n- **config_uuid** (string): Represents the unique identifier for the configuration. This parameter is also required to identify which configuration to act upon.\n    \n\n### Response\n\nOn successful execution, the endpoint responds with a status code of `200` and a JSON object containing the following fields:\n\n- **success** (boolean): Indicates whether the request was successful.\n    \n- **authenticated** (boolean): States if the user is authenticated.\n    \n- **message** (string): A message providing additional context about the request.\n    \n- **timestamp** (string): The time at which the response was generated.\n    \n- **code** (integer): A numerical code representing the status of the request.\n    \n- **data** (object): Contains detailed information about the configuration, including:\n    \n    - **configuration** (object): Detailed configuration data including identifiers, server name, description, component configurations, and validation results.\n        \n    - **component_counts** (object): Counts of various components within the configuration.\n        \n    - **component_ids_uuids** (object): UUIDs and quantities of the components.\n        \n    - **total_components** (integer): Total number of components in the configuration.\n        \n    - **power_consumption** (object): Information regarding power consumption metrics.\n        \n    - **compatibility_analysis** (object): Analysis of component compatibility with detailed checks and scores.\n        \n\n### Notes\n\n- Ensure that the `config_uuid` provided corresponds to an existing configuration to avoid errors.\n    \n- The response will include comprehensive details that can be used for further analysis of the configuration's compatibility and performance."
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Component",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-remove-component",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "component_type",
+									"value": "cpu",
+									"type": "text"
+								},
+								{
+									"key": "component_uuid",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-list-configs",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-list-configs",
+									"type": "text"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"type": "text"
+								},
+								{
+									"key": "offset",
+									"value": "0",
+									"type": "text"
+								},
+								{
+									"key": "status",
+									"value": "1",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-finalize-config",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-finalize-config",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "notes",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-delete-config",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-delete-config",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-get-available-components",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-get-available-components",
+									"type": "text"
+								},
+								{
+									"key": "component_type",
+									"value": "cpu",
+									"type": "text"
+								},
+								{
+									"key": "include_in_use",
+									"value": "false",
+									"type": "text"
+								},
+								{
+									"key": "limit",
+									"value": "50",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-validate-config",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-validate-config",
+									"type": "text"
+								},
+								{
+									"key": "config_uuid",
+									"value": "ebfcf9d1-0913-47db-a935-2c854093f63a",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-update-config",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "configuration_status",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "server_name",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "location",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "rack_position",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "notes",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "server-import-virtual",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "server-import-virtual",
+									"type": "text"
+								},
+								{
+									"key": "virtual_config_uuid",
+									"value": "2ea6c136-39a3-4684-8bc9-2229a4fc24cc",
+									"type": "text"
+								},
+								{
+									"key": "server_name",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "location",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "rack_position",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Tickets",
+			"item": [
+				{
+					"name": "create ticket",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "ticket-create",
+									"description": "Required",
+									"type": "text"
+								},
+								{
+									"key": "title",
+									"value": "",
+									"description": "Required",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "",
+									"description": "Required",
+									"type": "text"
+								},
+								{
+									"key": "priority",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "target_server_uuid",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "items",
+									"value": "",
+									"description": "Required",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Tickets",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": " Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "ticket-list",
+									"description": "Required (only required field in this request)",
+									"type": "text"
+								},
+								{
+									"key": "status",
+									"value": "pending",
+									"description": "draft, pending, approved, in_progress, deployed, completed, rejected, cancelled",
+									"type": "text"
+								},
+								{
+									"key": "priority",
+									"value": "",
+									"description": "Filter by priority: low, medium, high, urgent",
+									"type": "text"
+								},
+								{
+									"key": "created_by",
+									"value": "",
+									"description": "Filter by creator user ID",
+									"type": "text"
+								},
+								{
+									"key": "assigned_to",
+									"value": "",
+									"description": "Filter by assigned user ID",
+									"type": "text"
+								},
+								{
+									"key": "search",
+									"value": "",
+									"description": "Search in title, description, ticket_number",
+									"type": "text"
+								},
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default: 1)",
+									"type": "text"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Items per page (default: 20, max: 100)",
+									"type": "text"
+								},
+								{
+									"key": "order_by",
+									"value": "",
+									"description": "Sort field: created_at, updated_at, priority, status, ticket_number (default: created_at)",
+									"type": "text"
+								},
+								{
+									"key": "order_dir",
+									"value": "",
+									"description": "Sort direction: ASC, DESC (default: DESC)",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get-ticket-id",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "ticket-get",
+									"description": "Required (only required field in this request)",
+									"type": "text"
+								},
+								{
+									"key": "ticket_id",
+									"value": "",
+									"description": "Ticket ID   Required ",
+									"type": "text"
+								},
+								{
+									"key": "include_history",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update ticket",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "{{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "action",
+									"value": "ticket-update",
+									"description": "Required (only required field in this request)",
+									"type": "text"
+								},
+								{
+									"key": "ticket_id",
+									"value": "",
+									"description": "Ticket ID   Required ",
+									"type": "text"
+								},
+								{
+									"key": "status",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "title",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "priority",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "assigned_to",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "rejection_reason",
+									"value": "",
+									"description": "Required when status=rejected",
+									"type": "text"
+								},
+								{
+									"key": "deployment_notes",
+									"value": "",
+									"type": "text"
+								},
+								{
+									"key": "completion_notes",
+									"value": "",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}",
+							"host": [
+								"{{base_url}}"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "LOGIN",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Response format is valid\", function () {\r",
+							"pm.test(\"Response format is valid\", function () {\r",
+							"    const response = pm.response.json();\r",
+							"    pm.expect(response).to.have.all.keys('success', 'authenticated', 'message', 'timestamp', 'code', 'data');\r",
+							"    pm.expect(response.data).to.have.all.keys('user', 'tokens', 'permissions');\r",
+							"    pm.expect(response.data.user).to.have.all.keys('id', 'username', 'email', 'firstname', 'lastname');\r",
+							"    pm.expect(response.data.tokens).to.have.all.keys('access_token', 'refresh_token', 'expires_in');\r",
+							"    pm.expect(response.data.permissions).to.be.an('array');\r",
+							"});    const response = pm.response.json();\r",
+							"    \r",
+							"    pm.expect(response).to.have.all.keys('success', 'authenticated', 'message', 'timestamp', 'code', 'data');\r",
+							"    pm.expect(response.success).to.be.a('boolean');\r",
+							"    pm.expect(response.authenticated).to.be.a('boolean');\r",
+							"    pm.expect(response.message).to.be.a('string');\r",
+							"    pm.expect(response.timestamp).to.be.a('string');\r",
+							"    pm.expect(response.code).to.be.a('number');\r",
+							"    pm.expect(response.data).to.be.an('object');\r",
+							"});\r",
+							"pm.test(\"Access token matches expected value\", function () {\r",
+							"    const response = pm.response.json();\r",
+							"    const expectedToken = \"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjozOCwidXNlcm5hbWUiOiJzdXBlcmFkbWluIiwiaWF0IjoxNzU1OTM4OTQ1LCJleHAiOjE3NTU5NDI1NDUsImlzcyI6ImJkYy1pbXMifQ.Qch3_0gvHrH2Vh-mdLxgH18pY8eSzdmlyMfAq3O0Yc8\";\r",
+							"    pm.expect(response.data.tokens.access_token).to.equal(expectedToken);\r",
+							"});\r",
+							"pm.test(\"Response message is as expected\", function () {\r",
+							"    const response = pm.response.json();\r",
+							"    const expectedMessage = \"Login successful\";\r",
+							"    pm.expect(response.message).to.equal(expectedMessage);\r",
+							"});\r",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "auth-login",
+							"type": "text"
+						},
+						{
+							"key": "username",
+							"value": "superadmin",
+							"type": "text"
+						},
+						{
+							"key": "password",
+							"value": "password",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Logout",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "auth-logout",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "ce64eac2a90979fba0b01e340757f12d",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Verify_Token",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "auth-check_session",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Dashboard-get_data",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "dashboard-get_data",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						},
+						{
+							"key": "component",
+							"value": "all",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "search-components",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "search-components",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "query",
+							"value": "CPU123456",
+							"type": "text"
+						},
+						{
+							"key": "type",
+							"value": "all",
+							"type": "text"
+						},
+						{
+							"key": "limit",
+							"value": "20",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "cpu-list",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "cpu-list",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						},
+						{
+							"key": "limit",
+							"value": "50",
+							"type": "text"
+						},
+						{
+							"key": "offset",
+							"value": "0",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "ram-list",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "ram-list",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						},
+						{
+							"key": "limit",
+							"value": "50",
+							"type": "text"
+						},
+						{
+							"key": "offset",
+							"value": "0",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "storage-list",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "storage-list",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "motherboard-list",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "motherboard-list",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "nic-list",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "nic-list",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "caddy-list",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "caddy-list",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "all",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get-cpu-by-ID",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "cpu-get",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "id",
+							"value": "1",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get-ram-by-ID",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "ram-get",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "id",
+							"value": "1",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "cpu-add",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "cpu-add",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "component_uuid",
+							"value": "545e143b-57b3-419e-86e5-1df6f7aa8fd3",
+							"type": "text"
+						},
+						{
+							"key": "serial_number",
+							"value": "CPU789013",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "1",
+							"type": "text"
+						},
+						{
+							"key": "server_uuid",
+							"value": "",
+							"type": "text"
+						},
+						{
+							"key": "location",
+							"value": " Warehouse East",
+							"type": "text"
+						},
+						{
+							"key": "rack_position",
+							"value": "Shelf B4",
+							"type": "text"
+						},
+						{
+							"key": "purchase_date",
+							"value": "2024-01-10",
+							"type": "text"
+						},
+						{
+							"key": "warranty_end_date",
+							"value": "2027-01-10",
+							"type": "text"
+						},
+						{
+							"key": "flag",
+							"value": "Backup",
+							"type": "text"
+						},
+						{
+							"key": "notes",
+							"value": "AMD EPYC 16-core 2.9GHz",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "ram-add",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{JWT-TOKEN}}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": " ram-add",
+							"type": "text"
+						},
+						{
+							"key": "uuid",
+							"value": "e5f6a7b8-c9d0-1234-5678-90abcdef1234",
+							"type": "text"
+						},
+						{
+							"key": "serial_number",
+							"value": " RAM000000",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": " 1",
+							"type": "text"
+						},
+						{
+							"key": "location",
+							"value": " Rack B3, Storage Unit 4",
+							"type": "text"
+						},
+						{
+							"key": "rack_position",
+							"value": " B3-S4-01",
+							"type": "text"
+						},
+						{
+							"key": "purchase_date",
+							"value": " 2023-09-15",
+							"type": "text"
+						},
+						{
+							"key": "warranty_end_date",
+							"value": " 2028-09-15",
+							"type": "text"
+						},
+						{
+							"key": "flag",
+							"value": " Production",
+							"type": "text"
+						},
+						{
+							"key": "notes",
+							"value": " Kingston ValueRAM DDR4-3200 32GB ECC UDIMM",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "caddy add",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": " Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "caddy-add",
+							"type": "text"
+						},
+						{
+							"key": "uuid",
+							"value": "d7f1a3b5-8e4c-4f9d-9a2b-3c5d6e7f8a",
+							"type": "text"
+						},
+						{
+							"key": "serial_number",
+							"value": "CDY00989",
+							"type": "text"
+						},
+						{
+							"key": "status",
+							"value": "1",
+							"type": "text"
+						},
+						{
+							"key": "server_uuid",
+							"value": "",
+							"type": "text"
+						},
+						{
+							"key": "location",
+							"value": " Warehouse East",
+							"type": "text"
+						},
+						{
+							"key": "rack_position",
+							"value": "Shelf B4",
+							"type": "text"
+						},
+						{
+							"key": "purchase_date",
+							"value": "2024-01-31",
+							"type": "text"
+						},
+						{
+							"key": "warranty_end_date",
+							"value": "2026-01-31",
+							"type": "text"
+						},
+						{
+							"key": "flag",
+							"value": "Backup",
+							"type": "text"
+						},
+						{
+							"key": "notes",
+							"value": "3.5 inch caddy ",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "cpu-delete",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "cpu-delete",
+							"type": "text"
+						},
+						{
+							"key": "session_id",
+							"value": "{{SessionID}}",
+							"type": "text"
+						},
+						{
+							"key": "id",
+							"value": "3",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Refresh_Token",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "auth-refresh",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "assign-role",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "acl-assign_role",
+							"type": "text"
+						},
+						{
+							"key": "user_id",
+							"value": "37",
+							"type": "text"
+						},
+						{
+							"key": "role_id",
+							"value": "2",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Create User",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": " Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "users-create",
+							"type": "text"
+						},
+						{
+							"key": "username",
+							"value": "Shubham",
+							"type": "text"
+						},
+						{
+							"key": "email",
+							"value": "shubham@bharatdatacenter.com",
+							"type": "text"
+						},
+						{
+							"key": "password",
+							"value": "shubham@123",
+							"type": "text"
+						},
+						{
+							"key": "firstname",
+							"value": "Shubham",
+							"type": "text"
+						},
+						{
+							"key": "lastname",
+							"value": "Gurjar",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "auth-register",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get roles by id",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "action",
+							"value": "roles-get",
+							"type": "text"
+						},
+						{
+							"key": "id",
+							"value": "1",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}",
+					"host": [
+						"{{base_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "New Request",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": ""
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "New Request",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "https://shubham.staging.cloudmate.in/bdc_ims/api/api.php"
+		},
+		{
+			"key": "jwt_token",
+			"value": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjozNywidXNlcm5hbWUiOiJqb2huYWRtaW4iLCJlbWFpbCI6ImpvaG4uYWRtaW5AY29tcGFueS5jb20iLCJyb2xlIjoiYWRtaW4iLCJpc19hZG1pbiI6dHJ1ZSwiaXNfbWFuYWdlciI6dHJ1ZSwiaWF0IjoxNzUzMTQ0MjI2LCJleHAiOjE3NTMyMzA2MjYsIm5iZiI6MTc1MzE0NDIyNn0.qGyrNPkoc7XJ8hSm9wMke4bVw57yzbCaPt33hvnWneg",
+			"description": "access_token"
+		},
+		{
+			"key": "refresh_token",
+			"value": "6233831cf4aa883114fb92f9c326bc8f232a385acf2b8abbbf409a3cedc9e60d",
+			"description": "refresh_token"
+		},
+		{
+			"key": "JWT-TOKEN",
+			"value": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjozOCwidXNlcm5hbWUiOiJzdXBlcmFkbWluIiwiaWF0IjoxNzU1NTkyMjI0LCJleHAiOjE3NTU1OTU4MjQsImlzcyI6ImJkYy1pbXMifQ.Nqff0rvLMI_quFGnoV2xUo8XKKMVydm9Uj4fWHJwmxI",
+			"description": "access_token"
+		}
+	]
+}

@@ -61,7 +61,10 @@
       "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\api\\server/**)",
       "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\includes\\models/**)",
       "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\includes\\models/**)",
-      "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\includes\\models/**)"
+      "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\includes\\models/**)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(xargs:*)"
     ],
     "deny": [],
     "ask": []

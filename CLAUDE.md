@@ -195,6 +195,34 @@ All endpoints return:
 - Folder structure → [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md)
 - Database schema → [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)
 
+## Task Execution Workflow 🔄
+
+**MANDATORY PROCESS** - Follow these steps for EVERY task:
+
+1. **Plan First** → Think through the problem, read relevant files, write plan to `tasks/todo.md`
+   - Create actionable todo items with checkboxes
+
+2. **Get Approval** → Check in with user to verify the plan before starting work
+
+3. **Execute Incrementally** → Work through todo items one by one
+   - Mark each item complete as you finish it
+   - Provide high-level explanation of changes at each step
+
+4. **Review & Document** → Add review section to `tasks/todo.md` with:
+   - Summary of all changes made
+   - File paths and line numbers affected
+   - Any other relevant information
+
+**NON-NEGOTIABLE RULES:**
+
+- **NO LAZINESS** → Find root causes, no temporary fixes, no shortcuts
+- **SENIOR-LEVEL WORK** → Every fix must be thorough and production-ready
+- **MAXIMUM SIMPLICITY** → Impact minimal code, change only what's necessary
+- **ZERO BUG TOLERANCE** → Every change must be carefully crafted to avoid introducing bugs
+- **SURGICAL PRECISION** → Touch only code relevant to the task, nothing else
+
+**Complexity Principle**: The right solution is the simplest one that fully solves the problem. Three similar lines of code beats a premature abstraction.
+
 ## Documentation Standards ⚡
 
 **CRITICAL: Only create documentation when:**

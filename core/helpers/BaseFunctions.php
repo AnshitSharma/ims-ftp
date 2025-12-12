@@ -300,9 +300,9 @@ if (!function_exists('getUserRoles')) {
     function getUserRoles($pdo, $userId) {
         try {
             $stmt = $pdo->prepare("
-                SELECT r.id, r.role_name, r.description 
-                FROM user_roles ur 
-                JOIN acl_roles r ON ur.role_id = r.id 
+                SELECT r.id, r.name as role_name, r.display_name, r.description
+                FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
                 WHERE ur.user_id = ?
             ");
             $stmt->execute([$userId]);
@@ -409,7 +409,7 @@ if (!function_exists('revokeRoleFromUser')) {
 if (!function_exists('getAllRoles')) {
     function getAllRoles($pdo) {
         try {
-            $stmt = $pdo->prepare("SELECT id, role_name, description, created_at FROM acl_roles ORDER BY role_name");
+            $stmt = $pdo->prepare("SELECT id, name as role_name, display_name, description, is_system, is_default, created_at FROM roles ORDER BY name");
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
@@ -441,9 +441,12 @@ if (!function_exists('getAllPermissions')) {
 if (!function_exists('createRole')) {
     function createRole($pdo, $name, $description = '') {
         try {
-            $stmt = $pdo->prepare("INSERT INTO acl_roles (role_name, description, created_at) VALUES (?, ?, NOW())");
-            $result = $stmt->execute([$name, $description]);
-            
+            // Generate display name from role name
+            $displayName = ucwords(str_replace('_', ' ', $name));
+
+            $stmt = $pdo->prepare("INSERT INTO roles (name, display_name, description, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())");
+            $result = $stmt->execute([$name, $displayName, $description]);
+
             if ($result) {
                 return $pdo->lastInsertId();
             }
@@ -461,8 +464,11 @@ if (!function_exists('createRole')) {
 if (!function_exists('updateRole')) {
     function updateRole($pdo, $roleId, $name, $description = '') {
         try {
-            $stmt = $pdo->prepare("UPDATE acl_roles SET role_name = ?, description = ? WHERE id = ?");
-            return $stmt->execute([$name, $description, $roleId]);
+            // Generate display name from role name
+            $displayName = ucwords(str_replace('_', ' ', $name));
+
+            $stmt = $pdo->prepare("UPDATE roles SET name = ?, display_name = ?, description = ?, updated_at = NOW() WHERE id = ?");
+            return $stmt->execute([$name, $displayName, $description, $roleId]);
         } catch (Exception $e) {
             error_log("Update role error: " . $e->getMessage());
             return false;
@@ -488,7 +494,7 @@ if (!function_exists('deleteRole')) {
             $stmt->execute([$roleId]);
             
             // Delete role
-            $stmt = $pdo->prepare("DELETE FROM acl_roles WHERE id = ?");
+            $stmt = $pdo->prepare("DELETE FROM roles WHERE id = ?");
             $result = $stmt->execute([$roleId]);
             
             $pdo->commit();
