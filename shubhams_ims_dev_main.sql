@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Nov 21, 2025 at 12:35 PM
+-- Generation Time: Dec 15, 2025 at 10:09 PM
 -- Server version: 10.6.22-MariaDB-cll-lve
 -- PHP Version: 8.3.15
 
@@ -138,31 +138,6 @@ INSERT INTO `acl_permissions` (`id`, `permission_name`, `description`, `category
 -- --------------------------------------------------------
 
 --
--- Table structure for table `acl_roles`
---
-
-CREATE TABLE `acl_roles` (
-  `id` int(11) NOT NULL,
-  `role_name` varchar(50) NOT NULL,
-  `description` text DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `acl_roles`
---
-
-INSERT INTO `acl_roles` (`id`, `role_name`, `description`, `created_at`) VALUES
-(1, 'super_admin', 'Full system access with all permissions', '2025-07-24 00:05:50'),
-(3, 'manager', 'Management level access for inventory operations', '2025-07-24 00:05:50'),
-(4, 'technician', 'Technical staff with component management access', '2025-07-24 00:05:50'),
-(5, 'viewer', 'Read-only access to inventory data', '2025-07-24 00:05:50'),
-(6, 'media_manager', '', '2025-07-29 03:54:58'),
-(9, 'admin', 'Administrator with full access', '2025-08-20 10:01:01');
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `auth_tokens`
 --
 
@@ -195,48 +170,13 @@ INSERT INTO `auth_tokens` (`id`, `user_id`, `token`, `created_at`, `expires_at`,
 (18, 25, 'ddad6f90f21deeab493e116c8da65d854d3016be141edc67075abc6f8258c5d0', '2025-07-25 14:39:38', '2025-08-24 14:39:38', NULL),
 (19, 25, '803bd0dc379ad57ef817281686ddf9282f2a64625d99096fab2a292590786e71', '2025-07-25 14:40:09', '2025-08-24 14:40:09', NULL),
 (268, 25, '1bb955d054f2e490fc1604708e8a6d1f86c8c4c4b12207ffa8a9d6ff1ffbcebc', '2025-10-17 08:31:24', '2025-10-24 08:31:24', NULL),
-(372, 38, '5082aa09abea095f6fa46a1cc8618425850d9fbc9e465616bebc4664c834f54d', '2025-11-07 07:35:58', '2025-11-14 07:35:58', '2025-11-20 20:05:57'),
-(373, 38, '90544e628eafba0023c51333e377537d7fbb7434ba222997b677672797e51fbd', '2025-11-07 07:43:44', '2025-11-14 07:43:44', '2025-11-20 20:05:57'),
-(374, 38, '0a8c70776fa4f42ba5729bf5e699e34af5006eeb4193a88b5d4dce14ce435f84', '2025-11-07 07:52:49', '2025-11-14 07:52:49', '2025-11-20 20:05:57'),
-(375, 38, 'fa67ed9a10d460b507a0f41068967030ebb6d622e0da7070bf061d413eedce7a', '2025-11-07 08:05:28', '2025-11-14 08:05:28', '2025-11-20 20:05:57'),
-(376, 38, 'bb439545d57966e9fef04c28343ea1ba923a4e04e955a10d0f367d67d6ab774e', '2025-11-07 11:44:13', '2025-11-14 11:44:13', '2025-11-20 20:05:57'),
-(377, 38, '91fa5b59db54f0f09dbe17ae8a82a6149641d13a3bba9612b7245cdff33e0dce', '2025-11-08 05:23:03', '2025-11-15 05:23:03', '2025-11-20 20:05:57'),
-(378, 38, '65a48432186d5be7d0cc7958fe2dc3949dc97d45a294fd9c010a9e815bbed591', '2025-11-08 05:28:21', '2025-11-15 05:28:21', '2025-11-20 20:05:57'),
-(379, 38, 'e1e74cda995bdd2a6fe6a1616e3d8efb4c0fe93c1db0b12f11fbed22764cbaa2', '2025-11-08 05:29:12', '2025-11-15 05:29:12', '2025-11-20 20:05:57'),
-(380, 38, '50a7804f38ce455c1c119ec219d3ffb131145c454c0e5f6e90f93847d1d5e8a9', '2025-11-08 05:29:29', '2025-11-15 05:29:29', '2025-11-20 20:05:57'),
-(381, 38, '8e04b8a8cb2a9a1acbefd6e6d9ccd1f19fe6c519a34e9ee77c1710e82ba4865d', '2025-11-08 05:31:00', '2025-11-15 05:31:00', '2025-11-20 20:05:57'),
-(382, 38, '59dbde5715562374f463817b1624a40d843f76244876a3d45324d62c1d6f9ba7', '2025-11-09 15:33:14', '2025-11-16 15:33:14', '2025-11-20 20:05:57'),
-(383, 38, 'de470fe4c8b491a7b7fc499c60448b6aa2e39dad72519ada4effe19b8296301b', '2025-11-10 15:41:10', '2025-11-17 15:41:10', '2025-11-20 20:05:57'),
-(384, 38, '7d8ca5b6d428ffbebab79afcbe9829a0f670276e23342b83d174ef2f6c464cfe', '2025-11-10 15:43:17', '2025-11-17 15:43:17', '2025-11-20 20:05:57'),
-(385, 38, '1e4696943066f1d96bb6ec73f82302d0db16cabd8e91d3bc55b519f6ae0e5bb2', '2025-11-12 07:52:41', '2025-11-19 07:52:41', '2025-11-20 20:05:57'),
 (386, 5, 'd9d6dbe5f764f758423bdb3f2174f104bdeb14d4e120ee8c79c560af33856ae2', '2025-11-12 19:44:02', '2025-11-19 19:44:02', '2025-11-12 20:03:06'),
 (387, 5, 'cf83b0857a11dc1022e7be491356568a8b791f7a991817052dcf0ad17f961962', '2025-11-12 19:47:37', '2025-11-19 19:47:37', '2025-11-12 20:03:06'),
 (388, 5, '24a884be7ca0904b19e735afad8315fcd1b7958af8e736927d36711f238ff76c', '2025-11-12 19:56:34', '2025-11-19 19:56:34', '2025-11-12 20:03:06'),
 (389, 5, '4d693be5b2428691a6a6e31697ef89312d812bba99413fa282b33e34b2caddc7', '2025-11-12 19:58:10', '2025-11-19 19:58:10', '2025-11-12 20:03:06'),
-(390, 38, '1ee770df43f9ff84c940f4b6bb7e6ea017ef68de8790513efdc120a818140c03', '2025-11-13 08:14:59', '2025-11-20 08:14:59', '2025-11-20 20:05:57'),
-(391, 38, '2cbf15d891f884af44cdc95a79c0ffeabdffb5ff53fba2bce1e60e63418993b7', '2025-11-13 10:01:20', '2025-11-20 10:01:20', '2025-11-20 20:05:57'),
-(392, 38, '4d101353a729bd5cee2ad35aacd80226602cc286c1dfc58e24a4f7e60ab67904', '2025-11-14 14:21:17', '2025-11-21 14:21:17', '2025-11-20 20:05:57'),
-(393, 38, 'c597977af826d979aad178bd68f0cb380d8b5fd5b04486f0c40f3bcb5b6f97ff', '2025-11-16 07:46:26', '2025-11-23 07:46:26', '2025-11-20 20:05:57'),
-(394, 38, '226c7889cf9a2cd3d69acbf64fed6146ffa03f34b4ec4cab5c576a815694ed35', '2025-11-18 09:16:56', '2025-11-25 09:16:56', '2025-11-20 20:05:57'),
-(395, 38, 'fad86795654839691ce9a258fccbd8466e08e182644497d0cd234f1a890b2f0b', '2025-11-18 14:05:32', '2025-11-25 14:05:32', '2025-11-20 20:05:57'),
-(396, 38, 'ae4d6d5d29de8a3899d3145b78dc197f1ed0ec2b07d52ad7a46e3eed2faf382b', '2025-11-19 19:53:30', '2025-11-26 19:53:30', '2025-11-20 20:05:57'),
-(397, 38, 'f638f6aa192b79d1c7b043d03ce1674276b18ee2f7ffeb31e6b083daa6187468', '2025-11-19 21:19:02', '2025-11-26 21:19:02', '2025-11-20 20:05:57'),
-(398, 38, '1c0482ba2cbd8043a1f436bf3424786ac67753a4cd944e9a0b4acf255efdf84b', '2025-11-19 21:20:16', '2025-11-26 21:20:16', '2025-11-20 20:05:57'),
-(399, 38, '4c1874a774d03049a8875d22950d9506c810745787fe9fc738f8899f463c1b5e', '2025-11-19 21:21:48', '2025-11-26 21:21:48', '2025-11-20 20:05:57'),
-(400, 38, '4df56222e1c79e33413cfc57721e7c1d9c6fddb6acef9da88733f50ccadbd700', '2025-11-19 21:23:08', '2025-11-26 21:23:08', '2025-11-20 20:05:57'),
-(401, 38, 'd31e3039a0dde2679e1ba014e87f9578291249d92b42d6f6139a624639f1fd55', '2025-11-19 21:24:40', '2025-11-26 21:24:40', '2025-11-20 20:05:57'),
-(402, 38, '7439138e1f18f57eccf24e2e9e0863a73436c2350722d839973dbb49bb9bf578', '2025-11-19 21:26:07', '2025-11-26 21:26:07', '2025-11-20 20:05:57'),
-(403, 38, '3f17cb59d7240de71e19d4742b58345f315f5512860d1fe4178fec093bde32dc', '2025-11-19 21:27:06', '2025-11-26 21:27:06', '2025-11-20 20:05:57'),
-(404, 38, '19f49dea281463ace62521c1b5c3c1227834c4b90744f14e8c78badf1277b9a5', '2025-11-19 21:28:44', '2025-11-26 21:28:44', '2025-11-20 20:05:57'),
-(405, 38, '294029e42afb7c0cf78b5902fcb62a6a0bd0fa89ddbb695d96c619742bf0f407', '2025-11-19 21:29:36', '2025-11-26 21:29:36', '2025-11-20 20:05:57'),
-(406, 38, 'baf80e6edd53b6ffa7a1b02c80e71a75e0b4a225fb3e80ae4c5dac4d3801c38d', '2025-11-19 21:31:10', '2025-11-26 21:31:10', '2025-11-20 20:05:57'),
-(407, 38, '367b152ed66e77cf3fcff5b48a596b68ce7792955ce764498fa358b508ef702b', '2025-11-19 21:31:38', '2025-11-26 21:31:38', '2025-11-20 20:05:57'),
-(408, 38, '2681777d10a9104427d2c226e8e31b112375438b801db0675ac95063b19b8ec1', '2025-11-19 21:34:32', '2025-11-26 21:34:32', '2025-11-20 20:05:57'),
-(409, 38, '4ba1f198f0790590324a85216adf8b01cfcff1fee8f3b4556be8ab0641fd65a1', '2025-11-19 21:54:52', '2025-11-26 21:54:52', '2025-11-20 20:05:57'),
-(410, 38, 'a01e4ff74b1f15006026a42c456b85c756e32324c02874a3f8ea3ac48a590637', '2025-11-19 21:56:08', '2025-11-26 21:56:08', '2025-11-20 20:05:57'),
-(411, 38, '9564374fbb0c009698442c8e2a9f6c86bd41d63f0abc597af85e9ff8116e6000', '2025-11-19 21:57:21', '2025-11-26 21:57:21', '2025-11-20 20:05:57'),
-(412, 38, 'aadabf3055978d84252caac114ebc63ce4d64a7d8857b4d22d95e9ae7e38e059', '2025-11-19 21:58:54', '2025-11-26 21:58:54', '2025-11-20 20:05:57'),
-(413, 38, 'b542a9cec36ad0dbf296deb991ee69df7ab3e74259b5de6c2690e4ffd5e52ad9', '2025-11-20 17:48:22', '2025-11-27 17:48:22', '2025-11-20 20:05:57');
+(421, 38, 'e3af612e94665cc51d0ae8dff407815c20e68b58df0a0dd2a18ed4dcf3862a4c', '2025-12-12 21:30:29', '2025-12-19 21:30:29', '2025-12-15 15:18:09'),
+(422, 38, 'e3df30f3ae29b2be4a2a54f8a1f9ca306de6ebb26bfd42d90004dff6196de8e9', '2025-12-14 09:21:31', '2025-12-21 09:21:31', '2025-12-15 15:18:09'),
+(423, 38, 'a079cac512744c32d40cbd01c7424b2bcbe999d7474462ce4eb07568734eaf6b', '2025-12-15 14:09:54', '2025-12-22 14:09:54', '2025-12-15 15:18:09');
 
 -- --------------------------------------------------------
 
@@ -493,7 +433,7 @@ INSERT INTO `cpuinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`
 (2, '41849749-8d19-4366-b41a-afda6fa46b58', 'CPU789012', 1, NULL, 'Warehouse East', NULL, '2024-01-10', NULL, '2027-01-10', 'Backup', 'AMD EPYC 16-core 2.9GHz', '2025-05-11 11:42:52', '2025-10-15 08:40:32'),
 (24, '545e143b-57b3-419e-86e5-1df6f7aa8fd3', 'CPU999999', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2025-08-29', '2025-11-07', '2030-12-20', 'Backup', 'Cpu - Platinum 8480+', '2025-08-29 13:59:05', '2025-11-07 13:18:57'),
 (26, '545e143b-57b3-419e-86e5-1df6f7aa8fxx', 'CPU111111', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2024-01-31', '2025-11-07', '2026-01-31', 'Backup', 'Intel 8470', '2025-09-04 23:33:55', '2025-11-07 11:47:31'),
-(27, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU000000', 1, NULL, '', NULL, '2024-01-31', NULL, '2026-01-31', 'Backup', 'AMD EPYC 9374F', '2025-09-04 23:41:35', '2025-11-18 14:05:53'),
+(27, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU000000', 2, 'd304360a-ba07-4949-b578-57d4cccbd371', NULL, NULL, '2024-01-31', '2025-11-21', '2026-01-31', 'Backup', 'AMD EPYC 9374F', '2025-09-04 23:41:35', '2025-11-21 20:30:07'),
 (28, '80aeb1cd-dd2d-4f86-86b7-04237b56376f', 'Shubham-Test-Server', 2, 'null', 'Indore', 'null', '2025-10-24', NULL, '2025-11-12', 'Backup', 'TESt - Platinum 8470', '2025-10-24 17:38:46', '2025-10-24 17:38:46'),
 (30, '067737c6-4786-487e-9127-c75fc030c408', 'after-fix-cpu', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-21', 'Backup', 'Test - Platinum 8480+', '2025-10-25 07:48:09', '2025-10-25 07:48:09'),
 (36, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU1009854', 2, '4841e506-6e58-46d2-ab77-6fa91996561c', '', '', '2025-11-06', '2025-11-13', '2028-11-08', 'null', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-11-06 13:58:32', '2025-11-13 13:15:31'),
@@ -1010,7 +950,7 @@ CREATE TABLE `roles` (
 --
 
 INSERT INTO `roles` (`id`, `name`, `display_name`, `description`, `is_default`, `is_system`, `created_at`, `updated_at`) VALUES
-(1, 'super_admin', 'Super Administrator', 'Full system access with all permissions', 0, 1, '2025-07-24 00:05:50', '2025-07-24 00:05:50'),
+(1, 'super_admin', 'Super Administrator', 'Full system access with all permissions', 0, 1, '2025-07-24 00:05:50', '2025-12-07 13:28:42'),
 (2, 'admin', 'Administrator', 'Administrative access with most permissions', 0, 1, '2025-07-24 00:05:50', '2025-07-24 00:05:50'),
 (3, 'manager', 'Manager', 'Management level access for inventory operations', 0, 1, '2025-07-24 00:05:50', '2025-07-24 00:05:50'),
 (4, 'technician', 'Technician', 'Technical staff with component management access', 0, 1, '2025-07-24 00:05:50', '2025-07-24 00:05:50'),
@@ -1036,75 +976,6 @@ CREATE TABLE `role_permissions` (
 --
 
 INSERT INTO `role_permissions` (`id`, `role_id`, `permission_id`, `granted`, `created_at`) VALUES
-(31, 1, 4, 1, '2025-08-20 10:01:01'),
-(32, 1, 5, 1, '2025-08-20 10:01:01'),
-(33, 1, 6, 1, '2025-08-20 10:01:01'),
-(34, 1, 7, 1, '2025-08-20 10:01:01'),
-(35, 1, 8, 1, '2025-08-20 10:01:01'),
-(36, 1, 9, 1, '2025-08-20 10:01:01'),
-(37, 1, 10, 1, '2025-08-20 10:01:01'),
-(38, 1, 11, 1, '2025-08-20 10:01:01'),
-(39, 1, 12, 1, '2025-08-20 10:01:01'),
-(40, 1, 14, 1, '2025-08-20 10:01:01'),
-(41, 1, 15, 1, '2025-08-20 10:01:01'),
-(42, 1, 16, 1, '2025-08-20 10:01:01'),
-(43, 1, 18, 1, '2025-08-20 10:01:01'),
-(44, 1, 19, 1, '2025-08-20 10:01:01'),
-(45, 1, 20, 1, '2025-08-20 10:01:01'),
-(46, 1, 22, 1, '2025-08-20 10:01:01'),
-(47, 1, 23, 1, '2025-08-20 10:01:01'),
-(48, 1, 24, 1, '2025-08-20 10:01:01'),
-(49, 1, 26, 1, '2025-08-20 10:01:01'),
-(50, 1, 27, 1, '2025-08-20 10:01:01'),
-(51, 1, 28, 1, '2025-08-20 10:01:01'),
-(52, 1, 30, 1, '2025-08-20 10:01:01'),
-(53, 1, 31, 1, '2025-08-20 10:01:01'),
-(54, 1, 32, 1, '2025-08-20 10:01:01'),
-(55, 1, 34, 1, '2025-08-20 10:01:01'),
-(56, 1, 35, 1, '2025-08-20 10:01:01'),
-(57, 1, 36, 1, '2025-08-20 10:01:01'),
-(58, 1, 38, 1, '2025-08-20 10:01:01'),
-(59, 1, 39, 1, '2025-08-20 10:01:01'),
-(60, 1, 41, 1, '2025-08-20 10:01:01'),
-(61, 1, 42, 1, '2025-08-20 10:01:01'),
-(62, 1, 43, 1, '2025-08-20 10:01:01'),
-(63, 1, 44, 1, '2025-08-20 10:01:01'),
-(64, 1, 45, 1, '2025-08-20 10:01:01'),
-(65, 1, 95, 1, '2025-08-20 10:01:01'),
-(66, 1, 128, 1, '2025-08-20 10:01:01'),
-(67, 1, 133, 1, '2025-08-20 10:01:01'),
-(68, 1, 134, 1, '2025-08-20 10:01:01'),
-(69, 1, 47431, 1, '2025-08-20 10:01:01'),
-(70, 1, 47432, 1, '2025-08-20 10:01:01'),
-(71, 1, 47433, 1, '2025-08-20 10:01:01'),
-(72, 1, 47434, 1, '2025-08-20 10:01:01'),
-(73, 1, 47435, 1, '2025-08-20 10:01:01'),
-(74, 1, 47436, 1, '2025-08-20 10:01:01'),
-(75, 1, 47437, 1, '2025-08-20 10:01:01'),
-(76, 1, 47438, 1, '2025-08-20 10:01:01'),
-(77, 1, 47439, 1, '2025-08-20 10:01:01'),
-(78, 1, 47440, 1, '2025-08-20 10:01:01'),
-(79, 1, 49861, 1, '2025-08-20 10:01:01'),
-(80, 1, 49862, 1, '2025-08-20 10:01:01'),
-(81, 1, 49863, 1, '2025-08-20 10:01:01'),
-(82, 1, 49864, 1, '2025-08-20 10:01:01'),
-(83, 1, 49865, 1, '2025-08-20 10:01:01'),
-(84, 1, 49866, 1, '2025-08-20 10:01:01'),
-(85, 1, 1, 1, '2025-08-20 10:01:01'),
-(86, 1, 2, 1, '2025-08-20 10:01:01'),
-(87, 1, 3, 1, '2025-08-20 10:01:01'),
-(88, 1, 13, 1, '2025-08-20 10:01:01'),
-(89, 1, 17, 1, '2025-08-20 10:01:01'),
-(90, 1, 21, 1, '2025-08-20 10:01:01'),
-(91, 1, 25, 1, '2025-08-20 10:01:01'),
-(92, 1, 29, 1, '2025-08-20 10:01:01'),
-(93, 1, 33, 1, '2025-08-20 10:01:01'),
-(94, 1, 37, 1, '2025-08-20 10:01:01'),
-(95, 1, 40, 1, '2025-08-20 10:01:01'),
-(97, 1, 49893, 1, '2025-10-26 11:51:14'),
-(98, 1, 49895, 1, '2025-10-26 11:51:14'),
-(99, 1, 49894, 1, '2025-10-26 11:51:14'),
-(100, 1, 49892, 1, '2025-10-26 11:51:14'),
 (101, 2, 4, 1, '2025-11-12 19:58:10'),
 (102, 2, 5, 1, '2025-11-12 19:58:10'),
 (103, 2, 6, 1, '2025-11-12 19:58:10'),
@@ -1182,10 +1053,6 @@ INSERT INTO `role_permissions` (`id`, `role_id`, `permission_id`, `granted`, `cr
 (175, 2, 40, 1, '2025-11-12 19:58:10'),
 (176, 2, 49884, 1, '2025-11-12 19:58:10'),
 (177, 2, 49888, 1, '2025-11-12 19:58:10'),
-(293, 1, 49896, 1, '2025-11-15 09:34:59'),
-(294, 1, 49897, 1, '2025-11-15 09:34:59'),
-(295, 1, 49898, 1, '2025-11-15 09:34:59'),
-(296, 1, 49899, 1, '2025-11-15 09:34:59'),
 (297, 3, 49896, 1, '2025-11-15 09:34:59'),
 (298, 3, 49897, 1, '2025-11-15 09:34:59'),
 (299, 3, 49898, 1, '2025-11-15 09:34:59'),
@@ -1197,19 +1064,6 @@ INSERT INTO `role_permissions` (`id`, `role_id`, `permission_id`, `granted`, `cr
 (321, 2, 49898, 1, '2025-11-15 09:39:46'),
 (322, 2, 49899, 1, '2025-11-15 09:39:46'),
 (333, 2, 49897, 1, '2025-11-15 12:47:39'),
-(419, 1, 97, 1, '2025-11-19 21:51:53'),
-(420, 1, 98, 1, '2025-11-19 21:51:53'),
-(421, 1, 99, 1, '2025-11-19 21:51:53'),
-(422, 1, 100, 1, '2025-11-19 21:51:53'),
-(423, 1, 101, 1, '2025-11-19 21:51:53'),
-(424, 1, 102, 1, '2025-11-19 21:51:53'),
-(425, 1, 103, 1, '2025-11-19 21:51:53'),
-(426, 1, 104, 1, '2025-11-19 21:51:53'),
-(427, 1, 105, 1, '2025-11-19 21:51:53'),
-(428, 1, 106, 1, '2025-11-19 21:51:53'),
-(429, 1, 107, 1, '2025-11-19 21:51:53'),
-(430, 1, 108, 1, '2025-11-19 21:51:53'),
-(431, 1, 109, 1, '2025-11-19 21:51:53'),
 (432, 2, 97, 1, '2025-11-19 21:52:02'),
 (433, 2, 98, 1, '2025-11-19 21:52:02'),
 (434, 2, 99, 1, '2025-11-19 21:52:02'),
@@ -1222,7 +1076,101 @@ INSERT INTO `role_permissions` (`id`, `role_id`, `permission_id`, `granted`, `cr
 (441, 2, 106, 1, '2025-11-19 21:52:02'),
 (442, 2, 107, 1, '2025-11-19 21:52:02'),
 (443, 2, 108, 1, '2025-11-19 21:52:02'),
-(444, 2, 109, 1, '2025-11-19 21:52:02');
+(444, 2, 109, 1, '2025-11-19 21:52:02'),
+(765, 1, 3, 1, '2025-12-07 13:28:42'),
+(766, 1, 1, 1, '2025-12-07 13:28:42'),
+(767, 1, 2, 1, '2025-12-07 13:28:42'),
+(768, 1, 47438, 1, '2025-12-07 13:28:42'),
+(769, 1, 47440, 1, '2025-12-07 13:28:42'),
+(770, 1, 47439, 1, '2025-12-07 13:28:42'),
+(771, 1, 95, 1, '2025-12-07 13:28:42'),
+(772, 1, 37, 1, '2025-12-07 13:28:42'),
+(773, 1, 34, 1, '2025-12-07 13:28:42'),
+(774, 1, 49885, 1, '2025-12-07 13:28:42'),
+(775, 1, 14, 1, '2025-12-07 13:28:42'),
+(776, 1, 26, 1, '2025-12-07 13:28:42'),
+(777, 1, 30, 1, '2025-12-07 13:28:42'),
+(778, 1, 49889, 1, '2025-12-07 13:28:42'),
+(779, 1, 18, 1, '2025-12-07 13:28:42'),
+(780, 1, 49897, 1, '2025-12-07 13:28:42'),
+(781, 1, 22, 1, '2025-12-07 13:28:42'),
+(782, 1, 49893, 1, '2025-12-07 13:28:42'),
+(783, 1, 36, 1, '2025-12-07 13:28:42'),
+(784, 1, 49887, 1, '2025-12-07 13:28:42'),
+(785, 1, 16, 1, '2025-12-07 13:28:42'),
+(786, 1, 49895, 1, '2025-12-07 13:28:42'),
+(787, 1, 28, 1, '2025-12-07 13:28:42'),
+(788, 1, 32, 1, '2025-12-07 13:28:42'),
+(789, 1, 49891, 1, '2025-12-07 13:28:42'),
+(790, 1, 20, 1, '2025-12-07 13:28:42'),
+(791, 1, 49899, 1, '2025-12-07 13:28:42'),
+(792, 1, 24, 1, '2025-12-07 13:28:42'),
+(793, 1, 35, 1, '2025-12-07 13:28:42'),
+(794, 1, 49886, 1, '2025-12-07 13:28:42'),
+(795, 1, 15, 1, '2025-12-07 13:28:42'),
+(796, 1, 49894, 1, '2025-12-07 13:28:42'),
+(797, 1, 27, 1, '2025-12-07 13:28:42'),
+(798, 1, 31, 1, '2025-12-07 13:28:42'),
+(799, 1, 49890, 1, '2025-12-07 13:28:42'),
+(800, 1, 19, 1, '2025-12-07 13:28:42'),
+(801, 1, 49898, 1, '2025-12-07 13:28:42'),
+(802, 1, 23, 1, '2025-12-07 13:28:42'),
+(803, 1, 33, 1, '2025-12-07 13:28:42'),
+(804, 1, 49884, 1, '2025-12-07 13:28:42'),
+(805, 1, 13, 1, '2025-12-07 13:28:42'),
+(806, 1, 49892, 1, '2025-12-07 13:28:42'),
+(807, 1, 25, 1, '2025-12-07 13:28:42'),
+(808, 1, 29, 1, '2025-12-07 13:28:42'),
+(809, 1, 49888, 1, '2025-12-07 13:28:42'),
+(810, 1, 17, 1, '2025-12-07 13:28:42'),
+(811, 1, 49896, 1, '2025-12-07 13:28:42'),
+(812, 1, 21, 1, '2025-12-07 13:28:42'),
+(813, 1, 49865, 1, '2025-12-07 13:28:42'),
+(814, 1, 39, 1, '2025-12-07 13:28:42'),
+(815, 1, 49866, 1, '2025-12-07 13:28:42'),
+(816, 1, 38, 1, '2025-12-07 13:28:42'),
+(817, 1, 10, 1, '2025-12-07 13:28:42'),
+(818, 1, 12, 1, '2025-12-07 13:28:42'),
+(819, 1, 11, 1, '2025-12-07 13:28:42'),
+(820, 1, 49862, 1, '2025-12-07 13:28:42'),
+(821, 1, 49863, 1, '2025-12-07 13:28:42'),
+(822, 1, 49864, 1, '2025-12-07 13:28:42'),
+(823, 1, 9, 1, '2025-12-07 13:28:42'),
+(824, 1, 49861, 1, '2025-12-07 13:28:42'),
+(825, 1, 47432, 1, '2025-12-07 13:28:42'),
+(826, 1, 47436, 1, '2025-12-07 13:28:42'),
+(827, 1, 47434, 1, '2025-12-07 13:28:42'),
+(828, 1, 47433, 1, '2025-12-07 13:28:42'),
+(829, 1, 47435, 1, '2025-12-07 13:28:42'),
+(830, 1, 47431, 1, '2025-12-07 13:28:42'),
+(831, 1, 47437, 1, '2025-12-07 13:28:42'),
+(832, 1, 43, 1, '2025-12-07 13:28:42'),
+(833, 1, 44, 1, '2025-12-07 13:28:42'),
+(834, 1, 45, 1, '2025-12-07 13:28:42'),
+(835, 1, 133, 1, '2025-12-07 13:28:42'),
+(836, 1, 42, 1, '2025-12-07 13:28:42'),
+(837, 1, 134, 1, '2025-12-07 13:28:42'),
+(838, 1, 102, 1, '2025-12-07 13:28:42'),
+(839, 1, 104, 1, '2025-12-07 13:28:42'),
+(840, 1, 107, 1, '2025-12-07 13:28:42'),
+(841, 1, 106, 1, '2025-12-07 13:28:42'),
+(842, 1, 97, 1, '2025-12-07 13:28:42'),
+(843, 1, 108, 1, '2025-12-07 13:28:42'),
+(844, 1, 105, 1, '2025-12-07 13:28:42'),
+(845, 1, 99, 1, '2025-12-07 13:28:42'),
+(846, 1, 109, 1, '2025-12-07 13:28:42'),
+(847, 1, 103, 1, '2025-12-07 13:28:42'),
+(848, 1, 100, 1, '2025-12-07 13:28:42'),
+(849, 1, 101, 1, '2025-12-07 13:28:42'),
+(850, 1, 98, 1, '2025-12-07 13:28:42'),
+(851, 1, 128, 1, '2025-12-07 13:28:42'),
+(852, 1, 5, 1, '2025-12-07 13:28:42'),
+(853, 1, 7, 1, '2025-12-07 13:28:42'),
+(854, 1, 6, 1, '2025-12-07 13:28:42'),
+(855, 1, 8, 1, '2025-12-07 13:28:42'),
+(856, 1, 4, 1, '2025-12-07 13:28:42'),
+(857, 1, 41, 1, '2025-12-07 13:28:42'),
+(858, 1, 40, 1, '2025-12-07 13:28:42');
 
 -- --------------------------------------------------------
 
@@ -1310,7 +1258,12 @@ INSERT INTO `server_configurations` (`id`, `config_uuid`, `server_name`, `descri
 (69, '61303ed1-381f-4774-9604-09a29df0407a', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-10 18:16:32', '2025-11-10 18:16:32', NULL, NULL, NULL, NULL, NULL),
 (70, 'b8754c5b-f071-4446-bae1-f0fd5afd640f', 'My Production Server', 'Web server for production workloads', '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', NULL, NULL, NULL, NULL, 0, 0, 72, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-12 07:52:53', '2025-11-12 13:49:41', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-6e4c2a5b-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Intel X710\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-11-12 13:49:41\"\n}', NULL, NULL, NULL),
 (72, '4841e506-6e58-46d2-ab77-6fa91996561c', 'My Production Server', 'Web server for production workloads', '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', NULL, NULL, NULL, NULL, 0, 0, 840, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-13 13:14:07', '2025-11-18 17:50:18', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-4f8e6c3d-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Broadcom BCM57414\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-11-18 17:50:18\"\n}', '{\"cpus\":[{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-13 13:15:31\",\"serial_number\":\"CPU1009854\"},{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-13 13:15:46\",\"serial_number\":\"AMD13241551\"}]}', NULL, NULL),
-(73, 'bb40c2ab-2443-462b-a4fa-e36306fdfdcf', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-19 19:56:15', '2025-11-19 19:56:15', NULL, NULL, NULL, NULL, NULL);
+(73, 'bb40c2ab-2443-462b-a4fa-e36306fdfdcf', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-19 19:56:15', '2025-11-19 19:56:15', NULL, NULL, NULL, NULL, NULL),
+(74, 'b08943c7-11e8-459c-8f9b-724092528acb', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 12:37:02', '2025-11-21 12:37:02', NULL, NULL, NULL, NULL, NULL),
+(75, 'b24bbeac-25f0-4a7c-ab3d-91c7160b0608', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 13:05:53', '2025-11-21 13:05:53', NULL, NULL, NULL, NULL, NULL),
+(76, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 1, 360, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 13:06:02', '2025-11-21 19:17:09', NULL, NULL, '{\"cpus\":[{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-21 15:18:59\",\"serial_number\":\"CPU000000\"},{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-21 19:17:09\",\"serial_number\":\"VIRTUAL-CPU-2-1763752629\"}]}', NULL, NULL),
+(77, '78694bc5-96b5-4cb8-845a-262825b45db6', 'Virtual to real', 'Testing virtual server import', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', NULL, '2025-11-21 20:01:53', '2025-11-21 20:01:53', NULL, NULL, NULL, NULL, NULL),
+(79, 'fd129801-6a8c-44d4-b7a3-b9b40ed9b38f', 'Virtual to real', 'Testing virtual server import', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', NULL, '2025-11-21 21:41:49', '2025-11-21 21:41:49', NULL, NULL, NULL, NULL, NULL);
 
 --
 -- Triggers `server_configurations`
@@ -1340,6 +1293,10 @@ CREATE TABLE `server_configuration_history` (
   `id` int(11) NOT NULL,
   `config_uuid` varchar(36) NOT NULL,
   `action` varchar(50) NOT NULL COMMENT 'created, updated, component_added, component_removed, validated, etc.',
+  `component_type` varchar(20) DEFAULT NULL,
+  `component_uuid` varchar(36) DEFAULT NULL,
+  `metadata` text DEFAULT NULL COMMENT 'JSON metadata for the action',
+  `created_by` int(11) DEFAULT NULL,
   `user_id` int(11) NOT NULL,
   `changes` longtext DEFAULT NULL COMMENT 'JSON of changes made',
   `old_values` longtext DEFAULT NULL COMMENT 'JSON of old values',
@@ -1348,6 +1305,22 @@ CREATE TABLE `server_configuration_history` (
   `user_agent` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `server_configuration_history`
+--
+
+INSERT INTO `server_configuration_history` (`id`, `config_uuid`, `action`, `component_type`, `component_uuid`, `metadata`, `created_by`, `user_id`, `changes`, `old_values`, `new_values`, `ip_address`, `user_agent`, `created_at`) VALUES
+(1, 'b24bbeac-25f0-4a7c-ab3d-91c7160b0608', 'initialize', NULL, NULL, '{\"server_name\":\"My Production Server\",\"description\":\"Web server for production workloads\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 13:05:53'),
+(2, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'initialize', NULL, NULL, '{\"server_name\":\"My Production Server\",\"description\":\"Web server for production workloads\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":1}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 13:06:02'),
+(3, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 15:18:59'),
+(4, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 15:19:13'),
+(5, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 17:07:43'),
+(6, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:41'),
+(7, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:57'),
+(8, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:59'),
+(9, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 19:17:09'),
+(10, 'd304360a-ba07-4949-b578-57d4cccbd371', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":\"CPU000000\"}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 20:30:07');
 
 -- --------------------------------------------------------
 
@@ -1484,6 +1457,7 @@ CREATE TABLE `tickets` (
   `target_server_uuid` varchar(36) DEFAULT NULL COMMENT 'Server configuration UUID this ticket targets',
   `created_by` int(10) UNSIGNED NOT NULL COMMENT 'User ID who created ticket',
   `assigned_to` int(10) UNSIGNED DEFAULT NULL COMMENT 'User ID assigned to handle ticket',
+  `assigned_to_role` int(11) DEFAULT NULL COMMENT 'Role ID assigned to handle ticket (references acl_roles.id)',
   `rejection_reason` text DEFAULT NULL COMMENT 'Required when status = rejected',
   `deployment_notes` text DEFAULT NULL COMMENT 'Notes added during deployment',
   `completion_notes` text DEFAULT NULL COMMENT 'Notes added when completed',
@@ -1499,14 +1473,14 @@ CREATE TABLE `tickets` (
 -- Dumping data for table `tickets`
 --
 
-INSERT INTO `tickets` (`id`, `ticket_number`, `title`, `description`, `status`, `priority`, `target_server_uuid`, `created_by`, `assigned_to`, `rejection_reason`, `deployment_notes`, `completion_notes`, `created_at`, `updated_at`, `submitted_at`, `approved_at`, `deployed_at`, `completed_at`) VALUES
-(1, 'TKT-20251119-0001', 'Setup New Server Configuration', 'Build and test new server configuration with latest components', 'rejected', 'high', NULL, 38, NULL, 'Insufficient justification for upgradea', NULL, NULL, '2025-11-19 21:57:21', '2025-11-20 20:05:57', '2025-11-19 21:57:25', NULL, NULL, NULL),
-(2, 'TKT-20251119-0002', 'Update Component Inventory', 'Add new CPUs and RAM modules to inventory', 'pending', 'medium', NULL, 38, NULL, NULL, NULL, NULL, '2025-11-19 21:57:22', '2025-11-19 21:57:26', '2025-11-19 21:57:26', NULL, NULL, NULL),
-(3, 'TKT-20251119-0003', 'Configure Network Cards', 'Test and configure new network interface cards', 'pending', 'medium', NULL, 38, NULL, NULL, NULL, NULL, '2025-11-19 21:57:23', '2025-11-19 21:57:27', '2025-11-19 21:57:27', NULL, NULL, NULL),
-(4, 'TKT-20251119-0004', 'Setup New Server Configuration', 'Build and test new server configuration with latest components', 'completed', 'high', NULL, 38, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:54', '2025-11-19 21:59:13', '2025-11-19 21:58:58', '2025-11-19 21:59:02', '2025-11-19 21:59:09', '2025-11-19 21:59:13'),
-(5, 'TKT-20251119-0005', 'Update Component Inventory', 'Add new CPUs and RAM modules to inventory', 'completed', 'medium', NULL, 38, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:55', '2025-11-19 21:59:14', '2025-11-19 21:58:59', '2025-11-19 21:59:03', '2025-11-19 21:59:10', '2025-11-19 21:59:14'),
-(6, 'TKT-20251119-0006', 'Configure Network Cards', 'Test and configure new network interface cards', 'completed', 'medium', NULL, 38, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:57', '2025-11-19 21:59:15', '2025-11-19 21:59:00', '2025-11-19 21:59:04', '2025-11-19 21:59:12', '2025-11-19 21:59:15'),
-(7, 'TKT-20251120-0001', 'Upgrade Server CPUs', 'testing the ticket', 'draft', 'high', '4841e506-6e58-46d2-ab77-6fa91996561c', 38, NULL, NULL, NULL, NULL, '2025-11-20 17:40:09', '2025-11-20 17:40:09', NULL, NULL, NULL, NULL);
+INSERT INTO `tickets` (`id`, `ticket_number`, `title`, `description`, `status`, `priority`, `target_server_uuid`, `created_by`, `assigned_to`, `assigned_to_role`, `rejection_reason`, `deployment_notes`, `completion_notes`, `created_at`, `updated_at`, `submitted_at`, `approved_at`, `deployed_at`, `completed_at`) VALUES
+(1, 'TKT-20251119-0001', 'Setup New Server Configuration', 'Build and test new server configuration with latest components', 'rejected', 'high', NULL, 38, NULL, NULL, 'Insufficient justification for upgradea', NULL, NULL, '2025-11-19 21:57:21', '2025-11-20 20:05:57', '2025-11-19 21:57:25', NULL, NULL, NULL),
+(2, 'TKT-20251119-0002', 'Update Component Inventory', 'Add new CPUs and RAM modules to inventory', 'pending', 'medium', NULL, 38, NULL, NULL, NULL, NULL, NULL, '2025-11-19 21:57:22', '2025-11-19 21:57:26', '2025-11-19 21:57:26', NULL, NULL, NULL),
+(3, 'TKT-20251119-0003', 'Configure Network Cards', 'Test and configure new network interface cards', 'pending', 'medium', NULL, 38, NULL, NULL, NULL, NULL, NULL, '2025-11-19 21:57:23', '2025-11-19 21:57:27', '2025-11-19 21:57:27', NULL, NULL, NULL),
+(4, 'TKT-20251119-0004', 'Setup New Server Configuration', 'Build and test new server configuration with latest components', 'completed', 'high', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:54', '2025-11-19 21:59:13', '2025-11-19 21:58:58', '2025-11-19 21:59:02', '2025-11-19 21:59:09', '2025-11-19 21:59:13'),
+(5, 'TKT-20251119-0005', 'Update Component Inventory', 'Add new CPUs and RAM modules to inventory', 'completed', 'medium', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:55', '2025-11-19 21:59:14', '2025-11-19 21:58:59', '2025-11-19 21:59:03', '2025-11-19 21:59:10', '2025-11-19 21:59:14'),
+(6, 'TKT-20251119-0006', 'Configure Network Cards', 'Test and configure new network interface cards', 'completed', 'medium', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:57', '2025-11-19 21:59:15', '2025-11-19 21:59:00', '2025-11-19 21:59:04', '2025-11-19 21:59:12', '2025-11-19 21:59:15'),
+(7, 'TKT-20251120-0001', 'Upgrade Server CPUs', 'testing the ticket', 'draft', 'high', '4841e506-6e58-46d2-ab77-6fa91996561c', 38, NULL, NULL, NULL, NULL, NULL, '2025-11-20 17:40:09', '2025-12-13 12:57:28', NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1557,7 +1531,10 @@ INSERT INTO `ticket_history` (`id`, `ticket_id`, `action`, `old_value`, `new_val
 (23, 5, 'status_changed', 'deployed', 'completed', 38, 'Status changed from deployed to completed', '106.215.167.32', NULL, '2025-11-19 21:59:14'),
 (24, 6, 'status_changed', 'deployed', 'completed', 38, 'Status changed from deployed to completed', '106.215.167.32', NULL, '2025-11-19 21:59:15'),
 (25, 7, 'created', NULL, 'draft', 38, 'Ticket created', '106.215.160.165', 'PostmanRuntime/7.49.1', '2025-11-20 17:40:09'),
-(26, 1, 'status_changed', 'pending', 'rejected', 38, 'Status changed from pending to rejected', '106.215.162.205', 'PostmanRuntime/7.49.1', '2025-11-20 20:05:57');
+(26, 1, 'status_changed', 'pending', 'rejected', 38, 'Status changed from pending to rejected', '106.215.162.205', 'PostmanRuntime/7.49.1', '2025-11-20 20:05:57'),
+(27, 7, 'title_changed', 'Upgrade Server CPUs', 'Upgrade Server CPUs', 38, NULL, '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28'),
+(28, 7, 'description_changed', NULL, NULL, 38, 'Description updated', '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28'),
+(29, 7, 'priority_changed', 'high', 'high', 38, NULL, '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28');
 
 -- --------------------------------------------------------
 
@@ -1694,13 +1671,6 @@ INSERT INTO `user_roles` (`id`, `user_id`, `role_id`, `assigned_by`, `assigned_a
 ALTER TABLE `acl_permissions`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `permission_name` (`permission_name`);
-
---
--- Indexes for table `acl_roles`
---
-ALTER TABLE `acl_roles`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `role_name` (`role_name`);
 
 --
 -- Indexes for table `auth_tokens`
@@ -1939,7 +1909,8 @@ ALTER TABLE `server_configuration_history`
   ADD KEY `idx_config_uuid` (`config_uuid`),
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_action` (`action`),
-  ADD KEY `idx_created_at` (`created_at`);
+  ADD KEY `idx_created_at` (`created_at`),
+  ADD KEY `idx_component_uuid` (`component_uuid`);
 
 --
 -- Indexes for table `server_deployments`
@@ -2044,16 +2015,10 @@ ALTER TABLE `acl_permissions`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=110;
 
 --
--- AUTO_INCREMENT for table `acl_roles`
---
-ALTER TABLE `acl_roles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
-
---
 -- AUTO_INCREMENT for table `auth_tokens`
 --
 ALTER TABLE `auth_tokens`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=414;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=424;
 
 --
 -- AUTO_INCREMENT for table `caddyinventory`
@@ -2143,7 +2108,7 @@ ALTER TABLE `pciecardinventory`
 -- AUTO_INCREMENT for table `permissions`
 --
 ALTER TABLE `permissions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=64231;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=95646;
 
 --
 -- AUTO_INCREMENT for table `raminventory`
@@ -2167,7 +2132,7 @@ ALTER TABLE `roles`
 -- AUTO_INCREMENT for table `role_permissions`
 --
 ALTER TABLE `role_permissions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=542;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1151;
 
 --
 -- AUTO_INCREMENT for table `server_build_templates`
@@ -2179,13 +2144,13 @@ ALTER TABLE `server_build_templates`
 -- AUTO_INCREMENT for table `server_configurations`
 --
 ALTER TABLE `server_configurations`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=74;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=80;
 
 --
 -- AUTO_INCREMENT for table `server_configuration_history`
 --
 ALTER TABLE `server_configuration_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `server_deployments`
@@ -2215,7 +2180,7 @@ ALTER TABLE `tickets`
 -- AUTO_INCREMENT for table `ticket_history`
 --
 ALTER TABLE `ticket_history`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `ticket_items`
