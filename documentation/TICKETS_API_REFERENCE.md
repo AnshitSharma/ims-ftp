@@ -83,7 +83,11 @@ Authorization: Bearer {access_token}
 | `description` | string | ✅ | Detailed description (min 10 chars) |
 | `priority` | string | ❌ | Priority level: `low`, `medium`, `high`, `urgent` (default: `medium`) |
 | `target_server_uuid` | string | ❌ | Target server configuration UUID (36 chars) |
+| `assigned_to` | integer | ⚠️ | User ID to assign ticket to (mutually exclusive with `assigned_to_role`) |
+| `assigned_to_role` | integer | ⚠️ | Role ID to assign ticket to (mutually exclusive with `assigned_to`) |
 | `items` | JSON string | ✅ | Array of component items (see Items Format below) |
+
+> ⚠️ **Assignment Required**: You must provide either `assigned_to` OR `assigned_to_role` (not both, not neither)
 
 **Items Format** (JSON array):
 
@@ -141,6 +145,9 @@ Authorization: Bearer {access_token}
       "assigned_to": null,
       "assigned_to_username": null,
       "assigned_to_email": null,
+      "assigned_to_role": 3,
+      "assigned_to_role_name": "manager",
+      "assigned_to_role_description": "Management level access",
       "rejection_reason": null,
       "deployment_notes": null,
       "completion_notes": null,
@@ -212,6 +219,8 @@ Authorization: Bearer {access_token}
 | `priority` | string | ❌ | Filter by priority: `low`, `medium`, `high`, `urgent` |
 | `created_by` | integer | ❌ | Filter by creator user ID |
 | `assigned_to` | integer | ❌ | Filter by assigned user ID |
+| `assigned_to_role` | integer | ❌ | Filter by assigned role ID |
+| `my_tickets` | string | ❌ | Set to `true` to get tickets assigned to you OR your roles |
 | `search` | string | ❌ | Search in title, description, ticket_number |
 | `created_from` | string | ❌ | Filter by created date (format: `YYYY-MM-DD`) |
 | `created_to` | string | ❌ | Filter by created date (format: `YYYY-MM-DD`) |
@@ -223,8 +232,8 @@ Authorization: Bearer {access_token}
 **Permission Logic**:
 - `ticket.view_all` or `ticket.manage`: Can see all tickets
 - `ticket.view_own` only: Can only see tickets they created
-- `ticket.view_assigned` only: Can only see tickets assigned to them
-- Both `ticket.view_own` and `ticket.view_assigned`: Can see tickets they created OR are assigned to
+- `ticket.view_assigned` only: Can only see tickets assigned to them (user OR role)
+- Both `ticket.view_own` and `ticket.view_assigned`: Can see tickets they created OR are assigned to (user OR role)
 
 #### Response
 
@@ -252,7 +261,8 @@ Authorization: Bearer {access_token}
         "created_by_email": "john@example.com",
         "assigned_to": 3,
         "assigned_to_username": "admin_user",
-        "assigned_to_email": "admin@example.com",
+        "assigned_to_role": null,
+        "assigned_to_role_name": null,
         "created_at": "2025-11-18 14:23:45",
         "updated_at": "2025-11-18 14:25:30",
         "submitted_at": "2025-11-18 14:25:30",
@@ -432,12 +442,15 @@ Authorization: Bearer {access_token}
 | `title` | string | ❌ | New title (only for `draft` tickets, requires `ticket.edit_own` or `ticket.manage`) |
 | `description` | string | ❌ | New description (only for `draft` tickets, requires `ticket.edit_own` or `ticket.manage`) |
 | `priority` | string | ❌ | New priority: `low`, `medium`, `high`, `urgent` (only for `draft` tickets) |
-| `assigned_to` | integer | ❌ | User ID to assign (requires `ticket.assign` or `ticket.manage`) |
+| `assigned_to` | integer | ❌ | User ID to assign (clears `assigned_to_role`, requires `ticket.assign` or `ticket.manage`) |
+| `assigned_to_role` | integer | ❌ | Role ID to assign (clears `assigned_to`, requires `ticket.assign` or `ticket.manage`) |
 | `rejection_reason` | string | ⚠️ | **Required** when `status=rejected` |
 | `deployment_notes` | string | ❌ | Notes when deploying (optional for `status=deployed`) |
 | `completion_notes` | string | ❌ | Notes when completing (optional for `status=completed`) |
 
 **⚠️ At least one optional parameter must be provided**
+
+> **Note**: `assigned_to` and `assigned_to_role` are mutually exclusive. Setting one clears the other.
 
 #### Status Transition Rules
 
@@ -459,7 +472,7 @@ Authorization: Bearer {access_token}
 
 **Editing Fields**:
 - **title/description/priority**: Only editable in `draft` status
-- **assigned_to**: Can be changed anytime with `ticket.assign` permission
+- **assigned_to/assigned_to_role**: Can be changed anytime with `ticket.assign` permission
 - **ticket.manage** permission bypasses most restrictions
 
 #### Response

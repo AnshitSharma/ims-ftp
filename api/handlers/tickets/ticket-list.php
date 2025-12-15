@@ -13,6 +13,8 @@
  * - priority (optional): Filter by priority (low, medium, high, urgent)
  * - created_by (optional): Filter by creator user ID
  * - assigned_to (optional): Filter by assigned user ID
+ * - assigned_to_role (optional): Filter by assigned role ID
+ * - my_tickets (optional): Set to "true" to get tickets assigned to you OR your roles
  * - search (optional): Search in title, description, ticket_number
  * - created_from (optional): Filter by created date (YYYY-MM-DD)
  * - created_to (optional): Filter by created date (YYYY-MM-DD)
@@ -81,6 +83,18 @@ try {
         $filters['assigned_to'] = (int)$assignedTo;
     }
 
+    // Assigned to role filter
+    $assignedToRole = $_POST['assigned_to_role'] ?? $_GET['assigned_to_role'] ?? null;
+    if (!empty($assignedToRole)) {
+        $filters['assigned_to_role'] = (int)$assignedToRole;
+    }
+
+    // My tickets filter (tickets assigned to current user OR their roles)
+    $myTickets = $_POST['my_tickets'] ?? $_GET['my_tickets'] ?? null;
+    if ($myTickets === 'true' || $myTickets === '1') {
+        $filters['my_tickets_user_id'] = $user_id;
+    }
+
     // Search filter
     $search = $_POST['search'] ?? $_GET['search'] ?? null;
     if (!empty($search)) {
@@ -100,19 +114,19 @@ try {
 
     // Apply permission-based filtering
     if (!$canViewAll && !$canManage) {
-        // User can only view own tickets or assigned tickets
+        // User can only view own tickets or assigned tickets (including role assignments)
         if ($canViewOwn && $canViewAssigned) {
-            // Can view both own and assigned - use OR filter
+            // Can view both own and assigned - use combined filter
             // Only apply if no specific user filter is requested
-            if (!isset($filters['created_by']) && !isset($filters['assigned_to'])) {
-                $filters['user_id_or'] = $user_id;
+            if (!isset($filters['created_by']) && !isset($filters['assigned_to']) && !isset($filters['assigned_to_role']) && !isset($filters['my_tickets_user_id'])) {
+                $filters['my_tickets_user_id'] = $user_id;
             }
         } elseif ($canViewOwn) {
             // Can only view own tickets
             $filters['created_by'] = $user_id;
         } elseif ($canViewAssigned) {
-            // Can only view assigned tickets
-            $filters['assigned_to'] = $user_id;
+            // Can only view assigned tickets (user OR role)
+            $filters['my_tickets_user_id'] = $user_id;
         }
     }
 

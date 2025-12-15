@@ -261,11 +261,32 @@ class TicketManager
                 $params[] = $filters['assigned_to_role'];
             }
 
-            // OR filter for user (created_by OR assigned_to) - used for "My Tickets" view
+            // OR filter for user (created_by OR assigned_to) - used for "My Tickets" view (legacy)
             if (!empty($filters['user_id_or'])) {
                 $where[] = "(t.created_by = ? OR t.assigned_to = ?)";
                 $params[] = $filters['user_id_or'];
                 $params[] = $filters['user_id_or'];
+            }
+
+            // My tickets filter - includes user assignment AND role-based assignment
+            // Shows tickets where: assigned_to = user OR assigned_to_role IN (user's roles) OR created_by = user
+            if (!empty($filters['my_tickets_user_id'])) {
+                $userId = $filters['my_tickets_user_id'];
+                // Get user's role IDs
+                $userRoleIds = $this->getUserRoleIds($userId);
+
+                if (!empty($userRoleIds)) {
+                    $rolePlaceholders = implode(',', array_fill(0, count($userRoleIds), '?'));
+                    $where[] = "(t.created_by = ? OR t.assigned_to = ? OR t.assigned_to_role IN ($rolePlaceholders))";
+                    $params[] = $userId;
+                    $params[] = $userId;
+                    $params = array_merge($params, $userRoleIds);
+                } else {
+                    // User has no roles, just check created_by and assigned_to
+                    $where[] = "(t.created_by = ? OR t.assigned_to = ?)";
+                    $params[] = $userId;
+                    $params[] = $userId;
+                }
             }
 
             // Search filter (title, description, ticket_number)
@@ -583,5 +604,25 @@ class TicketManager
         $sequence = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
 
         return $prefix . $sequence;
+    }
+
+    /**
+     * Get role IDs for a user
+     *
+     * @param int $userId User ID
+     * @return array Array of role IDs
+     */
+    private function getUserRoleIds($userId)
+    {
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT role_id FROM user_roles WHERE user_id = ?
+            ");
+            $stmt->execute([$userId]);
+            return $stmt->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Exception $e) {
+            error_log("TicketManager::getUserRoleIds error: " . $e->getMessage());
+            return [];
+        }
     }
 }
