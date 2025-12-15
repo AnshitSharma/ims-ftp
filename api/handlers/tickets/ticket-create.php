@@ -13,6 +13,8 @@
  * - description (required): Detailed description
  * - priority (optional): low, medium, high, urgent (default: medium)
  * - target_server_uuid (optional): Server configuration UUID
+ * - assigned_to (conditional): User ID to assign ticket to (mutually exclusive with assigned_to_role)
+ * - assigned_to_role (conditional): Role ID to assign ticket to (mutually exclusive with assigned_to)
  * - items (required): JSON array of component items
  *   [
  *     {
@@ -22,6 +24,8 @@
  *       "action": "add"
  *     }
  *   ]
+ *
+ * Note: Either assigned_to OR assigned_to_role must be provided (not both, not neither)
  *
  * Response:
  * {
@@ -53,6 +57,8 @@ try {
     $title = $_POST['title'] ?? null;
     $description = $_POST['description'] ?? null;
     $itemsJson = $_POST['items'] ?? null;
+    $assignedTo = $_POST['assigned_to'] ?? null;
+    $assignedToRole = $_POST['assigned_to_role'] ?? null;
 
     if (empty($title)) {
         send_json_response(false, true, 400, "title is required", null);
@@ -93,6 +99,8 @@ try {
         'description' => trim($description),
         'priority' => $_POST['priority'] ?? 'medium',
         'target_server_uuid' => $_POST['target_server_uuid'] ?? null,
+        'assigned_to' => $assignedTo ? (int)$assignedTo : null,
+        'assigned_to_role' => $assignedToRole ? (int)$assignedToRole : null,
         'items' => $items
     ];
 

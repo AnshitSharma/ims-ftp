@@ -84,8 +84,10 @@ class TicketManager
                     priority,
                     target_server_uuid,
                     created_by,
+                    assigned_to,
+                    assigned_to_role,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
 
             $stmt->execute([
@@ -95,7 +97,9 @@ class TicketManager
                 'draft', // Always start as draft
                 $data['priority'] ?? 'medium',
                 $data['target_server_uuid'] ?? null,
-                $userId
+                $userId,
+                $data['assigned_to'] ?? null,
+                $data['assigned_to_role'] ?? null
             ]);
 
             $ticketId = $this->pdo->lastInsertId();
@@ -152,10 +156,13 @@ class TicketManager
                     creator.username as created_by_username,
                     creator.email as created_by_email,
                     assignee.username as assigned_to_username,
-                    assignee.email as assigned_to_email
+                    assignee.email as assigned_to_email,
+                    assigned_role.role_name as assigned_to_role_name,
+                    assigned_role.description as assigned_to_role_description
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN users assignee ON t.assigned_to = assignee.id
+                LEFT JOIN acl_roles assigned_role ON t.assigned_to_role = assigned_role.id
                 WHERE t.id = ?
             ");
             $stmt->execute([$ticketId]);
@@ -247,7 +254,13 @@ class TicketManager
                 $where[] = "t.assigned_to = ?";
                 $params[] = $filters['assigned_to'];
             }
-            
+
+            // Assigned to role filter
+            if (!empty($filters['assigned_to_role'])) {
+                $where[] = "t.assigned_to_role = ?";
+                $params[] = $filters['assigned_to_role'];
+            }
+
             // OR filter for user (created_by OR assigned_to) - used for "My Tickets" view
             if (!empty($filters['user_id_or'])) {
                 $where[] = "(t.created_by = ? OR t.assigned_to = ?)";
@@ -299,10 +312,12 @@ class TicketManager
                     t.*,
                     creator.username as created_by_username,
                     assignee.username as assigned_to_username,
+                    assigned_role.role_name as assigned_to_role_name,
                     (SELECT COUNT(*) FROM ticket_items WHERE ticket_id = t.id) as item_count
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN users assignee ON t.assigned_to = assignee.id
+                LEFT JOIN acl_roles assigned_role ON t.assigned_to_role = assigned_role.id
                 $whereClause
                 ORDER BY t.$orderBy $orderDir
                 LIMIT ? OFFSET ?
@@ -426,7 +441,13 @@ class TicketManager
             if (isset($updates['assigned_to'])) {
                 $setFields[] = "assigned_to = ?";
                 $params[] = $updates['assigned_to'];
-                $this->historyService->logHistory($ticketId, 'assigned', $ticket['assigned_to'], $updates['assigned_to'], $userId, 'Ticket assigned');
+                $this->historyService->logHistory($ticketId, 'assigned', $ticket['assigned_to'], $updates['assigned_to'], $userId, 'Ticket assigned to user');
+            }
+
+            if (array_key_exists('assigned_to_role', $updates)) {
+                $setFields[] = "assigned_to_role = ?";
+                $params[] = $updates['assigned_to_role'];
+                $this->historyService->logHistory($ticketId, 'assigned_role', $ticket['assigned_to_role'], $updates['assigned_to_role'], $userId, 'Ticket assigned to role');
             }
 
             // Handle extra data fields

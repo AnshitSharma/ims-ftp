@@ -17,10 +17,13 @@
  * - title: New title (only for draft tickets)
  * - description: New description (only for draft tickets)
  * - priority: New priority (low, medium, high, urgent)
- * - assigned_to: User ID to assign ticket to
+ * - assigned_to: User ID to assign ticket to (clears assigned_to_role)
+ * - assigned_to_role: Role ID to assign ticket to (clears assigned_to)
  * - rejection_reason: Required when status=rejected
  * - deployment_notes: Notes when deploying
  * - completion_notes: Notes when completing
+ *
+ * Note: assigned_to and assigned_to_role are mutually exclusive
  *
  * Status Transitions & Required Permissions:
  * - draft → pending: ticket.create
@@ -244,7 +247,7 @@ try {
         $permissionNeeded = $permissionNeeded ?? 'ticket.edit_own';
     }
 
-    // ASSIGNMENT - only if non-empty value provided
+    // ASSIGNMENT TO USER - only if non-empty value provided
     if (isset($_POST['assigned_to']) && $_POST['assigned_to'] !== '') {
         $permissionNeeded = $permissionNeeded ?? 'ticket.assign';
 
@@ -253,6 +256,22 @@ try {
             $validationErrors[] = "You don't have permission to assign tickets";
         } else {
             $updates['assigned_to'] = $_POST['assigned_to'] ? (int)$_POST['assigned_to'] : null;
+            // Clear role assignment when assigning to user (mutually exclusive)
+            $updates['assigned_to_role'] = null;
+        }
+    }
+
+    // ASSIGNMENT TO ROLE - only if non-empty value provided
+    if (isset($_POST['assigned_to_role']) && $_POST['assigned_to_role'] !== '') {
+        $permissionNeeded = $permissionNeeded ?? 'ticket.assign';
+
+        // Check if user has assignment permission
+        if (!$acl->hasPermission($user_id, 'ticket.assign') && !$acl->hasPermission($user_id, 'ticket.manage')) {
+            $validationErrors[] = "You don't have permission to assign tickets";
+        } else {
+            $updates['assigned_to_role'] = $_POST['assigned_to_role'] ? (int)$_POST['assigned_to_role'] : null;
+            // Clear user assignment when assigning to role (mutually exclusive)
+            $updates['assigned_to'] = null;
         }
     }
 

@@ -62,6 +62,32 @@ class TicketValidator
             }
         }
 
+        // Assignment validation - MANDATORY, mutually exclusive
+        $hasAssignedTo = !empty($data['assigned_to']);
+        $hasAssignedToRole = !empty($data['assigned_to_role']);
+
+        if (!$hasAssignedTo && !$hasAssignedToRole) {
+            $errors[] = "Assignment is required. Provide either 'assigned_to' (user ID) or 'assigned_to_role' (role ID)";
+        }
+
+        if ($hasAssignedTo && $hasAssignedToRole) {
+            $errors[] = "Cannot assign to both user and role. Provide only one of 'assigned_to' or 'assigned_to_role'";
+        }
+
+        // Validate assigned user exists
+        if ($hasAssignedTo) {
+            if (!$this->userExists($data['assigned_to'])) {
+                $errors[] = "Assigned user (ID: {$data['assigned_to']}) not found";
+            }
+        }
+
+        // Validate assigned role exists
+        if ($hasAssignedToRole) {
+            if (!$this->roleExists($data['assigned_to_role'])) {
+                $errors[] = "Assigned role (ID: {$data['assigned_to_role']}) not found";
+            }
+        }
+
         // Target server validation (optional but recommended)
         if (isset($data['target_server_uuid']) && !empty($data['target_server_uuid'])) {
             if (!$this->isValidUuid($data['target_server_uuid'])) {
@@ -560,6 +586,24 @@ class TicketValidator
             return $stmt->fetchColumn() > 0;
         } catch (Exception $e) {
             error_log("User existence check error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Check if role exists
+     *
+     * @param int $roleId Role ID
+     * @return bool
+     */
+    private function roleExists($roleId)
+    {
+        try {
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM acl_roles WHERE id = ?");
+            $stmt->execute([$roleId]);
+            return $stmt->fetchColumn() > 0;
+        } catch (Exception $e) {
+            error_log("Role existence check error: " . $e->getMessage());
             return false;
         }
     }
