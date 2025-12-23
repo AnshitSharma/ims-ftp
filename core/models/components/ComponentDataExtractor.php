@@ -717,7 +717,10 @@ class ComponentDataExtractor {
             'drive_bays' => $this->extractDriveBays($model),
             'pcie_slots' => $model['expansion_slots']['pcie_slots'] ?? [],
             'pcie_version' => $this->extractMotherboardPCIeVersion($model),
-            'uuid' => $model['uuid']
+            'uuid' => $model['uuid'],
+            // Include storage section for M.2/U.2/NVMe slot detection
+            'storage' => $model['storage'] ?? [],
+            'expansion_slots' => $model['expansion_slots'] ?? []
         ];
     }
 }

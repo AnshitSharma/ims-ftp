@@ -10,12 +10,14 @@ class DataExtractionUtilities {
     private $jsonCache = [];
     private $cacheTimeout = 3600; // 1 hour
     private $paths = [
-        'storage' => __DIR__ . '/../../resources/specifications/storage-jsons/storage-level-3.json',
-        'motherboard' => __DIR__ . '/../../resources/specifications/motherboard-jsons/motherboard-level-3.json',
-        'chassis' => __DIR__ . '/../../resources/specifications/chassis-jsons/chassis-level-3.json',
-        'cpu' => __DIR__ . '/../../resources/specifications/cpu-jsons/Cpu-details-level-3.json',
-        'ram' => __DIR__ . '/../../resources/specifications/Ram-jsons/ram_detail.json',
-        'pciecard' => __DIR__ . '/../../resources/specifications/pci-jsons/pci-level-3.json'
+        'storage' => __DIR__ . '/../../../resources/specifications/storage/storage-level-3.json',
+        'motherboard' => __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json',
+        'chassis' => __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json',
+        'cpu' => __DIR__ . '/../../../resources/specifications/cpu/Cpu-details-level-3.json',
+        'ram' => __DIR__ . '/../../../resources/specifications/ram/ram_detail.json',
+        'pciecard' => __DIR__ . '/../../../resources/specifications/pciecard/pci-level-3.json',
+        'hbacard' => __DIR__ . '/../../../resources/specifications/hbacard/hbacard-level-3.json',
+        'nic' => __DIR__ . '/../../../resources/specifications/nic/nic-level-3.json'
     ];
     
     /**
@@ -73,6 +75,10 @@ class DataExtractionUtilities {
                 return $this->findRamInData($data, $uuid);
             case 'pciecard':
                 return $this->findPCIeCardInData($data, $uuid);
+            case 'hbacard':
+                return $this->findHBACardInData($data, $uuid);
+            case 'nic':
+                return $this->findNICInData($data, $uuid);
             default:
                 return null;
         }
@@ -205,6 +211,58 @@ class DataExtractionUtilities {
     }
 
     /**
+     * Find HBA card in HBA card data structure
+     * HBA JSON structure: array of categories with models (UUID field is capitalized)
+     */
+    private function findHBACardInData($data, $uuid) {
+        foreach ($data as $category) {
+            if (isset($category['models'])) {
+                foreach ($category['models'] as $model) {
+                    // HBA cards use capitalized 'UUID' field
+                    if (isset($model['UUID']) && $model['UUID'] === $uuid) {
+                        // Merge category-level data into model
+                        if (isset($category['component_subtype'])) {
+                            $model['component_subtype'] = $category['component_subtype'];
+                        }
+                        if (isset($category['brand'])) {
+                            $model['brand'] = $category['brand'];
+                        }
+                        if (isset($category['series'])) {
+                            $model['series'] = $category['series'];
+                        }
+                        return $model;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find NIC in NIC data structure
+     * NIC JSON structure: brand → series (array) → models (with lowercase uuid)
+     */
+    private function findNICInData($data, $uuid) {
+        foreach ($data as $brand) {
+            if (isset($brand['series'])) {
+                foreach ($brand['series'] as $series) {
+                    if (isset($series['models'])) {
+                        foreach ($series['models'] as $model) {
+                            if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+                                // Merge brand and series data into model
+                                $model['brand'] = $brand['brand'] ?? null;
+                                $model['series_name'] = $series['name'] ?? null;
+                                return $model;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * Extract storage form factor
      */
     public function extractStorageFormFactor($storageUuid) {
@@ -326,6 +384,7 @@ class DataExtractionUtilities {
     
     /**
      * Extract motherboard storage connectors
+     * JSON structure: storage.sata.ports, storage.nvme.m2_slots, storage.sas.ports
      */
     public function extractMotherboardStorageConnectors($motherboardUuid) {
         try {
@@ -333,31 +392,35 @@ class DataExtractionUtilities {
             if (!$motherboard) {
                 return [];
             }
-            
+
             $connectors = [];
-            
-            // Extract SATA ports
-            if (isset($motherboard['storage']['sata_ports'])) {
-                $sataCount = $motherboard['storage']['sata_ports'];
+
+            // Extract SATA ports (storage.sata.ports)
+            if (isset($motherboard['storage']['sata']['ports'])) {
+                $sataCount = $motherboard['storage']['sata']['ports'];
                 for ($i = 0; $i < $sataCount; $i++) {
                     $connectors[] = 'SATA';
                 }
             }
-            
-            // Extract M.2 slots
-            if (isset($motherboard['storage']['m2_slots'])) {
-                foreach ($motherboard['storage']['m2_slots'] as $slot) {
-                    $connectors[] = 'M.2_NVMe';
+
+            // Extract M.2 slots (storage.nvme.m2_slots)
+            if (isset($motherboard['storage']['nvme']['m2_slots'])) {
+                foreach ($motherboard['storage']['nvme']['m2_slots'] as $slot) {
+                    $slotCount = $slot['count'] ?? 1;
+                    for ($i = 0; $i < $slotCount; $i++) {
+                        $connectors[] = 'M.2_NVMe';
+                    }
                 }
             }
-            
-            // Extract SAS connectors
-            if (isset($motherboard['storage']['sas_connectors'])) {
-                foreach ($motherboard['storage']['sas_connectors'] as $connector) {
+
+            // Extract SAS ports (storage.sas.ports)
+            if (isset($motherboard['storage']['sas']['ports'])) {
+                $sasCount = $motherboard['storage']['sas']['ports'];
+                for ($i = 0; $i < $sasCount; $i++) {
                     $connectors[] = 'SFF-8643';
                 }
             }
-            
+
             // Extract PCIe slots that can be used for storage controllers
             if (isset($motherboard['expansion_slots']['pcie_slots'])) {
                 foreach ($motherboard['expansion_slots']['pcie_slots'] as $slot) {
@@ -368,9 +431,9 @@ class DataExtractionUtilities {
                     }
                 }
             }
-            
+
             return array_unique($connectors);
-            
+
         } catch (Exception $e) {
             error_log("Error extracting motherboard storage connectors: " . $e->getMessage());
             return [];
@@ -430,6 +493,7 @@ class DataExtractionUtilities {
     
     /**
      * Extract storage controllers from motherboard
+     * JSON structure: storage.sata.ports, storage.nvme.m2_slots, storage.sas.ports
      */
     public function extractMotherboardStorageControllers($motherboardUuid) {
         try {
@@ -437,40 +501,50 @@ class DataExtractionUtilities {
             if (!$motherboard) {
                 return [];
             }
-            
+
             $controllers = [];
-            
+
             // Extract integrated storage controllers
             if (isset($motherboard['storage'])) {
                 $storage = $motherboard['storage'];
-                
-                if (!empty($storage['sata_ports'])) {
+
+                // SATA controller (storage.sata.ports)
+                if (!empty($storage['sata']['ports'])) {
                     $controllers[] = [
                         'type' => 'SATA',
-                        'version' => $storage['sata_version'] ?? '3.0',
-                        'ports' => $storage['sata_ports']
+                        'version' => '3.0',
+                        'ports' => $storage['sata']['ports'],
+                        'controller' => $storage['sata']['sata_controller'] ?? 'Integrated'
                     ];
                 }
-                
-                if (!empty($storage['m2_slots'])) {
+
+                // NVMe controller (storage.nvme.m2_slots)
+                if (!empty($storage['nvme']['m2_slots'])) {
+                    $totalM2Slots = 0;
+                    foreach ($storage['nvme']['m2_slots'] as $slot) {
+                        $totalM2Slots += $slot['count'] ?? 1;
+                    }
                     $controllers[] = [
                         'type' => 'NVMe',
-                        'version' => $storage['nvme_version'] ?? '1.3',
-                        'slots' => count($storage['m2_slots'])
+                        'version' => '1.4',
+                        'slots' => $totalM2Slots,
+                        'pcie_generation' => $storage['nvme']['m2_slots'][0]['pcie_generation'] ?? 4
                     ];
                 }
-                
-                if (!empty($storage['sas_connectors'])) {
+
+                // SAS controller (storage.sas.ports)
+                if (!empty($storage['sas']['ports'])) {
                     $controllers[] = [
                         'type' => 'SAS',
-                        'version' => $storage['sas_version'] ?? '3.0',
-                        'connectors' => count($storage['sas_connectors'])
+                        'version' => '3.0',
+                        'ports' => $storage['sas']['ports'],
+                        'controller' => $storage['sas']['controller'] ?? 'Integrated'
                     ];
                 }
             }
-            
+
             return $controllers;
-            
+
         } catch (Exception $e) {
             error_log("Error extracting motherboard storage controllers: " . $e->getMessage());
             return [];
@@ -479,6 +553,7 @@ class DataExtractionUtilities {
     
     /**
      * Extract NVMe support information from motherboard
+     * JSON structure: storage.nvme.m2_slots (array with count field)
      */
     public function extractMotherboardNVMeSupport($motherboardUuid) {
         try {
@@ -491,16 +566,18 @@ class DataExtractionUtilities {
                     'max_pcie_lanes' => 0
                 ];
             }
-            
+
             $m2Slots = 0;
             $pcieSlots = 0;
             $maxPcieLanes = 0;
-            
-            // Count M.2 slots
-            if (isset($motherboard['storage']['m2_slots'])) {
-                $m2Slots = count($motherboard['storage']['m2_slots']);
+
+            // Count M.2 slots (storage.nvme.m2_slots[].count)
+            if (isset($motherboard['storage']['nvme']['m2_slots'])) {
+                foreach ($motherboard['storage']['nvme']['m2_slots'] as $slot) {
+                    $m2Slots += $slot['count'] ?? 1;
+                }
             }
-            
+
             // Count PCIe slots suitable for NVMe (x4 or higher)
             if (isset($motherboard['expansion_slots']['pcie_slots'])) {
                 foreach ($motherboard['expansion_slots']['pcie_slots'] as $slot) {
@@ -510,16 +587,16 @@ class DataExtractionUtilities {
                     }
                 }
             }
-            
+
             $supported = ($m2Slots > 0) || ($pcieSlots > 0);
-            
+
             return [
                 'supported' => $supported,
                 'm2_slots' => $m2Slots,
                 'pcie_slots' => $pcieSlots,
                 'max_pcie_lanes' => $maxPcieLanes
             ];
-            
+
         } catch (Exception $e) {
             error_log("Error extracting motherboard NVMe support: " . $e->getMessage());
             return [
@@ -533,6 +610,7 @@ class DataExtractionUtilities {
     
     /**
      * Extract SATA/SAS port count from motherboard
+     * JSON structure: storage.sata.ports, storage.sas.ports
      */
     public function extractMotherboardSATASASPorts($motherboardUuid) {
         try {
@@ -544,20 +622,16 @@ class DataExtractionUtilities {
                     'total_ports' => 0
                 ];
             }
-            
-            $sataPorts = $motherboard['storage']['sata_ports'] ?? 0;
-            $sasPorts = 0;
-            
-            if (isset($motherboard['storage']['sas_connectors'])) {
-                $sasPorts = count($motherboard['storage']['sas_connectors']);
-            }
-            
+
+            $sataPorts = $motherboard['storage']['sata']['ports'] ?? 0;
+            $sasPorts = $motherboard['storage']['sas']['ports'] ?? 0;
+
             return [
                 'sata_ports' => $sataPorts,
                 'sas_ports' => $sasPorts,
                 'total_ports' => $sataPorts + $sasPorts
             ];
-            
+
         } catch (Exception $e) {
             error_log("Error extracting motherboard SATA/SAS ports: " . $e->getMessage());
             return [

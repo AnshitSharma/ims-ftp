@@ -64,7 +64,8 @@
       "Read(/C:\\Users\\anshi\\Downloads\\Work\\mine\\ims ftp\\includes\\models/**)",
       "Bash(grep:*)",
       "Bash(sed:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

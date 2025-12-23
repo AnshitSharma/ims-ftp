@@ -3747,7 +3747,7 @@ function parseMotherboardSpecs($motherboardDetails) {
     try {
         // Try to find matching motherboard JSON data
         $jsonFiles = [
-            __DIR__ . '/../../All-JSON/motherboard-jsons/motherboard-level-3.json'
+            __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json'
         ];
         
         $serialNumber = $motherboardDetails['SerialNumber'];
@@ -5093,12 +5093,12 @@ function checkRAMCompatibilityWithExistingComponents($ramComponent, $existingCom
  */
 function loadComponentSpecsFromJSON($componentUUID, $componentType) {
     try {
-        $jsonDir = __DIR__ . '/../../All-JSON';
+        $jsonDir = __DIR__ . '/../../../resources/specifications';
 
         $jsonFiles = [
-            'cpu' => $jsonDir . '/cpu-jsons/Cpu-details-level-3.json',
-            'ram' => $jsonDir . '/Ram-jsons/ram_detail.json',
-            'motherboard' => $jsonDir . '/motherboard-jsons/motherboard-level-3.json'
+            'cpu' => $jsonDir . '/cpu/Cpu-details-level-3.json',
+            'ram' => $jsonDir . '/ram/ram_detail.json',
+            'motherboard' => $jsonDir . '/motherboard/motherboard-level-3.json'
         ];
 
         if (!isset($jsonFiles[$componentType])) {

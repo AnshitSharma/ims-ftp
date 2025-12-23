@@ -2971,11 +2971,11 @@ class ComponentCompatibility {
                 $result['score_breakdown'] = [
                     'base_score' => 100,
                     'penalty_applied' => -100,
-                    'reason' => 'JSON specifications not found in resources/specifications/chassis-jsons/ directory',
+                    'reason' => 'JSON specifications not found in resources/specifications/chassis/ directory',
                     'final_score' => 0,
                     'missing_data' => [
                         'JSON specification file for UUID: ' . $chassisComponent['uuid'],
-                        'Expected location: resources/specifications/chassis-jsons/*.json',
+                        'Expected location: resources/specifications/chassis/*.json',
                         'Required fields: form_factor, chassis_type, drive_bays, backplane'
                     ],
                     'validation_status' => 'FAILED',
@@ -4238,10 +4238,10 @@ class ComponentCompatibility {
                 $result['details'][] = 'Available storage slots: ' . count($storageSupport['slots']);
             }
 
-            // Extract M.2 slot information from drive_bays (not storage)
-            $driveBays = $mbSpecs['drive_bays'] ?? [];
-            if (isset($driveBays['m2_slots']) && !empty($driveBays['m2_slots'])) {
-                $m2Slots = $driveBays['m2_slots'];
+            // Extract M.2 slot information from storage.nvme.m2_slots (correct JSON path)
+            $nvmeStorage = $storageSupport['nvme'] ?? [];
+            if (isset($nvmeStorage['m2_slots']) && !empty($nvmeStorage['m2_slots'])) {
+                $m2Slots = $nvmeStorage['m2_slots'];
 
                 if (!empty($m2Slots) && is_array($m2Slots)) {
                     $firstSlotConfig = $m2Slots[0];
@@ -4250,8 +4250,9 @@ class ComponentCompatibility {
                     $m2FormFactors = $firstSlotConfig['form_factors'] ?? [];
                     $storageRequirements['m2_form_factors'] = $m2FormFactors;
 
-                    // Store M.2 slot count
+                    // Store M.2 slot count - using correct key name
                     $m2SlotCount = $firstSlotConfig['count'] ?? 0;
+                    $storageRequirements['motherboard_m2_slots'] = $m2SlotCount;
                     $storageRequirements['m2_slots'] = [
                         'total' => $m2SlotCount,
                         'used' => 0, // Will be calculated later
@@ -4268,6 +4269,21 @@ class ComponentCompatibility {
                         if (!in_array($nvmeInterface, $storageRequirements['supported_interfaces'])) {
                             $storageRequirements['supported_interfaces'][] = $nvmeInterface;
                         }
+                    }
+                }
+            }
+
+            // Extract U.2 slot information from storage.nvme.u2_slots
+            if (isset($nvmeStorage['u2_slots']['count']) && $nvmeStorage['u2_slots']['count'] > 0) {
+                $u2SlotCount = (int)$nvmeStorage['u2_slots']['count'];
+                $storageRequirements['motherboard_u2_slots'] = $u2SlotCount;
+                $result['details'][] = "Motherboard U.2 slots: {$u2SlotCount} available";
+
+                // Add U.2/NVMe interface support
+                $u2Interfaces = ['U.2', 'NVMe', 'PCIe NVMe'];
+                foreach ($u2Interfaces as $u2Interface) {
+                    if (!in_array($u2Interface, $storageRequirements['supported_interfaces'])) {
+                        $storageRequirements['supported_interfaces'][] = $u2Interface;
                     }
                 }
             }
