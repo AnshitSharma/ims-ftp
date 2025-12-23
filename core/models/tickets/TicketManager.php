@@ -152,24 +152,87 @@ class TicketManager
             // Get ticket
             $stmt = $this->pdo->prepare("
                 SELECT
-                    t.*,
+                    t.id,
+                    t.ticket_number,
+                    t.title,
+                    t.description,
+                    t.status,
+                    t.priority,
+                    t.target_server_uuid,
+                    t.rejection_reason,
+                    t.deployment_notes,
+                    t.completion_notes,
+                    t.created_at,
+                    t.updated_at,
+                    t.submitted_at,
+                    t.approved_at,
+                    t.deployed_at,
+                    t.completed_at,
+                    t.created_by,
                     creator.username as created_by_username,
-                    creator.email as created_by_email,
+                    t.assigned_to,
                     assignee.username as assigned_to_username,
-                    assignee.email as assigned_to_email,
-                    assigned_role.role_name as assigned_to_role_name,
-                    assigned_role.description as assigned_to_role_description
+                    t.assigned_to_role,
+                    assigned_role.display_name as assigned_to_role_name
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN users assignee ON t.assigned_to = assignee.id
-                LEFT JOIN acl_roles assigned_role ON t.assigned_to_role = assigned_role.id
+                LEFT JOIN roles assigned_role ON t.assigned_to_role = assigned_role.id
                 WHERE t.id = ?
             ");
             $stmt->execute([$ticketId]);
-            $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$ticket) {
+            if (!$row) {
                 return null;
+            }
+
+            // Build clean response structure
+            $ticket = [
+                'id' => (int)$row['id'],
+                'ticket_number' => $row['ticket_number'],
+                'title' => $row['title'],
+                'description' => $row['description'],
+                'status' => $row['status'],
+                'priority' => $row['priority'],
+                'target_server_uuid' => $row['target_server_uuid'],
+                'created_by' => $row['created_by'] ? [
+                    'id' => (int)$row['created_by'],
+                    'username' => $row['created_by_username']
+                ] : null,
+                'assigned_user' => $row['assigned_to'] ? [
+                    'id' => (int)$row['assigned_to'],
+                    'username' => $row['assigned_to_username']
+                ] : null,
+                'assigned_role' => $row['assigned_to_role'] ? [
+                    'id' => (int)$row['assigned_to_role'],
+                    'name' => $row['assigned_to_role_name']
+                ] : null,
+                'created_at' => $row['created_at'],
+                'updated_at' => $row['updated_at']
+            ];
+
+            // Add optional status-specific fields only if they have values
+            if ($row['rejection_reason']) {
+                $ticket['rejection_reason'] = $row['rejection_reason'];
+            }
+            if ($row['deployment_notes']) {
+                $ticket['deployment_notes'] = $row['deployment_notes'];
+            }
+            if ($row['completion_notes']) {
+                $ticket['completion_notes'] = $row['completion_notes'];
+            }
+            if ($row['submitted_at']) {
+                $ticket['submitted_at'] = $row['submitted_at'];
+            }
+            if ($row['approved_at']) {
+                $ticket['approved_at'] = $row['approved_at'];
+            }
+            if ($row['deployed_at']) {
+                $ticket['deployed_at'] = $row['deployed_at'];
+            }
+            if ($row['completed_at']) {
+                $ticket['completed_at'] = $row['completed_at'];
             }
 
             // Get items via service
@@ -177,9 +240,9 @@ class TicketManager
                 $ticket['items'] = $this->itemService->getTicketItems($ticketId);
             }
 
-            // Get history via service
+            // Get history via service (simplified)
             if ($includeHistory) {
-                $ticket['history'] = $this->historyService->getTicketHistory($ticketId);
+                $ticket['history'] = $this->historyService->getTicketHistorySimplified($ticketId);
             }
 
             return $ticket;
@@ -330,29 +393,64 @@ class TicketManager
             // Get tickets with item count in single query (Fix N+1)
             $stmt = $this->pdo->prepare("
                 SELECT
-                    t.*,
+                    t.id,
+                    t.ticket_number,
+                    t.title,
+                    t.status,
+                    t.priority,
+                    t.created_at,
+                    t.updated_at,
+                    t.created_by,
                     creator.username as created_by_username,
+                    t.assigned_to,
                     assignee.username as assigned_to_username,
-                    assigned_role.role_name as assigned_to_role_name,
+                    t.assigned_to_role,
+                    assigned_role.display_name as assigned_to_role_name,
                     (SELECT COUNT(*) FROM ticket_items WHERE ticket_id = t.id) as item_count
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN users assignee ON t.assigned_to = assignee.id
-                LEFT JOIN acl_roles assigned_role ON t.assigned_to_role = assigned_role.id
+                LEFT JOIN roles assigned_role ON t.assigned_to_role = assigned_role.id
                 $whereClause
                 ORDER BY t.$orderBy $orderDir
                 LIMIT ? OFFSET ?
             ");
 
             $stmt->execute(array_merge($params, [$limit, $offset]));
-            $tickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Format tickets with clean structure
+            $tickets = array_map(function ($row) {
+                return [
+                    'id' => (int)$row['id'],
+                    'ticket_number' => $row['ticket_number'],
+                    'title' => $row['title'],
+                    'status' => $row['status'],
+                    'priority' => $row['priority'],
+                    'created_by' => $row['created_by'] ? [
+                        'id' => (int)$row['created_by'],
+                        'username' => $row['created_by_username']
+                    ] : null,
+                    'assigned_user' => $row['assigned_to'] ? [
+                        'id' => (int)$row['assigned_to'],
+                        'username' => $row['assigned_to_username']
+                    ] : null,
+                    'assigned_role' => $row['assigned_to_role'] ? [
+                        'id' => (int)$row['assigned_to_role'],
+                        'name' => $row['assigned_to_role_name']
+                    ] : null,
+                    'item_count' => (int)$row['item_count'],
+                    'created_at' => $row['created_at'],
+                    'updated_at' => $row['updated_at']
+                ];
+            }, $rows);
 
             return [
                 'tickets' => $tickets,
                 'total' => (int)$total,
                 'page' => (int)$page,
                 'limit' => (int)$limit,
-                'total_pages' => ceil($total / $limit)
+                'total_pages' => (int)ceil($total / $limit)
             ];
 
         } catch (Exception $e) {

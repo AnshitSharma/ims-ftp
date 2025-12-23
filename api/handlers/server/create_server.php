@@ -76,7 +76,7 @@ function handleInitializeServerCreation() {
     $location = trim($_POST['location'] ?? '');
     $rackPosition = trim($_POST['rack_position'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
-    $isVirtual = isset($_POST['is_virtual']) ? (int)$_POST['is_virtual'] : 0;
+    $isVirtual = isset($_POST['is_virtual']) ? (int)filter_var($_POST['is_virtual'], FILTER_VALIDATE_BOOLEAN) : 0;
 
 
     if (empty($serverName)) {

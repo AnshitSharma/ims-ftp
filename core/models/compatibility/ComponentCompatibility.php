@@ -90,6 +90,169 @@ class ComponentCompatibility {
     }
 
     /**
+     * Validate RAM exists in JSON specifications
+     * Delegates to ComponentValidator
+     * @param string $ramUuid RAM UUID
+     * @return array Validation result with exists flag and specifications
+     */
+    public function validateRAMExistsInJSON($ramUuid) {
+        return $this->validator->validateRAMExistsInJSON($ramUuid);
+    }
+
+    /**
+     * Validate memory type compatibility (DDR4/DDR5)
+     * Delegates to ComponentValidator
+     * @param array $ramSpecs RAM specifications
+     * @param array $motherboardSpecs Motherboard specifications
+     * @param array $cpuSpecs CPU specifications
+     * @return array Compatibility result
+     */
+    public function validateMemoryTypeCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs) {
+        return $this->validator->validateMemoryTypeCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs);
+    }
+
+    /**
+     * Validate ECC compatibility
+     * Delegates to ComponentValidator
+     * @param array $ramSpecs RAM specifications
+     * @param array $motherboardSpecs Motherboard specifications
+     * @param array $cpuSpecs CPU specifications
+     * @return array ECC validation result
+     */
+    public function validateECCCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs) {
+        return $this->validator->validateECCCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs);
+    }
+
+    /**
+     * Validate memory slot availability
+     * Delegates to ComponentValidator
+     * @param string $configUuid Configuration UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array Slot availability result
+     */
+    public function validateMemorySlotAvailability($configUuid, $motherboardSpecs) {
+        return $this->validator->validateMemorySlotAvailability($configUuid, $motherboardSpecs);
+    }
+
+    /**
+     * Validate memory form factor compatibility (DIMM/SO-DIMM)
+     * Delegates to ComponentValidator
+     * @param array $ramSpecs RAM specifications
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array Form factor validation result
+     */
+    public function validateMemoryFormFactor($ramSpecs, $motherboardSpecs) {
+        return $this->validator->validateMemoryFormFactor($ramSpecs, $motherboardSpecs);
+    }
+
+    /**
+     * Parse motherboard specifications from UUID
+     * Delegates to ComponentValidator
+     * @param string $motherboardUuid Motherboard UUID
+     * @return array Parsed motherboard specifications
+     */
+    public function parseMotherboardSpecifications($motherboardUuid) {
+        return $this->validator->parseMotherboardSpecifications($motherboardUuid);
+    }
+
+    /**
+     * Validate motherboard exists in JSON
+     * Delegates to ComponentValidator
+     * @param string $motherboardUuid Motherboard UUID
+     * @return array Validation result
+     */
+    public function validateMotherboardExists($motherboardUuid) {
+        return $this->validator->validateMotherboardExists($motherboardUuid);
+    }
+
+    /**
+     * Validate CPU exists in JSON
+     * Delegates to ComponentValidator
+     * @param string $cpuUuid CPU UUID
+     * @return array Validation result
+     */
+    public function validateCPUExists($cpuUuid) {
+        return $this->validator->validateCPUExists($cpuUuid);
+    }
+
+    /**
+     * Validate caddy exists in JSON
+     * Delegates to ComponentValidator
+     * @param string $caddyUuid Caddy UUID
+     * @return array Validation result
+     */
+    public function validateCaddyExists($caddyUuid) {
+        return $this->validator->validateCaddyExists($caddyUuid);
+    }
+
+    /**
+     * Validate CPU socket compatibility with motherboard
+     * Delegates to ComponentValidator
+     * @param string $cpuUuid CPU UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array Socket compatibility result
+     */
+    public function validateCPUSocketCompatibility($cpuUuid, $motherboardSpecs) {
+        return $this->validator->validateCPUSocketCompatibility($cpuUuid, $motherboardSpecs);
+    }
+
+    /**
+     * Validate CPU count limit for motherboard
+     * Delegates to ComponentValidator
+     * @param string $configUuid Configuration UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array CPU count validation result
+     */
+    public function validateCPUCountLimit($configUuid, $motherboardSpecs) {
+        return $this->validator->validateCPUCountLimit($configUuid, $motherboardSpecs);
+    }
+
+    /**
+     * Validate mixed CPU compatibility
+     * Delegates to ComponentValidator
+     * @param array $existingCPUs Existing CPU UUIDs
+     * @param string $newCpuUuid New CPU UUID
+     * @return array Mixed CPU compatibility result
+     */
+    public function validateMixedCPUCompatibility($existingCPUs, $newCpuUuid) {
+        return $this->validator->validateMixedCPUCompatibility($existingCPUs, $newCpuUuid);
+    }
+
+    /**
+     * Validate RAM type compatibility with motherboard
+     * Delegates to ComponentValidator
+     * @param string $ramUuid RAM UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array RAM type compatibility result
+     */
+    public function validateRAMTypeCompatibility($ramUuid, $motherboardSpecs) {
+        return $this->validator->validateRAMTypeCompatibility($ramUuid, $motherboardSpecs);
+    }
+
+    /**
+     * Validate RAM slot availability
+     * Delegates to ComponentValidator
+     * @param string $configUuid Configuration UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array RAM slot availability result
+     */
+    public function validateRAMSlotAvailability($configUuid, $motherboardSpecs) {
+        return $this->validator->validateRAMSlotAvailability($configUuid, $motherboardSpecs);
+    }
+
+    /**
+     * Validate NIC PCIe compatibility
+     * Delegates to ComponentValidator
+     * @param string $nicUuid NIC UUID
+     * @param string $configUuid Configuration UUID
+     * @param array $motherboardSpecs Motherboard specifications
+     * @return array NIC PCIe compatibility result
+     */
+    public function validateNICPCIeCompatibility($nicUuid, $configUuid, $motherboardSpecs) {
+        return $this->validator->validateNICPCIeCompatibility($nicUuid, $configUuid, $motherboardSpecs);
+    }
+
+    /**
      * Check compatibility between two specific components - ENHANCED with proper validation
      */
     public function checkComponentPairCompatibility($component1, $component2) {

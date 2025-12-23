@@ -86,4 +86,53 @@ class TicketHistoryService
             return [];
         }
     }
+
+    /**
+     * Get simplified ticket history (minimal fields for API response)
+     *
+     * @param int $ticketId Ticket ID
+     * @return array Simplified history entries
+     */
+    public function getTicketHistorySimplified($ticketId)
+    {
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT
+                    h.action,
+                    h.old_value,
+                    h.new_value,
+                    h.notes,
+                    h.created_at,
+                    u.username as changed_by
+                FROM ticket_history h
+                LEFT JOIN users u ON h.changed_by = u.id
+                WHERE h.ticket_id = ?
+                ORDER BY h.created_at DESC
+            ");
+            $stmt->execute([$ticketId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Clean up null values
+            return array_map(function ($row) {
+                $entry = [
+                    'action' => $row['action'],
+                    'changed_by' => $row['changed_by'],
+                    'created_at' => $row['created_at']
+                ];
+                if ($row['old_value'] !== null) {
+                    $entry['old_value'] = $row['old_value'];
+                }
+                if ($row['new_value'] !== null) {
+                    $entry['new_value'] = $row['new_value'];
+                }
+                if ($row['notes'] !== null) {
+                    $entry['notes'] = $row['notes'];
+                }
+                return $entry;
+            }, $rows);
+        } catch (Exception $e) {
+            error_log("TicketHistoryService::getTicketHistorySimplified error: " . $e->getMessage());
+            return [];
+        }
+    }
 }

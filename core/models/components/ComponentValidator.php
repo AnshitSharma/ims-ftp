@@ -313,7 +313,7 @@ class ComponentValidator {
     public function validateCPUCountLimit($configUuid, $motherboardSpecs) {
         try {
             // Get existing CPUs in configuration (JSON-based storage)
-            require_once __DIR__ . '/ServerConfiguration.php';
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $currentCPUCount = 0;
@@ -846,7 +846,7 @@ class ComponentValidator {
      */
     public function validateMemorySlotAvailability($configUuid, $motherboardSpecs) {
         try {
-            require_once __DIR__ . '/ServerConfiguration.php';
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $usedSlots = 0;
@@ -885,7 +885,7 @@ class ComponentValidator {
     /**
      * Validate chassis bay storage
      */
-    private function validateChassisBayStorage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
+    public function validateChassisBayStorage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
         // Validate storage device can fit in chassis bays
         $chassisBays = $storageRequirements['chassis_bays'] ?? [];
 
@@ -916,7 +916,7 @@ class ComponentValidator {
     /**
      * Validate motherboard M.2 storage
      */
-    private function validateMotherboardM2Storage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
+    public function validateMotherboardM2Storage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
         $m2Slots = $storageRequirements['motherboard_m2_slots'] ?? 0;
 
         if ($m2Slots <= 0) {
@@ -930,7 +930,7 @@ class ComponentValidator {
     /**
      * Validate motherboard U.2 storage
      */
-    private function validateMotherboardU2Storage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
+    public function validateMotherboardU2Storage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
         $u2Slots = $storageRequirements['motherboard_u2_slots'] ?? 0;
 
         if ($u2Slots <= 0) {
@@ -944,7 +944,7 @@ class ComponentValidator {
     /**
      * Validate generic storage
      */
-    private function validateGenericStorage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
+    public function validateGenericStorage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
         // Generic validation - check if any connection path is available
         $hasPath = !empty($storageRequirements['chassis_bays']) ||
                    ($storageRequirements['motherboard_m2_slots'] ?? 0) > 0 ||
@@ -1084,7 +1084,7 @@ class ComponentValidator {
     public function countUsedMemorySlots($configUuid) {
         try {
             // Get RAM modules from configuration (JSON-based storage)
-            require_once __DIR__ . '/ServerConfiguration.php';
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $totalRamModules = 0;
@@ -1111,7 +1111,7 @@ class ComponentValidator {
     public function countUsedStorageInterfaces($configUuid, $motherboardSpecs) {
         try {
             // Get storage components from configuration (JSON-based storage)
-            require_once __DIR__ . '/ServerConfiguration.php';
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $usedInterfaces = [
@@ -1148,7 +1148,7 @@ class ComponentValidator {
     public function countUsedPCIeSlots($configUuid, $motherboardSpecs) {
         try {
             // Get PCIe components from configuration (JSON-based storage)
-            require_once __DIR__ . '/ServerConfiguration.php';
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $usedSlots = [];

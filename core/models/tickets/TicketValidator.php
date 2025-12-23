@@ -599,7 +599,7 @@ class TicketValidator
     private function roleExists($roleId)
     {
         try {
-            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM acl_roles WHERE id = ?");
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM roles WHERE id = ?");
             $stmt->execute([$roleId]);
             return $stmt->fetchColumn() > 0;
         } catch (Exception $e) {
