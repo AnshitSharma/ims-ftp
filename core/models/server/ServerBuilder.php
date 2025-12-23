@@ -2134,13 +2134,13 @@ class ServerBuilder {
 
             // Task 5: Memory slot limit validation
             $slotCheck = $compatibility->validateMemorySlotAvailability($configUuid, $motherboardSpecs);
-            if (!$slotCheck['can_add']) {
+            if (!$slotCheck['available']) {
                 return [
                     'success' => false,
                     'message' => $slotCheck['error'],
                     'details' => [
                         'used_slots' => $slotCheck['used_slots'],
-                        'max_slots' => $slotCheck['max_slots']
+                        'total_slots' => $slotCheck['total_slots']
                     ]
                 ];
             }
