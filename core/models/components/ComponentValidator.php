@@ -960,14 +960,47 @@ class ComponentValidator {
 
     /**
      * Validate chassis bay capacity
+     * Checks if chassis has sufficient bays for required storage drives
+     * Supports both simple count comparison and detailed bay type validation
+     *
+     * @param array $chassisBays Bay configuration from chassis specs
+     * @param array|int $requiredBays Required bays by type or simple count
+     * @return array Compatibility result with 'compatible', 'issues', 'recommendations'
      */
-    private function validateChassisBayCapacity($chassisBays, $requiredBays) {
+    public function validateChassisBayCapacity($chassisBays, $requiredBays) {
+        // If requiredBays is an array with counts by type, validate by type
+        if (is_array($requiredBays)) {
+            $totalRequired = array_sum($requiredBays);
+        } else {
+            // Legacy support for simple integer count
+            $totalRequired = (int)$requiredBays;
+        }
+
         $totalBays = 0;
         foreach ($chassisBays as $bay) {
             $totalBays += $bay['count'] ?? 0;
         }
 
-        return $totalBays >= $requiredBays;
+        // Check if total capacity is sufficient
+        if ($totalBays < $totalRequired) {
+            return [
+                'compatible' => false,
+                'issues' => [
+                    "Insufficient chassis bays: {$totalRequired} drives required, but only {$totalBays} bays available"
+                ],
+                'recommendations' => [
+                    "Choose chassis with more bays or reduce storage drive count",
+                    "Current requirement: {$totalRequired} bays, chassis capacity: {$totalBays} bays"
+                ]
+            ];
+        }
+
+        // All checks passed
+        return [
+            'compatible' => true,
+            'issues' => [],
+            'recommendations' => []
+        ];
     }
 
     /**

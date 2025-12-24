@@ -5010,6 +5010,46 @@ class ComponentCompatibility {
         ];
     }
 
+    /**
+     * Calculate required bay capacity from storage components
+     * Only counts traditional bay storage (2.5" and 3.5"), excludes M.2/U.2/NVMe
+     *
+     * @param array $storageComponents Array of storage components
+     * @return array Array with bay counts by type ['2.5_inch' => count, '3.5_inch' => count]
+     */
+    private function calculateRequiredBays($storageComponents) {
+        $requiredBays = [
+            '2.5_inch' => 0,
+            '3.5_inch' => 0
+        ];
+
+        if (empty($storageComponents)) {
+            return $requiredBays;
+        }
+
+        foreach ($storageComponents as $storage) {
+            // Get the storage data
+            $storageData = $storage['data'] ?? [];
+
+            // Extract form factor using the data extractor
+            $formFactor = $this->dataExtractor->extractStorageFormFactorFromSpecs($storageData);
+
+            // Skip M.2, U.2, and unknown - these don't use traditional bays
+            if ($formFactor === 'M.2' || strpos($formFactor, 'U.2') !== false || $formFactor === 'unknown') {
+                continue;
+            }
+
+            // Count drives by form factor
+            if ($formFactor === '2.5_inch') {
+                $requiredBays['2.5_inch']++;
+            } elseif ($formFactor === '3.5_inch') {
+                $requiredBays['3.5_inch']++;
+            }
+        }
+
+        return $requiredBays;
+    }
+
 
 }
 ?>

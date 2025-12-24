@@ -1,0 +1,15 @@
+# Ignore all Markdown files
+*.md
+
+# Environment files
+.env
+
+# Error logs
+logs/*.log
+
+# IDE settings
+.vscode/
+
+# Claude/Agent metadata
+.claude/
+.claude-memory.md
