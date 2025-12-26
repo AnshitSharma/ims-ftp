@@ -1377,6 +1377,84 @@ class StorageConnectionValidator {
     }
 
     /**
+     * Validate caddy form factor against existing chassis bay configuration
+     * Called when adding a caddy to ensure it matches chassis bay sizes
+     * STRICT MATCHING: Caddy size must exactly match chassis bay type
+     *
+     * @param string $caddyUuid The UUID of the caddy being added
+     * @param array $existingComponents Existing components in the configuration
+     * @return array ['valid' => bool, 'errors' => array]
+     */
+    public function validateCaddyAgainstExistingConfig($caddyUuid, $existingComponents) {
+        $errors = [];
+
+        // Get caddy specifications
+        $caddySpecs = $this->componentDataService->getCaddyByUuid($caddyUuid);
+        if (!$caddySpecs) {
+            return [
+                'valid' => false,
+                'errors' => [[
+                    'type' => 'caddy_not_found',
+                    'message' => 'Caddy specifications not found in JSON',
+                    'caddy_uuid' => $caddyUuid
+                ]]
+            ];
+        }
+
+        // Extract caddy size from compatibility.size or type field
+        $caddySize = $caddySpecs['compatibility']['size'] ?? $caddySpecs['type'] ?? '';
+        $normalizedCaddySize = $this->normalizeFormFactor($caddySize);
+
+        // If no chassis in config, allow caddy (will be validated when chassis is added)
+        if (empty($existingComponents['chassis']) || !is_array($existingComponents['chassis'])) {
+            return ['valid' => true, 'errors' => []];
+        }
+
+        // Validate against each chassis in the configuration
+        foreach ($existingComponents['chassis'] as $chassis) {
+            $chassisUuid = $chassis['component_uuid'] ?? null;
+            if (!$chassisUuid) continue;
+
+            $chassisSpecs = $this->componentDataService->getChassisSpecifications($chassisUuid);
+            if (!$chassisSpecs) continue;
+
+            // Extract chassis bay configuration
+            $bayConfig = $chassisSpecs['drive_bays']['bay_configuration'] ?? [];
+            $hasMatchingBay = false;
+            $availableBaySizes = [];
+
+            foreach ($bayConfig as $bay) {
+                $bayType = $bay['bay_type'] ?? '';
+                $normalizedBayType = $this->normalizeFormFactor($bayType);
+                $availableBaySizes[] = $normalizedBayType;
+
+                // STRICT matching: caddy size must exactly match bay type
+                if ($normalizedCaddySize === $normalizedBayType) {
+                    $hasMatchingBay = true;
+                    break;
+                }
+            }
+
+            // Generate error if caddy size doesn't match any available bay type
+            if (!$hasMatchingBay && ($normalizedCaddySize === '2.5-inch' || $normalizedCaddySize === '3.5-inch')) {
+                $errors[] = [
+                    'type' => 'caddy_chassis_mismatch',
+                    'message' => "Cannot add $normalizedCaddySize caddy - chassis only has " . implode(', ', array_unique($availableBaySizes)) . " bays",
+                    'caddy_size' => $normalizedCaddySize,
+                    'chassis_uuid' => $chassisUuid,
+                    'available_bay_sizes' => array_unique($availableBaySizes),
+                    'resolution' => "Use a caddy matching chassis bay size OR remove current chassis and add one with $normalizedCaddySize bays"
+                ];
+            }
+        }
+
+        return [
+            'valid' => empty($errors),
+            'errors' => $errors
+        ];
+    }
+
+    /**
      * PHASE 2: Count total M.2 slots available in configuration
      * Includes: motherboard direct M.2 slots + NVMe adapter M.2 slots
      *

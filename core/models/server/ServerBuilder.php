@@ -795,8 +795,13 @@ class ServerBuilder {
 
             switch ($componentType) {
                 case 'chassis':
-                    // Chassis is tracked in server_configuration_components, not in main table
-                    // No direct column update needed
+                    // Chassis is stored in chassis_uuid column (similar to motherboard)
+                    if ($action === 'add') {
+                        $updateFields[] = "chassis_uuid = ?";
+                        $updateValues[] = $componentUuid;
+                    } elseif ($action === 'remove') {
+                        $updateFields[] = "chassis_uuid = NULL";
+                    }
                     break;
 
                 case 'cpu':

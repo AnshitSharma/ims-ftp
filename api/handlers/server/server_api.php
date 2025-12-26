@@ -593,6 +593,9 @@ function handleAddComponent($serverBuilder, $user) {
                 case 'sfp':
                     $compatibilityResult = $compatibility->checkSFPDecentralizedCompatibility($newComponent, $existingComponentsData);
                     break;
+                case 'caddy':
+                    $compatibilityResult = $compatibility->checkCaddyDecentralizedCompatibility($newComponent, $existingComponentsData);
+                    break;
                 default:
                     $compatibilityResult = ['compatible' => true, 'warnings' => [], 'recommendations' => []];
             }
@@ -656,23 +659,35 @@ function handleAddComponent($serverBuilder, $user) {
         $existingComponents = $config ? extractComponentsFromConfigData($config->getData()) : [];
 
         if ($componentType === 'pciecard') {
-            // Validate adding riser card
-            $riserValidation = $componentValidator->validateAddRiserCard(
-                ['uuid' => $componentUuid, 'type' => 'pcie_card'],
-                $existingComponents
-            );
+            // First check if this is actually a Riser Card (not NVMe Adaptor or other PCIe device)
+            require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+            $componentDataService = ComponentDataService::getInstance();
+            $pcieCardSpecs = $componentDataService->getComponentSpecifications('pciecard', $componentUuid, $componentDetails ?? []);
 
-            if (!$riserValidation['valid']) {
-                error_log("Riser card validation failed: " . $riserValidation['error']);
-                send_json_response(0, 1, 400,
-                    "Cannot add riser card due to compatibility issues",
-                    [
-                        'component_type' => $componentType,
-                        'component_uuid' => $componentUuid,
-                        'validation_status' => 'blocked',
-                        'error' => $riserValidation['error']
-                    ]
+            $pcieComponentSubtype = $pcieCardSpecs['component_subtype'] ?? null;
+            $isActualRiserCard = ($pcieComponentSubtype === 'Riser Card') || (stripos($componentUuid, 'riser-') === 0);
+
+            // Only validate riser card ordering for actual riser cards
+            if ($isActualRiserCard) {
+                $riserValidation = $componentValidator->validateAddRiserCard(
+                    ['uuid' => $componentUuid, 'type' => 'pcie_card'],
+                    $existingComponents
                 );
+
+                if (!$riserValidation['valid']) {
+                    error_log("Riser card validation failed: " . $riserValidation['error']);
+                    send_json_response(0, 1, 400,
+                        "Cannot add riser card due to compatibility issues",
+                        [
+                            'component_type' => $componentType,
+                            'component_uuid' => $componentUuid,
+                            'validation_status' => 'blocked',
+                            'error' => $riserValidation['error']
+                        ]
+                    );
+                }
+            } else {
+                error_log("PCIe card $componentUuid is not a riser card (subtype: " . ($pcieComponentSubtype ?? 'NULL') . ") - skipping riser validation");
             }
         }
 

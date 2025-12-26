@@ -4926,6 +4926,180 @@ class ComponentCompatibility {
         ];
     }
 
+    /**
+     * Check caddy compatibility when adding to configuration
+     * Validates caddy form factor matches chassis bay sizes
+     * STRICT MATCHING: Caddy size must exactly match chassis bay type
+     *
+     * @param array $caddyComponent The caddy being added ['uuid' => string]
+     * @param array $existingComponents Existing components in configuration
+     * @return array Compatibility result with compatible flag, issues, warnings, recommendations
+     */
+    public function checkCaddyDecentralizedCompatibility($caddyComponent, $existingComponents) {
+        $result = [
+            'compatible' => true,
+            'issues' => [],
+            'warnings' => [],
+            'recommendations' => [],
+            'details' => [],
+            'score_breakdown' => []
+        ];
+
+        // If no existing components, caddy is compatible
+        if (empty($existingComponents)) {
+            $result['details'][] = 'No existing components - caddy compatible';
+            $result['compatibility_summary'] = 'Compatible - no constraints found';
+            $result['score_breakdown'] = [
+                'base_score' => 100,
+                'final_score' => 100,
+                'factors' => ['No existing components to validate against']
+            ];
+            return $result;
+        }
+
+        // Get caddy UUID
+        $caddyUuid = $caddyComponent['uuid'] ?? null;
+        if (!$caddyUuid) {
+            $result['compatible'] = false;
+            $result['issues'][] = 'Caddy UUID not provided';
+            $result['compatibility_summary'] = 'INCOMPATIBLE: Missing caddy UUID';
+            return $result;
+        }
+
+        // Get caddy specifications using loadComponentFromJSON
+        $caddyResult = $this->dataLoader->loadComponentFromJSON('caddy', $caddyUuid);
+        if (!$caddyResult['found'] || !$caddyResult['data']) {
+            $result['compatible'] = false;
+            $result['issues'][] = 'Caddy specifications not found in JSON';
+            $result['compatibility_summary'] = 'INCOMPATIBLE: Caddy JSON specifications missing';
+            $result['recommendations'][] = 'Verify caddy UUID exists in caddy_details.json';
+            $result['score_breakdown'] = [
+                'base_score' => 100,
+                'penalty_applied' => -100,
+                'reason' => 'Caddy specifications not found',
+                'final_score' => 0
+            ];
+            return $result;
+        }
+        $caddySpecs = $caddyResult['data'];
+
+        // Extract caddy size from compatibility.size or type field
+        $caddySize = $caddySpecs['compatibility']['size'] ?? $caddySpecs['type'] ?? '';
+        $normalizedCaddySize = $this->normalizeFormFactor($caddySize);
+
+        $result['details'][] = "Caddy size: $normalizedCaddySize";
+
+        // Find chassis in existing components
+        $existingChassis = [];
+        foreach ($existingComponents as $comp) {
+            if (($comp['type'] ?? '') === 'chassis') {
+                $existingChassis[] = $comp;
+            }
+        }
+
+        // If no chassis in config, caddy is compatible (will be validated when chassis is added)
+        if (empty($existingChassis)) {
+            $result['details'][] = 'No chassis in configuration - caddy will be validated when chassis is added';
+            $result['compatibility_summary'] = 'Compatible - no chassis constraints yet';
+            $result['score_breakdown'] = [
+                'base_score' => 100,
+                'final_score' => 100,
+                'factors' => ['No chassis to validate against - deferred validation']
+            ];
+            return $result;
+        }
+
+        // Validate caddy size against each chassis bay configuration
+        foreach ($existingChassis as $chassis) {
+            $chassisUuid = $chassis['uuid'] ?? null;
+            if (!$chassisUuid) continue;
+
+            $chassisSpecs = $this->dataLoader->loadChassisSpecs($chassisUuid);
+            if (!$chassisSpecs) {
+                $result['warnings'][] = "Could not load specifications for chassis $chassisUuid";
+                continue;
+            }
+
+            // Extract chassis bay configuration
+            $bayConfig = $chassisSpecs['drive_bays']['bay_configuration'] ?? [];
+            $hasMatchingBay = false;
+            $availableBaySizes = [];
+
+            foreach ($bayConfig as $bay) {
+                $bayType = $bay['bay_type'] ?? '';
+                $normalizedBayType = $this->normalizeFormFactor($bayType);
+                $availableBaySizes[] = $normalizedBayType;
+
+                // STRICT matching: caddy size must exactly match bay type
+                if ($normalizedCaddySize === $normalizedBayType) {
+                    $hasMatchingBay = true;
+                    break;
+                }
+            }
+
+            // Generate error if caddy size doesn't match any available bay type
+            if (!$hasMatchingBay && ($normalizedCaddySize === '2.5-inch' || $normalizedCaddySize === '3.5-inch')) {
+                $result['compatible'] = false;
+                $availableSizes = implode(', ', array_unique($availableBaySizes));
+                $result['issues'][] = "Cannot add $normalizedCaddySize caddy - chassis only has $availableSizes bays (strict matching required)";
+                $result['details'][] = [
+                    'type' => 'caddy_chassis_mismatch',
+                    'caddy_size' => $normalizedCaddySize,
+                    'chassis_uuid' => $chassisUuid,
+                    'available_bay_sizes' => array_unique($availableBaySizes)
+                ];
+                $result['recommendations'][] = "Use a caddy matching chassis bay size ($availableSizes) OR remove current chassis";
+            } else if ($hasMatchingBay) {
+                $result['details'][] = "Caddy size $normalizedCaddySize matches chassis bay configuration";
+            }
+        }
+
+        // Set final summary
+        if ($result['compatible']) {
+            $result['compatibility_summary'] = "Caddy ($normalizedCaddySize) compatible with chassis bay configuration";
+            $result['score_breakdown'] = [
+                'base_score' => 100,
+                'final_score' => 100,
+                'factors' => ['Caddy size matches chassis bay size']
+            ];
+        } else {
+            $result['compatibility_summary'] = 'INCOMPATIBLE: Caddy size does not match chassis bay configuration';
+            $result['score_breakdown'] = [
+                'base_score' => 100,
+                'penalty_applied' => -100,
+                'reason' => 'Caddy form factor incompatible with chassis bay sizes',
+                'final_score' => 0,
+                'validation_status' => 'FAILED'
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Normalize form factor string to standard format (e.g., "2.5-inch", "3.5-inch")
+     * @param string $formFactor Raw form factor string
+     * @return string Normalized form factor
+     */
+    private function normalizeFormFactor($formFactor) {
+        $normalized = strtolower(trim($formFactor));
+
+        // Handle various 2.5" formats
+        if (strpos($normalized, '2.5') !== false) {
+            return '2.5-inch';
+        }
+
+        // Handle various 3.5" formats
+        if (strpos($normalized, '3.5') !== false) {
+            return '3.5-inch';
+        }
+
+        // Handle underscore format (e.g., "2.5_inch")
+        $normalized = str_replace('_', '-', $normalized);
+
+        return $normalized;
+    }
+
 
     /**
      * Check SFP-NIC compatibility
