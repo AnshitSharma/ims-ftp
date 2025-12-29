@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Dec 15, 2025 at 10:09 PM
+-- Generation Time: Dec 29, 2025 at 12:09 PM
 -- Server version: 10.6.22-MariaDB-cll-lve
 -- PHP Version: 8.3.15
 
@@ -174,9 +174,7 @@ INSERT INTO `auth_tokens` (`id`, `user_id`, `token`, `created_at`, `expires_at`,
 (387, 5, 'cf83b0857a11dc1022e7be491356568a8b791f7a991817052dcf0ad17f961962', '2025-11-12 19:47:37', '2025-11-19 19:47:37', '2025-11-12 20:03:06'),
 (388, 5, '24a884be7ca0904b19e735afad8315fcd1b7958af8e736927d36711f238ff76c', '2025-11-12 19:56:34', '2025-11-19 19:56:34', '2025-11-12 20:03:06'),
 (389, 5, '4d693be5b2428691a6a6e31697ef89312d812bba99413fa282b33e34b2caddc7', '2025-11-12 19:58:10', '2025-11-19 19:58:10', '2025-11-12 20:03:06'),
-(421, 38, 'e3af612e94665cc51d0ae8dff407815c20e68b58df0a0dd2a18ed4dcf3862a4c', '2025-12-12 21:30:29', '2025-12-19 21:30:29', '2025-12-15 15:18:09'),
-(422, 38, 'e3df30f3ae29b2be4a2a54f8a1f9ca306de6ebb26bfd42d90004dff6196de8e9', '2025-12-14 09:21:31', '2025-12-21 09:21:31', '2025-12-15 15:18:09'),
-(423, 38, 'a079cac512744c32d40cbd01c7424b2bcbe999d7474462ce4eb07568734eaf6b', '2025-12-15 14:09:54', '2025-12-22 14:09:54', '2025-12-15 15:18:09');
+(447, 38, 'bc09313103286f49d28b708cb3fbf6f6c36a88bebaed7baa52d9fcfb7aef6df4', '2025-12-29 10:47:25', '2026-01-05 10:47:25', '2025-12-29 12:08:20');
 
 -- --------------------------------------------------------
 
@@ -206,9 +204,9 @@ CREATE TABLE `caddyinventory` (
 --
 
 INSERT INTO `caddyinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`, `Location`, `RackPosition`, `PurchaseDate`, `InstallationDate`, `WarrantyEndDate`, `Flag`, `Notes`, `CreatedAt`, `UpdatedAt`) VALUES
-(1, '4a8a2c05-e993-4b00-acae-9f036617091c', 'CDY123456', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2023-05-12', '2025-11-06', '2026-05-12', 'Production', 'Dell 2.5\" SAS Drive Caddy', '2025-05-11 11:42:52', '2025-11-06 12:52:58'),
-(2, 'bcdce745-47ce-4deb-984d-8c3ba4b767ca', 'CDY789012', 1, NULL, 'Mumbai', NULL, '2022-03-10', NULL, '2025-03-10', 'Damaged', 'HP 3.5\" SATA Drive Caddy - Damaged locking mechanism', '2025-05-11 11:42:52', '2025-11-06 09:43:06'),
-(3, 'bf3192bf-810e-47ea-81c6-946533aad2ca', 'CDY456789', 1, NULL, '', NULL, '2024-03-01', NULL, '2027-03-01', 'New', 'SuperMicro 3.5\" SAS/SATA Drive Tray', '2025-05-11 11:42:52', '2025-11-06 12:47:21'),
+(1, '4a8a2c05-e993-4b00-acae-9f036617091c', 'CDY123456', 1, NULL, '', NULL, '2023-05-12', NULL, '2026-05-12', 'Production', 'Dell 2.5\" SAS Drive Caddy', '2025-05-11 11:42:52', '2025-12-25 15:40:01'),
+(2, 'bcdce745-47ce-4deb-984d-8c3ba4b767ca', 'CDY789012', 1, NULL, '', NULL, '2022-03-10', NULL, '2025-03-10', 'Damaged', 'HP 3.5\" SATA Drive Caddy - Damaged locking mechanism', '2025-05-11 11:42:52', '2025-12-25 15:31:52'),
+(3, 'bf3192bf-810e-47ea-81c6-946533aad2ca', 'CDY456789', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-03-01', '2025-12-25', '2027-03-01', 'New', 'SuperMicro 3.5\" SAS/SATA Drive Tray', '2025-05-11 11:42:52', '2025-12-25 19:06:04'),
 (4, '505c1ec9-35cc-4da9-b555-b7d15c0d9d06', 'CDY789082', 1, NULL, 'Mumbai', NULL, '2025-07-29', NULL, '2025-07-17', 'Critical', 'Type: 3.5 Inch\n\nAdditional Notes: new caddy', '2025-07-27 14:11:44', '2025-11-06 10:48:32'),
 (5, 'a8d6f3c1-4b2e-4c89-9d13-72f5b9d0e6f7', 'CAD999999', 1, NULL, 'Mumbai', NULL, '2025-08-30', NULL, '2028-10-30', 'Backup', 'Caddy - Universal 2.5-inch HDD/SSD Caddy', '2025-08-30 12:14:12', '2025-11-06 09:43:14'),
 (6, 'd7f1a3b5-8e4c-4f9d-9a2b-3c5d6e7f8a9b', 'CDY11111', 1, NULL, 'Mumbai', NULL, '2024-01-31', NULL, '2026-01-31', 'Backup', '2.5 inch caddy ', '2025-10-15 08:58:45', '2025-11-06 10:48:32'),
@@ -247,12 +245,12 @@ CREATE TABLE `chassisinventory` (
 --
 
 INSERT INTO `chassisinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`, `Location`, `RackPosition`, `PurchaseDate`, `InstallationDate`, `WarrantyEndDate`, `Flag`, `Notes`, `CreatedAt`, `UpdatedAt`) VALUES
-(1, 'sm-sc846be1c-r90jbod-001', 'SUP-SC846B-001234', 1, NULL, '', NULL, '2024-03-15', NULL, '2027-03-15', 'Available', '{\"brand\": \"Supermicro\", \"model\": \"SC846BE1C-R90JBOD\", \"series\": \"SuperChassis 4U\", \"form_factor\": \"4U\", \"chassis_type\": \"Storage Server\", \"drive_bays\": 24, \"backplane_interface\": \"SAS3\"}', '2025-09-17 05:46:06', '2025-11-06 12:47:21'),
+(1, 'sm-sc846be1c-r90jbod-001', 'SUP-SC846B-001234', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-03-15', '2025-12-24', '2027-03-15', 'Available', '{\"brand\": \"Supermicro\", \"model\": \"SC846BE1C-R90JBOD\", \"series\": \"SuperChassis 4U\", \"form_factor\": \"4U\", \"chassis_type\": \"Storage Server\", \"drive_bays\": 24, \"backplane_interface\": \"SAS3\"}', '2025-09-17 05:46:06', '2025-12-24 16:15:49'),
 (2, 'dell-r740-chassis-001', 'DEL-R740CH-001237', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2024-01-10', '2025-11-06', '2027-01-10', 'In Use', '{\"brand\": \"Dell\", \"model\": \"PowerEdge R740\", \"series\": \"PowerEdge R-Series\", \"form_factor\": \"2U\", \"chassis_type\": \"Rack Server\", \"drive_bays\": 16, \"backplane_interface\": \"SAS3\"}', '2025-09-17 05:46:06', '2025-11-06 12:52:49'),
 (3, 'hpe-dl380-gen10-001', 'HPE-DL380G-001240', 1, NULL, '', NULL, '2024-06-01', NULL, '2027-06-01', 'Ready', '{\"brand\": \"HPE\", \"model\": \"ProLiant DL380 Gen10\", \"series\": \"ProLiant DL-Series\", \"form_factor\": \"2U\", \"chassis_type\": \"Rack Server\", \"drive_bays\": 12, \"backplane_interface\": \"SAS3\"}', '2025-09-17 05:46:06', '2025-10-27 20:04:24'),
 (4, '6fa0bd31-bb99-4d1c-9191-e3cd04a85da4', 'after-fix-chassis', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-20', 'Backup', 'chassis', '2025-10-25 07:59:16', '2025-10-25 07:59:16'),
-(5, 'abaa2c58-c08c-46f0-abcf-2242400e907c', NULL, 1, 'null', NULL, 'null', NULL, NULL, NULL, 'Backup', 'chassis', '2025-10-25 21:32:29', '2025-10-25 21:32:29'),
-(6, 'f0bb3152-1157-40d4-9547-5a1654cd29dd', NULL, 1, 'null', NULL, 'null', NULL, NULL, NULL, 'Backup', 'chassis', '2025-10-25 21:32:29', '2025-10-25 21:32:29'),
+(5, 'abaa2c58-c08c-46f0-abcf-2242400e907c', NULL, 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', NULL, '2025-12-25', NULL, 'Backup', 'chassis', '2025-10-25 21:32:29', '2025-12-25 18:59:26'),
+(6, 'f0bb3152-1157-40d4-9547-5a1654cd29dd', NULL, 1, NULL, '', '', NULL, '2025-12-24', NULL, 'Backup', 'chassis', '2025-10-25 21:32:29', '2025-12-24 16:13:38'),
 (7, '291647ea-b780-47e6-a8b9-3086f814129e', 'Shubham-Test-Server', 2, 'null', 'Indore', 'null', '2025-10-26', NULL, '0000-00-00', 'Backup', 'chassis', '2025-10-26 05:37:02', '2025-10-26 05:37:02'),
 (8, '037bd515-19a7-47ab-8832-40fe388f65aa', 'Shubham-Test-Server', 2, 'null', 'Indore', 'null', '2025-10-26', NULL, '0000-00-00', 'Backup', 'chassis', '2025-10-26 05:37:02', '2025-10-26 05:37:02'),
 (9, 'sm-sc113tq-r700cb-001', 'Shubham-Test-Server-Full-Done', 2, 'null', 'Indore', 'null', '2025-10-26', NULL, '2025-10-01', 'Backup', 'chassis', '2025-10-26 06:01:55', '2025-10-26 06:01:55');
@@ -377,33 +375,6 @@ CREATE TABLE `component_specifications` (
 -- --------------------------------------------------------
 
 --
--- Table structure for table `component_usage_tracking`
---
-
-CREATE TABLE `component_usage_tracking` (
-  `id` int(11) NOT NULL,
-  `component_uuid` varchar(36) NOT NULL,
-  `component_type` varchar(20) NOT NULL,
-  `config_uuid` varchar(36) DEFAULT NULL COMMENT 'NULL if not assigned to configuration',
-  `deployment_uuid` varchar(36) DEFAULT NULL COMMENT 'NULL if not deployed',
-  `usage_status` tinyint(1) NOT NULL DEFAULT 0 COMMENT '0=Available, 1=Reserved, 2=In Use, 3=Maintenance, 4=Failed, 5=Retired',
-  `assigned_at` timestamp NULL DEFAULT NULL,
-  `released_at` timestamp NULL DEFAULT NULL,
-  `assigned_by` int(11) DEFAULT NULL,
-  `released_by` int(11) DEFAULT NULL,
-  `usage_purpose` varchar(255) DEFAULT NULL,
-  `expected_duration` int(11) DEFAULT NULL COMMENT 'Expected usage duration in days',
-  `actual_duration` int(11) DEFAULT NULL COMMENT 'Actual usage duration in days',
-  `performance_notes` text DEFAULT NULL,
-  `failure_reason` text DEFAULT NULL,
-  `maintenance_required` tinyint(1) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `cpuinventory`
 --
 
@@ -431,13 +402,18 @@ CREATE TABLE `cpuinventory` (
 INSERT INTO `cpuinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`, `Location`, `RackPosition`, `PurchaseDate`, `InstallationDate`, `WarrantyEndDate`, `Flag`, `Notes`, `CreatedAt`, `UpdatedAt`) VALUES
 (1, 'd93a4790-959d-4cd4-8e95-bb1b9c85b9fd', 'CPU123456', 1, NULL, 'Datacenter North', 'Rack A3-12', '2023-05-15', '2023-06-01', '2026-05-15', 'Production', 'Intel Xeon 8-core 3.2GHz', '2025-05-11 11:42:52', '2025-10-15 08:32:47'),
 (2, '41849749-8d19-4366-b41a-afda6fa46b58', 'CPU789012', 1, NULL, 'Warehouse East', NULL, '2024-01-10', NULL, '2027-01-10', 'Backup', 'AMD EPYC 16-core 2.9GHz', '2025-05-11 11:42:52', '2025-10-15 08:40:32'),
-(24, '545e143b-57b3-419e-86e5-1df6f7aa8fd3', 'CPU999999', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2025-08-29', '2025-11-07', '2030-12-20', 'Backup', 'Cpu - Platinum 8480+', '2025-08-29 13:59:05', '2025-11-07 13:18:57'),
+(24, '545e143b-57b3-419e-86e5-1df6f7aa8fd3', 'CPU999999', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2025-08-29', '2025-12-23', '2030-12-20', 'Backup', 'Cpu - Platinum 8480+', '2025-08-29 13:59:05', '2025-12-23 12:20:09'),
 (26, '545e143b-57b3-419e-86e5-1df6f7aa8fxx', 'CPU111111', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2024-01-31', '2025-11-07', '2026-01-31', 'Backup', 'Intel 8470', '2025-09-04 23:33:55', '2025-11-07 11:47:31'),
-(27, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU000000', 2, 'd304360a-ba07-4949-b578-57d4cccbd371', NULL, NULL, '2024-01-31', '2025-11-21', '2026-01-31', 'Backup', 'AMD EPYC 9374F', '2025-09-04 23:41:35', '2025-11-21 20:30:07'),
+(27, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU000000', 1, NULL, NULL, NULL, '2024-01-31', NULL, '2026-01-31', 'Backup', 'AMD EPYC 9374F', '2025-09-04 23:41:35', '2025-12-16 16:17:13'),
 (28, '80aeb1cd-dd2d-4f86-86b7-04237b56376f', 'Shubham-Test-Server', 2, 'null', 'Indore', 'null', '2025-10-24', NULL, '2025-11-12', 'Backup', 'TESt - Platinum 8470', '2025-10-24 17:38:46', '2025-10-24 17:38:46'),
 (30, '067737c6-4786-487e-9127-c75fc030c408', 'after-fix-cpu', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-21', 'Backup', 'Test - Platinum 8480+', '2025-10-25 07:48:09', '2025-10-25 07:48:09'),
-(36, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU1009854', 2, '4841e506-6e58-46d2-ab77-6fa91996561c', '', '', '2025-11-06', '2025-11-13', '2028-11-08', 'null', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-11-06 13:58:32', '2025-11-13 13:15:31'),
-(38, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'AMD13241551', 2, '4841e506-6e58-46d2-ab77-6fa91996561c', '', '', '2025-11-07', '2025-11-13', '2028-10-16', 'null', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-11-07 07:54:55', '2025-11-13 13:15:46');
+(36, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'CPU1009854', 1, NULL, '', NULL, '2025-11-06', NULL, '2028-11-08', 'null', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-11-06 13:58:32', '2025-12-16 16:17:13'),
+(38, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'AMD13241551', 1, NULL, '', NULL, '2025-11-07', NULL, '2028-10-16', 'null', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-11-07 07:54:55', '2025-12-16 16:17:13'),
+(48, '545e143b-57b3-419e-86e5-1df6f7aa8fd3', '6261123645', 1, NULL, '', NULL, '2025-12-16', NULL, '2008-12-12', 'Backup', 'Brand: Intel, Series: Xeon Scalable, Model: Platinum 8480+', '2025-12-16 12:32:41', '2025-12-19 23:17:22'),
+(50, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '12234567890', 1, NULL, 'Indore', NULL, '2025-12-26', NULL, '2025-12-19', 'Testing', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F\r\n\r\nAdditional Notes: TEst', '2025-12-16 12:46:18', '2025-12-16 16:17:13'),
+(52, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '1234567890', 1, '', 'INdote', '', '2025-12-17', '2025-12-21', '2025-12-27', 'Critical', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F\r\n\r\nAdditional Notes: TEst', '2025-12-16 12:48:19', '2025-12-19 14:48:45'),
+(54, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'ewvqev', 1, NULL, 'remote', NULL, '0000-00-00', NULL, '0000-00-00', 'Maintenance', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-12-16 12:48:52', '2025-12-16 16:17:13'),
+(58, 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', 'cpu-2533-231-543cd-432g32g7h', 1, '', 'Noida', 'Rack B9', '2025-12-19', '2025-12-23', '2028-10-24', 'Production', 'Brand: AMD, Series: EPYC, Model: EPYC 9374F', '2025-12-19 14:51:50', '2025-12-19 14:54:19');
 
 -- --------------------------------------------------------
 
@@ -475,7 +451,7 @@ INSERT INTO `hbacardinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerU
 (22, 'hba-9500-8i-001-uvwx4567', 'BC9500-8I-002', 1, NULL, 'Datacenter C, Rack B2', NULL, '2024-06-18', NULL, '2027-06-18', NULL, 'Broadcom HBA 9500-8i Tri-Mode, 8-port, PCIe 4.0 x8, SAS/SATA/NVMe', '2025-10-22 06:27:09', '2025-11-06 10:51:52'),
 (23, 'hba-9300-16i-001-yzab8901', 'BC9300-16I-004', 1, NULL, 'Datacenter A, Rack C1', 'Storage Unit 7', '2023-11-22', NULL, '2026-11-22', NULL, 'Broadcom HBA 9300-16i, 16-port internal, PCIe 3.0 x8, 12Gb/s SAS', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
 (24, 'hba-9300-8i-001-cdef2345', 'BC9300-8I-005', 1, NULL, 'Datacenter B, Rack B3', 'Server Bay 2', '2023-12-05', NULL, '2026-12-05', NULL, 'Broadcom HBA 9300-8i, 8-port internal, PCIe 3.0 x8, 12Gb/s SAS', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
-(25, 'hba-9300-16e-001-ghij6789', 'BC9300-16E-002', 0, NULL, 'Warehouse A', 'Bin 45', '2023-09-14', NULL, '2026-09-14', 'RMA', 'Broadcom HBA 9300-16e, 16-port external - Failed, awaiting RMA', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
+(25, 'hba-9300-16e-001-ghij6789', 'BC9300-16E-002', 0, '', 'Warehouse A', 'Bin 45', '2023-09-14', '2025-12-24', '2026-09-14', 'RMA', 'Broadcom HBA 9300-16e, 16-port external - Failed, awaiting RMA', '2025-10-22 06:27:09', '2025-12-19 14:54:46'),
 (26, 'hba-9300-8e-001-klmn0123', 'BC9300-8E-006', 1, NULL, 'Datacenter C, Rack A2', 'Storage Unit 11', '2023-10-30', NULL, '2026-10-30', NULL, 'Broadcom HBA 9300-8e, 8-port external, PCIe 3.0 x8, 12Gb/s SAS', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
 (27, 'smarthba-2100-8i-001-opqr4567', 'MC2100-8I-001', 1, NULL, 'Datacenter A, Rack D2', 'Server Bay 6', '2024-02-28', NULL, '2027-02-28', NULL, 'Microchip SmartHBA 2100-8i, 8-port internal, PCIe 3.0 x8, SAS/SATA', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
 (28, 'smarthba-2100-4i-001-stuv8901', 'MC2100-4I-003', 1, NULL, 'Datacenter B, Rack C1', 'Shelf 5', '2024-03-15', NULL, '2027-03-15', NULL, 'Microchip SmartHBA 2100-4i, 4-port internal, PCIe 3.0 x8, SAS/SATA', '2025-10-22 06:27:09', '2025-10-22 06:27:09'),
@@ -622,21 +598,6 @@ INSERT INTO `inventory_log` (`id`, `user_id`, `component_type`, `component_id`, 
 -- --------------------------------------------------------
 
 --
--- Table structure for table `jwt_blacklist`
---
-
-CREATE TABLE `jwt_blacklist` (
-  `id` int(11) NOT NULL,
-  `jti` varchar(255) NOT NULL,
-  `token_hash` varchar(64) NOT NULL,
-  `expires_at` datetime NOT NULL,
-  `reason` varchar(100) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `motherboardinventory`
 --
 
@@ -667,13 +628,13 @@ INSERT INTO `motherboardinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `Ser
 (3, 'fa410f1c-ab12-46c5-add9-201fcc4985c7', 'MB345678', 1, NULL, 'Mumbai', NULL, '2024-02-10', NULL, '2027-02-10', 'Spare', 'MSI PRO B650-P WiFi', '2025-05-11 11:42:52', '2025-10-15 08:39:47'),
 (4, '18527f82-7f18-4148-9cb8-7449b1e3cadf', 'MOT2323882', 1, NULL, 'New Delhi India', NULL, '2025-07-29', NULL, '2029-11-15', 'Backup', 'Brand: GIGABYTE, Series: MZ, Model: MZ93-FS0\n\nAdditional Notes: gigabyte motherboard z790 godlike', '2025-07-27 14:08:05', '2025-10-15 08:40:32'),
 (5, '67c845a3-d827-47d1-8441-0639ef10391b', 'MB345688', 1, 'null', 'Banglore', 'Rack Z10', '2025-07-28', NULL, '2025-08-02', 'Backup', 'Brand: Supermicro, Series: X13, Model: X13DRi-N good motherboard\r\n\r\nAdditional Notes: gigabyte godlike z790 ', '2025-07-27 14:09:43', '2025-08-28 13:15:45'),
-(6, '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', 'MOT2323999', 1, NULL, 'Mumbai', NULL, '2025-08-30', NULL, '2029-10-30', 'Backup', 'Motherboard - X13DRi-N', '2025-08-30 09:39:49', '2025-11-06 10:48:33'),
-(9, '9d2e4f6a-7b8c-4d9e-8f1a-6c3d5e7f9a2b', 'SMC-1029U-001', 1, NULL, 'Mumbai', NULL, '2024-09-10', NULL, '2027-09-10', 'Available', 'Supermicro SYS-1029U-TR4, 1U form factor, LGA 4189 dual socket, Intel C741 chipset, 16x DDR5 slots (4TB max), Expansion: 2x PCIe 5.0 x16 Riser + 2x PCIe 5.0 x8 Riser (riser cards required), Storage: 4x SATA, 2x M.2 NVMe, 4x U.2 NVMe, Networking: Dual 10GbE SFP+, IPMI 2.0, 1200W redundant PSU recommended. Use cases: Dense Rack Deployment, Edge Computing, Virtualization Host', '2025-10-22 21:28:24', '2025-11-06 09:11:26'),
-(10, '5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b', 'DELL-R760-001', 1, NULL, 'Mumbai', NULL, '2024-10-05', NULL, '2027-10-05', 'Available', 'Dell PowerEdge R760, 2U Rack form factor, LGA 4189 dual socket, Intel C741 chipset, 32x DDR5 slots (8TB max), Expansion: 3x PCIe 5.0 x16 + 2x PCIe 5.0 x8 + 3x PCIe 5.0 x16 Riser (Dell Riser Config 1A/2A required), Storage: 8x SATA, 8x SAS (Broadcom 3916), 2x M.2 NVMe, 8x U.2 NVMe, Networking: Quad 10GbE RJ45 (Broadcom BCM57416), iDRAC 9 management, 1600W redundant PSU recommended. Use cases: Enterprise Data Center, Virtualization, Database Workloads, AI/ML Training', '2025-10-22 21:28:24', '2025-10-29 06:40:31'),
-(11, '3f8d6b2e-9a4c-7e1f-5b3d-8a2c6f4e9d7b', 'HPE-DL385-001', 1, NULL, 'Datacenter C, Rack A2', 'Server Bay 12', '2024-11-15', NULL, '2027-11-15', 'Available', 'HPE ProLiant DL385 Gen11, 2U Rack form factor, SP5 dual socket (AMD EPYC 9004), AMD SP5 Integrated chipset, 24x DDR5 slots (6TB max), Expansion: 4x PCIe 5.0 x16 Riser + 2x PCIe 5.0 x8 Riser (HPE PCIe Riser Kit 1/2/3 required), Storage: 8x SATA, 8x SAS (Broadcom 3916), 2x M.2 NVMe, 10x U.2 NVMe, Networking: Dual 25GbE SFP28 (Broadcom BCM57508), iLO 6 management, 1600W redundant PSU recommended. Use cases: Virtualization, Software Defined Storage, HPC Workloads, Database Consolidation', '2025-10-22 21:28:24', '2025-10-22 21:28:24'),
-(12, '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', NULL, 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', NULL, '2025-11-07', NULL, 'New Stock', 'Brand: Supermicro, Series: X13, Model: X13DRG-H, Form Factor: EATX, Chipset: Intel C741, Socket: LGA 4189 (2 sockets), Max Risers: 4, Slot Spacing: 20.32mm, Mounting Length: 280mm', '2025-10-23 09:11:47', '2025-11-07 07:49:44'),
-(14, '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', NULL, 2, 'b8754c5b-f071-4446-bae1-f0fd5afd640f', '', '', NULL, '2025-11-12', NULL, 'New Stock', 'Brand: GIGABYTE, Series: MZ, Model: MZ93-FS0, Form Factor: EATX, Chipset: Intel C741, Socket: LGA 4189 (2 sockets), Riser Slots Available', '2025-10-23 09:11:47', '2025-11-12 13:49:41'),
-(15, '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', NULL, 2, '4841e506-6e58-46d2-ab77-6fa91996561c', '', '', NULL, '2025-11-18', NULL, 'New Stock', 'Brand: ASRock Rack, Series: ROMED, Model: ROMED8-9001, Form Factor: EATX, Chipset: AMD SP5 Integrated, Socket: SP5 (2 sockets), Riser Slots Available', '2025-10-23 09:11:47', '2025-11-18 17:50:18');
+(6, '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', 'MOT2323999', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2025-08-30', '2025-12-23', '2029-10-30', 'Backup', 'Motherboard - X13DRi-N', '2025-08-30 09:39:49', '2025-12-23 12:23:29'),
+(9, '9d2e4f6a-7b8c-4d9e-8f1a-6c3d5e7f9a2b', 'SMC-1029U-001', 1, NULL, '', NULL, '2024-09-10', NULL, '2027-09-10', 'Available', 'Supermicro SYS-1029U-TR4, 1U form factor, LGA 4189 dual socket, Intel C741 chipset, 16x DDR5 slots (4TB max), Expansion: 2x PCIe 5.0 x16 Riser + 2x PCIe 5.0 x8 Riser (riser cards required), Storage: 4x SATA, 2x M.2 NVMe, 4x U.2 NVMe, Networking: Dual 10GbE SFP+, IPMI 2.0, 1200W redundant PSU recommended. Use cases: Dense Rack Deployment, Edge Computing, Virtualization Host', '2025-10-22 21:28:24', '2025-12-16 16:15:05'),
+(10, '5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b', 'DELL-R760-001', 1, NULL, '', NULL, '2024-10-05', NULL, '2027-10-05', 'Available', 'Dell PowerEdge R760, 2U Rack form factor, LGA 4189 dual socket, Intel C741 chipset, 32x DDR5 slots (8TB max), Expansion: 3x PCIe 5.0 x16 + 2x PCIe 5.0 x8 + 3x PCIe 5.0 x16 Riser (Dell Riser Config 1A/2A required), Storage: 8x SATA, 8x SAS (Broadcom 3916), 2x M.2 NVMe, 8x U.2 NVMe, Networking: Quad 10GbE RJ45 (Broadcom BCM57416), iDRAC 9 management, 1600W redundant PSU recommended. Use cases: Enterprise Data Center, Virtualization, Database Workloads, AI/ML Training', '2025-10-22 21:28:24', '2025-12-16 16:14:21'),
+(11, '3f8d6b2e-9a4c-7e1f-5b3d-8a2c6f4e9d7b', 'HPE-DL385-001', 1, NULL, '', NULL, '2024-11-15', NULL, '2027-11-15', 'Available', 'HPE ProLiant DL385 Gen11, 2U Rack form factor, SP5 dual socket (AMD EPYC 9004), AMD SP5 Integrated chipset, 24x DDR5 slots (6TB max), Expansion: 4x PCIe 5.0 x16 Riser + 2x PCIe 5.0 x8 Riser (HPE PCIe Riser Kit 1/2/3 required), Storage: 8x SATA, 8x SAS (Broadcom 3916), 2x M.2 NVMe, 10x U.2 NVMe, Networking: Dual 25GbE SFP28 (Broadcom BCM57508), iLO 6 management, 1600W redundant PSU recommended. Use cases: Virtualization, Software Defined Storage, HPC Workloads, Database Consolidation', '2025-10-22 21:28:24', '2025-12-16 16:14:17'),
+(12, '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', NULL, 2, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', '', '', NULL, '2025-12-17', NULL, 'New Stock', 'Brand: Supermicro, Series: X13, Model: X13DRG-H, Form Factor: EATX, Chipset: Intel C741, Socket: LGA 4189 (2 sockets), Max Risers: 4, Slot Spacing: 20.32mm, Mounting Length: 280mm', '2025-10-23 09:11:47', '2025-12-17 12:19:30'),
+(14, '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', NULL, 1, NULL, '', NULL, NULL, NULL, NULL, 'New Stock', 'Brand: GIGABYTE, Series: MZ, Model: MZ93-FS0, Form Factor: EATX, Chipset: Intel C741, Socket: LGA 4189 (2 sockets), Riser Slots Available', '2025-10-23 09:11:47', '2025-12-16 16:17:08'),
+(25, '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', '6261123645', 1, 'bnvhvh', 'jaipur', 'b4', '2000-12-12', '2002-04-05', '2007-12-12', 'Critical', 'Brand: ASRock Rack, Series: ROMED, Model: ROMED8-9001', '2025-12-16 12:38:42', '2025-12-22 10:37:08');
 
 -- --------------------------------------------------------
 
@@ -722,10 +683,13 @@ INSERT INTO `nicinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`
 (30, '5a63e63f-9a08-4c60-956b-f57d857ca25b', 'fhdjfhskjfhsjkdf', 1, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-15', 'Backup', 'nic', 'component', NULL, NULL, '2025-10-25 06:29:07', '2025-10-25 06:29:07'),
 (32, 'a9089773-4aa9-42bd-af82-fbca810df093', 'after-fix', 0, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-09', 'Backup', 'Test - nic', 'component', NULL, NULL, '2025-10-25 07:44:38', '2025-10-25 07:44:38'),
 (34, 'bbad8dd7-bc61-4297-9067-9155c35ef89b', 'after-fix-NIC', 1, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-15', 'Backup', 'nic', 'component', NULL, NULL, '2025-10-25 07:55:39', '2025-10-25 07:55:39'),
-(35, 'onboard-nic-5a7c9e2b-4d6f-8a1c-3e5b-', 'ONBOARD', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Broadcom BCM57416 4-port 10GbE RJ45', 'onboard', '5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b', 1, '2025-10-28 23:37:05', '2025-10-29 06:41:07'),
-(175, 'onboard-8c5f2b87-1', 'ONBOARD-8c5f2b87-1', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Intel X710 2-port 10GbE SFP+', 'onboard', '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', 1, '2025-11-07 07:49:44', '2025-11-07 07:49:44'),
-(176, 'onboard-6e4c2a5b-1', 'ONBOARD-6e4c2a5b-1', 2, 'b8754c5b-f071-4446-bae1-f0fd5afd640f', NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Intel X710 2-port 10GbE SFP+', 'onboard', '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', 1, '2025-11-12 13:49:41', '2025-11-12 13:49:41'),
-(177, 'onboard-4f8e6c3d-1', 'ONBOARD-4f8e6c3d-1', 2, '4841e506-6e58-46d2-ab77-6fa91996561c', NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Broadcom BCM57414 2-port 10GbE SFP+', 'onboard', '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', 1, '2025-11-18 17:50:18', '2025-11-18 17:50:18');
+(175, 'onboard-8c5f2b87-1', 'ONBOARD-8c5f2b87-1', 2, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Intel X710 2-port 10GbE SFP+', 'onboard', '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', 1, '2025-11-07 07:49:44', '2025-12-17 12:19:30'),
+(176, 'onboard-6e4c2a5b-1', 'ONBOARD-6e4c2a5b-1', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Intel X710 2-port 10GbE SFP+', 'onboard', '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', 1, '2025-11-12 13:49:41', '2025-12-16 16:17:08'),
+(177, 'onboard-4f8e6c3d-1', 'ONBOARD-4f8e6c3d-1', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Broadcom BCM57414 2-port 10GbE SFP+', 'onboard', '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', 1, '2025-11-18 17:50:18', '2025-12-16 16:15:20'),
+(178, 'onboard-9d2e4f6a-1', 'ONBOARD-9d2e4f6a-1', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Intel X710 2-port 10GbE SFP+', 'onboard', '9d2e4f6a-7b8c-4d9e-8f1a-6c3d5e7f9a2b', 1, '2025-12-16 10:11:17', '2025-12-16 16:15:05'),
+(181, 'onboard-3f8d6b2e-1', 'ONBOARD-3f8d6b2e-1', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Broadcom BCM57508 2-port 25GbE SFP28', 'onboard', '3f8d6b2e-9a4c-7e1f-5b3d-8a2c6f4e9d7b', 1, '2025-12-16 11:12:18', '2025-12-16 16:14:17'),
+(182, 'onboard-5a7c9e2b-1', 'ONBOARD-5a7c9e2b-1', 1, NULL, NULL, NULL, NULL, NULL, NULL, 'Onboard', 'Onboard: Broadcom BCM57416 4-port 10GbE RJ45', 'onboard', '5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b', 1, '2025-12-16 12:38:22', '2025-12-16 16:14:21'),
+(183, 't520-cr-bcde-f012-3456-345678901234', '6261123645', 1, NULL, 'jaipur', '21d1', '2002-12-12', '3333-12-12', '1222-12-12', 'Backup', 'Brand: Chelsio, Series: T5 Series, Model: T520-CR', 'component', NULL, NULL, '2025-12-16 12:41:05', '2025-12-16 12:41:05');
 
 -- --------------------------------------------------------
 
@@ -755,13 +719,14 @@ CREATE TABLE `pciecardinventory` (
 --
 
 INSERT INTO `pciecardinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`, `Location`, `RackPosition`, `PurchaseDate`, `InstallationDate`, `WarrantyEndDate`, `Flag`, `Notes`, `CreatedAt`, `UpdatedAt`) VALUES
-(3, 'nvme-adaptor-4m2p-001-ijkl9012', NULL, 1, NULL, '', NULL, '2024-04-10', NULL, '2027-04-10', NULL, 'Supermicro Quad M.2 NVMe Adapter AOM-SNG-4M2P, PCIe 3.0 x16', '2025-09-27 15:39:02', '2025-11-06 12:47:21'),
+(3, 'nvme-adaptor-4m2p-001-ijkl9012', 'nvme-ds23-431f', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-04-10', '2025-12-29', '2027-04-10', NULL, 'Supermicro Quad M.2 NVMe Adapter AOM-SNG-4M2P, PCIe 3.0 x16', '2025-09-27 15:39:02', '2025-12-29 12:02:33'),
 (4, 'nvme-adaptor-2m2p-001-mnop3456', NULL, 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2024-04-05', '2025-11-06', '2027-04-05', NULL, 'Supermicro Dual M.2 NVMe Adapter AOM-SNG-2M2P, PCIe 3.0 x8', '2025-09-27 15:39:02', '2025-11-06 12:53:07'),
-(5, 'riser-1u-e8r-001-qrst7890', NULL, 1, NULL, 'Mumbai', NULL, '2024-05-01', NULL, '2027-05-01', NULL, 'Supermicro 1U PCIe Riser Card RSC-R1UU-E8R, PCIe 3.0/4.0 x8', '2025-09-27 15:39:02', '2025-11-06 10:51:52'),
-(6, 'riser-1u-2e8r-001-uvwx4567', NULL, 1, NULL, 'Mumbai', NULL, '2024-05-05', NULL, '2027-05-05', NULL, 'Supermicro 1U PCIe Riser Card RSC-R1UU-2E8R, PCIe 3.0/4.0 dual x8', '2025-09-27 15:39:02', '2025-11-06 10:48:33'),
-(7, 'riser-2u-e16r-001-yzab8901', NULL, 1, NULL, 'Mumbai', NULL, '2024-05-10', NULL, '2027-05-10', NULL, 'Supermicro 2U PCIe Riser Card RSC-R2UU-E16R, PCIe 3.0/4.0 x16', '2025-09-27 15:39:02', '2025-11-06 10:48:33'),
+(5, 'riser-1u-e8r-001-qrst7890', NULL, 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-05-01', '2025-12-29', '2027-05-01', NULL, 'Supermicro 1U PCIe Riser Card RSC-R1UU-E8R, PCIe 3.0/4.0 x8', '2025-09-27 15:39:02', '2025-12-29 12:02:42'),
+(6, 'riser-1u-2e8r-001-uvwx4567', NULL, 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-05-05', '2025-12-29', '2027-05-05', NULL, 'Supermicro 1U PCIe Riser Card RSC-R1UU-2E8R, PCIe 3.0/4.0 dual x8', '2025-09-27 15:39:02', '2025-12-29 12:02:49'),
+(7, 'riser-2u-e16r-001-yzab8901', NULL, 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2024-05-10', '2025-12-29', '2027-05-10', NULL, 'Supermicro 2U PCIe Riser Card RSC-R2UU-E16R, PCIe 3.0/4.0 x16', '2025-09-27 15:39:02', '2025-12-29 12:04:52'),
 (9, 'a7baedef-ced2-4f5a-bee3-15927d018b6c', 'after-fix-PCIe', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-22', 'Backup', 'pciecard', '2025-10-25 08:01:06', '2025-10-25 08:01:06'),
-(10, 'e6032fcb-4768-4eb1-9aee-44172d07dbc7', 'Shubham-Test-Server-nil', 2, 'null', 'Indore', 'null', '2025-10-26', NULL, '0000-00-00', 'Backup', 'pciecard', '2025-10-26 06:48:00', '2025-10-26 06:48:00');
+(10, 'e6032fcb-4768-4eb1-9aee-44172d07dbc7', 'Shubham-Test-Server-nil', 2, 'null', 'Indore', 'null', '2025-10-26', NULL, '0000-00-00', 'Backup', 'pciecard', '2025-10-26 06:48:00', '2025-10-26 06:48:00'),
+(13, 'riser-hpe-dl380-g10p-rsr1-stuv8901', 'riser-53q-435gd-53fa-gf5455x', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2025-12-20', '2025-12-29', '2028-11-20', 'Critical', 'Brand: HPE, Series: ProLiant Riser Cards, Model: DL380 Gen10+ Primary Riser', '2025-12-20 13:56:27', '2025-12-29 12:05:32');
 
 -- --------------------------------------------------------
 
@@ -910,23 +875,11 @@ INSERT INTO `raminventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerUUID`
 (1, '897472c6-7b40-411b-80ef-31a6ca3156ea', 'RAM123456', 1, NULL, 'Datacenter North', 'Rack A3-12', '2023-05-15', '2023-06-01', '2026-05-15', 'Production', '32GB DDR4-3200', '2025-05-11 11:42:52', '2025-10-15 08:38:33'),
 (2, 'ef5798f2-fdc4-4e5d-9364-6971995002ea', 'RAM789012', 1, NULL, 'Mumbai', NULL, '2024-01-15', NULL, '2027-01-15', 'Backup', '64GB DDR4-3600', '2025-05-11 11:42:52', '2025-10-15 08:38:21'),
 (3, '82827c01-6e89-4d6a-bf2d-e62c929e2080', 'RAM456789', 1, NULL, 'Datacenter South', 'Rack B2-5', '2023-08-20', '2023-09-01', '2026-08-20', 'Production', '32GB DDR4-3200 ECC', '2025-05-11 11:42:52', '2025-10-15 08:38:16'),
-(4, 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'RAM999999', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2025-08-30', '2025-11-07', '2032-10-12', 'Backup', 'RAM - DDR5 64GB 4800MT/s', '2025-08-30 10:08:30', '2025-11-07 07:50:38'),
-(6, 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', 'RAM000000', 1, NULL, 'Mumbai', NULL, '2023-09-15', NULL, '2028-09-15', 'Production', 'Kingston ValueRAM DDR4-3200 32GB ECC UDIMM', '2025-09-06 22:17:07', '2025-11-06 10:48:33'),
-(7, 'b2c3d4e5-f6a7-8901-2345-67890abcdef1', 'after-fix-ram', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-06', 'Backup', 'DDR5 128GB 4800MT/s', '2025-10-25 07:49:33', '2025-10-25 07:49:33');
-
--- --------------------------------------------------------
-
---
--- Table structure for table `refresh_tokens`
---
-
-CREATE TABLE `refresh_tokens` (
-  `id` int(11) NOT NULL,
-  `user_id` int(6) UNSIGNED NOT NULL,
-  `token_hash` varchar(64) NOT NULL,
-  `expires_at` datetime NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+(6, 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', 'RAM000000', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2023-09-15', '2025-12-23', '2028-09-15', 'Production', 'Kingston ValueRAM DDR4-3200 32GB ECC UDIMM', '2025-09-06 22:17:07', '2025-12-23 13:44:45'),
+(7, 'b2c3d4e5-f6a7-8901-2345-67890abcdef1', 'after-fix-ram', 2, 'null', 'Indore', 'null', '2025-10-25', NULL, '2025-10-06', 'Backup', 'DDR5 128GB 4800MT/s', '2025-10-25 07:49:33', '2025-10-25 07:49:33'),
+(17, 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', 'ewvqev', 2, NULL, 'remote', '21d1', '2004-12-12', '2005-12-16', '2006-12-16', 'Maintenance', '', '2025-12-16 12:34:38', '2025-12-16 12:34:38'),
+(21, 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', '9602447439', 0, NULL, 'Jaipur', 'b4', '0000-00-00', '0000-00-00', '0000-00-00', 'null', '', '2025-12-17 06:13:08', '2025-12-17 06:13:08'),
+(23, 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', 'ram-53q-435gd-53fa-gf54fd4', 1, NULL, 'Noida', 'Rack D11', '2025-12-21', '2025-12-26', '2029-11-30', 'Critical', '', '2025-12-20 13:17:41', '2025-12-20 13:17:41');
 
 -- --------------------------------------------------------
 
@@ -1175,44 +1128,6 @@ INSERT INTO `role_permissions` (`id`, `role_id`, `permission_id`, `granted`, `cr
 -- --------------------------------------------------------
 
 --
--- Table structure for table `server_build_templates`
---
-
-CREATE TABLE `server_build_templates` (
-  `id` int(11) NOT NULL,
-  `template_uuid` varchar(36) NOT NULL,
-  `template_name` varchar(255) NOT NULL,
-  `description` text DEFAULT NULL,
-  `category` varchar(100) DEFAULT NULL COMMENT 'Web Server, Database Server, Storage Server, etc.',
-  `created_by` int(11) NOT NULL,
-  `is_public` tinyint(1) NOT NULL DEFAULT 0 COMMENT '0=Private, 1=Public',
-  `use_count` int(11) NOT NULL DEFAULT 0 COMMENT 'Number of times template was used',
-  `template_configuration` longtext NOT NULL COMMENT 'JSON configuration template',
-  `minimum_requirements` longtext DEFAULT NULL COMMENT 'JSON of minimum hardware requirements',
-  `recommended_specs` longtext DEFAULT NULL COMMENT 'JSON of recommended specifications',
-  `tags` varchar(500) DEFAULT NULL COMMENT 'Comma-separated tags',
-  `estimated_power_consumption` decimal(8,2) DEFAULT NULL,
-  `version` varchar(20) NOT NULL DEFAULT '1.0',
-  `parent_template_id` int(11) DEFAULT NULL COMMENT 'For template versioning',
-  `status` tinyint(1) NOT NULL DEFAULT 0 COMMENT '0=Draft, 1=Active, 2=Deprecated, 3=Archived',
-  `approved_by` int(11) DEFAULT NULL,
-  `approved_at` timestamp NULL DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `server_build_templates`
---
-
-INSERT INTO `server_build_templates` (`id`, `template_uuid`, `template_name`, `description`, `category`, `created_by`, `is_public`, `use_count`, `template_configuration`, `minimum_requirements`, `recommended_specs`, `tags`, `estimated_power_consumption`, `version`, `parent_template_id`, `status`, `approved_by`, `approved_at`, `created_at`, `updated_at`) VALUES
-(1, '745c73d1-726e-11f0-9219-309c239ceca6', 'Basic Web Server', 'Standard web server configuration for small to medium websites', 'Web Server', 1, 1, 0, '{\"cpu\": {\"cores\": 4, \"frequency\": \"2.0GHz\"}, \"ram\": {\"capacity\": \"8GB\", \"type\": \"DDR4\"}, \"storage\": {\"capacity\": \"500GB\", \"type\": \"SSD\"}, \"network\": {\"ports\": 2}}', '{\"cpu_cores\": 2, \"ram_gb\": 4, \"storage_gb\": 250}', '{\"cpu_cores\": 8, \"ram_gb\": 16, \"storage_gb\": 1000}', 'web,server,basic,production', NULL, '1.0', NULL, 1, NULL, NULL, '2025-08-06 02:38:37', '2025-08-06 02:38:37'),
-(2, '745c7829-726e-11f0-9219-309c239ceca6', 'Database Server', 'High-performance database server with redundant storage', 'Database Server', 1, 1, 0, '{\"cpu\": {\"cores\": 8, \"frequency\": \"3.0GHz\"}, \"ram\": {\"capacity\": \"32GB\", \"type\": \"DDR4\"}, \"storage\": {\"capacity\": \"2TB\", \"type\": \"NVMe SSD\", \"redundancy\": \"RAID1\"}, \"network\": {\"ports\": 4}}', '{\"cpu_cores\": 4, \"ram_gb\": 16, \"storage_gb\": 500}', '{\"cpu_cores\": 16, \"ram_gb\": 64, \"storage_gb\": 4000}', 'database,server,performance,raid', NULL, '1.0', NULL, 1, NULL, NULL, '2025-08-06 02:38:37', '2025-08-06 02:38:37'),
-(3, '745c79ae-726e-11f0-9219-309c239ceca6', 'Storage Server', 'Large capacity storage server with multiple drive bays', 'Storage Server', 1, 1, 0, '{\"cpu\": {\"cores\": 4, \"frequency\": \"2.5GHz\"}, \"ram\": {\"capacity\": \"16GB\", \"type\": \"DDR4\"}, \"storage\": {\"capacity\": \"20TB\", \"type\": \"SATA\", \"drives\": 8, \"redundancy\": \"RAID6\"}, \"network\": {\"ports\": 2, \"speed\": \"10Gb\"}}', '{\"cpu_cores\": 2, \"ram_gb\": 8, \"storage_gb\": 2000}', '{\"cpu_cores\": 8, \"ram_gb\": 32, \"storage_gb\": 50000}', 'storage,server,raid,backup', NULL, '1.0', NULL, 1, NULL, NULL, '2025-08-06 02:38:37', '2025-08-06 02:38:37');
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `server_configurations`
 --
 
@@ -1251,19 +1166,14 @@ CREATE TABLE `server_configurations` (
 --
 
 INSERT INTO `server_configurations` (`id`, `config_uuid`, `server_name`, `description`, `motherboard_uuid`, `chassis_uuid`, `ram_configuration`, `storage_configuration`, `caddy_configuration`, `configuration_status`, `is_virtual`, `power_consumption`, `validation_results`, `created_by`, `updated_by`, `built_date`, `deployed_date`, `location`, `rack_position`, `notes`, `created_at`, `updated_at`, `pciecard_configurations`, `nic_config`, `cpu_configuration`, `hbacard_uuid`, `sfp_configuration`) VALUES
-(30, '8edc0ec7-4921-4261-b7d8-760eb0788551', 'FlexibleOrderTest', 'Testing flexible component addition order', NULL, NULL, NULL, NULL, NULL, 0, 0, 384, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-09-23 21:44:22', '2025-11-09 19:52:11', NULL, NULL, '{\"cpus\": [{\"uuid\": \"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\", \"quantity\": 1, \"socket\": \"LGA3647\", \"added_at\": \"2025-09-23 21:44:22\"}]}', NULL, NULL),
 (31, '34851b18-b600-4415-8c5e-0a1cde1bceed', 'CPUFirstTest', 'Test adding CPU as first component', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-09-23 21:47:47', '2025-10-15 08:33:13', NULL, NULL, NULL, NULL, NULL),
-(67, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', 'Test-Shubham-changes', 'changes', '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', NULL, '[{\"uuid\":\"a1b2c3d4-e5f6-7890-1234-567890abcdef\",\"quantity\":1,\"added_at\":\"2025-11-07 07:50:38\"}]', '[{\"uuid\":\"a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8\",\"quantity\":1,\"added_at\":\"2025-11-06 12:52:41\"},{\"uuid\":\"b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9\",\"quantity\":1,\"added_at\":\"2025-11-07 13:16:06\"}]', '[{\"uuid\":\"4a8a2c05-e993-4b00-acae-9f036617091c\",\"quantity\":1,\"added_at\":\"2025-11-06 12:52:58\"}]', 3, 0, 970, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-06 12:49:33', '2025-11-09 19:52:11', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-8c5f2b87-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Intel X710\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-11-07 07:49:44\"\n}', '{\"cpus\": [{\"uuid\": \"545e143b-57b3-419e-86e5-1df6f7aa8fd3\", \"quantity\": 1, \"socket\": \"LGA3647\", \"added_at\": \"2025-11-06 12:49:33\"}]}', NULL, NULL),
-(68, 'aae87a84-b4cf-4344-97c1-83a99b0176a2', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-09 15:36:25', '2025-11-09 15:36:25', NULL, NULL, NULL, NULL, NULL),
-(69, '61303ed1-381f-4774-9604-09a29df0407a', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-10 18:16:32', '2025-11-10 18:16:32', NULL, NULL, NULL, NULL, NULL),
-(70, 'b8754c5b-f071-4446-bae1-f0fd5afd640f', 'My Production Server', 'Web server for production workloads', '6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c', NULL, NULL, NULL, NULL, 0, 0, 72, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-12 07:52:53', '2025-11-12 13:49:41', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-6e4c2a5b-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Intel X710\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-11-12 13:49:41\"\n}', NULL, NULL, NULL),
-(72, '4841e506-6e58-46d2-ab77-6fa91996561c', 'My Production Server', 'Web server for production workloads', '4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b', NULL, NULL, NULL, NULL, 0, 0, 840, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-13 13:14:07', '2025-11-18 17:50:18', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-4f8e6c3d-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Broadcom BCM57414\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-11-18 17:50:18\"\n}', '{\"cpus\":[{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-13 13:15:31\",\"serial_number\":\"CPU1009854\"},{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-13 13:15:46\",\"serial_number\":\"AMD13241551\"}]}', NULL, NULL),
-(73, 'bb40c2ab-2443-462b-a4fa-e36306fdfdcf', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-19 19:56:15', '2025-11-19 19:56:15', NULL, NULL, NULL, NULL, NULL),
-(74, 'b08943c7-11e8-459c-8f9b-724092528acb', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 12:37:02', '2025-11-21 12:37:02', NULL, NULL, NULL, NULL, NULL),
-(75, 'b24bbeac-25f0-4a7c-ab3d-91c7160b0608', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 13:05:53', '2025-11-21 13:05:53', NULL, NULL, NULL, NULL, NULL),
-(76, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'My Production Server', 'Web server for production workloads', NULL, NULL, NULL, NULL, NULL, 0, 1, 360, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-11-21 13:06:02', '2025-11-21 19:17:09', NULL, NULL, '{\"cpus\":[{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-21 15:18:59\",\"serial_number\":\"CPU000000\"},{\"uuid\":\"d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-11-21 19:17:09\",\"serial_number\":\"VIRTUAL-CPU-2-1763752629\"}]}', NULL, NULL),
-(77, '78694bc5-96b5-4cb8-845a-262825b45db6', 'Virtual to real', 'Testing virtual server import', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', NULL, '2025-11-21 20:01:53', '2025-11-21 20:01:53', NULL, NULL, NULL, NULL, NULL),
-(79, 'fd129801-6a8c-44d4-b7a3-b9b40ed9b38f', 'Virtual to real', 'Testing virtual server import', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', NULL, '2025-11-21 21:41:49', '2025-11-21 21:41:49', NULL, NULL, NULL, NULL, NULL);
+(109, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'New Server', 'Testing', '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', NULL, NULL, NULL, '[]', 0, 0, 282, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-16 19:27:55', '2025-12-17 20:04:30', NULL, '{\n    \"nics\": [\n        {\n            \"uuid\": \"onboard-8c5f2b87-1\",\n            \"source_type\": \"onboard\",\n            \"parent_motherboard_uuid\": \"8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c\",\n            \"onboard_index\": 1,\n            \"status\": \"in_use\",\n            \"replaceable\": true,\n            \"specifications\": {\n                \"controller\": \"Intel X710\",\n                \"ports\": 2,\n                \"speed\": \"10GbE\",\n                \"connector\": \"SFP+\"\n            }\n        }\n    ],\n    \"summary\": {\n        \"total_nics\": 1,\n        \"onboard_nics\": 1,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-12-17 12:19:30\"\n}', '{\"cpus\":[{\"uuid\":\"545e143b-57b3-419e-86e5-1df6f7aa8fd3\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-12-16 20:05:25\",\"serial_number\":\"CPU999999\"}]}', NULL, NULL),
+(112, '52201142-1fb5-409c-8ea7-1e0ad14f0911', 'test 2', 'testing', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-18 15:21:43', '2025-12-18 15:21:43', NULL, NULL, NULL, NULL, NULL),
+(113, '730480b9-a930-4804-94db-087d955f8061', 'test 3', 'testing', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-18 15:22:08', '2025-12-18 15:22:08', NULL, NULL, NULL, NULL, NULL),
+(114, 'e01f88cd-31d4-44f5-b2ac-59917f1a8987', 'test 4', 'testing', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-18 15:26:13', '2025-12-18 15:26:13', NULL, NULL, NULL, NULL, NULL),
+(116, '65fe4db0-a455-4338-b0dc-253810a88a1e', 'New Server', 'New Server is badddd', NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-19 23:13:47', '2025-12-19 23:13:47', NULL, NULL, NULL, NULL, NULL),
+(118, '9dda0039-1f41-43f0-966a-a32fe2801840', 'Production Servers', 'Can run everything', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', NULL, NULL, NULL, NULL, 0, 1, 252, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-19 23:22:40', '2025-12-19 23:23:15', NULL, NULL, '{\"cpus\":[{\"uuid\":\"545e143b-57b3-419e-86e5-1df6f7aa8fd3\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-12-19 23:23:05\",\"serial_number\":\"VIRTUAL-CPU-1-1766186585\"}]}', NULL, NULL),
+(119, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'Linux', '', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', 'abaa2c58-c08c-46f0-abcf-2242400e907c', '[{\"uuid\":\"e5f6a7b8-c9d0-1234-5678-90abcdef1234\",\"quantity\":1,\"added_at\":\"2025-12-23 13:44:45\"}]', '[{\"uuid\":\"b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9\",\"quantity\":1,\"added_at\":\"2025-12-23 17:55:11\"}]', '[{\"uuid\":\"bf3192bf-810e-47ea-81c6-946533aad2ca\",\"quantity\":1,\"added_at\":\"2025-12-25 19:06:04\"}]', 0, 0, 690, NULL, 38, NULL, NULL, NULL, '', '', '', '2025-12-22 10:39:14', '2025-12-29 12:05:32', '[{\"uuid\":\"nvme-adaptor-4m2p-001-ijkl9012\",\"quantity\":1,\"added_at\":\"2025-12-29 12:02:33\",\"slot_position\":\"pcie_x16_slot_1\"},{\"uuid\":\"riser-1u-e8r-001-qrst7890\",\"quantity\":1,\"added_at\":\"2025-12-29 12:02:42\",\"slot_position\":\"riser_x8_slot_1\"},{\"uuid\":\"riser-1u-2e8r-001-uvwx4567\",\"quantity\":1,\"added_at\":\"2025-12-29 12:02:49\",\"slot_position\":\"riser_x8_slot_2\"},{\"uuid\":\"riser-2u-e16r-001-yzab8901\",\"quantity\":1,\"added_at\":\"2025-12-29 12:04:52\",\"slot_position\":\"riser_x16_slot_1\"},{\"uuid\":\"riser-hpe-dl380-g10p-rsr1-stuv8901\",\"quantity\":1,\"added_at\":\"2025-12-29 12:05:32\",\"slot_position\":\"riser_x16_slot_2\"}]', '{\n    \"nics\": [],\n    \"summary\": {\n        \"total_nics\": 0,\n        \"onboard_nics\": 0,\n        \"component_nics\": 0\n    },\n    \"last_updated\": \"2025-12-22 10:40:15\"\n}', '{\"cpus\":[{\"uuid\":\"545e143b-57b3-419e-86e5-1df6f7aa8fd3\",\"quantity\":1,\"socket\":\"LGA3647\",\"added_at\":\"2025-12-23 12:20:09\",\"serial_number\":\"CPU999999\"}]}', NULL, NULL);
 
 --
 -- Triggers `server_configurations`
@@ -1311,54 +1221,52 @@ CREATE TABLE `server_configuration_history` (
 --
 
 INSERT INTO `server_configuration_history` (`id`, `config_uuid`, `action`, `component_type`, `component_uuid`, `metadata`, `created_by`, `user_id`, `changes`, `old_values`, `new_values`, `ip_address`, `user_agent`, `created_at`) VALUES
-(1, 'b24bbeac-25f0-4a7c-ab3d-91c7160b0608', 'initialize', NULL, NULL, '{\"server_name\":\"My Production Server\",\"description\":\"Web server for production workloads\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 13:05:53'),
-(2, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'initialize', NULL, NULL, '{\"server_name\":\"My Production Server\",\"description\":\"Web server for production workloads\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":1}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 13:06:02'),
-(3, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 15:18:59'),
-(4, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 15:19:13'),
-(5, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 17:07:43'),
-(6, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:41'),
-(7, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:57'),
-(8, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 18:46:59'),
-(9, '2ea6c136-39a3-4684-8bc9-2229a4fc24cc', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"CPU_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 19:17:09'),
-(10, 'd304360a-ba07-4949-b578-57d4cccbd371', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":\"CPU000000\"}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 20:30:07');
-
--- --------------------------------------------------------
-
---
--- Table structure for table `server_deployments`
---
-
-CREATE TABLE `server_deployments` (
-  `id` int(11) NOT NULL,
-  `deployment_uuid` varchar(36) NOT NULL,
-  `config_uuid` varchar(36) NOT NULL,
-  `deployment_name` varchar(255) NOT NULL,
-  `environment` varchar(50) NOT NULL COMMENT 'production, staging, development, testing',
-  `location` varchar(255) DEFAULT NULL COMMENT 'Physical location or datacenter',
-  `rack_position` varchar(50) DEFAULT NULL,
-  `deployment_status` tinyint(1) NOT NULL DEFAULT 0 COMMENT '0=Planned, 1=In Progress, 2=Deployed, 3=Decommissioned',
-  `deployed_by` int(11) DEFAULT NULL,
-  `deployed_at` timestamp NULL DEFAULT NULL,
-  `decommissioned_by` int(11) DEFAULT NULL,
-  `decommissioned_at` timestamp NULL DEFAULT NULL,
-  `ip_addresses` longtext DEFAULT NULL COMMENT 'JSON array of assigned IP addresses',
-  `hostname` varchar(255) DEFAULT NULL,
-  `domain` varchar(255) DEFAULT NULL,
-  `os_type` varchar(100) DEFAULT NULL,
-  `os_version` varchar(100) DEFAULT NULL,
-  `installed_software` longtext DEFAULT NULL COMMENT 'JSON array of installed software',
-  `monitoring_enabled` tinyint(1) NOT NULL DEFAULT 0,
-  `backup_enabled` tinyint(1) NOT NULL DEFAULT 0,
-  `last_maintenance` timestamp NULL DEFAULT NULL,
-  `next_maintenance` timestamp NULL DEFAULT NULL,
-  `maintenance_notes` text DEFAULT NULL,
-  `cpu_utilization` decimal(5,2) DEFAULT NULL COMMENT 'Average CPU utilization percentage',
-  `memory_utilization` decimal(5,2) DEFAULT NULL COMMENT 'Average memory utilization percentage',
-  `storage_utilization` decimal(5,2) DEFAULT NULL COMMENT 'Average storage utilization percentage',
-  `uptime_percentage` decimal(5,2) DEFAULT NULL COMMENT 'Uptime percentage',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+(10, 'd304360a-ba07-4949-b578-57d4cccbd371', 'add_component', 'cpu', 'd3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b', '{\"quantity\":1,\"serial_number\":\"CPU000000\"}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-11-21 20:30:07'),
+(57, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'initialize', NULL, NULL, '{\"server_name\":\"New Server\",\"description\":\"Testing\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-16 19:27:55'),
+(58, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'cpu', '545e143b-57b3-419e-86e5-1df6f7aa8fd3', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-16 20:05:25'),
+(59, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'motherboard', '8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 12:19:30'),
+(60, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 12:34:56'),
+(61, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'remove_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 12:36:16'),
+(62, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 15:00:50'),
+(63, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'remove_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 15:01:20'),
+(64, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 15:01:33'),
+(65, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'remove_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 15:01:57'),
+(66, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'add_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 15:02:05'),
+(67, 'cd181a49-2450-46cc-920a-f4d1ca0af93a', 'remove_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-17 20:04:30'),
+(70, '52201142-1fb5-409c-8ea7-1e0ad14f0911', 'initialize', NULL, NULL, '{\"server_name\":\"test 2\",\"description\":\"testing\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-18 15:21:43'),
+(71, '730480b9-a930-4804-94db-087d955f8061', 'initialize', NULL, NULL, '{\"server_name\":\"test 3\",\"description\":\"testing\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-18 15:22:08'),
+(72, 'e01f88cd-31d4-44f5-b2ac-59917f1a8987', 'initialize', NULL, NULL, '{\"server_name\":\"test 4\",\"description\":\"testing\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-18 15:26:13'),
+(76, '65fe4db0-a455-4338-b0dc-253810a88a1e', 'initialize', NULL, NULL, '{\"server_name\":\"New Server\",\"description\":\"New Server is badddd\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-19 23:13:47'),
+(78, '9dda0039-1f41-43f0-966a-a32fe2801840', 'initialize', NULL, NULL, '{\"server_name\":\"Production Servers\",\"description\":\"Can run everything\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":1}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-19 23:22:40'),
+(79, '9dda0039-1f41-43f0-966a-a32fe2801840', 'add_component', 'cpu', '545e143b-57b3-419e-86e5-1df6f7aa8fd3', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-19 23:23:06'),
+(80, '9dda0039-1f41-43f0-966a-a32fe2801840', 'add_component', 'motherboard', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-19 23:23:15'),
+(81, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'initialize', NULL, NULL, '{\"server_name\":\"Linux\",\"description\":\"\",\"location\":\"\",\"rack_position\":\"\",\"notes\":\"\",\"is_virtual\":0}', 38, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-22 10:39:14'),
+(82, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'cpu', '545e143b-57b3-419e-86e5-1df6f7aa8fd3', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-22 10:39:21'),
+(83, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'motherboard', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-22 10:39:26'),
+(84, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'remove_component', 'motherboard', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-22 10:40:15'),
+(85, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'remove_component', 'cpu', '545e143b-57b3-419e-86e5-1df6f7aa8fd3', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-22 10:42:53'),
+(86, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'cpu', '545e143b-57b3-419e-86e5-1df6f7aa8fd3', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-23 12:20:09'),
+(87, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'motherboard', '7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-23 12:23:29'),
+(88, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'ram', 'e5f6a7b8-c9d0-1234-5678-90abcdef1234', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-23 13:44:45'),
+(89, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'storage', 'b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-23 17:55:11'),
+(90, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'sm-sc846be1c-r90jbod-001', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-24 15:26:01'),
+(91, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'abaa2c58-c08c-46f0-abcf-2242400e907c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-24 15:26:51'),
+(92, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'f0bb3152-1157-40d4-9547-5a1654cd29dd', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-24 15:27:29'),
+(93, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'sm-sc846be1c-r90jbod-001', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-24 16:15:49'),
+(94, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'abaa2c58-c08c-46f0-abcf-2242400e907c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:24:36'),
+(95, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'caddy', 'bcdce745-47ce-4deb-984d-8c3ba4b767ca', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:31:09'),
+(96, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'remove_component', 'caddy', 'bcdce745-47ce-4deb-984d-8c3ba4b767ca', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:31:52'),
+(97, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:32:04'),
+(98, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'remove_component', 'caddy', '4a8a2c05-e993-4b00-acae-9f036617091c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:40:01'),
+(99, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'remove_component', 'chassis', 'abaa2c58-c08c-46f0-abcf-2242400e907c', 'null', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 15:40:05'),
+(100, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'chassis', 'abaa2c58-c08c-46f0-abcf-2242400e907c', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 18:59:26'),
+(101, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'caddy', 'bf3192bf-810e-47ea-81c6-946533aad2ca', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-25 19:06:04'),
+(102, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'nvme-adaptor-4m2p-001-ijkl9012', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"pcie_x16_slot_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-26 12:08:24'),
+(103, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'nvme-adaptor-4m2p-001-ijkl9012', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"pcie_x16_slot_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-29 12:02:33'),
+(104, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'riser-1u-e8r-001-qrst7890', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"riser_x8_slot_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-29 12:02:42'),
+(105, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'riser-1u-2e8r-001-uvwx4567', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"riser_x8_slot_2\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-29 12:02:49'),
+(106, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'riser-2u-e16r-001-yzab8901', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"riser_x16_slot_1\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-29 12:04:52'),
+(107, '89d8bbc0-e859-4540-b971-e0e2876751aa', 'add_component', 'pciecard', 'riser-hpe-dl380-g10p-rsr1-stuv8901', '{\"quantity\":1,\"serial_number\":null,\"slot_position\":\"riser_x16_slot_2\",\"notes\":\"\",\"override_used\":false}', NULL, 0, NULL, NULL, NULL, NULL, NULL, '2025-12-29 12:05:32');
 
 -- --------------------------------------------------------
 
@@ -1436,10 +1344,11 @@ INSERT INTO `storageinventory` (`ID`, `UUID`, `SerialNumber`, `Status`, `ServerU
 (2, '9ee83441-f1dc-4ac1-82dd-6319b0725737', 'HDD789012', 1, NULL, 'Warehouse East', NULL, '2024-01-05', NULL, '2027-01-05', 'Backup', 'Seagate IronWolf 8TB NAS HDD', '2025-05-11 11:42:52', '2025-10-15 08:39:47'),
 (3, 'e383d2a8-6ce7-46af-8ead-73f2f2921545', 'SSD987654', 1, NULL, '', NULL, '2020-08-10', NULL, '2023-08-10', 'Decommissioned', 'WD Black 1TB NVMe - SMART errors detected', '2025-05-11 11:42:52', '2025-10-15 08:38:59'),
 (4, '43e1ad0d-cf4a-49c9-a750-b50f73e773f7', 'HDD789098', 1, NULL, '', NULL, '2025-07-30', NULL, '2029-10-25', 'Backup', 'Type: HDD, Capacity: 960GB\n\nAdditional Notes: crucial nvme gen 4 ', '2025-07-27 14:06:01', '2025-10-15 08:38:59'),
-(5, 'e1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6', 'HDD999999', 1, NULL, '', NULL, '2025-08-30', NULL, '2031-06-30', 'Backup', 'HDD - undefined undefined SATA HDD 8000GB', '2025-08-30 10:57:23', '2025-11-06 12:47:21'),
-(6, 'e7f8a9b0-c1d2-e3f4-a5b6-c7d8e9f0a1b2', 'SDD000000', 1, NULL, 'Mumbai', NULL, '2025-09-09', NULL, NULL, 'Available', 'Intel Optane 800GB U.3 PCIe 4.0 SSD, 7500MBps read, 5000MBps write, 1.5W idle, 8W active', '2025-09-09 12:42:56', '2025-11-06 10:48:33'),
-(7, 'a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8', 'SSD999999', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2025-10-04', '2025-11-06', NULL, 'Available', 'Brand: Samsung, Series: Data Center, Type: SSD (SATA SSD, 2.5-inch, SATA III), Capacity: 1000GB, Read: 550MBps, Write: 520MBps, Power Idle: 0.5W, Active: 3.2W', '2025-10-04 09:51:34', '2025-11-06 12:52:41'),
-(8, 'b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9', 'SSD111111', 2, '214100e3-c7cd-4f01-8c27-eca2310b0bbb', '', '', '2025-10-04', '2025-11-07', NULL, 'Available', 'Type: SSD (M.2 NVMe SSD, M.2 2280, NVMe PCIe 4.0), Capacity: 2000GB, Read: 7000MBps, Write: 5000MBps, Power Idle: 0.5W, Active: 5W', '2025-10-04 10:04:58', '2025-11-07 13:16:06');
+(5, 'e1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6', 'HDD999999', 1, NULL, '', NULL, '2025-08-30', NULL, '2031-06-30', 'Backup', 'HDD - undefined undefined SATA HDD 8000GB', '2025-08-30 10:57:23', '2025-12-16 16:15:13'),
+(6, 'e7f8a9b0-c1d2-e3f4-a5b6-c7d8e9f0a1b2', 'SDD000000', 1, NULL, '', NULL, '2025-09-09', NULL, NULL, 'Available', 'Intel Optane 800GB U.3 PCIe 4.0 SSD, 7500MBps read, 5000MBps write, 1.5W idle, 8W active', '2025-09-09 12:42:56', '2025-12-16 16:14:29'),
+(7, 'a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8', 'SSD999999', 1, NULL, '', NULL, '2025-10-04', NULL, NULL, 'Available', 'Brand: Samsung, Series: Data Center, Type: SSD (SATA SSD, 2.5-inch, SATA III), Capacity: 1000GB, Read: 550MBps, Write: 520MBps, Power Idle: 0.5W, Active: 3.2W', '2025-10-04 09:51:34', '2025-12-16 16:17:15'),
+(8, 'b4c5d6e7-f8a9-b0c1-d2e3-f4a5b6c7d8e9', 'SSD111111', 2, '89d8bbc0-e859-4540-b971-e0e2876751aa', '', '', '2025-10-04', '2025-12-23', NULL, 'Available', 'Type: SSD (M.2 NVMe SSD, M.2 2280, NVMe PCIe 4.0), Capacity: 2000GB, Read: 7000MBps, Write: 5000MBps, Power Idle: 0.5W, Active: 5W', '2025-10-04 10:04:58', '2025-12-23 17:55:11'),
+(11, 'e7f8a9b0-c1d2-e3f4-a5b6-c7d8e9f0a1b2', 'we12e12e12w1', 1, NULL, 'remote', NULL, '2002-12-12', NULL, '2008-12-12', 'Critical', '', '2025-12-16 12:36:41', '2025-12-16 16:14:29');
 
 -- --------------------------------------------------------
 
@@ -1480,7 +1389,9 @@ INSERT INTO `tickets` (`id`, `ticket_number`, `title`, `description`, `status`, 
 (4, 'TKT-20251119-0004', 'Setup New Server Configuration', 'Build and test new server configuration with latest components', 'completed', 'high', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:54', '2025-11-19 21:59:13', '2025-11-19 21:58:58', '2025-11-19 21:59:02', '2025-11-19 21:59:09', '2025-11-19 21:59:13'),
 (5, 'TKT-20251119-0005', 'Update Component Inventory', 'Add new CPUs and RAM modules to inventory', 'completed', 'medium', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:55', '2025-11-19 21:59:14', '2025-11-19 21:58:59', '2025-11-19 21:59:03', '2025-11-19 21:59:10', '2025-11-19 21:59:14'),
 (6, 'TKT-20251119-0006', 'Configure Network Cards', 'Test and configure new network interface cards', 'completed', 'medium', NULL, 38, NULL, NULL, NULL, 'Successfully deployed all changes to staging environment', 'All tasks completed successfully. Ticket closure approved.', '2025-11-19 21:58:57', '2025-11-19 21:59:15', '2025-11-19 21:59:00', '2025-11-19 21:59:04', '2025-11-19 21:59:12', '2025-11-19 21:59:15'),
-(7, 'TKT-20251120-0001', 'Upgrade Server CPUs', 'testing the ticket', 'draft', 'high', '4841e506-6e58-46d2-ab77-6fa91996561c', 38, NULL, NULL, NULL, NULL, NULL, '2025-11-20 17:40:09', '2025-12-13 12:57:28', NULL, NULL, NULL, NULL);
+(7, 'TKT-20251120-0001', 'Upgrade Server CPUs', 'testing the ticket', 'draft', 'high', '4841e506-6e58-46d2-ab77-6fa91996561c', 38, NULL, NULL, NULL, NULL, NULL, '2025-11-20 17:40:09', '2025-12-13 12:57:28', NULL, NULL, NULL, NULL),
+(8, 'TKT-20251218-0001', 'Upgrade Server CPUs', 'Upgrade Server CPUs', 'draft', 'low', NULL, 38, NULL, 3, NULL, NULL, NULL, '2025-12-18 01:33:26', '2025-12-18 01:40:39', NULL, NULL, NULL, NULL),
+(9, 'TKT-20251218-0002', 'Update the SSD in Server 123', 'Update the SSD', 'draft', 'low', NULL, 38, 38, NULL, NULL, NULL, NULL, '2025-12-18 10:20:46', '2025-12-18 10:20:46', NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1534,7 +1445,12 @@ INSERT INTO `ticket_history` (`id`, `ticket_id`, `action`, `old_value`, `new_val
 (26, 1, 'status_changed', 'pending', 'rejected', 38, 'Status changed from pending to rejected', '106.215.162.205', 'PostmanRuntime/7.49.1', '2025-11-20 20:05:57'),
 (27, 7, 'title_changed', 'Upgrade Server CPUs', 'Upgrade Server CPUs', 38, NULL, '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28'),
 (28, 7, 'description_changed', NULL, NULL, 38, 'Description updated', '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28'),
-(29, 7, 'priority_changed', 'high', 'high', 38, NULL, '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28');
+(29, 7, 'priority_changed', 'high', 'high', 38, NULL, '106.215.167.151', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-13 12:57:28'),
+(30, 8, 'created', NULL, 'draft', 38, 'Ticket created', '106.215.162.74', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-18 01:33:26'),
+(31, 8, 'title_changed', 'Upgrade Server CPUs', 'Upgrade Server CPUs', 38, NULL, '106.215.162.74', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-18 01:40:39'),
+(32, 8, 'description_changed', NULL, NULL, 38, 'Description updated', '106.215.162.74', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-18 01:40:39'),
+(33, 8, 'priority_changed', 'low', 'low', 38, NULL, '106.215.162.74', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-18 01:40:39'),
+(34, 9, 'created', NULL, 'draft', 38, 'Ticket created', '106.215.162.74', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2025-12-18 10:20:46');
 
 -- --------------------------------------------------------
 
@@ -1743,19 +1659,6 @@ ALTER TABLE `component_specifications`
   ADD KEY `idx_verified_by` (`verified_by`);
 
 --
--- Indexes for table `component_usage_tracking`
---
-ALTER TABLE `component_usage_tracking`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_component_uuid` (`component_uuid`),
-  ADD KEY `idx_component_type` (`component_type`),
-  ADD KEY `idx_config_uuid` (`config_uuid`),
-  ADD KEY `idx_deployment_uuid` (`deployment_uuid`),
-  ADD KEY `idx_usage_status` (`usage_status`),
-  ADD KEY `idx_assigned_by` (`assigned_by`),
-  ADD KEY `idx_assigned_at` (`assigned_at`);
-
---
 -- Indexes for table `cpuinventory`
 --
 ALTER TABLE `cpuinventory`
@@ -1780,14 +1683,6 @@ ALTER TABLE `hbacardinventory`
 ALTER TABLE `inventory_log`
   ADD PRIMARY KEY (`id`),
   ADD KEY `user_id` (`user_id`);
-
---
--- Indexes for table `jwt_blacklist`
---
-ALTER TABLE `jwt_blacklist`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `jti` (`jti`),
-  ADD KEY `idx_expires_at` (`expires_at`);
 
 --
 -- Indexes for table `motherboardinventory`
@@ -1842,15 +1737,6 @@ ALTER TABLE `raminventory`
   ADD KEY `idx_uuid` (`UUID`);
 
 --
--- Indexes for table `refresh_tokens`
---
-ALTER TABLE `refresh_tokens`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `token_hash` (`token_hash`),
-  ADD KEY `user_id` (`user_id`),
-  ADD KEY `idx_expires_at` (`expires_at`);
-
---
 -- Indexes for table `roles`
 --
 ALTER TABLE `roles`
@@ -1867,21 +1753,8 @@ ALTER TABLE `role_permissions`
   ADD UNIQUE KEY `unique_role_permission` (`role_id`,`permission_id`),
   ADD KEY `idx_role_id` (`role_id`),
   ADD KEY `idx_permission_id` (`permission_id`),
-  ADD KEY `idx_role_permissions_lookup` (`role_id`,`permission_id`,`granted`);
-
---
--- Indexes for table `server_build_templates`
---
-ALTER TABLE `server_build_templates`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `template_uuid` (`template_uuid`),
-  ADD KEY `idx_template_uuid` (`template_uuid`),
-  ADD KEY `idx_created_by` (`created_by`),
-  ADD KEY `idx_category` (`category`),
-  ADD KEY `idx_status` (`status`),
-  ADD KEY `idx_is_public` (`is_public`),
-  ADD KEY `idx_use_count` (`use_count`),
-  ADD KEY `idx_parent_template` (`parent_template_id`);
+  ADD KEY `idx_role_permissions_lookup` (`role_id`,`permission_id`,`granted`),
+  ADD KEY `idx_role_permissions_role_perm` (`role_id`,`permission_id`,`granted`);
 
 --
 -- Indexes for table `server_configurations`
@@ -1899,7 +1772,9 @@ ALTER TABLE `server_configurations`
   ADD KEY `idx_status` (`configuration_status`),
   ADD KEY `idx_created_at` (`created_at`),
   ADD KEY `idx_hbacard_uuid` (`hbacard_uuid`),
-  ADD KEY `idx_is_virtual` (`is_virtual`);
+  ADD KEY `idx_is_virtual` (`is_virtual`),
+  ADD KEY `idx_server_config_created_by` (`created_by`),
+  ADD KEY `idx_server_config_status` (`configuration_status`);
 
 --
 -- Indexes for table `server_configuration_history`
@@ -1911,20 +1786,6 @@ ALTER TABLE `server_configuration_history`
   ADD KEY `idx_action` (`action`),
   ADD KEY `idx_created_at` (`created_at`),
   ADD KEY `idx_component_uuid` (`component_uuid`);
-
---
--- Indexes for table `server_deployments`
---
-ALTER TABLE `server_deployments`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `deployment_uuid` (`deployment_uuid`),
-  ADD KEY `idx_deployment_uuid` (`deployment_uuid`),
-  ADD KEY `idx_config_uuid` (`config_uuid`),
-  ADD KEY `idx_environment` (`environment`),
-  ADD KEY `idx_deployment_status` (`deployment_status`),
-  ADD KEY `idx_deployed_by` (`deployed_by`),
-  ADD KEY `idx_hostname` (`hostname`),
-  ADD KEY `idx_location` (`location`);
 
 --
 -- Indexes for table `sfpinventory`
@@ -1991,7 +1852,8 @@ ALTER TABLE `users`
 --
 ALTER TABLE `user_permissions`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `user_permission` (`user_id`,`permission_id`);
+  ADD UNIQUE KEY `user_permission` (`user_id`,`permission_id`),
+  ADD KEY `idx_user_permissions_user_perm` (`user_id`,`permission_id`);
 
 --
 -- Indexes for table `user_roles`
@@ -2002,7 +1864,8 @@ ALTER TABLE `user_roles`
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_role_id` (`role_id`),
   ADD KEY `fk_user_roles_assigned_by` (`assigned_by`),
-  ADD KEY `idx_user_roles_lookup` (`user_id`,`role_id`);
+  ADD KEY `idx_user_roles_lookup` (`user_id`,`role_id`),
+  ADD KEY `idx_user_roles_user_role` (`user_id`,`role_id`);
 
 --
 -- AUTO_INCREMENT for dumped tables
@@ -2018,7 +1881,7 @@ ALTER TABLE `acl_permissions`
 -- AUTO_INCREMENT for table `auth_tokens`
 --
 ALTER TABLE `auth_tokens`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=424;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=448;
 
 --
 -- AUTO_INCREMENT for table `caddyinventory`
@@ -2030,7 +1893,7 @@ ALTER TABLE `caddyinventory`
 -- AUTO_INCREMENT for table `chassisinventory`
 --
 ALTER TABLE `chassisinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
 
 --
 -- AUTO_INCREMENT for table `compatibility_log`
@@ -2057,22 +1920,16 @@ ALTER TABLE `component_specifications`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
--- AUTO_INCREMENT for table `component_usage_tracking`
---
-ALTER TABLE `component_usage_tracking`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
 -- AUTO_INCREMENT for table `cpuinventory`
 --
 ALTER TABLE `cpuinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=40;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=60;
 
 --
 -- AUTO_INCREMENT for table `hbacardinventory`
 --
 ALTER TABLE `hbacardinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=33;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=42;
 
 --
 -- AUTO_INCREMENT for table `inventory_log`
@@ -2081,82 +1938,58 @@ ALTER TABLE `inventory_log`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=110;
 
 --
--- AUTO_INCREMENT for table `jwt_blacklist`
---
-ALTER TABLE `jwt_blacklist`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
 -- AUTO_INCREMENT for table `motherboardinventory`
 --
 ALTER TABLE `motherboardinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `nicinventory`
 --
 ALTER TABLE `nicinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=178;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=187;
 
 --
 -- AUTO_INCREMENT for table `pciecardinventory`
 --
 ALTER TABLE `pciecardinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `permissions`
 --
 ALTER TABLE `permissions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=95646;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=378320;
 
 --
 -- AUTO_INCREMENT for table `raminventory`
 --
 ALTER TABLE `raminventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
-
---
--- AUTO_INCREMENT for table `refresh_tokens`
---
-ALTER TABLE `refresh_tokens`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT for table `roles`
 --
 ALTER TABLE `roles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4387;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4388;
 
 --
 -- AUTO_INCREMENT for table `role_permissions`
 --
 ALTER TABLE `role_permissions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1151;
-
---
--- AUTO_INCREMENT for table `server_build_templates`
---
-ALTER TABLE `server_build_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6156;
 
 --
 -- AUTO_INCREMENT for table `server_configurations`
 --
 ALTER TABLE `server_configurations`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=80;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=120;
 
 --
 -- AUTO_INCREMENT for table `server_configuration_history`
 --
 ALTER TABLE `server_configuration_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
-
---
--- AUTO_INCREMENT for table `server_deployments`
---
-ALTER TABLE `server_deployments`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=108;
 
 --
 -- AUTO_INCREMENT for table `sfpinventory`
@@ -2168,19 +2001,19 @@ ALTER TABLE `sfpinventory`
 -- AUTO_INCREMENT for table `storageinventory`
 --
 ALTER TABLE `storageinventory`
-  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `ID` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- AUTO_INCREMENT for table `tickets`
 --
 ALTER TABLE `tickets`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `ticket_history`
 --
 ALTER TABLE `ticket_history`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
 
 --
 -- AUTO_INCREMENT for table `ticket_items`
@@ -2204,7 +2037,7 @@ ALTER TABLE `user_permissions`
 -- AUTO_INCREMENT for table `user_roles`
 --
 ALTER TABLE `user_roles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- Constraints for dumped tables
@@ -2221,12 +2054,6 @@ ALTER TABLE `auth_tokens`
 --
 ALTER TABLE `inventory_log`
   ADD CONSTRAINT `inventory_log_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL;
-
---
--- Constraints for table `refresh_tokens`
---
-ALTER TABLE `refresh_tokens`
-  ADD CONSTRAINT `fk_refresh_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `role_permissions`

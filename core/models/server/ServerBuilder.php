@@ -1075,15 +1075,15 @@ class ServerBuilder {
      */
     private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action) {
         try {
-            $stmt = $this->pdo->prepare("SELECT nic_configuration FROM server_configurations WHERE config_uuid = ?");
+            $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $currentConfig = $stmt->fetchColumn();
-            
+
             $nicConfig = $currentConfig ? json_decode($currentConfig, true) : [];
             if (!is_array($nicConfig)) {
                 $nicConfig = [];
             }
-            
+
             if ($action === 'add') {
                 $nicConfig[] = [
                     'uuid' => $componentUuid,
@@ -1096,10 +1096,10 @@ class ServerBuilder {
                 });
                 $nicConfig = array_values($nicConfig);
             }
-            
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET nic_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
+
+            $stmt = $this->pdo->prepare("UPDATE server_configurations SET nic_config = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($nicConfig), $configUuid]);
-            
+
         } catch (Exception $e) {
             error_log("Error updating NIC configuration: " . $e->getMessage());
             throw $e;
