@@ -1005,24 +1005,10 @@ class ComponentValidator {
 
     /**
      * Validate adding riser card to configuration
+     * Note: Actual riser slot compatibility is validated by UnifiedSlotTracker::assignRiserSlotBySize()
+     * which checks motherboard riser slot availability
      */
     public function validateAddRiserCard($riserComponent, $existingComponents) {
-        // Check if chassis already exists
-        $hasChassisInvalid = false;
-        foreach ($existingComponents as $comp) {
-            if ($comp['component_type'] === 'chassis') {
-                $hasChassisInvalid = true;
-                break;
-            }
-        }
-
-        if ($hasChassisInvalid) {
-            return [
-                'valid' => false,
-                'error' => "Cannot add riser card after chassis is added"
-            ];
-        }
-
         return [
             'valid' => true,
             'error' => null

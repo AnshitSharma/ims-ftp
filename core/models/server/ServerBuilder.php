@@ -842,6 +842,22 @@ class ServerBuilder {
                     $portIndex = $options['port_index'] ?? null;
                     $this->updateSfpConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $parentNicUuid, $portIndex);
                     break;
+
+                case 'pciecard':
+                    // Extract slot position from options if provided
+                    $slotPosition = $options['slot_position'] ?? null;
+                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition);
+                    break;
+
+                case 'hbacard':
+                    // HBA card is stored in hbacard_uuid column (single value like motherboard/chassis)
+                    if ($action === 'add') {
+                        $updateFields[] = "hbacard_uuid = ?";
+                        $updateValues[] = $componentUuid;
+                    } elseif ($action === 'remove') {
+                        $updateFields[] = "hbacard_uuid = NULL";
+                    }
+                    break;
             }
 
             if (!empty($updateFields)) {
@@ -1189,6 +1205,55 @@ class ServerBuilder {
 
         } catch (Exception $e) {
             error_log("Error updating SFP configuration: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Update PCIe card configuration in JSON format
+     * Stores PCIe cards (including riser cards, NVMe adapters, etc.) in pciecard_configurations column
+     */
+    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT pciecard_configurations FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $currentConfig = $stmt->fetchColumn();
+
+            $pcieConfig = $currentConfig ? json_decode($currentConfig, true) : [];
+            if (!is_array($pcieConfig)) {
+                $pcieConfig = [];
+            }
+
+            if ($action === 'add') {
+                $pcieEntry = [
+                    'uuid' => $componentUuid,
+                    'quantity' => $quantity,
+                    'added_at' => date('Y-m-d H:i:s')
+                ];
+
+                // Add slot position if provided
+                if ($slotPosition !== null) {
+                    $pcieEntry['slot_position'] = $slotPosition;
+                }
+
+                $pcieConfig[] = $pcieEntry;
+                error_log("Added PCIe card to configuration: UUID=$componentUuid, Quantity=$quantity" . ($slotPosition ? ", Slot=$slotPosition" : ""));
+
+            } elseif ($action === 'remove') {
+                $pcieConfig = array_filter($pcieConfig, function($pcie) use ($componentUuid) {
+                    return $pcie['uuid'] !== $componentUuid;
+                });
+                $pcieConfig = array_values($pcieConfig); // Re-index array
+                error_log("Removed PCIe card from configuration: UUID=$componentUuid");
+            }
+
+            $stmt = $this->pdo->prepare("UPDATE server_configurations SET pciecard_configurations = ?, updated_at = NOW() WHERE config_uuid = ?");
+            $stmt->execute([json_encode($pcieConfig), $configUuid]);
+
+            error_log("PCIe card configuration updated successfully for config $configUuid");
+
+        } catch (Exception $e) {
+            error_log("Error updating PCIe card configuration: " . $e->getMessage());
             throw $e;
         }
     }

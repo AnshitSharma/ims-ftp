@@ -12,6 +12,9 @@ require_once(__DIR__ . '/../auth/ACL.php');
 $jwtSecret = getenv('JWT_SECRET') ?: 'bdc-ims-jwt-secret-key-change-in-production-2025-xyz';
 JWTHelper::init($jwtSecret);
 
+// Initialize permission cache (request-level caching for performance)
+$GLOBALS['_permission_cache'] = [];
+
 /**
  * Generate UUID v4
  */
@@ -200,12 +203,17 @@ if (!function_exists('initializeACLSystem')) {
 }
 
 /**
- * Check if user has specific permission
+ * Load user permission data into cache - OPTIMIZED: Loads all permissions in 1-2 queries
  */
-if (!function_exists('hasPermission')) {
-    function hasPermission($pdo, $permission, $userId) {
+if (!function_exists('loadUserPermissionData')) {
+    function loadUserPermissionData($pdo, $userId) {
+        $data = [
+            'is_admin' => false,
+            'permissions' => []
+        ];
+
         try {
-            // Check if user has super_admin or admin role (bypass all permission checks)
+            // Query 1: Check if user has admin/super_admin role
             $stmt = $pdo->prepare("
                 SELECT COUNT(*) as count
                 FROM user_roles ur
@@ -214,81 +222,89 @@ if (!function_exists('hasPermission')) {
             ");
             $stmt->execute([$userId]);
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            $data['is_admin'] = ($result['count'] > 0);
 
-            if ($result['count'] > 0) {
-                return true; // Super admin/admin has all permissions
+            // If not admin, load all permissions (direct + role-based) in single query
+            if (!$data['is_admin']) {
+                $stmt = $pdo->prepare("
+                    SELECT DISTINCT ap.name
+                    FROM permissions ap
+                    WHERE ap.id IN (
+                        SELECT permission_id FROM user_permissions WHERE user_id = ?
+                        UNION
+                        SELECT rp.permission_id
+                        FROM user_roles ur
+                        JOIN role_permissions rp ON ur.role_id = rp.role_id
+                        WHERE ur.user_id = ? AND rp.granted = 1
+                    )
+                ");
+                $stmt->execute([$userId, $userId]);
+                $data['permissions'] = $stmt->fetchAll(PDO::FETCH_COLUMN);
             }
-
-            // Check direct user permissions
-            $stmt = $pdo->prepare("
-                SELECT COUNT(*) as count
-                FROM user_permissions up
-                JOIN permissions ap ON up.permission_id = ap.id
-                WHERE up.user_id = ? AND ap.name = ?
-            ");
-            $stmt->execute([$userId, $permission]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($result['count'] > 0) {
-                return true;
-            }
-
-            // Check role-based permissions
-            $stmt = $pdo->prepare("
-                SELECT COUNT(*) as count
-                FROM user_roles ur
-                JOIN role_permissions rp ON ur.role_id = rp.role_id
-                JOIN permissions ap ON rp.permission_id = ap.id
-                WHERE ur.user_id = ? AND ap.name = ? AND rp.granted = 1
-            ");
-            $stmt->execute([$userId, $permission]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            return $result['count'] > 0;
         } catch (Exception $e) {
-            error_log("Permission check error: " . $e->getMessage());
-            return false;
+            error_log("Permission cache load error: " . $e->getMessage());
         }
+
+        return $data;
     }
 }
 
 /**
- * Get all permissions for a user
+ * Check if user has specific permission - OPTIMIZED with request-level caching
+ */
+if (!function_exists('hasPermission')) {
+    function hasPermission($pdo, $permission, $userId) {
+        // Check cache first
+        $cacheKey = "user_{$userId}";
+
+        if (!isset($GLOBALS['_permission_cache'][$cacheKey])) {
+            // Load all permissions for this user once per request
+            $GLOBALS['_permission_cache'][$cacheKey] = loadUserPermissionData($pdo, $userId);
+        }
+
+        $cache = $GLOBALS['_permission_cache'][$cacheKey];
+
+        // Admin bypass - has all permissions
+        if ($cache['is_admin']) {
+            return true;
+        }
+
+        // Check if permission exists in cached list
+        return in_array($permission, $cache['permissions']);
+    }
+}
+
+/**
+ * Get all permissions for a user - OPTIMIZED with request-level caching
  */
 if (!function_exists('getUserPermissions')) {
     function getUserPermissions($pdo, $userId) {
-        try {
-            $permissions = [];
-            
-            // Get direct permissions
-            $stmt = $pdo->prepare("
-                SELECT ap.name 
-                FROM user_permissions up 
-                JOIN permissions ap ON up.permission_id = ap.id 
-                WHERE up.user_id = ?
-            ");
-            $stmt->execute([$userId]);
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $permissions[] = $row['name'];
-            }
-            
-            // Get role-based permissions
-            $stmt = $pdo->prepare("
-                SELECT ap.name 
-                FROM user_roles ur 
-                JOIN role_permissions rp ON ur.role_id = rp.role_id 
-                JOIN permissions ap ON rp.permission_id = ap.id 
-                WHERE ur.user_id = ?
-            ");
-            $stmt->execute([$userId]);
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $permissions[] = $row['name'];
-            }
-            
-            return array_unique($permissions);
-        } catch (Exception $e) {
-            error_log("Get user permissions error: " . $e->getMessage());
-            return [];
+        $cacheKey = "user_{$userId}";
+
+        if (!isset($GLOBALS['_permission_cache'][$cacheKey])) {
+            $GLOBALS['_permission_cache'][$cacheKey] = loadUserPermissionData($pdo, $userId);
+        }
+
+        $cache = $GLOBALS['_permission_cache'][$cacheKey];
+
+        // Admin has all permissions
+        if ($cache['is_admin']) {
+            return ['*'];
+        }
+
+        return $cache['permissions'];
+    }
+}
+
+/**
+ * Clear permission cache - call after permission changes
+ */
+if (!function_exists('clearPermissionCache')) {
+    function clearPermissionCache($userId = null) {
+        if ($userId) {
+            unset($GLOBALS['_permission_cache']["user_{$userId}"]);
+        } else {
+            $GLOBALS['_permission_cache'] = [];
         }
     }
 }
@@ -543,72 +559,81 @@ if (!function_exists('getSystemSetting')) {
 }
 
 /**
- * Get dashboard data
+ * Get dashboard data - OPTIMIZED: 13 queries reduced to 2 queries
  */
 if (!function_exists('getDashboardData')) {
     function getDashboardData($pdo, $user) {
         $data = [];
-        
+
         try {
-            // Get component counts
-            $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy'];
-            $componentCounts = [];
-            
-            foreach ($componentTypes as $type) {
-                try {
-                    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM $type");
-                    $stmt->execute();
-                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $componentCounts[$type] = (int)$result['count'];
-                } catch (Exception $e) {
-                    $componentCounts[$type] = 0;
+            // OPTIMIZED: Single UNION ALL query for all component counts and status breakdown
+            $sql = "
+                SELECT 'cpuinventory' as type, Status, COUNT(*) as cnt FROM cpuinventory GROUP BY Status
+                UNION ALL
+                SELECT 'raminventory' as type, Status, COUNT(*) as cnt FROM raminventory GROUP BY Status
+                UNION ALL
+                SELECT 'storageinventory' as type, Status, COUNT(*) as cnt FROM storageinventory GROUP BY Status
+                UNION ALL
+                SELECT 'motherboardinventory' as type, Status, COUNT(*) as cnt FROM motherboardinventory GROUP BY Status
+                UNION ALL
+                SELECT 'nicinventory' as type, Status, COUNT(*) as cnt FROM nicinventory GROUP BY Status
+                UNION ALL
+                SELECT 'caddyinventory' as type, Status, COUNT(*) as cnt FROM caddyinventory GROUP BY Status
+            ";
+
+            $stmt = $pdo->query($sql);
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Initialize component counts
+            $componentCounts = [
+                'cpu' => 0, 'ram' => 0, 'storage' => 0,
+                'motherboard' => 0, 'nic' => 0, 'caddy' => 0
+            ];
+            $statusCounts = [];
+
+            // Map table names to component types
+            $typeMap = [
+                'cpuinventory' => 'cpu',
+                'raminventory' => 'ram',
+                'storageinventory' => 'storage',
+                'motherboardinventory' => 'motherboard',
+                'nicinventory' => 'nic',
+                'caddyinventory' => 'caddy'
+            ];
+
+            // Process results from single query
+            foreach ($results as $row) {
+                $type = $typeMap[$row['type']] ?? $row['type'];
+                $status = $row['Status'];
+                $count = (int)$row['cnt'];
+
+                // Add to component counts
+                $componentCounts[$type] += $count;
+
+                // Add to status counts (aggregated across all types)
+                if (!isset($statusCounts[$status])) {
+                    $statusCounts[$status] = 0;
                 }
+                $statusCounts[$status] += $count;
             }
-            
+
             $data['component_counts'] = $componentCounts;
             $data['total_components'] = array_sum($componentCounts);
-            
-            // Get status breakdown
-            $statusCounts = [];
-            foreach ($componentTypes as $type) {
-                try {
-                    $stmt = $pdo->prepare("SELECT Status, COUNT(*) as count FROM $type GROUP BY Status");
-                    $stmt->execute();
-                    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    foreach ($results as $result) {
-                        $status = $result['Status'];
-                        if (!isset($statusCounts[$status])) {
-                            $statusCounts[$status] = 0;
-                        }
-                        $statusCounts[$status] += (int)$result['count'];
-                    }
-                } catch (Exception $e) {
-                    // Skip this type if table doesn't exist
-                    continue;
-                }
-            }
-            
             $data['status_counts'] = $statusCounts;
-            
-            // Server configurations count
-            try {
-                $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM server_configurations WHERE created_by = ?");
-                $stmt->execute([$user['id']]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                $data['user_configurations'] = (int)$result['count'];
-            } catch (Exception $e) {
-                $data['user_configurations'] = 0;
-            }
-            
-            // Recent activity placeholder
+
+            // User configurations (1 query - user-specific, cannot be combined)
+            $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM server_configurations WHERE created_by = ?");
+            $stmt->execute([$user['id']]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            $data['user_configurations'] = (int)$result['count'];
+
             $data['recent_activity'] = [];
-            
+
         } catch (Exception $e) {
             error_log("Error getting dashboard data: " . $e->getMessage());
             $data = ['error' => 'Unable to fetch dashboard data'];
         }
-        
+
         return $data;
     }
 }
