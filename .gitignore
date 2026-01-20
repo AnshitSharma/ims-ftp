@@ -13,3 +13,4 @@ logs/*.log
 # Claude/Agent metadata
 .claude/
 .claude-memory.md
+.claude/settings.local.json

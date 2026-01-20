@@ -427,6 +427,7 @@ class ComponentDataService {
             'chipset' => $component['chipset'] ?? '',
             'memory' => $component['memory'] ?? [],
             'expansion_slots' => $component['expansion_slots'] ?? [],
+            'storage' => $component['storage'] ?? [],
             'storage_interfaces' => $component['storage_interfaces'] ?? [],
             'network_interfaces' => $component['network_interfaces'] ?? [],
             'power_connectors' => $component['power_connectors'] ?? [],
