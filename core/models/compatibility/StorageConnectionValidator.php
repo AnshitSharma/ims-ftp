@@ -20,17 +20,20 @@
 
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
+require_once __DIR__ . '/UnifiedSlotTracker.php';
 
 class StorageConnectionValidator {
 
     private $pdo;
     private $dataUtils;
     private $componentDataService;
+    private $slotTracker;
 
     public function __construct($pdo) {
         $this->pdo = $pdo;
         $this->dataUtils = new DataExtractionUtilities();
         $this->componentDataService = ComponentDataService::getInstance();
+        $this->slotTracker = new UnifiedSlotTracker($pdo);
     }
 
     /**
@@ -85,13 +88,14 @@ class StorageConnectionValidator {
         }
 
         // CHECK 2: Motherboard Direct Connection
-        $motherboardPath = $this->checkMotherboardDirectConnection($storageInterface, $storageFormFactor, $storageSubtype, $existingComponents, $storageSpecs);
+        $motherboardPath = $this->checkMotherboardDirectConnection($storageInterface, $storageFormFactor, $storageSubtype, $existingComponents, $storageSpecs, $configUuid);
         if ($motherboardPath['available']) {
             $connectionPaths[] = $motherboardPath;
         }
 
         // CHECK 3: HBA Card Requirement/Availability
-        $hbaPath = $this->checkHBACardRequirement($storageInterface, $existingComponents);
+        // QUANTITY-FIX: Pass storageSpecs to include quantity in port capacity check
+        $hbaPath = $this->checkHBACardRequirement($storageInterface, $existingComponents, $storageSpecs);
         if ($hbaPath['available']) {
             $connectionPaths[] = $hbaPath;
         } elseif ($hbaPath['mandatory']) {
@@ -99,7 +103,7 @@ class StorageConnectionValidator {
         }
 
         // CHECK 4: PCIe Adapter Card Check
-        $adapterPath = $this->checkPCIeAdapterCard($storageFormFactor, $storageSubtype, $existingComponents);
+        $adapterPath = $this->checkPCIeAdapterCard($storageFormFactor, $storageSubtype, $existingComponents, $configUuid);
         if ($adapterPath['available']) {
             $connectionPaths[] = $adapterPath;
         }
@@ -287,9 +291,9 @@ class StorageConnectionValidator {
     /**
      * CHECK 2: Motherboard Direct Connection Check
      * Reads: motherboard.storage.sata.ports, motherboard.storage.nvme.m2_slots[], motherboard.storage.nvme.u2_slots
-     * PHASE 2 ENHANCED: Now tracks M.2/U.2 slot usage
+     * PHASE 2 ENHANCED: Now tracks M.2/U.2 slot usage with UnifiedSlotTracker
      */
-    private function checkMotherboardDirectConnection($storageInterface, $storageFormFactor, $storageSubtype, $existing, $storageSpecs) {
+    private function checkMotherboardDirectConnection($storageInterface, $storageFormFactor, $storageSubtype, $existing, $storageSpecs, $configUuid = null) {
         if (!$existing['motherboard'] || !isset($existing['motherboard']['component_uuid'])) {
             // PHASE 2: For M.2/U.2 storage, check if NVMe adapters exist
             $isM2 = (strpos(strtolower($storageFormFactor), 'm.2') !== false || strpos(strtolower($storageSubtype), 'm.2') !== false);
@@ -333,12 +337,27 @@ class StorageConnectionValidator {
             ];
         }
 
-        // PHASE 2: M.2 Slot Check with usage tracking
+        // PHASE 2: M.2 Slot Check with usage tracking using UnifiedSlotTracker
         // ONLY check form_factor, NOT subtype - subtype indicates protocol, form_factor indicates physical connection
+        // P3.1 FIX: Sum ALL M.2 slot types (NVMe + SATA), not just the first one
         if (strpos(strtolower($storageFormFactor), 'm.2') !== false) {
             $m2Slots = $storage['nvme']['m2_slots'] ?? [];
-            $totalM2Slots = (!empty($m2Slots) && isset($m2Slots[0]['count'])) ? $m2Slots[0]['count'] : 0;
-            $usedM2Slots = $this->countUsedM2Slots($existing);
+            // P3.1 FIX: Calculate total by summing all slot configurations
+            $totalM2Slots = 0;
+            if (!empty($m2Slots) && is_array($m2Slots)) {
+                foreach ($m2Slots as $slotConfig) {
+                    $totalM2Slots += $slotConfig['count'] ?? 0;
+                }
+            }
+
+            // UNIFIED: Use UnifiedSlotTracker for M.2 counting if configUuid available
+            $usedM2Slots = 0;
+            if ($configUuid) {
+                $usedM2Slots = $this->slotTracker->countUsedM2Slots($configUuid);
+            } else {
+                // Fallback to old method if configUuid not provided
+                $usedM2Slots = $this->countUsedM2SlotsLegacy($existing);
+            }
 
             if ($totalM2Slots > 0 && $usedM2Slots < $totalM2Slots) {
                 // Motherboard has available M.2 slots
@@ -402,10 +421,19 @@ class StorageConnectionValidator {
 
     /**
      * CHECK 3: HBA Card Requirement Check
+     * QUANTITY-FIX: Now includes quantity parameter to prevent port over-subscription
      * Reads: HBA cards from hbacardinventory (now separate component type)
+     *
+     * @param string $storageInterface Storage interface (e.g., "SATA 6Gb/s", "SAS 12Gb/s")
+     * @param array $existing Existing components in configuration
+     * @param array $storageSpecs Storage specifications including quantity
+     * @return array Availability result with HBA connection details
      */
-    private function checkHBACardRequirement($storageInterface, $existing) {
+    private function checkHBACardRequirement($storageInterface, $existing, $storageSpecs = []) {
         $protocol = $this->extractProtocol($storageInterface);
+
+        // Extract quantity being added (default to 1)
+        $quantityBeingAdded = $storageSpecs['quantity'] ?? 1;
 
         // SAS storage REQUIRES HBA card
         if ($protocol === 'sas') {
@@ -417,18 +445,19 @@ class StorageConnectionValidator {
                         // Check if HBA supports SAS protocol
                         $hbaProtocol = strtolower($hbaSpecs['protocol'] ?? '');
                         if (strpos($hbaProtocol, 'sas') !== false) {
-                            // Check HBA port capacity
+                            // QUANTITY-FIX: Check HBA port capacity INCLUDING quantity being added
                             $internalPorts = $hbaSpecs['internal_ports'] ?? 0;
                             $currentStorageCount = $this->countChassisConnectedStorage($existing);
+                            $totalAfterAddition = $currentStorageCount + $quantityBeingAdded;
 
-                            if ($internalPorts <= $currentStorageCount) {
+                            if ($internalPorts < $totalAfterAddition) {
                                 return [
                                     'available' => false,
                                     'mandatory' => true,
                                     'error' => [
                                         'type' => 'hba_ports_exhausted',
-                                        'message' => "HBA card ({$hbaSpecs['model']}) has $internalPorts internal ports, all occupied by existing storage",
-                                        'resolution' => "Remove storage devices OR replace with HBA having more ports"
+                                        'message' => "HBA card ({$hbaSpecs['model']}) has $internalPorts internal ports. Currently using $currentStorageCount, trying to add $quantityBeingAdded (total would be $totalAfterAddition)",
+                                        'resolution' => "Reduce quantity OR remove existing storage OR replace with HBA having more ports"
                                     ]
                                 ];
                             }
@@ -472,11 +501,12 @@ class StorageConnectionValidator {
                     // Check if HBA supports this storage protocol
                     $hbaProtocol = strtolower($hbaSpecs['protocol'] ?? '');
                     if ($protocol === 'sata' && (strpos($hbaProtocol, 'sata') !== false || strpos($hbaProtocol, 'sas') !== false)) {
-                        // Check HBA port capacity
+                        // QUANTITY-FIX: Check HBA port capacity INCLUDING quantity being added
                         $internalPorts = $hbaSpecs['internal_ports'] ?? 0;
                         $currentStorageCount = $this->countChassisConnectedStorage($existing);
+                        $totalAfterAddition = $currentStorageCount + $quantityBeingAdded;
 
-                        if ($internalPorts <= $currentStorageCount) {
+                        if ($internalPorts < $totalAfterAddition) {
                             return [
                                 'available' => false,
                                 'mandatory' => false,
@@ -543,9 +573,9 @@ class StorageConnectionValidator {
     /**
      * CHECK 4: PCIe Adapter Card Check
      * Reads: PCIe cards with component_subtype='NVMe Adaptor'
-     * PHASE 2 ENHANCED: Now tracks M.2/U.2 slot usage on adapters
+     * PHASE 2 ENHANCED: Now tracks M.2/U.2 slot usage on adapters using UnifiedSlotTracker
      */
-    private function checkPCIeAdapterCard($storageFormFactor, $storageSubtype, $existing) {
+    private function checkPCIeAdapterCard($storageFormFactor, $storageSubtype, $existing, $configUuid = null) {
         $nvmeAdapters = $this->componentDataService->filterNvmeAdapters($existing['pciecard'] ?? []);
 
         if (empty($nvmeAdapters)) {
@@ -561,21 +591,33 @@ class StorageConnectionValidator {
             $cardUuid = $adapter['uuid'];
             $quantity = $adapter['quantity'];
 
-            // Check M.2 support
+            // Check M.2 support using UnifiedSlotTracker
             if ($isM2 && isset($cardSpecs['m2_slots']) && $cardSpecs['m2_slots'] > 0) {
-                // Count how many M.2 storage devices are using adapters
-                $totalAdapterM2Slots = $this->countTotalM2Slots($existing);
-                $motherboardM2Slots = 0;
-                if (!empty($existing['motherboard'])) {
-                    $mbSpecs = $this->getMotherboardSpecs($existing['motherboard']['component_uuid']);
-                    if ($mbSpecs) {
-                        $m2Slots = $mbSpecs['storage']['nvme']['m2_slots'] ?? [];
-                        $motherboardM2Slots = (!empty($m2Slots) && isset($m2Slots[0]['count'])) ? $m2Slots[0]['count'] : 0;
+                // UNIFIED: Use UnifiedSlotTracker for M.2 counting if configUuid available
+                if ($configUuid) {
+                    $m2Availability = $this->slotTracker->getM2SlotAvailability($configUuid);
+                    if ($m2Availability['success']) {
+                        $totalMotherboardSlots = $m2Availability['motherboard_slots']['total'];
+                        $usedMotherboardSlots = $m2Availability['motherboard_slots']['used'];
+                        $availableAdapterSlots = $m2Availability['expansion_card_slots']['available'];
+                    } else {
+                        $availableAdapterSlots = 0;
                     }
+                } else {
+                    // Fallback to old method
+                    $totalAdapterM2Slots = $this->countTotalM2SlotsLegacy($existing);
+                    $motherboardM2Slots = 0;
+                    if (!empty($existing['motherboard'])) {
+                        $mbSpecs = $this->getMotherboardSpecs($existing['motherboard']['component_uuid']);
+                        if ($mbSpecs) {
+                            $m2Slots = $mbSpecs['storage']['nvme']['m2_slots'] ?? [];
+                            $motherboardM2Slots = (!empty($m2Slots) && isset($m2Slots[0]['count'])) ? $m2Slots[0]['count'] : 0;
+                        }
+                    }
+                    $adapterProvidedSlots = $totalAdapterM2Slots - $motherboardM2Slots;
+                    $usedM2Slots = $this->countUsedM2SlotsLegacy($existing);
+                    $availableAdapterSlots = max(0, $adapterProvidedSlots - max(0, $usedM2Slots - $motherboardM2Slots));
                 }
-                $adapterProvidedSlots = $totalAdapterM2Slots - $motherboardM2Slots;
-                $usedM2Slots = $this->countUsedM2Slots($existing);
-                $availableAdapterSlots = max(0, $adapterProvidedSlots - max(0, $usedM2Slots - $motherboardM2Slots));
 
                 if ($availableAdapterSlots > 0) {
                     $supportedFormFactors = $cardSpecs['m2_form_factors'] ?? [];
@@ -634,7 +676,8 @@ class StorageConnectionValidator {
     }
 
     /**
-     * CHECK 5: Bay Availability Check
+     * CHECK 5: Bay Availability Check with Form Factor Lock Respect
+     * P2.4 FIX: Respect form factor lock when calculating available bay count
      */
     private function checkBayAvailability($storageFormFactor, $existing, $storageSpecs) {
         if (!$existing['chassis'] || !isset($existing['chassis']['component_uuid'])) {
@@ -650,7 +693,26 @@ class StorageConnectionValidator {
         $totalBays = $driveBays['total_bays'] ?? 0;
         $bayConfiguration = $driveBays['bay_configuration'] ?? [];
 
-        // Count used bays
+        // P2.4 FIX: Detect form factor lock from existing storage
+        $existingFormFactorLock = $this->detectFormFactorLock($existing);
+        $normalizedStorageFF = $this->normalizeFormFactor($storageFormFactor);
+
+        // If form factor lock exists, validate new storage matches it
+        if ($existingFormFactorLock && $existingFormFactorLock !== $normalizedStorageFF) {
+            $lockedFF = $this->denormalizeFormFactor($existingFormFactorLock);
+            return [
+                'available' => false,
+                'error' => [
+                    'type' => 'form_factor_lock_violation',
+                    'message' => "Chassis bays are locked to $lockedFF form factor. Cannot add $storageFormFactor",
+                    'locked_form_factor' => $existingFormFactorLock,
+                    'requested_form_factor' => $normalizedStorageFF,
+                    'resolution' => "Add storage with $lockedFF form factor OR remove all existing storage to unlock"
+                ]
+            ];
+        }
+
+        // Count used bays (respect form factor lock)
         $usedBays = (!empty($existing['storage']) && is_array($existing['storage'])) ? count($existing['storage']) : 0;
 
         if ($usedBays >= $totalBays) {
@@ -665,7 +727,6 @@ class StorageConnectionValidator {
         }
 
         // Form factor compatibility check
-        $normalizedStorageFF = $this->normalizeFormFactor($storageFormFactor);
         $caddyRequired = false;
         $bayTypeMatch = false;
 
@@ -701,7 +762,9 @@ class StorageConnectionValidator {
         return [
             'available' => true,
             'caddy_required' => $caddyRequired,
-            'available_bays' => $totalBays - $usedBays
+            'available_bays' => $totalBays - $usedBays,
+            'form_factor_lock' => $existingFormFactorLock,
+            'form_factor_enforced' => (bool) $existingFormFactorLock
         ];
     }
 
@@ -1455,13 +1518,66 @@ class StorageConnectionValidator {
     }
 
     /**
-     * PHASE 2: Count total M.2 slots available in configuration
+     * P2.4: Detect form factor lock from existing storage
+     * If all existing storage has the same form factor, that form factor is "locked"
+     * and new storage must match it
+     *
+     * @param array $existingComponents Existing storage components
+     * @return string|null Locked form factor (normalized) or null if no lock
+     */
+    private function detectFormFactorLock($existingComponents) {
+        if (empty($existingComponents['storage']) || !is_array($existingComponents['storage'])) {
+            return null; // No storage yet, no lock
+        }
+
+        $formFactors = [];
+        foreach ($existingComponents['storage'] as $storage) {
+            $specs = $this->getStorageSpecs($storage['component_uuid']);
+            if ($specs && isset($specs['form_factor'])) {
+                $normalized = $this->normalizeFormFactor($specs['form_factor']);
+                $formFactors[$normalized] = true;
+            }
+        }
+
+        // If all storage shares exactly one form factor, that's the lock
+        if (count($formFactors) === 1) {
+            return array_key_first($formFactors);
+        }
+
+        return null; // Multiple form factors, no lock
+    }
+
+    /**
+     * P2.4: Convert normalized form factor back to display format
+     * E.g., "2.5-inch" → "2.5-Inch" or "3.5-inch" → "3.5-Inch"
+     *
+     * @param string $normalizedFF Normalized form factor
+     * @return string Display-friendly form factor
+     */
+    private function denormalizeFormFactor($normalizedFF) {
+        $mapping = [
+            '2.5-inch' => '2.5-Inch',
+            '3.5-inch' => '3.5-Inch',
+            'm.2' => 'M.2',
+            'u.2' => 'U.2',
+            'u.3' => 'U.3',
+            'nvme' => 'NVMe',
+            'sata' => 'SATA',
+            'sas' => 'SAS'
+        ];
+
+        return $mapping[strtolower($normalizedFF)] ?? ucfirst($normalizedFF);
+    }
+
+    /**
+     * LEGACY METHOD: Count total M.2 slots available in configuration
+     * DEPRECATED: Use UnifiedSlotTracker::countTotalM2Slots() instead
      * Includes: motherboard direct M.2 slots + NVMe adapter M.2 slots
      *
      * @param array $existingComponents
      * @return int Total M.2 slots available
      */
-    private function countTotalM2Slots($existingComponents) {
+    private function countTotalM2SlotsLegacy($existingComponents) {
         $totalSlots = 0;
 
         // Count motherboard M.2 slots
@@ -1487,12 +1603,13 @@ class StorageConnectionValidator {
     }
 
     /**
-     * PHASE 2: Count M.2 slots currently used by existing storage
+     * LEGACY METHOD: Count M.2 slots currently used by existing storage
+     * DEPRECATED: Use UnifiedSlotTracker::countUsedM2Slots() instead
      *
      * @param array $existingComponents
      * @return int Number of M.2 slots in use
      */
-    private function countUsedM2Slots($existingComponents) {
+    private function countUsedM2SlotsLegacy($existingComponents) {
         $usedSlots = 0;
 
         if (empty($existingComponents['storage']) || !is_array($existingComponents['storage'])) {
@@ -1584,35 +1701,89 @@ class StorageConnectionValidator {
     }
 
     /**
-     * PHASE 2: Get detailed M.2/U.2 slot usage information
+     * Get detailed M.2/U.2 slot usage information
+     * UNIFIED: Delegates to UnifiedSlotTracker
      *
-     * @param array $existingComponents
+     * @param string|array $configUuidOrComponents Either configUuid (string) or existingComponents array (legacy)
      * @return array Slot usage statistics
      */
-    public function getNvmeSlotUsage($existingComponents) {
-        return [
-            'm2' => [
-                'total' => $this->countTotalM2Slots($existingComponents),
-                'used' => $this->countUsedM2Slots($existingComponents),
-                'available' => max(0, $this->countTotalM2Slots($existingComponents) - $this->countUsedM2Slots($existingComponents))
-            ],
-            'u2' => [
-                'total' => $this->countTotalU2Slots($existingComponents),
-                'used' => $this->countUsedU2Slots($existingComponents),
-                'available' => max(0, $this->countTotalU2Slots($existingComponents) - $this->countUsedU2Slots($existingComponents))
-            ]
-        ];
+    public function getNvmeSlotUsage($configUuidOrComponents) {
+        // Check if it's a configUuid (string) or legacy existingComponents (array)
+        if (is_string($configUuidOrComponents)) {
+            // New unified approach - delegate to UnifiedSlotTracker
+            return $this->slotTracker->getNvmeSlotUsage($configUuidOrComponents);
+        } else {
+            // Legacy fallback - keep old behavior for backward compatibility
+            return [
+                'm2' => [
+                    'total' => $this->countTotalM2SlotsLegacy($configUuidOrComponents),
+                    'used' => $this->countUsedM2SlotsLegacy($configUuidOrComponents),
+                    'available' => max(0, $this->countTotalM2SlotsLegacy($configUuidOrComponents) - $this->countUsedM2SlotsLegacy($configUuidOrComponents))
+                ],
+                'u2' => [
+                    'total' => $this->countTotalU2Slots($configUuidOrComponents),
+                    'used' => $this->countUsedU2Slots($configUuidOrComponents),
+                    'available' => max(0, $this->countTotalU2Slots($configUuidOrComponents) - $this->countUsedU2Slots($configUuidOrComponents))
+                ]
+            ];
+        }
     }
 
     /**
      * PHASE 2: Validate motherboard against existing M.2/U.2 storage
      * Called when motherboard is added AFTER M.2/U.2 storage exists
+     * UNIFIED: Delegates to UnifiedSlotTracker
      *
      * @param string $motherboardUuid Motherboard being added
-     * @param array $existingComponents Existing configuration
+     * @param array $existingComponents Existing configuration (deprecated - kept for backward compatibility)
+     * @param string $configUuid Server configuration UUID (recommended)
      * @return array ['valid' => bool, 'errors' => array, 'warnings' => array]
      */
-    public function validateMotherboardForNvmeStorage($motherboardUuid, $existingComponents) {
+    public function validateMotherboardForNvmeStorage($motherboardUuid, $existingComponents, $configUuid = null) {
+        // If configUuid provided, use modern approach
+        if ($configUuid) {
+            $availability = $this->slotTracker->getM2SlotAvailability($configUuid);
+            if (!$availability['success']) {
+                return ['valid' => true, 'errors' => [], 'warnings' => []];
+            }
+
+            $errors = [];
+            $warnings = [];
+
+            // Get motherboard specs
+            $mbSpecs = $this->getMotherboardSpecs($motherboardUuid);
+            if (!$mbSpecs) {
+                return ['valid' => true, 'errors' => [], 'warnings' => []];
+            }
+
+            $storage = $mbSpecs['storage'] ?? [];
+            $m2Slots = $storage['nvme']['m2_slots'] ?? [];
+            $motherboardM2Slots = (!empty($m2Slots) && isset($m2Slots[0]['count'])) ? $m2Slots[0]['count'] : 0;
+
+            // Check if motherboard has enough M.2 slots
+            $totalM2Used = $availability['motherboard_slots']['used'] + $availability['expansion_card_slots']['used'];
+            $motherboardM2Used = $availability['motherboard_slots']['used'];
+            $m2RequiringMotherboard = max(0, $totalM2Used - $availability['expansion_card_slots']['total']);
+
+            if ($m2RequiringMotherboard > $motherboardM2Slots) {
+                $errors[] = [
+                    'type' => 'm2_insufficient_slots',
+                    'message' => "Cannot add motherboard - insufficient M.2 slots for existing storage",
+                    'existing_m2_storage' => $totalM2Used,
+                    'motherboard_m2_slots' => $motherboardM2Slots,
+                    'm2_requiring_motherboard' => $m2RequiringMotherboard,
+                    'resolution' => "Select motherboard with at least $m2RequiringMotherboard M.2 slots OR remove M.2 storage"
+                ];
+            }
+
+            return [
+                'valid' => empty($errors),
+                'errors' => $errors,
+                'warnings' => $warnings
+            ];
+        }
+
+        // Legacy approach - use existing components
         $errors = [];
         $warnings = [];
 
@@ -1629,7 +1800,7 @@ class StorageConnectionValidator {
         $motherboardU2Slots = isset($u2Slots['count']) ? $u2Slots['count'] : 0;
 
         // Count existing M.2 and U.2 storage
-        $existingM2Count = $this->countUsedM2Slots($existingComponents);
+        $existingM2Count = $this->countUsedM2SlotsLegacy($existingComponents);
         $existingU2Count = $this->countUsedU2Slots($existingComponents);
 
         // Count slots provided by NVMe adapters

@@ -2385,50 +2385,27 @@ class ComponentCompatibility {
                 return $result;
             }
 
-            // CASE 3: Storage devices exist - check protocol compatibility
+            // CASE 3: Storage devices exist - HBA connection to PCIe slot is independent of storage
+            // NOTE: Storage-to-HBA protocol compatibility will be validated when storage is added/modified
+            // HBA validation only checks if HBA can fit in motherboard PCIe slot
             $storageCount = count($storageDevices);
             $result['details'][] = "Found {$storageCount} storage device(s) in configuration";
 
-            // Extract unique storage interfaces
+            // Extract unique storage interfaces for informational purposes only
             $storageInterfaces = array_unique(array_column($storageDevices, 'interface'));
             $result['details'][] = 'Storage interfaces detected: ' . implode(', ', $storageInterfaces);
 
-            // Check if HBA protocol supports all storage interfaces
-            $incompatibleInterfaces = [];
-            foreach ($storageInterfaces as $storageInterface) {
-                if (!$this->isHBAProtocolCompatible($hbaProtocol, $storageInterface)) {
-                    $incompatibleInterfaces[] = $storageInterface;
-                }
-            }
+            // IMPORTANT: Storage-to-HBA protocol compatibility is checked when storage is added
+            // NOT during HBA addition. HBA can be added independently of storage.
+            $result['details'][] = "Note: Storage-to-HBA protocol compatibility will be validated when storage is added or modified";
+            $result['details'][] = "HBA protocol: {$hbaProtocol} - Storage protocol compatibility will be checked later";
 
-            if (!empty($incompatibleInterfaces)) {
-                $result['compatible'] = false;
-                $incompatibleList = implode(', ', $incompatibleInterfaces);
-                $result['issues'][] = "HBA protocol '{$hbaProtocol}' incompatible with storage interfaces: {$incompatibleList}";
-                $result['recommendations'][] = 'Use HBA card with matching protocol or choose tri-mode HBA (SAS/SATA/NVMe)';
+            // HBA validation for existing storage is now informational only
+            // The actual compatibility check happens in storage validation (checkStorageDecentralizedCompatibility)
+            $result['details'][] = "HBA connection route: PCIe {$hbaSlotRequired} on motherboard (independent of storage protocol)";
 
-                // Create detailed compatibility summary explaining the mismatch
-                $result['compatibility_summary'] = "Incompatible - HBA protocol '{$hbaProtocol}' does not support storage interface(s): {$incompatibleList}. Storage requires compatible HBA.";
-                return $result;
-            }
-
-            // Check if HBA has enough ports for storage devices
-            if ($hbaInternalPorts > 0 && $storageCount > $hbaInternalPorts) {
-                $result['compatible'] = false;
-                $result['issues'][] = "HBA card has {$hbaInternalPorts} internal ports but configuration has {$storageCount} storage devices";
-                $result['recommendations'][] = "Remove " . ($storageCount - $hbaInternalPorts) . " storage device(s) or choose HBA with more ports";
-                $result['compatibility_summary'] = 'Incompatible - Insufficient ports';
-                return $result;
-            }
-
-            // Check max devices capacity
-            if ($hbaMaxDevices > 0 && $storageCount > $hbaMaxDevices) {
-                $result['compatible'] = false;
-                $result['issues'][] = "HBA card supports max {$hbaMaxDevices} devices but configuration has {$storageCount} storage devices";
-                $result['recommendations'][] = "Reduce storage devices to {$hbaMaxDevices} or choose HBA with higher capacity";
-                $result['compatibility_summary'] = 'Incompatible - Exceeds max device capacity';
-                return $result;
-            }
+            // Check PCIe slot availability - this is the ONLY blocker for HBA addition
+            // Skip further checks - HBA can be added if there's a PCIe slot available
 
             // Check PCIe slot availability (if motherboard exists) - INCLUDING riser-provided slots
             if ($hasMotherboard) {
@@ -2457,10 +2434,11 @@ class ComponentCompatibility {
                 }
             }
 
-            // All checks passed
-            $result['details'][] = "HBA card protocol '{$hbaProtocol}' is compatible with storage interfaces";
-            $result['details'][] = "HBA card has sufficient capacity: {$hbaInternalPorts} ports for {$storageCount} devices";
-            $result['compatibility_summary'] = "Compatible - Protocol match, sufficient capacity ({$hbaInternalPorts} ports for {$storageCount} devices)";
+            // All checks passed - HBA fits in available PCIe slot
+            $result['details'][] = "HBA card can connect to motherboard PCIe {$hbaSlotRequired} slot";
+            $result['details'][] = "HBA capacity: {$hbaInternalPorts} internal ports available";
+            $result['details'][] = "Storage in configuration ({$storageCount} device(s)) - compatibility will be validated when storage is accessed via HBA";
+            $result['compatibility_summary'] = "Compatible - HBA PCIe slot available. Storage-HBA protocol compatibility will be checked when storage is added/modified";
 
             return $result;
 
@@ -2882,6 +2860,33 @@ class ComponentCompatibility {
                         $result['issues'] = array_merge($result['issues'], $chassisCompatResult['issues']);
                     }
                     $result['details'] = array_merge($result['details'], $chassisCompatResult['details']);
+                }
+            }
+
+            // CRITICAL: Check if storage interface is compatible with existing HBA (if present)
+            // This is the key validation that was missing - when storage is added, verify it can work with HBA
+            if ($result['compatible'] && !empty($storageRequirements['supported_interfaces'])) {
+                $hbaCompatible = false;
+                $supportedInterfaces = $storageRequirements['supported_interfaces'];
+
+                // Check if storage interface matches any supported interface from HBA
+                foreach ($supportedInterfaces as $supportedInterface) {
+                    // Normalize comparison
+                    if (stripos($storageInterface, $supportedInterface) !== false ||
+                        stripos($supportedInterface, $storageInterface) !== false) {
+                        $hbaCompatible = true;
+                        break;
+                    }
+                }
+
+                // If HBA exists but storage interface not compatible, block storage
+                if (!$hbaCompatible && !empty($storageRequirements['hba_ports'])) {
+                    $result['compatible'] = false;
+                    $hbaProtocol = $storageRequirements['hba_protocol'] ?? 'Unknown';
+                    $result['issues'][] = "Storage interface '{$storageInterface}' is incompatible with HBA protocol '{$hbaProtocol}'";
+                    $result['recommendations'][] = 'Use storage with compatible interface (e.g., tri-mode HBA supports SAS/SATA/NVMe) OR replace HBA with compatible model';
+                    $result['details'][] = "HBA supports: " . implode(', ', $supportedInterfaces);
+                    $result['details'][] = "Storage requires: {$storageInterface}";
                 }
             }
 
@@ -4429,13 +4434,14 @@ class ComponentCompatibility {
             $result['details'][] = "HBA: {$hbaData['model']} - {$internalPorts} internal ports, {$usedPorts} used, {$availablePorts} available";
         }
 
-        // Store HBA capacity info for later use
+        // Store HBA capacity info and protocol for later use
         $storageRequirements['hba_ports'] = [
             'total' => $internalPorts,
             'used' => $usedPorts,
             'available' => $availablePorts,
             'max_devices' => $maxDevices
         ];
+        $storageRequirements['hba_protocol'] = $hbaProtocol;
 
         return $result;
     }

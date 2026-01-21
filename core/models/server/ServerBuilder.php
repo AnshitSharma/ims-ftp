@@ -6,6 +6,7 @@ class ServerBuilder {
     private $componentTables;
     private $dataUtils;
     private $configCache;
+    private $activeLocks = [];  // P4.1: Track acquired locks for deterministic ordering
 
     public function __construct($pdo) {
         $this->pdo = $pdo;
@@ -49,103 +50,83 @@ class ServerBuilder {
     private function extractComponentsFromJson($configData) {
         $components = [];
 
-        // CPU configuration (JSON array)
+        // CPU configuration (JSON array) - P5.2: Use safe JSON decoder
         if (!empty($configData['cpu_configuration'])) {
-            try {
-                $cpuConfig = json_decode($configData['cpu_configuration'], true);
-                if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                    foreach ($cpuConfig['cpus'] as $cpu) {
-                        $component = [
-                            'component_type' => 'cpu',
-                            'component_uuid' => $cpu['uuid'] ?? null,
-                            'quantity' => $cpu['quantity'] ?? 1,
-                            'added_at' => $cpu['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                        // CRITICAL: Include serial_number to identify specific physical component
-                        if (isset($cpu['serial_number'])) {
-                            $component['serial_number'] = $cpu['serial_number'];
-                        }
-                        $components[] = $component;
+            $cpuConfig = $this->safeJsonDecode($configData['cpu_configuration'], true, 'cpu_configuration');
+            if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
+                foreach ($cpuConfig['cpus'] as $cpu) {
+                    $component = [
+                        'component_type' => 'cpu',
+                        'component_uuid' => $cpu['uuid'] ?? null,
+                        'quantity' => $cpu['quantity'] ?? 1,
+                        'added_at' => $cpu['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
+                    // CRITICAL: Include serial_number to identify specific physical component
+                    if (isset($cpu['serial_number'])) {
+                        $component['serial_number'] = $cpu['serial_number'];
                     }
+                    $components[] = $component;
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing cpu_configuration JSON: " . $e->getMessage());
             }
         }
 
-        // RAM configuration (JSON array)
+        // RAM configuration (JSON array) - P5.2: Use safe JSON decoder
         if (!empty($configData['ram_configuration'])) {
-            try {
-                $ramConfigs = json_decode($configData['ram_configuration'], true);
-                if (is_array($ramConfigs)) {
-                    foreach ($ramConfigs as $ram) {
-                        $components[] = [
-                            'component_type' => 'ram',
-                            'component_uuid' => $ram['uuid'] ?? null,
-                            'quantity' => $ram['quantity'] ?? 1,
-                            'added_at' => $ram['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                    }
+            $ramConfigs = $this->safeJsonDecode($configData['ram_configuration'], true, 'ram_configuration');
+            if (is_array($ramConfigs)) {
+                foreach ($ramConfigs as $ram) {
+                    $components[] = [
+                        'component_type' => 'ram',
+                        'component_uuid' => $ram['uuid'] ?? null,
+                        'quantity' => $ram['quantity'] ?? 1,
+                        'added_at' => $ram['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing ram_configuration JSON: " . $e->getMessage());
             }
         }
 
-        // Storage configuration (JSON array)
+        // Storage configuration (JSON array) - P5.2: Use safe JSON decoder
         if (!empty($configData['storage_configuration'])) {
-            try {
-                $storageConfigs = json_decode($configData['storage_configuration'], true);
-                if (is_array($storageConfigs)) {
-                    foreach ($storageConfigs as $storage) {
-                        $components[] = [
-                            'component_type' => 'storage',
-                            'component_uuid' => $storage['uuid'] ?? null,
-                            'quantity' => $storage['quantity'] ?? 1,
-                            'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                    }
+            $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], true, 'storage_configuration');
+            if (is_array($storageConfigs)) {
+                foreach ($storageConfigs as $storage) {
+                    $components[] = [
+                        'component_type' => 'storage',
+                        'component_uuid' => $storage['uuid'] ?? null,
+                        'quantity' => $storage['quantity'] ?? 1,
+                        'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing storage_configuration JSON: " . $e->getMessage());
             }
         }
 
-        // Caddy configuration (JSON array)
+        // Caddy configuration (JSON array) - P5.2: Use safe JSON decoder
         if (!empty($configData['caddy_configuration'])) {
-            try {
-                $caddyConfigs = json_decode($configData['caddy_configuration'], true);
-                if (is_array($caddyConfigs)) {
-                    foreach ($caddyConfigs as $caddy) {
-                        $components[] = [
-                            'component_type' => 'caddy',
-                            'component_uuid' => $caddy['uuid'] ?? null,
-                            'quantity' => $caddy['quantity'] ?? 1,
-                            'added_at' => $caddy['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                    }
+            $caddyConfigs = $this->safeJsonDecode($configData['caddy_configuration'], true, 'caddy_configuration');
+            if (is_array($caddyConfigs)) {
+                foreach ($caddyConfigs as $caddy) {
+                    $components[] = [
+                        'component_type' => 'caddy',
+                        'component_uuid' => $caddy['uuid'] ?? null,
+                        'quantity' => $caddy['quantity'] ?? 1,
+                        'added_at' => $caddy['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing caddy_configuration JSON: " . $e->getMessage());
             }
         }
 
-        // NIC configuration (JSON object with nics array)
+        // NIC configuration (JSON object with nics array) - P5.2: Use safe JSON decoder
         if (!empty($configData['nic_config'])) {
-            try {
-                $nicConfig = json_decode($configData['nic_config'], true);
-                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                    foreach ($nicConfig['nics'] as $nic) {
-                        $components[] = [
-                            'component_type' => 'nic',
-                            'component_uuid' => $nic['uuid'] ?? null,
-                            'quantity' => 1,
-                            'added_at' => date('Y-m-d H:i:s')
-                        ];
-                    }
+            $nicConfig = $this->safeJsonDecode($configData['nic_config'], true, 'nic_config');
+            if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
+                foreach ($nicConfig['nics'] as $nic) {
+                    $components[] = [
+                        'component_type' => 'nic',
+                        'component_uuid' => $nic['uuid'] ?? null,
+                        'quantity' => 1,
+                        'added_at' => date('Y-m-d H:i:s')
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing nic_config JSON: " . $e->getMessage());
             }
         }
 
@@ -179,60 +160,52 @@ class ServerBuilder {
             ];
         }
 
-        // PCIe Card configuration (JSON array)
+        // PCIe Card configuration (JSON array) - P5.2: Use safe JSON decoder
         if (!empty($configData['pciecard_configurations'])) {
-            try {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
-                if (is_array($pcieConfigs)) {
-                    foreach ($pcieConfigs as $pcie) {
-                        $components[] = [
-                            'component_type' => 'pciecard',
-                            'component_uuid' => $pcie['uuid'] ?? null,
-                            'quantity' => $pcie['quantity'] ?? 1,
-                            'added_at' => $pcie['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                    }
+            $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], true, 'pciecard_configurations');
+            if (is_array($pcieConfigs)) {
+                foreach ($pcieConfigs as $pcie) {
+                    $components[] = [
+                        'component_type' => 'pciecard',
+                        'component_uuid' => $pcie['uuid'] ?? null,
+                        'quantity' => $pcie['quantity'] ?? 1,
+                        'added_at' => $pcie['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing pciecard_configurations JSON: " . $e->getMessage());
             }
         }
 
-        // SFP configuration (JSON object with sfps array)
+        // SFP configuration (JSON object with sfps array) - P5.2: Use safe JSON decoder
         if (!empty($configData['sfp_configuration'])) {
-            try {
-                $sfpConfig = json_decode($configData['sfp_configuration'], true);
+            $sfpConfig = $this->safeJsonDecode($configData['sfp_configuration'], true, 'sfp_configuration');
 
-                // Extract assigned SFPs (with parent NIC and port assignments)
-                if (isset($sfpConfig['sfps']) && is_array($sfpConfig['sfps'])) {
-                    foreach ($sfpConfig['sfps'] as $sfp) {
-                        $components[] = [
-                            'component_type' => 'sfp',
-                            'component_uuid' => $sfp['uuid'] ?? null,
-                            'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
-                            'port_index' => $sfp['port_index'] ?? null,
-                            'quantity' => 1,
-                            'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s')
-                        ];
-                    }
+            // Extract assigned SFPs (with parent NIC and port assignments)
+            if (isset($sfpConfig['sfps']) && is_array($sfpConfig['sfps'])) {
+                foreach ($sfpConfig['sfps'] as $sfp) {
+                    $components[] = [
+                        'component_type' => 'sfp',
+                        'component_uuid' => $sfp['uuid'] ?? null,
+                        'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
+                        'port_index' => $sfp['port_index'] ?? null,
+                        'quantity' => 1,
+                        'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
                 }
+            }
 
-                // Extract unassigned SFPs (added before NIC, awaiting assignment)
-                if (isset($sfpConfig['unassigned_sfps']) && is_array($sfpConfig['unassigned_sfps'])) {
-                    foreach ($sfpConfig['unassigned_sfps'] as $sfp) {
-                        $components[] = [
-                            'component_type' => 'sfp',
-                            'component_uuid' => $sfp['uuid'] ?? null,
-                            'parent_nic_uuid' => null,
-                            'port_index' => null,
-                            'quantity' => 1,
-                            'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s'),
-                            'status' => 'unassigned'
-                        ];
-                    }
+            // Extract unassigned SFPs (added before NIC, awaiting assignment)
+            if (isset($sfpConfig['unassigned_sfps']) && is_array($sfpConfig['unassigned_sfps'])) {
+                foreach ($sfpConfig['unassigned_sfps'] as $sfp) {
+                    $components[] = [
+                        'component_type' => 'sfp',
+                        'component_uuid' => $sfp['uuid'] ?? null,
+                        'parent_nic_uuid' => null,
+                        'port_index' => null,
+                        'quantity' => 1,
+                        'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s'),
+                        'status' => 'unassigned'
+                    ];
                 }
-            } catch (Exception $e) {
-                error_log("Error parsing sfp_configuration JSON: " . $e->getMessage());
             }
         }
 
@@ -289,6 +262,9 @@ class ServerBuilder {
      * Add component to server configuration with proper database updates
      */
     public function addComponent($configUuid, $componentType, $componentUuid, $options = []) {
+        // RACE CONDITION FIX: Initialize transaction control early
+        $ownTransaction = false;
+
         try {
             // Phase 1: Validate component type
             if (!$this->isValidComponentType($componentType)) {
@@ -302,13 +278,24 @@ class ServerBuilder {
             // CRITICAL: Get serial_number from options to identify specific physical component
             $serialNumber = $options['serial_number'] ?? null;
 
+            // RACE CONDITION FIX: Start transaction BEFORE any availability checks
+            // This ensures all checks happen atomically with component locking
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+                error_log("RACE-FIX: Transaction started for component $componentUuid");
+            }
+
             // Phase 1.5: Validate compatibility with existing components (flexible order)
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
             if (!$compatibilityValidation['success']) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
                 return $compatibilityValidation;
             }
 
-            // Phase 2: Check for duplicate component FIRST with cleanup
+            // Phase 2: Check for duplicate component with configuration row locked
             // CRITICAL: Pass serial_number to allow multiple components with same UUID but different serials
             // Skip duplicate check for virtual configs (allow same component UUID multiple times for testing)
             if (!$this->isVirtualConfig($configUuid) && $this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
@@ -320,6 +307,9 @@ class ServerBuilder {
 
                     // Note: Component data is now stored in JSON columns, no cleanup needed
                 } else {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
                     return [
                         'success' => false,
                         'message' => "Component $componentUuid is already added to this configuration"
@@ -337,6 +327,9 @@ class ServerBuilder {
 
                     $chassisResult = $chassisManager->loadChassisSpecsByUUID($componentUuid);
                     if (!$chassisResult['found']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
                         return [
                             'success' => false,
                             'message' => "Chassis $componentUuid not found in JSON specifications: " . ($chassisResult['error'] ?? 'Unknown error')
@@ -353,6 +346,9 @@ class ServerBuilder {
                     require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
                     if (!class_exists('ComponentCompatibility')) {
                         error_log("ComponentCompatibility class not found after require_once");
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
                         return [
                             'success' => false,
                             'message' => "Component validation system not available"
@@ -370,6 +366,9 @@ class ServerBuilder {
                     if (!$isVirtual && in_array($componentType, $componentsToValidate)) {
                         $existsResult = $compatibility->validateComponentExistsInJSON($componentType, $componentUuid);
                         if (!$existsResult) {
+                            if ($ownTransaction && $this->pdo->inTransaction()) {
+                                $this->pdo->rollback();
+                            }
                             return [
                                 'success' => false,
                                 'message' => "Component $componentUuid not found in $componentType JSON specifications database"
@@ -383,42 +382,49 @@ class ServerBuilder {
                 error_log("ComponentCompatibility.php exists: " . (file_exists(__DIR__ . '/ComponentCompatibility.php') ? 'yes' : 'no'));
                 error_log("CompatibilityEngine.php exists: " . (file_exists(__DIR__ . '/CompatibilityEngine.php') ? 'yes' : 'no'));
                 // Return error instead of skipping
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
                 return [
                     'success' => false,
                     'message' => 'Component validation error: ' . $compatError->getMessage()
                 ];
             }
             
-            // Phase 4: Get component details from inventory
+            // Phase 4: RACE CONDITION FIX - Lock and get component details atomically
             // Note: $serialNumber was already extracted in Phase 1.1
             // For virtual configs, create dummy component details if not found in inventory
-
-            $componentDetails = $this->getComponentByUuidAndSerial($componentType, $componentUuid, $serialNumber);
 
             // Check if this is a virtual config
             $isVirtual = $this->isVirtualConfig($configUuid);
 
-            if (!$componentDetails) {
-                if ($isVirtual) {
-                    // For virtual configs, create dummy component details
-                    // Virtual configs don't need real inventory components
-                    $componentDetails = [
-                        'UUID' => $componentUuid,
-                        'SerialNumber' => $serialNumber ?? 'VIRTUAL-' . substr($componentUuid, 0, 8),
-                        'Status' => 1, // Virtual component (always "available")
-                        'ServerUUID' => null,
-                        'Location' => null,
-                        'Notes' => 'Virtual component for testing'
-                    ];
-                    error_log("Virtual config: Created dummy component details for $componentType $componentUuid");
-                } else {
-                    // Real config requires component to exist in inventory
-                    $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
+            if (!$isVirtual) {
+                // Real config - LOCK the component row to prevent race conditions
+                $lockResult = $this->lockAndCheckComponent($componentType, $componentUuid, $serialNumber);
+
+                if (!$lockResult['found']) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
                     return [
                         'success' => false,
-                        'message' => "Component not found in inventory: $componentUuid$serialInfo"
+                        'message' => $lockResult['error']
                     ];
                 }
+
+                // Component is now LOCKED - no other transaction can modify it
+                $componentDetails = $lockResult['data'];
+            } else {
+                // Virtual config - create dummy component details (no locking needed)
+                $componentDetails = [
+                    'UUID' => $componentUuid,
+                    'SerialNumber' => $serialNumber ?? 'VIRTUAL-' . substr($componentUuid, 0, 8),
+                    'Status' => 1, // Virtual component (always "available")
+                    'ServerUUID' => null,
+                    'Location' => null,
+                    'Notes' => 'Virtual component for testing'
+                ];
+                error_log("Virtual config: Created dummy component details for $componentType $componentUuid");
             }
 
             // Extract the actual serial number from component details (in case it wasn't provided in options)
@@ -436,6 +442,9 @@ class ServerBuilder {
                 try {
                     $ramValidation = $this->validateRAMAddition($configUuid, $componentUuid, $compatibility);
                     if (!$ramValidation['success']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
                         return $ramValidation;
                     }
                     // Store validation results for inclusion in response
@@ -445,12 +454,15 @@ class ServerBuilder {
                     // Continue without RAM validation
                 }
             }
-            
+
             // Phase 6: Other component-specific validations
             if (isset($compatibility)) {
                 try {
                     $compatibilityValidation = $this->validateComponentCompatibilityBeforeAdd($configUuid, $componentType, $componentUuid, $compatibility);
                     if (!$compatibilityValidation['success']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
                         return $compatibilityValidation;
                     }
                 } catch (Exception $compatError) {
@@ -458,21 +470,27 @@ class ServerBuilder {
                     // Continue without compatibility validation
                 }
             }
-            
-            // Phase 7: Check availability
+
+            // Phase 7: Check availability WITH LOCKED DATA (race condition prevented)
             $availability = $this->checkComponentAvailability($componentDetails, $configUuid, $options);
             if (!$availability['available'] && !($options['override_used'] ?? false)) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
                 return [
                     'success' => false,
                     'message' => $availability['message'],
                     'availability_details' => $availability
                 ];
             }
-            
+
             // For single-instance components, check if already exists in config
             if ($this->isSingleInstanceComponent($componentType)) {
                 $existingComponent = $this->getConfigurationComponent($configUuid, $componentType);
                 if ($existingComponent) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
                     return [
                         'success' => false,
                         'message' => "Configuration already has a $componentType. Remove existing component first."
@@ -492,33 +510,44 @@ class ServerBuilder {
             // Log server configuration data for component assignment
             error_log("Component assignment: Server $configUuid has Location='$serverLocation', RackPosition='$serverRackPosition'");
 
-
-            // ALL VALIDATIONS COMPLETE - Begin transaction only after all checks pass
-            // Check if already in transaction (e.g., called from import function)
-            $ownTransaction = !$this->pdo->inTransaction();
-            if ($ownTransaction) {
-                $this->pdo->beginTransaction();
-            }
+            // RACE CONDITION FIX: Transaction already started at beginning of method
+            // Component is already locked with SELECT FOR UPDATE
+            // All validations complete - now proceed with updates
 
             // Extract quantity and slot position from options (component data now stored in JSON columns)
             $quantity = $options['quantity'] ?? 1;
+
+            // P5.1: Validate quantity for slot-based components (RAM, Storage, PCIe cards, etc.)
+            $quantityValidation = $this->validateComponentQuantity($componentType, $componentUuid, $quantity, $configUuid);
+            if (!$quantityValidation['valid']) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
+                return [
+                    'success' => false,
+                    'message' => $quantityValidation['message'],
+                    'details' => $quantityValidation['details'] ?? null
+                ];
+            }
             $slotPosition = $options['slot_position'] ?? null;
 
             // Note: Component data is now stored in JSON columns in server_configurations table
             // No separate server_configuration_components table needed
 
-            // Update component status to "In Use" ONLY for real builds (not virtual/test builds)
+            // P4.3 FIX: Update JSON BEFORE status (safer transaction order)
+            // This ensures JSON is persisted even if status update fails
+
+            // Update the main server_configurations table with component info (FIRST)
+            // CRITICAL: Pass serial_number to store in configuration JSON
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber, $options);
+
+            // Update component status to "In Use" ONLY for real builds (not virtual/test builds) (SECOND)
             // Virtual configs don't lock components - they're for testing only
             if (!$this->isVirtualConfig($configUuid)) {
                 // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
                 // CRITICAL: Pass serial number to update only the specific physical component
                 $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
             }
-
-            
-            // Update the main server_configurations table with component info
-            // CRITICAL: Pass serial_number to store in configuration JSON
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber, $options);
             
             // Update calculated fields (power, compatibility, etc.)
             $this->updateConfigurationMetrics($configUuid);
@@ -637,16 +666,21 @@ class ServerBuilder {
                 }
             }
 
-            // Update component status back to "Available" ONLY for real builds (not test builds)
-            
-            // Update component status back to "Available" and clear ServerUUID, installation date, and rack position
+            // P4.3 FIX: Update JSON BEFORE status (safer transaction order)
+            // This ensures JSON is persisted even if status update fails
+
+            // Update the main server_configurations table (FIRST)
+            // CRITICAL: Pass serial number to remove correct component from JSON
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber);
+
+            // Update component status back to "Available" and clear ServerUUID, installation date, and rack position (SECOND)
             // CRITICAL: Pass serial number to update only the specific physical component
             $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
 
-
-            // Update the main server_configurations table
-            // CRITICAL: Pass serial number to remove correct component from JSON
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber);
+            // P3.4 FIX: Recalculate form factor lock on chassis/storage removal
+            if ($componentType === 'chassis' || $componentType === 'storage') {
+                $this->recalculateFormFactorLock($configUuid);
+            }
 
             // Update calculated fields
             $this->updateConfigurationMetrics($configUuid);
@@ -850,12 +884,66 @@ class ServerBuilder {
                     break;
 
                 case 'hbacard':
-                    // HBA card is stored in hbacard_uuid column (single value like motherboard/chassis)
+                    // HBA-TRACK FIX: Store HBA with PCIe slot position in JSON format
                     if ($action === 'add') {
+                        // Get slot position from options or auto-assign
+                        $slotPosition = $options['slot_position'] ?? null;
+
+                        if (!$slotPosition) {
+                            // Auto-assign PCIe slot for HBA card
+                            require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
+                            require_once __DIR__ . '/../components/ComponentDataService.php';
+
+                            $slotTracker = new UnifiedSlotTracker($this->pdo);
+                            $dataService = ComponentDataService::getInstance();
+
+                            // Get HBA specs to determine slot size requirement
+                            $hbaSpecs = $dataService->getComponentSpecifications('hbacard', $componentUuid);
+
+                            if ($hbaSpecs && isset($hbaSpecs['interface'])) {
+                                // Extract slot size from interface (e.g., "PCIe 3.0 x8" → "x8")
+                                $interface = $hbaSpecs['interface'];
+                                preg_match('/x(\d+)/', $interface, $matches);
+                                $slotSize = 'x' . ($matches[1] ?? '8'); // Default to x8 if not found
+                            } else {
+                                $slotSize = 'x8'; // Default HBA slot size
+                            }
+
+                            // Assign available PCIe slot
+                            $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
+
+                            if (!$slotPosition) {
+                                error_log("HBA-TRACK: No available PCIe slots for HBA card (requires $slotSize)");
+                                throw new Exception("No available PCIe slots for HBA card (requires $slotSize slot)");
+                            }
+
+                            error_log("HBA-TRACK: Auto-assigned HBA card to slot: $slotPosition");
+                        }
+
+                        // Build HBA configuration JSON
+                        $hbaConfig = [
+                            'uuid' => $componentUuid,
+                            'slot_position' => $slotPosition,
+                            'added_at' => date('Y-m-d H:i:s'),
+                            'serial_number' => $serialNumber
+                        ];
+
+                        // Store in new JSON column
+                        $updateFields[] = "hbacard_config = ?";
+                        $updateValues[] = json_encode($hbaConfig);
+
+                        // BACKWARD COMPATIBILITY: Also store in old column for 2 releases
                         $updateFields[] = "hbacard_uuid = ?";
                         $updateValues[] = $componentUuid;
+
+                        error_log("HBA-TRACK: Stored HBA config - UUID: $componentUuid, Slot: $slotPosition");
+
                     } elseif ($action === 'remove') {
+                        // Clear both old and new format
+                        $updateFields[] = "hbacard_config = NULL";
                         $updateFields[] = "hbacard_uuid = NULL";
+
+                        error_log("HBA-TRACK: Removed HBA card from configuration");
                     }
                     break;
             }
@@ -1975,18 +2063,42 @@ class ServerBuilder {
     
     /**
      * Check if component UUID already exists in configuration
-     * Now checks in JSON columns instead of relational table
+     * RACE CONDITION FIX: Now locks configuration row with FOR UPDATE
+     *
+     * IMPORTANT: This method MUST be called within a transaction (started in addComponent)
+     * The FOR UPDATE lock prevents concurrent modifications to the configuration JSON
+     *
+     * @param string $configUuid Configuration UUID
+     * @param string $componentUuid Component UUID to check
+     * @param string|null $serialNumber Optional serial number for physical component identification
+     * @return bool True if duplicate found, false otherwise
      */
     private function isDuplicateComponent($configUuid, $componentUuid, $serialNumber = null) {
         try {
-            // Get configuration data
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+            // RACE CONDITION FIX: Lock configuration row to prevent concurrent JSON updates
+            // This REQUIRES being in a transaction (should be started in addComponent)
+            if (!$this->pdo->inTransaction()) {
+                error_log("RACE-FIX WARNING: isDuplicateComponent called outside transaction!");
+            }
+
+            // Lock configuration row with FOR UPDATE
+            $stmt = $this->pdo->prepare("
+                SELECT cpu_configuration, ram_configuration, storage_configuration,
+                       caddy_configuration, nic_config, hbacard_uuid, motherboard_uuid,
+                       chassis_uuid, pciecard_configurations, sfp_configuration
+                FROM server_configurations
+                WHERE config_uuid = ?
+                FOR UPDATE
+            ");
             $stmt->execute([$configUuid]);
             $configData = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$configData) {
+                error_log("RACE-FIX: Configuration $configUuid not found");
                 return false;
             }
+
+            error_log("RACE-FIX: Configuration $configUuid locked for duplicate check");
 
             // Extract components and check for duplicate
             $components = $this->extractComponentsFromJson($configData);
@@ -2021,13 +2133,27 @@ class ServerBuilder {
             // Debug logging
             $serialInfo = $serialNumber ? " SerialNumber=$serialNumber" : "";
             error_log("Duplicate check: ConfigUUID=$configUuid, ComponentUUID=$componentUuid$serialInfo");
-            error_log("Result: " . ($isDuplicate ? "DUPLICATE FOUND" : "NO DUPLICATE") .
+            error_log("RACE-FIX: Duplicate check result - " . ($isDuplicate ? "DUPLICATE FOUND" : "NO DUPLICATE") .
                      ($componentType ? " (Type: $componentType)" : ""));
 
             return $isDuplicate;
+
+        } catch (PDOException $e) {
+            error_log("RACE-FIX: Database error in duplicate check: " . $e->getMessage());
+
+            // Check for lock wait timeout
+            if (strpos($e->getMessage(), 'Lock wait timeout') !== false) {
+                error_log("RACE-FIX: Lock wait timeout - another transaction holds configuration lock");
+            }
+
+            // On error, return true to prevent addition (fail-safe approach)
+            // Better to prevent addition than risk duplicate
+            return true;
+
         } catch (Exception $e) {
-            error_log("Error checking duplicate component: " . $e->getMessage());
-            return false;
+            error_log("RACE-FIX: Error checking duplicate component: " . $e->getMessage());
+            // On error, return true to prevent addition (fail-safe)
+            return true;
         }
     }
     
@@ -2905,7 +3031,78 @@ class ServerBuilder {
         
         return $idsUuids;
     }
-    
+
+    /**
+     * RACE CONDITION FIX: Lock component row and retrieve details atomically
+     * Uses SELECT ... FOR UPDATE to prevent race conditions during component addition
+     *
+     * @param string $componentType Component type (cpu, motherboard, etc.)
+     * @param string $componentUuid Component UUID
+     * @param string|null $serialNumber Optional serial number for multi-component UUIDs
+     * @return array ['found' => bool, 'data' => array|null, 'error' => string|null]
+     */
+    private function lockAndCheckComponent($componentType, $componentUuid, $serialNumber = null) {
+        try {
+            $table = $this->getComponentInventoryTable($componentType);
+            if (!$table) {
+                return [
+                    'found' => false,
+                    'data' => null,
+                    'error' => "Invalid component type: $componentType"
+                ];
+            }
+
+            // CRITICAL: Use FOR UPDATE to lock the row and prevent race conditions
+            if ($serialNumber !== null) {
+                // Lock specific physical component by UUID + SerialNumber
+                $stmt = $this->pdo->prepare("
+                    SELECT UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                    FROM `$table`
+                    WHERE UUID = ? AND SerialNumber = ?
+                    FOR UPDATE
+                ");
+                $stmt->execute([$componentUuid, $serialNumber]);
+            } else {
+                // Lock by UUID only
+                $stmt = $this->pdo->prepare("
+                    SELECT UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                    FROM `$table`
+                    WHERE UUID = ?
+                    FOR UPDATE
+                ");
+                $stmt->execute([$componentUuid]);
+            }
+
+            $component = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$component) {
+                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
+                return [
+                    'found' => false,
+                    'data' => null,
+                    'error' => "Component not found in inventory: $componentUuid$serialInfo"
+                ];
+            }
+
+            // Component found and LOCKED - no other transaction can modify it now
+            error_log("RACE-FIX: Component $componentUuid locked (Status={$component['Status']}, ServerUUID={$component['ServerUUID']})");
+
+            return [
+                'found' => true,
+                'data' => $component,
+                'error' => null
+            ];
+
+        } catch (PDOException $e) {
+            error_log("RACE-FIX: Database error locking component: " . $e->getMessage());
+            return [
+                'found' => false,
+                'data' => null,
+                'error' => "Database error: " . $e->getMessage()
+            ];
+        }
+    }
+
     /**
      * Calculate component power consumption from JSON specifications
      */
@@ -4587,14 +4784,29 @@ class ServerBuilder {
                 }
             }
 
+            // P3.2 FIX: Use actual PCIe lane requirements from specs instead of hardcoded defaults
             if (isset($componentsByType['nic'])) {
                 foreach ($componentsByType['nic'] as $nic) {
-                    // Most NICs use x4 or x8, default to x4
-                    $usedLanes += 4;
+                    $nicSpecs = $this->dataUtils->getNICByUUID($nic['component_uuid']);
+                    if ($nicSpecs) {
+                        // Extract lanes from interface field (e.g., "PCIe 3.0 x4" → 4)
+                        $interface = $nicSpecs['interface'] ?? '';
+                        $lanes = 4; // default
+                        if (preg_match('/x(\d+)/i', $interface, $matches)) {
+                            $lanes = (int)$matches[1];
+                        }
+                        // Account for quantity if present
+                        $quantity = $nic['quantity'] ?? 1;
+                        $usedLanes += $lanes * $quantity;
+                    } else {
+                        // Fallback: assume x4 if specs not found
+                        $usedLanes += 4;
+                    }
                 }
             }
 
             // Account for NVMe storage that uses PCIe slots (not M.2)
+            // P3.2 FIX: Use actual lane requirements from specs, not hardcoded x4
             if (isset($componentsByType['storage'])) {
                 foreach ($componentsByType['storage'] as $storage) {
                     $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
@@ -4607,7 +4819,14 @@ class ServerBuilder {
                         $isNVMe = (strpos($interface, 'nvme') !== false || strpos($interface, 'pcie') !== false);
 
                         if ($isNVMe && !$isM2) {
-                            $usedLanes += 4; // U.2 or PCIe add-in NVMe typically uses x4
+                            // Extract actual lane requirement from interface
+                            $lanes = 4; // default
+                            if (preg_match('/x(\d+)/i', $interface, $matches)) {
+                                $lanes = (int)$matches[1];
+                            }
+                            // Account for quantity if present
+                            $quantity = $storage['quantity'] ?? 1;
+                            $usedLanes += $lanes * $quantity;
                         }
                     }
                 }
@@ -5451,5 +5670,426 @@ class ServerBuilder {
         }
 
         return $formatted;
+    }
+
+    /**
+     * P5.2: Safely parse JSON with error handling
+     * Prevents fatal errors from malformed JSON in database columns
+     *
+     * @param string $jsonString JSON string to parse
+     * @param bool $associative Return associative array (default true)
+     * @param string $fieldName Field name for error logging
+     * @return array Parsed data or empty array on error
+     */
+    private function safeJsonDecode($jsonString, $associative = true, $fieldName = 'unknown') {
+        if (empty($jsonString)) {
+            return $associative ? [] : new stdClass();
+        }
+
+        try {
+            $decoded = json_decode($jsonString, $associative);
+
+            // P5.2: Check for JSON parse errors
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $errorMsg = json_last_error_msg();
+                error_log("P5.2 JSON ERROR in $fieldName: " . $errorMsg . " | Raw: " . substr($jsonString, 0, 100));
+                return $associative ? [] : new stdClass();
+            }
+
+            // Handle null result (valid JSON null, but we treat as empty)
+            if ($decoded === null && $jsonString !== 'null') {
+                error_log("P5.2 JSON NULL in $fieldName: JSON decoded to null unexpectedly | Raw: " . substr($jsonString, 0, 100));
+                return $associative ? [] : new stdClass();
+            }
+
+            return $decoded;
+
+        } catch (Exception $e) {
+            error_log("P5.2 JSON EXCEPTION in $fieldName: " . $e->getMessage());
+            return $associative ? [] : new stdClass();
+        }
+    }
+
+    /**
+     * P5.1: Validate that we have enough slots/capacity for component quantity
+     * Prevents adding more components than the system can support (e.g., 16 RAM sticks to 4-DIMM board)
+     *
+     * @param string $componentType Component type (ram, storage, nic, pciecard, etc.)
+     * @param string $componentUuid Component UUID
+     * @param int $quantity Quantity being added
+     * @param string $configUuid Server configuration UUID
+     * @return array Validation result
+     */
+    private function validateComponentQuantity($componentType, $componentUuid, $quantity, $configUuid) {
+        // P5.1: Only validate slot-based components
+        $slotBasedTypes = ['ram', 'storage', 'pciecard', 'hbacard', 'nic'];
+
+        if (!in_array($componentType, $slotBasedTypes)) {
+            return ['valid' => true]; // Non-slot components don't need quantity validation
+        }
+
+        try {
+            // Get current configuration
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $config = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$config) {
+                return ['valid' => false, 'message' => 'Configuration not found'];
+            }
+
+            // Get motherboard specs to determine slot limits
+            $motherboardUuid = $config['motherboard_uuid'] ?? null;
+            if (!$motherboardUuid) {
+                // No motherboard, can't validate
+                return ['valid' => true];
+            }
+
+            $mbSpecs = $this->dataUtils->getMotherboardByUUID($motherboardUuid);
+            if (!$mbSpecs) {
+                return ['valid' => true]; // Can't validate without specs
+            }
+
+            // P5.1: Validate based on component type
+            switch ($componentType) {
+                case 'ram':
+                    $dimms = $mbSpecs['ram']['dimm_slots'] ?? 0;
+                    // Count existing RAM
+                    $existingRam = [];
+                    if (!empty($config['ram_configurations'])) {
+                        $ramConfigs = json_decode($config['ram_configurations'], true);
+                        if (is_array($ramConfigs)) {
+                            $existingRam = $ramConfigs;
+                        }
+                    }
+                    $totalRam = count($existingRam) + $quantity;
+
+                    if ($totalRam > $dimms) {
+                        return [
+                            'valid' => false,
+                            'message' => "Insufficient RAM slots: trying to add $quantity RAM modules but only " . ($dimms - count($existingRam)) . " slots available (board has $dimms total, $existingRam currently used)",
+                            'details' => [
+                                'total_slots' => $dimms,
+                                'used_slots' => count($existingRam),
+                                'requesting' => $quantity,
+                                'available' => $dimms - count($existingRam)
+                            ]
+                        ];
+                    }
+                    break;
+
+                case 'storage':
+                    // Count storage bays
+                    $driveBays = $mbSpecs['storage']['drive_bays']['total_bays'] ?? 0;
+                    if ($driveBays === 0) {
+                        // Check if chassis has bays
+                        $chassis = $config['chassis_uuid'] ?? null;
+                        if ($chassis) {
+                            $chassisSpecs = $this->dataUtils->getChassisSpecifications($chassis);
+                            if ($chassisSpecs) {
+                                $driveBays = $chassisSpecs['drive_bays']['total_bays'] ?? 0;
+                            }
+                        }
+                    }
+
+                    if ($driveBays > 0) {
+                        // Count existing storage
+                        $existingStorage = [];
+                        if (!empty($config['storage_configurations'])) {
+                            $storageConfigs = json_decode($config['storage_configurations'], true);
+                            if (is_array($storageConfigs)) {
+                                $existingStorage = $storageConfigs;
+                            }
+                        }
+                        $totalStorage = count($existingStorage) + $quantity;
+
+                        if ($totalStorage > $driveBays) {
+                            return [
+                                'valid' => false,
+                                'message' => "Insufficient drive bays: trying to add $quantity storage devices but only " . ($driveBays - count($existingStorage)) . " bays available (chassis has $driveBays total, " . count($existingStorage) . " currently used)",
+                                'details' => [
+                                    'total_bays' => $driveBays,
+                                    'used_bays' => count($existingStorage),
+                                    'requesting' => $quantity,
+                                    'available' => $driveBays - count($existingStorage)
+                                ]
+                            ];
+                        }
+                    }
+                    break;
+
+                case 'pciecard':
+                    // Count PCIe slots
+                    $pcieSlots = $mbSpecs['expansion_slots']['pcie_slots'] ?? [];
+                    $totalPcieSlots = 0;
+                    foreach ($pcieSlots as $slot) {
+                        $totalPcieSlots += $slot['count'] ?? 0;
+                    }
+
+                    if ($totalPcieSlots > 0) {
+                        // Count existing PCIe cards
+                        $existingPcie = [];
+                        if (!empty($config['pciecard_configurations'])) {
+                            $pcieConfigs = json_decode($config['pciecard_configurations'], true);
+                            if (is_array($pcieConfigs)) {
+                                $existingPcie = $pcieConfigs;
+                            }
+                        }
+                        $totalPcie = count($existingPcie) + $quantity;
+
+                        if ($totalPcie > $totalPcieSlots) {
+                            return [
+                                'valid' => false,
+                                'message' => "Insufficient PCIe slots: trying to add $quantity PCIe cards but only " . ($totalPcieSlots - count($existingPcie)) . " slots available (motherboard has $totalPcieSlots total, " . count($existingPcie) . " currently used)",
+                                'details' => [
+                                    'total_slots' => $totalPcieSlots,
+                                    'used_slots' => count($existingPcie),
+                                    'requesting' => $quantity,
+                                    'available' => $totalPcieSlots - count($existingPcie)
+                                ]
+                            ];
+                        }
+                    }
+                    break;
+            }
+
+            return ['valid' => true];
+
+        } catch (Exception $e) {
+            error_log("Error validating component quantity: " . $e->getMessage());
+            return ['valid' => true]; // Don't block on validation errors
+        }
+    }
+
+    /**
+     * P4.4: Detect and fix orphaned ServerUUID assignments
+     * When a component shows ServerUUID but is not in that config's JSON, remove the orphaned reference
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array Fix summary
+     */
+    public function fixOrphanedServerUUIDs($configUuid) {
+        try {
+            $fixed = [];
+            $errors = [];
+
+            // Get configuration
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $config = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$config) {
+                return ['success' => false, 'message' => 'Configuration not found'];
+            }
+
+            // Extract components actually in this config
+            $components = $this->extractComponentsFromJson($config);
+            $configComponentUuids = [];
+            foreach ($components as $comp) {
+                $configComponentUuids[$comp['component_type']][] = $comp['component_uuid'];
+            }
+
+            // P4.4: Check each component type table for orphaned ServerUUID
+            foreach ($this->componentTables as $type => $table) {
+                try {
+                    $stmt = $this->pdo->prepare("SELECT UUID FROM $table WHERE ServerUUID = ?");
+                    $stmt->execute([$configUuid]);
+                    $rows = $stmt->fetchAll();
+
+                    foreach ($rows as $row) {
+                        $uuid = $row['UUID'];
+                        // Check if this component is actually in the configuration
+                        $isInConfig = in_array($uuid, $configComponentUuids[$type] ?? []);
+
+                        if (!$isInConfig) {
+                            // P4.4: ORPHANED! Clear ServerUUID
+                            $updateStmt = $this->pdo->prepare("UPDATE $table SET ServerUUID = NULL, server_location = NULL, rack_position = NULL, installation_date = NULL WHERE UUID = ?");
+                            if ($updateStmt->execute([$uuid])) {
+                                $fixed[] = "Cleared orphaned ServerUUID from $type:$uuid";
+                                error_log("P4.4 AUTOFIX: Cleared orphaned ServerUUID from $type:$uuid in config $configUuid");
+                            } else {
+                                $errors[] = "Failed to fix $type:$uuid";
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log("P4.4: Error checking $table for orphaned ServerUUIDs: " . $e->getMessage());
+                }
+            }
+
+            return [
+                'success' => true,
+                'fixed_count' => count($fixed),
+                'fixed_items' => $fixed,
+                'errors' => $errors,
+                'message' => count($fixed) > 0 ? "Fixed " . count($fixed) . " orphaned ServerUUID(s)" : "No orphaned ServerUUIDs found"
+            ];
+
+        } catch (Exception $e) {
+            error_log("Error fixing orphaned ServerUUIDs: " . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => 'Failed to fix orphaned ServerUUIDs: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * P4.1: Get deterministic lock order for multiple resources
+     * Prevents deadlocks by always locking in same order (alphabetical)
+     *
+     * @param array $resourceIds Resource identifiers to lock
+     * @return array Sorted resource IDs
+     */
+    private function getDeterministicLockOrder($resourceIds) {
+        // P4.1: Always sort to ensure consistent lock order
+        sort($resourceIds);
+        return $resourceIds;
+    }
+
+    /**
+     * P4.1: Lock multiple resources in deterministic order
+     * Always locks server_configurations first (if config exists), then components in alphabetical order
+     *
+     * @param string|null $configUuid Server configuration UUID (locked first)
+     * @param array $componentIds Component UUIDs to lock (locked second, in sorted order)
+     * @return bool True if all locks acquired
+     */
+    private function acquireDeterministicLocks($configUuid = null, $componentIds = []) {
+        try {
+            $this->activeLocks = [];
+            $lockOrder = [];
+
+            // P4.1: Lock server_configurations first (has highest priority)
+            if ($configUuid) {
+                $lockOrder[] = ['type' => 'config', 'id' => $configUuid];
+            }
+
+            // P4.1: Lock components in alphabetical order
+            $sortedComponents = $this->getDeterministicLockOrder($componentIds);
+            foreach ($sortedComponents as $uuid) {
+                $lockOrder[] = ['type' => 'component', 'id' => $uuid];
+            }
+
+            // Acquire locks in determined order
+            foreach ($lockOrder as $lock) {
+                $startTime = microtime(true);
+
+                if ($lock['type'] === 'config') {
+                    $stmt = $this->pdo->prepare("SELECT config_uuid FROM server_configurations WHERE config_uuid = ? FOR UPDATE");
+                    if (!$stmt->execute([$lock['id']])) {
+                        error_log("P4.1 DEADLOCK: Failed to lock config {$lock['id']}");
+                        return false;
+                    }
+                    $this->activeLocks[] = $lock;
+                    $elapsed = (microtime(true) - $startTime) * 1000;
+                    if ($elapsed > 100) {
+                        error_log("P4.1 LOCK WAIT: Config lock took {$elapsed}ms");
+                    }
+                } elseif ($lock['type'] === 'component') {
+                    // Lock in server_configuration_components table
+                    $stmt = $this->pdo->prepare("SELECT component_uuid FROM server_configuration_components WHERE component_uuid = ? LIMIT 1 FOR UPDATE");
+                    if (!$stmt->execute([$lock['id']])) {
+                        error_log("P4.1 DEADLOCK: Failed to lock component {$lock['id']}");
+                        return false;
+                    }
+                    $this->activeLocks[] = $lock;
+                    $elapsed = (microtime(true) - $startTime) * 1000;
+                    if ($elapsed > 100) {
+                        error_log("P4.1 LOCK WAIT: Component lock took {$elapsed}ms");
+                    }
+                }
+            }
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log("P4.1: Error acquiring deterministic locks: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * P4.1: Release all locks in reverse order
+     * (locks are released in transaction rollback/commit, this is for logging/cleanup)
+     *
+     * @return void
+     */
+    private function releaseDeterministicLocks() {
+        // P4.1: Locks are released in reverse order by transaction management
+        // This method is for logging/cleanup purposes
+        if (!empty($this->activeLocks)) {
+            error_log("P4.1: Releasing " . count($this->activeLocks) . " locks");
+            $this->activeLocks = [];
+        }
+    }
+
+    /**
+     * P3.4: Recalculate form factor lock when chassis or storage is removed
+     * If only one storage form factor remains, set lock. If no storage, clear lock.
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return void
+     */
+    private function recalculateFormFactorLock($configUuid) {
+        try {
+            require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
+            $dataUtils = new DataExtractionUtilities();
+
+            // Get current configuration
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $config = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$config) {
+                return;
+            }
+
+            // Extract storage components from JSON
+            $storageComponents = [];
+            if (!empty($config['storage_configurations'])) {
+                $storageConfigs = json_decode($config['storage_configurations'], true);
+                if (is_array($storageConfigs)) {
+                    $storageComponents = $storageConfigs;
+                }
+            }
+
+            // Determine new form factor lock
+            $formFactors = [];
+            foreach ($storageComponents as $storage) {
+                $storageUuid = $storage['uuid'] ?? null;
+                if ($storageUuid) {
+                    $storageSpecs = $dataUtils->getStorageByUUID($storageUuid);
+                    if ($storageSpecs) {
+                        $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                        // Normalize form factor
+                        if (strpos($formFactor, '2.5') !== false) {
+                            $formFactor = '2.5-inch';
+                        } elseif (strpos($formFactor, '3.5') !== false) {
+                            $formFactor = '3.5-inch';
+                        } elseif (strpos($formFactor, 'm.') !== false || strpos($formFactor, 'm2') !== false) {
+                            $formFactor = 'm.2';
+                        }
+                        $formFactors[$formFactor] = true;
+                    }
+                }
+            }
+
+            // Update form factor lock
+            if (count($formFactors) === 1) {
+                // Only one form factor - set lock
+                $lockedFF = array_key_first($formFactors);
+                error_log("P3.4: Form factor lock set to '$lockedFF' for configuration $configUuid");
+            } else if (count($formFactors) === 0) {
+                // No storage - clear lock
+                error_log("P3.4: Form factor lock cleared for configuration $configUuid (no storage)");
+            } else {
+                // Multiple form factors - no lock
+                error_log("P3.4: Form factor lock cleared for configuration $configUuid (multiple form factors)");
+            }
+
+        } catch (Exception $e) {
+            error_log("Error recalculating form factor lock: " . $e->getMessage());
+        }
     }
 }

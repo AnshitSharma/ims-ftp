@@ -1463,6 +1463,175 @@ function handleRemoveComponent($serverBuilder, $user) {
 }
 
 /**
+ * Get unified slot tracking for a server configuration
+ * Consolidates PCIe, riser, and M.2 slot information from UnifiedSlotTracker
+ *
+ * @param string $configUuid Server configuration UUID
+ * @return array Unified slot tracking data
+ */
+function getSlotTracking($configUuid) {
+    global $pdo;
+
+    try {
+        require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
+        $slotTracker = new UnifiedSlotTracker($pdo);
+
+        // Get PCIe slot availability (includes riser-provided slots)
+        $pcieAvailability = $slotTracker->getSlotAvailability($configUuid);
+
+        // Get riser slot availability
+        $riserAvailability = $slotTracker->getRiserSlotAvailability($configUuid);
+
+        // Get M.2 slot availability
+        $m2Availability = $slotTracker->getM2SlotAvailability($configUuid);
+
+        // Build unified slot tracking response
+        $result = [
+            'pcie' => [
+                'success' => $pcieAvailability['success'],
+                'total_slots' => $pcieAvailability['total_slots'] ?? [],
+                'used_slots' => $pcieAvailability['used_slots'] ?? [],
+                'available_slots' => $pcieAvailability['available_slots'] ?? [],
+                'total_count' => 0,
+                'used_count' => 0,
+                'available_count' => 0
+            ],
+            'riser' => [
+                'success' => $riserAvailability['success'],
+                'total_slots' => $riserAvailability['total_slots'] ?? [],
+                'used_slots' => $riserAvailability['used_slots'] ?? [],
+                'available_slots' => $riserAvailability['available_slots'] ?? [],
+                'total_count' => 0,
+                'used_count' => 0,
+                'available_count' => 0
+            ],
+            'm2' => [
+                'success' => $m2Availability['success'],
+                'motherboard_slots' => $m2Availability['motherboard_slots'] ?? [
+                    'total' => 0,
+                    'used' => 0,
+                    'available' => 0
+                ],
+                'expansion_card_slots' => $m2Availability['expansion_card_slots'] ?? [
+                    'total' => 0,
+                    'used' => 0,
+                    'available' => 0,
+                    'providers' => []
+                ],
+                'total_count' => 0,
+                'used_count' => 0,
+                'available_count' => 0
+            ]
+        ];
+
+        // Calculate PCIe slot counts
+        foreach ($result['pcie']['total_slots'] as $slotType => $slotIds) {
+            $result['pcie']['total_count'] += count($slotIds);
+        }
+        $result['pcie']['used_count'] = count($result['pcie']['used_slots']);
+        $result['pcie']['available_count'] = $result['pcie']['total_count'] - $result['pcie']['used_count'];
+
+        // Calculate riser slot counts
+        foreach ($result['riser']['total_slots'] as $slotType => $slotIds) {
+            $result['riser']['total_count'] += count($slotIds);
+        }
+        $result['riser']['used_count'] = count($result['riser']['used_slots']);
+        $result['riser']['available_count'] = $result['riser']['total_count'] - $result['riser']['used_count'];
+
+        // Calculate M.2 slot counts
+        $result['m2']['total_count'] =
+            $result['m2']['motherboard_slots']['total'] +
+            $result['m2']['expansion_card_slots']['total'];
+        $result['m2']['used_count'] =
+            $result['m2']['motherboard_slots']['used'] +
+            $result['m2']['expansion_card_slots']['used'];
+        $result['m2']['available_count'] =
+            $result['m2']['motherboard_slots']['available'] +
+            $result['m2']['expansion_card_slots']['available'];
+
+        return $result;
+
+    } catch (Exception $e) {
+        error_log("Error getting slot tracking: " . $e->getMessage());
+        return [
+            'error' => 'Failed to get slot tracking: ' . $e->getMessage(),
+            'pcie' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0],
+            'riser' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0],
+            'm2' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0]
+        ];
+    }
+}
+
+/**
+ * Get unified network configuration for a server
+ * Consolidates NIC data from multiple sources (onboard, component, port tracking)
+ *
+ * @param string $configUuid Server configuration UUID
+ * @return array Unified network configuration data
+ */
+function getNetworkConfiguration($configUuid) {
+    global $pdo;
+
+    try {
+        $result = [
+            'summary' => [
+                'total_ports' => 0,
+                'onboard_ports' => 0,
+                'component_ports' => 0,
+                'total_nics' => 0,
+                'onboard_nics' => 0,
+                'component_nics' => 0
+            ],
+            'nics' => [],
+            'success' => true
+        ];
+
+        // Get NIC configuration from database
+        $stmt = $pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $nicConfigJson = $stmt->fetchColumn();
+
+        if (!$nicConfigJson) {
+            // No NIC configuration exists - return empty but successful
+            return $result;
+        }
+
+        $nicConfiguration = json_decode($nicConfigJson, true);
+        if (!is_array($nicConfiguration)) {
+            return $result;
+        }
+
+        // Extract summary if available
+        if (isset($nicConfiguration['summary'])) {
+            $result['summary'] = $nicConfiguration['summary'];
+        }
+
+        // Extract NICs if available
+        if (isset($nicConfiguration['nics']) && is_array($nicConfiguration['nics'])) {
+            $result['nics'] = $nicConfiguration['nics'];
+        }
+
+        return $result;
+
+    } catch (Exception $e) {
+        error_log("Error getting network configuration: " . $e->getMessage());
+        return [
+            'summary' => [
+                'total_ports' => 0,
+                'onboard_ports' => 0,
+                'component_ports' => 0,
+                'total_nics' => 0,
+                'onboard_nics' => 0,
+                'component_nics' => 0
+            ],
+            'nics' => [],
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+/**
  * ENHANCED: Get server configuration details with compatibility scoring and validation
  */
 function handleGetConfiguration($serverBuilder, $user) {
@@ -1502,201 +1671,49 @@ function handleGetConfiguration($serverBuilder, $user) {
 
         // Simplified configuration data - use stored values from database
         $configuration['power_consumption'] = $details['power_consumption']['total_with_overhead_watts'] ?? 0;
-        
-        
-        // Calculate PCIe lane usage, riser slot usage, and get warnings
-        $pcieTracking = calculatePCIeLaneUsage($details['components'] ?? []);
-        $riserTracking = calculateRiserSlotUsage($details['components'] ?? [], $configUuid);
+
+        // Get unified slot tracking (PCIe, riser, and M.2)
+        $slotTracking = getSlotTracking($configUuid);
+
+        // Get unified network configuration
+        $networkConfig = getNetworkConfiguration($configUuid);
+
+        // Get configuration warnings
         $configWarnings = getConfigurationWarnings($details['components'] ?? []);
-
-        // Get NIC configuration with onboard/component tracking
-        $nicConfiguration = null;
-        $nicSummary = ['total_nics' => 0, 'onboard_nics' => 0, 'component_nics' => 0];
-        $nicDebug = [];
-
-        try {
-            // Check if motherboard has onboard NICs that should be extracted
-            $motherboardDebug = [];
-            $motherboardStmt = $pdo->prepare("SELECT motherboard_uuid FROM server_configurations WHERE config_uuid = ?");
-            $motherboardStmt->execute([$configUuid]);
-            $mbResult = $motherboardStmt->fetch(PDO::FETCH_ASSOC);
-            $motherboardUuid = $mbResult ? $mbResult['motherboard_uuid'] : null;
-
-            if ($motherboardUuid) {
-                $motherboardDebug['motherboard_uuid'] = $motherboardUuid;
-
-                // Try to load motherboard specs
-                try {
-                    require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
-                    $dataService = ComponentDataService::getInstance();
-                    $mbSpecs = $dataService->findComponentByUuid('motherboard', $motherboardUuid);
-
-                    $motherboardDebug['motherboard_found_in_json'] = !is_null($mbSpecs);
-                    $motherboardDebug['has_networking'] = isset($mbSpecs['networking']);
-                    $motherboardDebug['has_onboard_nics'] = isset($mbSpecs['networking']['onboard_nics']);
-
-                    if (isset($mbSpecs['networking']['onboard_nics'])) {
-                        $motherboardDebug['expected_onboard_nics_count'] = count($mbSpecs['networking']['onboard_nics']);
-                        $motherboardDebug['onboard_nics_details'] = $mbSpecs['networking']['onboard_nics'];
-
-                        // Check if these NICs exist in database
-                        $checkOnboardStmt = $pdo->prepare("
-                            SELECT UUID, ServerUUID, Status FROM nicinventory
-                            WHERE ParentComponentUUID = ? AND SourceType = 'onboard'
-                        ");
-                        $checkOnboardStmt->execute([$motherboardUuid]);
-                        $allOnboardNICs = $checkOnboardStmt->fetchAll(PDO::FETCH_ASSOC);
-
-                        $motherboardDebug['all_onboard_nics_in_db'] = $allOnboardNICs;
-                        $motherboardDebug['onboard_nics_matching_config'] = array_filter($allOnboardNICs, function($nic) use ($configUuid) {
-                            return $nic['ServerUUID'] === $configUuid;
-                        });
-
-                        $actualOnboardCount = count($motherboardDebug['onboard_nics_matching_config']);
-                        $motherboardDebug['actual_onboard_nics_in_db'] = (int)$actualOnboardCount;
-                        $motherboardDebug['onboard_nics_missing'] = $motherboardDebug['expected_onboard_nics_count'] - (int)$actualOnboardCount;
-
-                        // If onboard NICs are missing, try to add them now
-                        if ($motherboardDebug['onboard_nics_missing'] > 0) {
-                            $motherboardDebug['attempting_auto_fix'] = true;
-                            require_once __DIR__ . '/../../../core/models/compatibility/OnboardNICHandler.php';
-                            $nicHandler = new OnboardNICHandler($pdo);
-                            $autoAddResult = $nicHandler->autoAddOnboardNICs($configUuid, $motherboardUuid);
-                            $motherboardDebug['auto_add_result'] = $autoAddResult;
-                        }
-                    }
-                } catch (Exception $mbError) {
-                    $motherboardDebug['error_loading_specs'] = $mbError->getMessage();
-                }
-            } else {
-                $motherboardDebug['motherboard_uuid'] = null;
-                $motherboardDebug['message'] = 'No motherboard in configuration';
-            }
-
-            $nicDebug['motherboard_check'] = $motherboardDebug;
-
-            // Try to get nic_config from server_configurations
-            $stmt = $pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $nicConfigJson = $stmt->fetchColumn();
-
-            $nicDebug['nic_config_exists'] = !empty($nicConfigJson);
-            $nicDebug['nic_config_length'] = strlen($nicConfigJson ?? '');
-
-            if ($nicConfigJson) {
-                $nicConfiguration = json_decode($nicConfigJson, true);
-                $nicDebug['nic_config_parsed'] = !is_null($nicConfiguration);
-                if ($nicConfiguration && isset($nicConfiguration['summary'])) {
-                    $nicSummary = $nicConfiguration['summary'];
-                    $nicDebug['summary_found'] = true;
-                }
-            }
-
-            // Check if nic_config needs to be updated (missing or mismatched with actual NICs)
-            // Note: server_configuration_components table no longer exists
-            // Get NICs from JSON columns instead
-            require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
-            $sb = new ServerBuilder($pdo);
-            $stmt = $pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $nicJsonConfig = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            $actualNicCount = 0;
-            if ($nicJsonConfig && !empty($nicJsonConfig['nic_config'])) {
-                try {
-                    $nicConfig = json_decode($nicJsonConfig['nic_config'], true);
-                    $actualNicCount = isset($nicConfig['nics']) ? count($nicConfig['nics']) : 0;
-                } catch (Exception $e) {
-                    error_log("Error parsing nic_config: " . $e->getMessage());
-                }
-            }
-            $nicDebug['nics_in_json_config'] = (int)$actualNicCount;
-
-            // Get the count from existing nic_config JSON
-            $configuredNicCount = isset($nicConfiguration['summary']['total_nics']) ?
-                (int)$nicConfiguration['summary']['total_nics'] : 0;
-            $nicDebug['nics_in_json_config'] = $configuredNicCount;
-
-            // Update if: 1) no config exists, OR 2) mismatch between actual NICs and configured NICs
-            $needsUpdate = !$nicConfiguration || ($actualNicCount !== $configuredNicCount);
-            $nicDebug['needs_update'] = $needsUpdate;
-            $nicDebug['update_reason'] = !$nicConfiguration ? 'No config exists' :
-                ($actualNicCount !== $configuredNicCount ? "Mismatch: $actualNicCount actual vs $configuredNicCount configured" : 'No update needed');
-
-            if ($needsUpdate && $actualNicCount > 0) {
-                $nicDebug['attempting_update'] = true;
-                require_once __DIR__ . '/../../../core/models/compatibility/OnboardNICHandler.php';
-                $nicHandler = new OnboardNICHandler($pdo);
-                $updateResult = $nicHandler->updateNICConfigJSON($configUuid);
-                $nicDebug['update_result'] = $updateResult;
-
-                // Fetch again after update
-                $stmt->execute([$configUuid]);
-                $nicConfigJson = $stmt->fetchColumn();
-                $nicDebug['nic_config_after_update_length'] = strlen($nicConfigJson ?? '');
-
-                if ($nicConfigJson) {
-                    $nicConfiguration = json_decode($nicConfigJson, true);
-                    $nicDebug['config_after_update'] = $nicConfiguration;
-                    $nicDebug['json_decode_success'] = !is_null($nicConfiguration);
-                    if ($nicConfiguration && isset($nicConfiguration['summary'])) {
-                        $nicSummary = $nicConfiguration['summary'];
-                        $nicDebug['summary_updated'] = true;
-                    } else {
-                        $nicDebug['summary_updated'] = false;
-                        $nicDebug['summary_missing_reason'] = is_null($nicConfiguration) ? 'JSON decode failed' : 'Summary key not found';
-                    }
-                } else {
-                    $nicDebug['nic_config_still_null'] = true;
-                }
-            } else {
-                $nicDebug['attempting_update'] = false;
-                $nicDebug['reason'] = $actualNicCount === 0 ? 'No NICs found in server_configuration_components' : 'Config is up to date';
-            }
-        } catch (Exception $nicError) {
-            $nicDebug['error'] = $nicError->getMessage();
-            $nicDebug['trace'] = $nicError->getTraceAsString();
-            error_log("Error getting NIC configuration: " . $nicError->getMessage());
-            // Continue without NIC config data
-        }
-
-        // Get NIC port tracking information
-        $nicPortTracking = ['nics' => []];
-        try {
-            require_once __DIR__ . '/../../../core/models/compatibility/NICPortTracker.php';
-            $portTracker = new NICPortTracker($pdo);
-            $nicPortTracking = $portTracker->getPortUtilizationForConfig($configUuid);
-        } catch (Exception $portError) {
-            error_log("Error getting NIC port tracking: " . $portError->getMessage());
-            // Continue without port tracking data
-        }
 
         send_json_response(1, 1, 200, "Configuration retrieved successfully", [
             'configuration' => [
                 'config_uuid' => $configuration['config_uuid'],
                 'server_name' => $configuration['server_name'],
                 'description' => $configuration['description'] ?? '',
-                'configuration_status' => $configuration['configuration_status'],
-                'power_consumption' => $configuration['power_consumption'],
-                'created_at' => $configuration['created_at'],
+                'status' => $configuration['configuration_status'],
                 'location' => $configuration['location'] ?? '',
-                'components' => $details['components'] ?? []
+                'created_at' => $configuration['created_at'],
+                'updated_at' => $configuration['updated_at'] ?? $configuration['created_at']
             ],
+            'components' => $details['components'] ?? [],
             'summary' => [
                 'total_components' => $details['total_components'],
                 'component_counts' => $details['component_counts'],
-                'power_consumption' => $details['power_consumption']
+                'power_consumption' => [
+                    'total_watts' => $details['power_consumption']['total_watts'] ?? 0,
+                    'total_with_overhead_watts' => $details['power_consumption']['total_with_overhead_watts'] ?? 0
+                ]
             ],
-            'status' => [
-                'configuration_valid' => $configurationValid,
-                'last_validation' => $configuration['updated_at'] ?? $configuration['created_at']
+            'hardware' => [
+                'slots' => [
+                    'pcie' => $slotTracking['pcie'],
+                    'riser' => $slotTracking['riser'],
+                    'm2' => $slotTracking['m2']
+                ],
+                'network' => $networkConfig
             ],
-            'pcie_lanes' => $pcieTracking,
-            'riser_slots' => $riserTracking,
-            'warnings' => $configWarnings,
-            'nic_port_tracking' => $nicPortTracking,
-            'nic_configuration' => $nicConfiguration,
-            'nic_summary' => $nicSummary
+            'validation' => [
+                'is_valid' => !empty($validationResults),
+                'last_validated' => $configuration['updated_at'] ?? $configuration['created_at'],
+                'warnings' => $configWarnings,
+                'errors' => []
+            ]
         ]);
         
     } catch (Exception $e) {
@@ -2986,453 +3003,6 @@ function getConfigurationStatusText($statusCode) {
 }
 
 /**
- * Calculate PCIe lane usage across the entire server configuration
- */
-function calculatePCIeLaneUsage($components) {
-    global $pdo;
-    require_once __DIR__ . '/../../../core/models/shared/DataExtractionUtilities.php';
-    $dataUtils = new DataExtractionUtilities($pdo);
-
-    $result = [
-        'cpu_lanes' => [
-            'total' => 0,
-            'used' => 0,
-            'available' => 0
-        ],
-        'chipset_lanes' => [
-            'total' => 0,
-            'used' => 0,
-            'available' => 0
-        ],
-        'm2_slots' => [
-            'motherboard' => [
-                'total' => 0,
-                'used' => 0,
-                'available' => 0
-            ],
-            'expansion_cards' => [
-                'total' => 0,
-                'used' => 0,
-                'available' => 0,
-                'providers' => []
-            ]
-        ],
-        'expansion_slots' => [
-            'total_x16' => 0,
-            'used_x16' => 0,
-            'total_x8' => 0,
-            'used_x8' => 0,
-            'total_x4' => 0,
-            'used_x4' => 0
-        ],
-        'riser_provided_pcie_slots' => [
-            'total_slots' => 0,
-            'used_slots' => 0,
-            'available_slots' => 0,
-            'risers' => []
-        ],
-        'detailed_usage' => []
-    ];
-
-    try {
-        // Get CPU PCIe lanes
-        if (isset($components['cpu']) && !empty($components['cpu'])) {
-            $cpuUuid = $components['cpu'][0]['uuid'] ?? null;
-            if ($cpuUuid) {
-                $cpuSpecs = $dataUtils->getCPUByUUID($cpuUuid);
-                if ($cpuSpecs) {
-                    $result['cpu_lanes']['total'] = $cpuSpecs['pcie_lanes'] ?? 0;
-                }
-            }
-        }
-
-        // Get motherboard M.2 slots and expansion slots
-        if (isset($components['motherboard']) && !empty($components['motherboard'])) {
-            $mbUuid = $components['motherboard'][0]['uuid'] ?? null;
-            if ($mbUuid) {
-                $mbSpecs = $dataUtils->getMotherboardByUUID($mbUuid);
-                if ($mbSpecs) {
-                    // M.2 slots from motherboard
-                    if (isset($mbSpecs['storage']['nvme']['m2_slots'][0]['count'])) {
-                        $result['m2_slots']['motherboard']['total'] = $mbSpecs['storage']['nvme']['m2_slots'][0]['count'];
-                    }
-
-                    // PCIe expansion slots
-                    if (isset($mbSpecs['expansion_slots']['pcie_slots'])) {
-                        foreach ($mbSpecs['expansion_slots']['pcie_slots'] as $slotType) {
-                            $lanes = $slotType['lanes'] ?? 0;
-                            $count = $slotType['count'] ?? 0;
-                            if ($lanes == 16) {
-                                $result['expansion_slots']['total_x16'] += $count;
-                            } elseif ($lanes == 8) {
-                                $result['expansion_slots']['total_x8'] += $count;
-                            } elseif ($lanes == 4) {
-                                $result['expansion_slots']['total_x4'] += $count;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Count M.2 storage usage
-        if (isset($components['storage']) && !empty($components['storage'])) {
-            foreach ($components['storage'] as $storage) {
-                $storageUuid = $storage['uuid'] ?? null;
-                if ($storageUuid) {
-                    $storageSpecs = $dataUtils->getStorageByUUID($storageUuid);
-                    if ($storageSpecs) {
-                        $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
-                        if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) {
-                            // Determine which type of slot this M.2 storage is using
-                            $slotPosition = strtolower($storage['slot_position'] ?? '');
-                            $slotSource = 'motherboard'; // Default to motherboard
-
-                            // Check if slot_position indicates expansion card usage
-                            if (strpos($slotPosition, 'expansion') !== false ||
-                                strpos($slotPosition, 'pcie') !== false ||
-                                strpos($slotPosition, 'adapter') !== false ||
-                                strpos($slotPosition, 'card') !== false) {
-                                $slotSource = 'expansion_cards';
-                            }
-
-                            // Increment the appropriate slot usage counter
-                            $result['m2_slots'][$slotSource]['used']++;
-
-                            $result['detailed_usage'][] = [
-                                'component' => 'M.2 Storage',
-                                'uuid' => $storageUuid,
-                                'type' => 'M.2 Slot',
-                                'slot_source' => $slotSource,
-                                'lanes_used' => 4
-                            ];
-                        }
-                    }
-                }
-            }
-        }
-
-        // Count PCIe card usage
-        if (isset($components['pciecard']) && !empty($components['pciecard'])) {
-            foreach ($components['pciecard'] as $card) {
-                $cardUuid = $card['uuid'] ?? null;
-                if ($cardUuid) {
-                    $cardSpecs = $dataUtils->getPCIeCardByUUID($cardUuid);
-                    if ($cardSpecs) {
-                        // Check if this is a riser card (riser cards use riser slots, not PCIe slots)
-                        $isRiserCard = isset($cardSpecs['component_subtype']) &&
-                                       $cardSpecs['component_subtype'] === 'Riser Card';
-
-                        if ($isRiserCard) {
-                            // DATA INTEGRITY CHECK: Warn if riser card has incorrect slot_position
-                            $slotPos = strtolower($card['slot_position'] ?? '');
-                            if (!empty($slotPos) && strpos($slotPos, 'riser_') !== 0) {
-                                error_log("WARNING: Riser card $cardUuid has incorrect slot_position: '{$card['slot_position']}'. Should start with 'riser_'");
-                            }
-
-                            // Track riser card and its provided PCIe slots
-                            $pcieSlots = $cardSpecs['pcie_slots'] ?? 0;
-                            $slotType = $cardSpecs['slot_type'] ?? 'x16';
-
-                            // Normalize slot type
-                            if (preg_match('/x(\d+)/i', $slotType, $matches)) {
-                                $slotSize = 'x' . $matches[1];
-                            } else {
-                                $slotSize = 'x16';
-                            }
-
-                            $riserInfo = [
-                                'riser_uuid' => $cardUuid,
-                                'riser_model' => $cardSpecs['model'] ?? 'Unknown Riser',
-                                'riser_slot_position' => $card['slot_position'] ?? 'N/A',
-                                'pcie_slots_provided' => $pcieSlots,
-                                'slot_type' => $slotSize,
-                                'cards_in_riser_slots' => []
-                            ];
-
-                            // Count how many slots this riser provides
-                            $result['riser_provided_pcie_slots']['total_slots'] += $pcieSlots;
-
-                            // Add riser to tracking list
-                            $result['riser_provided_pcie_slots']['risers'][] = $riserInfo;
-
-                            // Skip further processing - riser cards are tracked separately
-                            continue;
-                        }
-
-                        $interface = $cardSpecs['interface'] ?? '';
-                        preg_match('/x(\d+)/', $interface, $matches);
-                        $lanes = (int)($matches[1] ?? 4);
-
-                        $result['cpu_lanes']['used'] += $lanes;
-                        $result['detailed_usage'][] = [
-                            'component' => 'PCIe Card',
-                            'uuid' => $cardUuid,
-                            'type' => $interface,
-                            'lanes_used' => $lanes
-                        ];
-
-                        // Track slot usage
-                        if ($lanes == 16) {
-                            $result['expansion_slots']['used_x16']++;
-                        } elseif ($lanes == 8) {
-                            $result['expansion_slots']['used_x8']++;
-                        } elseif ($lanes == 4) {
-                            $result['expansion_slots']['used_x4']++;
-                        }
-
-                        // Check if this PCIe card provides M.2 slots (NVMe adapters)
-                        if (isset($cardSpecs['m2_slots']) && $cardSpecs['m2_slots'] > 0) {
-                            $m2SlotsProvided = (int)$cardSpecs['m2_slots'];
-                            $result['m2_slots']['expansion_cards']['total'] += $m2SlotsProvided;
-
-                            // Add card to providers list with detailed specs
-                            $result['m2_slots']['expansion_cards']['providers'][] = [
-                                'uuid' => $cardUuid,
-                                'name' => $cardSpecs['model'] ?? 'Unknown Model',
-                                'slots_provided' => $m2SlotsProvided,
-                                'max_capacity_per_slot' => $cardSpecs['max_capacity_per_slot'] ?? 'N/A',
-                                'max_speed' => $cardSpecs['performance']['max_sequential_read'] ?? 'N/A',
-                                'm2_form_factors' => $cardSpecs['m2_form_factors'] ?? []
-                            ];
-                        }
-                    }
-                }
-            }
-        }
-
-        // After processing all PCIe cards, check which cards are in riser-provided slots
-        // Loop through all non-riser PCIe cards, NICs, and HBA cards to find riser-slot assignments
-        $allPCIeComponents = [];
-
-        // Collect all PCIe components (EXCLUDING onboard NICs)
-        if (isset($components['pciecard']) && !empty($components['pciecard'])) {
-            foreach ($components['pciecard'] as $card) {
-                $cardSpecs = $dataUtils->getPCIeCardByUUID($card['uuid'] ?? '');
-                if ($cardSpecs && ($cardSpecs['component_subtype'] ?? '') !== 'Riser Card') {
-                    $allPCIeComponents[] = $card;
-                }
-            }
-        }
-        if (isset($components['nic']) && !empty($components['nic'])) {
-            foreach ($components['nic'] as $nic) {
-                // CRITICAL: Skip onboard NICs - they don't use PCIe/riser slots
-                $sourceType = $nic['source_type'] ?? '';
-                if ($sourceType !== 'onboard') {
-                    $allPCIeComponents[] = $nic;
-                }
-            }
-        }
-        if (isset($components['hbacard']) && !empty($components['hbacard'])) {
-            $allPCIeComponents = array_merge($allPCIeComponents, $components['hbacard']);
-        }
-
-        // Check each component's slot_position to see if it's in a riser-provided slot
-        $componentsWithExplicitSlots = [];
-        $componentsWithoutSlots = [];
-
-        foreach ($allPCIeComponents as $component) {
-            $slotPosition = $component['slot_position'] ?? '';
-
-            // Check if slot_position indicates riser-provided slot
-            // Format: riser_{riser_uuid}_pcie_{slot_type}_slot_{n}
-            if (preg_match('/^riser_([^_]+(?:_[^_]+)*?)_pcie_/', $slotPosition, $matches)) {
-                $riserUuid = $matches[1];
-                $result['riser_provided_pcie_slots']['used_slots']++;
-
-                // Find the riser in our tracking list and add this card to it
-                foreach ($result['riser_provided_pcie_slots']['risers'] as &$riser) {
-                    if ($riser['riser_uuid'] === $riserUuid) {
-                        $riser['cards_in_riser_slots'][] = [
-                            'slot' => $slotPosition,
-                            'card_uuid' => $component['uuid'] ?? 'unknown',
-                            'card_type' => $component['component_type'] ?? 'unknown',
-                            'serial_number' => $component['serial_number'] ?? 'N/A'
-                        ];
-                        break;
-                    }
-                }
-                unset($riser); // Break reference
-                $componentsWithExplicitSlots[] = $component;
-            } else if (empty($slotPosition) || !preg_match('/^(pcie_x\d+_slot_|riser_)/', $slotPosition)) {
-                // Component has no slot assignment OR has generic slot (like "slot 1")
-                // Both cases might be using riser slot implicitly
-                $componentsWithoutSlots[] = $component;
-            }
-        }
-
-        // SMART DETECTION: If motherboard has 0 direct PCIe slots and risers exist,
-        // components without explicit slot assignments MUST be using riser-provided slots
-        $motherboardDirectPCIeSlots = $result['expansion_slots']['total_x16'] +
-                                       $result['expansion_slots']['total_x8'] +
-                                       $result['expansion_slots']['total_x4'];
-
-        if ($motherboardDirectPCIeSlots === 0 &&
-            !empty($result['riser_provided_pcie_slots']['risers']) &&
-            !empty($componentsWithoutSlots)) {
-
-            error_log("SMART DETECTION: Motherboard has 0 direct PCIe slots but has " . count($componentsWithoutSlots) . " PCIe components without slot assignment");
-
-            // These components MUST be using riser-provided slots
-            // Assign them to risers respecting physical slot limits
-            $risers = &$result['riser_provided_pcie_slots']['risers'];
-
-            foreach ($componentsWithoutSlots as $component) {
-                $assigned = false;
-
-                // Try to find a riser with available slots
-                foreach ($risers as &$riser) {
-                    $currentCardsInRiser = count($riser['cards_in_riser_slots']);
-                    $maxSlotsInRiser = $riser['pcie_slots_provided'];
-
-                    // Check if riser has available slots
-                    if ($currentCardsInRiser < $maxSlotsInRiser) {
-                        $result['riser_provided_pcie_slots']['used_slots']++;
-
-                        $slotPositionValue = $component['slot_position'] ?? '';
-                        $displaySlot = empty($slotPositionValue) ?
-                            'auto-detected (no explicit slot assignment)' :
-                            "auto-detected (generic slot: $slotPositionValue)";
-
-                        $riser['cards_in_riser_slots'][] = [
-                            'slot' => $displaySlot,
-                            'card_uuid' => $component['uuid'] ?? 'unknown',
-                            'card_type' => $component['component_type'] ?? 'unknown',
-                            'serial_number' => $component['serial_number'] ?? 'N/A',
-                            'note' => 'Motherboard has 0 direct PCIe slots - component must be using riser-provided slot'
-                        ];
-
-                        error_log("AUTO-ASSIGNED component {$component['uuid']} ({$component['component_type']}) to riser {$riser['riser_uuid']} (slot " . ($currentCardsInRiser + 1) . "/{$maxSlotsInRiser})");
-                        $assigned = true;
-                        break;
-                    }
-                }
-                unset($riser); // Break reference
-
-                // If component couldn't be assigned, log error
-                if (!$assigned) {
-                    error_log("ERROR: Component {$component['uuid']} ({$component['component_type']}) cannot be assigned - all riser slots full!");
-                }
-            }
-        }
-
-        // Calculate available slots
-        $result['riser_provided_pcie_slots']['available_slots'] = max(0,
-            $result['riser_provided_pcie_slots']['total_slots'] -
-            $result['riser_provided_pcie_slots']['used_slots']
-        );
-
-        $result['cpu_lanes']['available'] = max(0, $result['cpu_lanes']['total'] - $result['cpu_lanes']['used']);
-        $result['m2_slots']['motherboard']['available'] = max(0, $result['m2_slots']['motherboard']['total'] - $result['m2_slots']['motherboard']['used']);
-        $result['m2_slots']['expansion_cards']['available'] = max(0, $result['m2_slots']['expansion_cards']['total'] - $result['m2_slots']['expansion_cards']['used']);
-
-    } catch (Exception $e) {
-        error_log("Error calculating PCIe lane usage: " . $e->getMessage());
-    }
-
-    return $result;
-}
-
-/**
- * Calculate riser slot usage and tracking with grouped slot type information
- */
-function calculateRiserSlotUsage($components, $configUuid) {
-    global $pdo;
-    require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
-    require_once __DIR__ . '/../../../core/models/shared/DataExtractionUtilities.php';
-
-    $result = [
-        'total_riser_slots' => 0,
-        'used_riser_slots' => 0,
-        'available_riser_slots' => 0,
-        'total_slots_by_type' => [],
-        'used_slots_by_type' => [],
-        'available_slots_by_type' => [],
-        'riser_assignments' => []
-    ];
-
-    try {
-        $slotTracker = new UnifiedSlotTracker($pdo);
-        $dataUtils = new DataExtractionUtilities($pdo);
-
-        // Get motherboard riser slot information
-        if (isset($components['motherboard']) && !empty($components['motherboard'])) {
-            $mbUuid = $components['motherboard'][0]['uuid'] ?? null;
-            if ($mbUuid) {
-                // Get riser slot availability (now returns grouped format)
-                $riserAvailability = $slotTracker->getRiserSlotAvailability($configUuid);
-
-                if ($riserAvailability['success']) {
-                    // Count total slots across all types (grouped format: ['x16' => [...], 'x8' => [...]])
-                    $totalSlotsByType = [];
-                    $totalCount = 0;
-                    foreach ($riserAvailability['total_slots'] as $slotType => $slotIds) {
-                        $count = count($slotIds);
-                        $totalSlotsByType[$slotType] = $count;
-                        $totalCount += $count;
-                    }
-                    $result['total_riser_slots'] = $totalCount;
-                    $result['total_slots_by_type'] = $totalSlotsByType;
-
-                    // Count used slots (flat mapping: ['riser_x16_slot_1' => 'uuid'])
-                    $result['used_riser_slots'] = count($riserAvailability['used_slots']);
-
-                    // Count used slots by type
-                    $usedSlotsByType = [];
-                    foreach ($riserAvailability['used_slots'] as $slotId => $riserUuid) {
-                        // Extract slot type from slot ID (e.g., "riser_x16_slot_1" -> "x16")
-                        if (preg_match('/riser_(x\d+)_slot_/', $slotId, $matches)) {
-                            $slotType = $matches[1];
-                            if (!isset($usedSlotsByType[$slotType])) {
-                                $usedSlotsByType[$slotType] = 0;
-                            }
-                            $usedSlotsByType[$slotType]++;
-                        }
-                    }
-                    $result['used_slots_by_type'] = $usedSlotsByType;
-
-                    // Count available slots by type (grouped format)
-                    $availableSlotsByType = [];
-                    $availableCount = 0;
-                    foreach ($riserAvailability['available_slots'] as $slotType => $slotIds) {
-                        $count = count($slotIds);
-                        $availableSlotsByType[$slotType] = $count;
-                        $availableCount += $count;
-                    }
-                    $result['available_riser_slots'] = $availableCount;
-                    $result['available_slots_by_type'] = $availableSlotsByType;
-
-                    // Get detailed riser assignments
-                    foreach ($riserAvailability['used_slots'] as $slotId => $riserUuid) {
-                        $riserSpecs = $dataUtils->getPCIeCardByUUID($riserUuid);
-
-                        // Extract slot type from slot ID
-                        $slotType = 'unknown';
-                        if (preg_match('/riser_(x\d+)_slot_/', $slotId, $matches)) {
-                            $slotType = $matches[1];
-                        }
-
-                        $result['riser_assignments'][] = [
-                            'slot_id' => $slotId,
-                            'slot_type' => $slotType,
-                            'riser_uuid' => $riserUuid,
-                            'riser_model' => $riserSpecs['model'] ?? 'Unknown Riser',
-                            'riser_slot_type' => $riserSpecs['slot_type'] ?? 'Unknown',
-                            'interface' => $riserSpecs['interface'] ?? 'Unknown'
-                        ];
-                    }
-                }
-            }
-        }
-
-    } catch (Exception $e) {
-        error_log("Error calculating riser slot usage: " . $e->getMessage());
-    }
-
-    return $result;
-}
-
-/**
  * Get current configuration warnings
  */
 function getConfigurationWarnings($components) {
@@ -3451,8 +3021,12 @@ function getConfigurationWarnings($components) {
             $mbUuid = $components['motherboard'][0]['uuid'] ?? null;
             if ($mbUuid) {
                 $mbSpecs = $dataUtils->getMotherboardByUUID($mbUuid);
-                if ($mbSpecs && isset($mbSpecs['storage']['nvme']['m2_slots'][0]['count'])) {
-                    $m2TotalSlots = $mbSpecs['storage']['nvme']['m2_slots'][0]['count'];
+                // P3.1 FIX: Sum ALL M.2 slot types (NVMe + SATA), not just the first one
+                if ($mbSpecs && isset($mbSpecs['storage']['nvme']['m2_slots'])) {
+                    $m2TotalSlots = 0;
+                    foreach ($mbSpecs['storage']['nvme']['m2_slots'] as $slotConfig) {
+                        $m2TotalSlots += $slotConfig['count'] ?? 0;
+                    }
                 }
             }
         }
@@ -3626,6 +3200,97 @@ function getConfigurationWarnings($components) {
 
     } catch (Exception $e) {
         error_log("Error getting configuration warnings: " . $e->getMessage());
+    }
+
+    return $warnings;
+}
+
+/**
+ * Get slot validation warnings for a configuration
+ * Uses UnifiedSlotTracker to validate PCIe, riser, and M.2 slots
+ *
+ * @param string $configUuid Server configuration UUID
+ * @return array Validation warnings
+ */
+function getSlotValidationWarnings($configUuid) {
+    global $pdo;
+    $warnings = [];
+
+    try {
+        require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
+        $slotTracker = new UnifiedSlotTracker($pdo);
+
+        // Validate PCIe slots
+        $pcieValidation = $slotTracker->validateAllSlots($configUuid);
+        if (!$pcieValidation['valid']) {
+            foreach ($pcieValidation['errors'] as $error) {
+                $warnings[] = [
+                    'type' => 'pcie_slot_error',
+                    'severity' => 'high',
+                    'message' => $error,
+                    'source' => 'PCIe Slots'
+                ];
+            }
+        }
+        if (!empty($pcieValidation['warnings'])) {
+            foreach ($pcieValidation['warnings'] as $warning) {
+                $warnings[] = [
+                    'type' => 'pcie_slot_warning',
+                    'severity' => 'info',
+                    'message' => $warning,
+                    'source' => 'PCIe Slots'
+                ];
+            }
+        }
+
+        // Validate riser slots
+        $riserValidation = $slotTracker->validateAllRiserSlots($configUuid);
+        if (!$riserValidation['valid']) {
+            foreach ($riserValidation['errors'] as $error) {
+                $warnings[] = [
+                    'type' => 'riser_slot_error',
+                    'severity' => 'high',
+                    'message' => $error,
+                    'source' => 'Riser Slots'
+                ];
+            }
+        }
+        if (!empty($riserValidation['warnings'])) {
+            foreach ($riserValidation['warnings'] as $warning) {
+                $warnings[] = [
+                    'type' => 'riser_slot_warning',
+                    'severity' => 'info',
+                    'message' => $warning,
+                    'source' => 'Riser Slots'
+                ];
+            }
+        }
+
+        // Validate M.2 slots
+        $m2Validation = $slotTracker->validateM2Slots($configUuid);
+        if (!$m2Validation['valid']) {
+            foreach ($m2Validation['errors'] as $error) {
+                $warnings[] = [
+                    'type' => 'm2_slot_error',
+                    'severity' => 'high',
+                    'message' => $error,
+                    'source' => 'M.2 Slots'
+                ];
+            }
+        }
+        if (!empty($m2Validation['warnings'])) {
+            foreach ($m2Validation['warnings'] as $warning) {
+                $warnings[] = [
+                    'type' => 'm2_slot_warning',
+                    'severity' => 'info',
+                    'message' => $warning,
+                    'source' => 'M.2 Slots'
+                ];
+            }
+        }
+
+    } catch (Exception $e) {
+        error_log("Error getting slot validation warnings: " . $e->getMessage());
     }
 
     return $warnings;

@@ -397,13 +397,28 @@ class UnifiedSlotTracker {
             $availability = $this->getSlotAvailability($configUuid);
 
             if (!$availability['success']) {
-                $errors[] = $availability['error'];
-                return [
-                    'valid' => false,
-                    'errors' => $errors,
-                    'warnings' => $warnings,
-                    'assignments' => []
-                ];
+                // No PCIe slots available - check if any components need them
+                if ($pcieCount > 0) {
+                    // Components exist but no slots - validation error
+                    $errors[] = "Configuration has $pcieCount PCIe components but motherboard has no PCIe slots";
+                    return [
+                        'valid' => false,
+                        'errors' => $errors,
+                        'warnings' => $warnings,
+                        'assignments' => []
+                    ];
+                } else {
+                    // No PCIe slots AND no PCIe components - valid configuration
+                    return [
+                        'valid' => true,
+                        'errors' => [],
+                        'warnings' => ['Motherboard has no PCIe slots - only riser slots available'],
+                        'assignments' => [],
+                        'total_slots' => 0,
+                        'used_slots' => 0,
+                        'available_slots' => 0
+                    ];
+                }
             }
 
             // Check 3: Count total slots vs used slots
@@ -517,6 +532,9 @@ class UnifiedSlotTracker {
                 // If no riser slots defined but risers exist, that's an error
                 if ($riserCount > 0) {
                     $errors[] = "Motherboard does not support risers, but $riserCount risers are installed";
+                } else {
+                    // No riser slots AND no risers - valid but inform user
+                    $warnings[] = 'Motherboard has no riser slots';
                 }
                 return [
                     'valid' => $riserCount === 0,
@@ -588,6 +606,173 @@ class UnifiedSlotTracker {
                 'errors' => ['Validation error: ' . $e->getMessage()],
                 'warnings' => [],
                 'assignments' => []
+            ];
+        }
+    }
+
+    /**
+     * Get comprehensive M.2 slot availability for a server configuration
+     * Includes M.2 slots from motherboard and expansion cards
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array M.2 slot availability details
+     */
+    public function getM2SlotAvailability($configUuid) {
+        try {
+            // Step 1: Get motherboard from configuration
+            $motherboard = $this->getMotherboardFromConfig($configUuid);
+
+            if (!$motherboard) {
+                return [
+                    'success' => false,
+                    'error' => 'No motherboard found in configuration',
+                    'motherboard_slots' => [
+                        'total' => 0,
+                        'used' => 0,
+                        'available' => 0
+                    ],
+                    'expansion_card_slots' => [
+                        'total' => 0,
+                        'used' => 0,
+                        'available' => 0,
+                        'providers' => []
+                    ]
+                ];
+            }
+
+            // Step 2: Load motherboard M.2 slots from JSON
+            $mbM2Slots = $this->loadMotherboardM2Slots($motherboard['component_uuid']);
+
+            // Step 3: Get M.2 storage currently in configuration
+            $usedM2Slots = $this->getUsedM2Slots($configUuid);
+
+            // Step 4: Calculate available motherboard M.2 slots
+            $availableMotherboardSlots = max(0, $mbM2Slots['total'] - count($usedM2Slots['motherboard']));
+
+            // Step 5: Get expansion cards providing M.2 slots
+            $expansionCardProviders = $this->getM2SlotProvidingCards($configUuid);
+
+            // Calculate total expansion slots
+            $totalExpansionSlots = 0;
+            $usedExpansionSlots = 0;
+            foreach ($expansionCardProviders as $provider) {
+                $totalExpansionSlots += $provider['m2_slots_provided'];
+                $usedExpansionSlots += count($provider['used_slots']);
+            }
+
+            return [
+                'success' => true,
+                'motherboard_slots' => [
+                    'total' => $mbM2Slots['total'],
+                    'used' => count($usedM2Slots['motherboard']),
+                    'available' => $availableMotherboardSlots,
+                    'assignments' => $usedM2Slots['motherboard']
+                ],
+                'expansion_card_slots' => [
+                    'total' => $totalExpansionSlots,
+                    'used' => $usedExpansionSlots,
+                    'available' => max(0, $totalExpansionSlots - $usedExpansionSlots),
+                    'providers' => $expansionCardProviders
+                ],
+                'motherboard_uuid' => $motherboard['component_uuid']
+            ];
+
+        } catch (Exception $e) {
+            error_log("UnifiedSlotTracker::getM2SlotAvailability error: " . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Failed to get M.2 slot availability: ' . $e->getMessage(),
+                'motherboard_slots' => [
+                    'total' => 0,
+                    'used' => 0,
+                    'available' => 0
+                ],
+                'expansion_card_slots' => [
+                    'total' => 0,
+                    'used' => 0,
+                    'available' => 0,
+                    'providers' => []
+                ]
+            ];
+        }
+    }
+
+    /**
+     * Validate all M.2 slot assignments in a configuration
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array Validation results
+     */
+    public function validateM2Slots($configUuid) {
+        $errors = [];
+        $warnings = [];
+
+        try {
+            // Get M.2 slot availability
+            $availability = $this->getM2SlotAvailability($configUuid);
+
+            if (!$availability['success']) {
+                return [
+                    'valid' => true, // No motherboard = no M.2 slots to validate
+                    'errors' => [],
+                    'warnings' => ['No motherboard found - M.2 slots cannot be validated'],
+                    'motherboard_slots' => 0,
+                    'expansion_slots' => 0,
+                    'total_m2_used' => 0
+                ];
+            }
+
+            $mbTotal = $availability['motherboard_slots']['total'];
+            $mbUsed = $availability['motherboard_slots']['used'];
+            $expandTotal = $availability['expansion_card_slots']['total'];
+            $expandUsed = $availability['expansion_card_slots']['used'];
+
+            // Check motherboard M.2 capacity
+            if ($mbUsed > $mbTotal && $mbTotal > 0) {
+                $errors[] = "Too many M.2 drives: $mbUsed assigned but only $mbTotal motherboard M.2 slots available";
+            }
+
+            // Check expansion card M.2 capacity
+            if ($expandUsed > $expandTotal && $expandTotal > 0) {
+                $errors[] = "Too many M.2 drives on expansion cards: $expandUsed assigned but only $expandTotal expansion card M.2 slots available";
+            }
+
+            // Warning if motherboard M.2 slots are full
+            if ($mbUsed === $mbTotal && $mbTotal > 0) {
+                $warnings[] = "All motherboard M.2 slots are in use ($mbUsed/$mbTotal)";
+            }
+
+            // Warning if expansion M.2 slots are full
+            if ($expandUsed === $expandTotal && $expandTotal > 0) {
+                $warnings[] = "All expansion card M.2 slots are in use ($expandUsed/$expandTotal)";
+            }
+
+            return [
+                'valid' => empty($errors),
+                'errors' => $errors,
+                'warnings' => $warnings,
+                'motherboard_slots' => [
+                    'total' => $mbTotal,
+                    'used' => $mbUsed,
+                    'available' => max(0, $mbTotal - $mbUsed)
+                ],
+                'expansion_slots' => [
+                    'total' => $expandTotal,
+                    'used' => $expandUsed,
+                    'available' => max(0, $expandTotal - $expandUsed)
+                ],
+                'total_m2_used' => $mbUsed + $expandUsed,
+                'total_m2_available' => ($mbTotal - $mbUsed) + ($expandTotal - $expandUsed)
+            ];
+
+        } catch (Exception $e) {
+            error_log("UnifiedSlotTracker::validateM2Slots error: " . $e->getMessage());
+            return [
+                'valid' => false,
+                'errors' => ['Validation error: ' . $e->getMessage()],
+                'warnings' => [],
+                'motherboard_slots' => ['total' => 0, 'used' => 0, 'available' => 0],
+                'expansion_slots' => ['total' => 0, 'used' => 0, 'available' => 0]
             ];
         }
     }
@@ -854,11 +1039,21 @@ class UnifiedSlotTracker {
                 }
             }
 
-            // Check HBA card (stored in single UUID column, need to check if assigned to PCIe slot)
-            if (!empty($configData['hbacard_uuid'])) {
-                // HBA cards use PCIe slots, but slot_position not stored in simple UUID column
-                // This would need to be tracked separately if needed
-                // For now, we assume HBA occupies a slot but don't know which one
+            // HBA-TRACK FIX: Check HBA card with new JSON format (includes slot_position)
+            if (!empty($configData['hbacard_config'])) {
+                $hbaConfig = json_decode($configData['hbacard_config'], true);
+                if (is_array($hbaConfig) && !empty($hbaConfig['slot_position'])) {
+                    if (strpos($hbaConfig['slot_position'], 'pcie_') === 0) {
+                        $usedSlots[$hbaConfig['slot_position']] = $hbaConfig['uuid'];
+                        error_log("HBA-TRACK: HBA card occupies slot: {$hbaConfig['slot_position']}");
+                    }
+                }
+            }
+            // BACKWARD COMPATIBILITY: Check legacy hbacard_uuid column
+            else if (!empty($configData['hbacard_uuid'])) {
+                error_log("HBA-TRACK WARNING: HBA card {$configData['hbacard_uuid']} has no slot position (legacy format)");
+                // Don't block - allow legacy configs to work
+                // TODO: Add migration notice to admin dashboard
             }
 
             // Check NIC config
@@ -1206,6 +1401,536 @@ class UnifiedSlotTracker {
         } catch (Exception $e) {
             error_log("Error loading riser card provided PCIe slots: " . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Load M.2 slots from motherboard JSON specifications
+     *
+     * @param string $motherboardUuid Motherboard UUID
+     * @return array M.2 slots information
+     */
+    private function loadMotherboardM2Slots($motherboardUuid) {
+        try {
+            $mbSpecs = $this->componentDataService->getComponentSpecifications('motherboard', $motherboardUuid);
+
+            if (!$mbSpecs) {
+                return [
+                    'total' => 0,
+                    'details' => []
+                ];
+            }
+
+            // Extract M.2 slots from storage.nvme.m2_slots
+            $m2Total = 0;
+            $m2Details = [];
+
+            if (isset($mbSpecs['storage']['nvme']['m2_slots']) && is_array($mbSpecs['storage']['nvme']['m2_slots'])) {
+                foreach ($mbSpecs['storage']['nvme']['m2_slots'] as $slotConfig) {
+                    $count = $slotConfig['count'] ?? 0;
+                    $m2Total += $count;
+                    $m2Details[] = [
+                        'count' => $count,
+                        'type' => $slotConfig['type'] ?? 'M.2 (NVMe)',
+                        'form_factor' => $slotConfig['form_factor'] ?? '2280'
+                    ];
+                }
+            }
+
+            return [
+                'total' => $m2Total,
+                'details' => $m2Details
+            ];
+
+        } catch (Exception $e) {
+            error_log("Error loading motherboard M.2 slots: " . $e->getMessage());
+            return [
+                'total' => 0,
+                'details' => []
+            ];
+        }
+    }
+
+    /**
+     * Get M.2 storage currently used in configuration
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array M.2 assignments grouped by source (motherboard/expansion_card)
+     */
+    private function getUsedM2Slots($configUuid) {
+        try {
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
+            if (!$config) {
+                return [
+                    'motherboard' => [],
+                    'expansion_cards' => []
+                ];
+            }
+
+            $configData = $config->getData();
+            $usedM2 = [
+                'motherboard' => [],
+                'expansion_cards' => []
+            ];
+
+            // Get storage components from configuration
+            if (!empty($configData['storage_configurations'])) {
+                $storageConfigs = json_decode($configData['storage_configurations'], true);
+                if (is_array($storageConfigs)) {
+                    foreach ($storageConfigs as $storage) {
+                        $storageUuid = $storage['uuid'] ?? null;
+                        $slotPosition = $storage['slot_position'] ?? '';
+
+                        if ($storageUuid) {
+                            // Check if this is M.2 storage
+                            $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storageUuid);
+                            if ($storageSpecs) {
+                                $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                                if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) {
+                                    // Determine source based on slot_position
+                                    if (strpos($slotPosition, 'expansion') !== false ||
+                                        strpos($slotPosition, 'pcie') !== false ||
+                                        strpos($slotPosition, 'adapter') !== false ||
+                                        strpos($slotPosition, 'card') !== false) {
+                                        $usedM2['expansion_cards'][] = [
+                                            'uuid' => $storageUuid,
+                                            'model' => $storageSpecs['model'] ?? 'Unknown',
+                                            'slot_position' => $slotPosition
+                                        ];
+                                    } else {
+                                        $usedM2['motherboard'][] = [
+                                            'uuid' => $storageUuid,
+                                            'model' => $storageSpecs['model'] ?? 'Unknown',
+                                            'slot_position' => $slotPosition
+                                        ];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return $usedM2;
+
+        } catch (Exception $e) {
+            error_log("Error getting used M.2 slots: " . $e->getMessage());
+            return [
+                'motherboard' => [],
+                'expansion_cards' => []
+            ];
+        }
+    }
+
+    /**
+     * Get expansion cards that provide M.2 slots
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array Array of M.2-capable expansion cards with slot info
+     */
+    private function getM2SlotProvidingCards($configUuid) {
+        try {
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
+            if (!$config) {
+                return [];
+            }
+
+            $configData = $config->getData();
+            $m2Cards = [];
+
+            // Check PCIe cards for M.2 provision capability
+            if (!empty($configData['pciecard_configurations'])) {
+                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                if (is_array($pcieConfigs)) {
+                    foreach ($pcieConfigs as $pcie) {
+                        $pcieUuid = $pcie['uuid'] ?? null;
+                        if ($pcieUuid) {
+                            $pcieSpecs = $this->componentDataService->getComponentSpecifications('pciecard', $pcieUuid);
+                            if ($pcieSpecs && isset($pcieSpecs['m2_slots']) && $pcieSpecs['m2_slots'] > 0) {
+                                // This card provides M.2 slots - count how many are used
+                                $usedM2 = $this->countM2SlotsOnCard($pcieUuid, $configData);
+                                $m2Cards[] = [
+                                    'card_uuid' => $pcieUuid,
+                                    'model' => $pcieSpecs['model'] ?? 'Unknown',
+                                    'm2_slots_provided' => $pcieSpecs['m2_slots'],
+                                    'used_slots' => array_fill(0, $usedM2, true), // Array with n elements
+                                    'form_factors' => $pcieSpecs['m2_form_factors'] ?? [],
+                                    'slot_position' => $pcie['slot_position'] ?? 'N/A'
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+
+            return $m2Cards;
+
+        } catch (Exception $e) {
+            error_log("Error getting M.2 slot providing cards: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Count how many M.2 slots are used on a specific card
+     *
+     * @param string $cardUuid PCIe card UUID
+     * @param array $configData Configuration data
+     * @return int Number of used M.2 slots
+     */
+    private function countM2SlotsOnCard($cardUuid, $configData) {
+        $count = 0;
+
+        if (!empty($configData['storage_configurations'])) {
+            $storageConfigs = json_decode($configData['storage_configurations'], true);
+            if (is_array($storageConfigs)) {
+                foreach ($storageConfigs as $storage) {
+                    $storageUuid = $storage['uuid'] ?? null;
+                    $slotPosition = $storage['slot_position'] ?? '';
+
+                    if ($storageUuid && strpos($slotPosition, $cardUuid) !== false) {
+                        // Check if this is M.2 storage
+                        $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storageUuid);
+                        if ($storageSpecs) {
+                            $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                            if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) {
+                                $count++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * UNIFIED METHOD: Count total M.2 slots available in configuration
+     * Includes: motherboard direct M.2 slots + NVMe adapter M.2 slots
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return int Total M.2 slots available
+     */
+    public function countTotalM2Slots($configUuid) {
+        try {
+            $availability = $this->getM2SlotAvailability($configUuid);
+            if (!$availability['success']) {
+                return 0;
+            }
+            return $availability['motherboard_slots']['total'] + $availability['expansion_card_slots']['total'];
+        } catch (Exception $e) {
+            error_log("Error counting total M.2 slots: " . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * UNIFIED METHOD: Count M.2 slots currently used by existing storage
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return int Number of M.2 slots in use
+     */
+    public function countUsedM2Slots($configUuid) {
+        try {
+            $availability = $this->getM2SlotAvailability($configUuid);
+            if (!$availability['success']) {
+                return 0;
+            }
+            return $availability['motherboard_slots']['used'] + $availability['expansion_card_slots']['used'];
+        } catch (Exception $e) {
+            error_log("Error counting used M.2 slots: " . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * UNIFIED METHOD: Get detailed M.2/U.2 slot usage information
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array Slot usage statistics
+     */
+    public function getNvmeSlotUsage($configUuid) {
+        try {
+            $m2Availability = $this->getM2SlotAvailability($configUuid);
+            $u2Availability = null;
+
+            // Note: Would need U.2 availability method for complete U.2 support
+            // For now, use the CountUsedU2Slots logic from the original
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
+            $usedU2Slots = [];
+            if ($config) {
+                $configData = $config->getData();
+                if (!empty($configData['storage_configurations'])) {
+                    $storageConfigs = json_decode($configData['storage_configurations'], true);
+                    if (is_array($storageConfigs)) {
+                        foreach ($storageConfigs as $storage) {
+                            $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storage['uuid'] ?? null);
+                            if ($storageSpecs) {
+                                $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                                if (strpos($formFactor, 'u.2') !== false || strpos($formFactor, 'u.3') !== false) {
+                                    $usedU2Slots[] = $storage['uuid'];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return [
+                'm2' => [
+                    'total' => $m2Availability['success'] ? ($m2Availability['motherboard_slots']['total'] + $m2Availability['expansion_card_slots']['total']) : 0,
+                    'used' => $m2Availability['success'] ? ($m2Availability['motherboard_slots']['used'] + $m2Availability['expansion_card_slots']['used']) : 0,
+                    'available' => $m2Availability['success'] ? max(0, ($m2Availability['motherboard_slots']['total'] + $m2Availability['expansion_card_slots']['total']) - ($m2Availability['motherboard_slots']['used'] + $m2Availability['expansion_card_slots']['used'])) : 0
+                ],
+                'u2' => [
+                    'total' => 0,
+                    'used' => count($usedU2Slots),
+                    'available' => 0
+                ]
+            ];
+        } catch (Exception $e) {
+            error_log("Error getting NVMe slot usage: " . $e->getMessage());
+            return [
+                'm2' => ['total' => 0, 'used' => 0, 'available' => 0],
+                'u2' => ['total' => 0, 'used' => 0, 'available' => 0]
+            ];
+        }
+    }
+
+    /**
+     * P2.3: Get all PCIe cards installed in a specific riser's provided slots
+     * Used for cascade validation/removal when riser is removed
+     *
+     * @param string $configUuid Server configuration UUID
+     * @param string $riserUuid Riser card UUID to check
+     * @return array Array of PCIe cards installed in this riser's slots
+     */
+    public function getPCIeCardsOnRiser($configUuid, $riserUuid) {
+        try {
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
+            if (!$config) {
+                return [];
+            }
+
+            $configData = $config->getData();
+            $cardsOnRiser = [];
+
+            // Get all PCIe cards in configuration
+            if (!empty($configData['pciecard_configurations'])) {
+                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                if (is_array($pcieConfigs)) {
+                    foreach ($pcieConfigs as $pcie) {
+                        $slotPosition = $pcie['slot_position'] ?? '';
+
+                        // Check if this card is installed in a slot provided by the riser
+                        // Slot format: "riser_{$riserUuid}_pcie_x16_slot_1"
+                        if (strpos($slotPosition, "riser_{$riserUuid}_pcie_") === 0) {
+                            $cardsOnRiser[] = [
+                                'uuid' => $pcie['uuid'],
+                                'slot_position' => $slotPosition,
+                                'is_riser' => false
+                            ];
+                        }
+                    }
+                }
+            }
+
+            return $cardsOnRiser;
+
+        } catch (Exception $e) {
+            error_log("Error getting PCIe cards on riser: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * P2.3: Validate that a riser can be safely removed
+     * Checks if there are dependent components that would be affected
+     *
+     * @param string $configUuid Server configuration UUID
+     * @param string $riserUuid Riser card UUID to validate
+     * @return array Validation result with dependencies list
+     */
+    public function validateRiserRemoval($configUuid, $riserUuid) {
+        try {
+            // Get PCIe cards that depend on this riser
+            $dependentCards = $this->getPCIeCardsOnRiser($configUuid, $riserUuid);
+
+            if (empty($dependentCards)) {
+                return [
+                    'can_remove' => true,
+                    'dependent_components' => [],
+                    'message' => 'Riser can be safely removed (no dependent components)'
+                ];
+            }
+
+            $componentDetails = [];
+            foreach ($dependentCards as $card) {
+                $specs = $this->componentDataService->getComponentSpecifications('pciecard', $card['uuid']);
+                $componentDetails[] = [
+                    'uuid' => $card['uuid'],
+                    'model' => $specs['model'] ?? 'Unknown',
+                    'subtype' => $specs['component_subtype'] ?? 'PCIe Card',
+                    'slot_position' => $card['slot_position']
+                ];
+            }
+
+            return [
+                'can_remove' => false,
+                'dependent_components' => $componentDetails,
+                'message' => 'Riser has ' . count($dependentCards) . ' dependent PCIe card(s). Remove those first or use cascade removal.',
+                'cascade_required' => true
+            ];
+
+        } catch (Exception $e) {
+            error_log("Error validating riser removal: " . $e->getMessage());
+            return [
+                'can_remove' => false,
+                'dependent_components' => [],
+                'message' => 'Validation error: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * P2.3: Get cascade removal plan for a riser
+     * Returns list of components that must be removed if riser is removed
+     *
+     * @param string $configUuid Server configuration UUID
+     * @param string $riserUuid Riser card UUID to remove
+     * @return array Cascade removal plan with dependencies
+     */
+    public function getCascadeRemovalPlan($configUuid, $riserUuid) {
+        try {
+            $removalPlan = [
+                'riser_uuid' => $riserUuid,
+                'dependent_pciecard' => [],
+                'total_affected' => 0,
+                'warning' => null
+            ];
+
+            // Get direct dependents (PCIe cards on riser slots)
+            $directDependents = $this->getPCIeCardsOnRiser($configUuid, $riserUuid);
+
+            foreach ($directDependents as $card) {
+                $specs = $this->componentDataService->getComponentSpecifications('pciecard', $card['uuid']);
+                $removalPlan['dependent_pciecard'][] = [
+                    'uuid' => $card['uuid'],
+                    'model' => $specs['model'] ?? 'Unknown',
+                    'subtype' => $specs['component_subtype'] ?? 'PCIe Card',
+                    'reason' => 'Installed in riser-provided PCIe slot'
+                ];
+            }
+
+            $removalPlan['total_affected'] = count($removalPlan['dependent_pciecard']);
+
+            if ($removalPlan['total_affected'] > 0) {
+                $removalPlan['warning'] = "Removing this riser will cascade-remove {$removalPlan['total_affected']} dependent PCIe card(s)";
+            }
+
+            return $removalPlan;
+
+        } catch (Exception $e) {
+            error_log("Error getting cascade removal plan: " . $e->getMessage());
+            return [
+                'riser_uuid' => $riserUuid,
+                'dependent_pciecard' => [],
+                'total_affected' => 0,
+                'error' => 'Failed to generate cascade plan: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * P2.3: Validate all riser slot assignments and detect conflicts
+     * Can detect orphaned cards or invalid riser references
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return array Validation results with any issues found
+     */
+    public function validateRiserSlotIntegrity($configUuid) {
+        try {
+            require_once __DIR__ . '/../server/ServerConfiguration.php';
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
+            if (!$config) {
+                return [
+                    'valid' => true,
+                    'errors' => [],
+                    'warnings' => []
+                ];
+            }
+
+            $configData = $config->getData();
+            $errors = [];
+            $warnings = [];
+
+            // Get all riser cards in this configuration
+            $riserCards = $this->getRiserCardsInConfig($configUuid);
+            $riserUuids = array_column($riserCards, 'component_uuid');
+
+            // Check all PCIe cards
+            if (!empty($configData['pciecard_configurations'])) {
+                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                if (is_array($pcieConfigs)) {
+                    foreach ($pcieConfigs as $pcie) {
+                        $slotPosition = $pcie['slot_position'] ?? '';
+
+                        // If card claims to be in a riser slot, verify riser exists
+                        if (strpos($slotPosition, 'riser_') === 0) {
+                            // Extract riser UUID from slot position
+                            if (preg_match('/^riser_([a-z0-9-]+)_pcie_/', $slotPosition, $matches)) {
+                                $referencedRiserUuid = $matches[1];
+
+                                if (!in_array($referencedRiserUuid, $riserUuids)) {
+                                    $errors[] = "PCIe card {$pcie['uuid']} references non-existent riser: $referencedRiserUuid";
+                                }
+                            } else {
+                                $errors[] = "PCIe card {$pcie['uuid']} has invalid riser slot format: $slotPosition";
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Validate riser specifications
+            foreach ($riserCards as $riser) {
+                $slotCount = $riser['specs']['pcie_slots'] ?? 0;
+                if ($slotCount <= 0) {
+                    $warnings[] = "Riser {$riser['component_uuid']} specifies 0 PCIe slots - may not function properly";
+                }
+
+                // Count cards actually in this riser's slots
+                $dependentCount = count($this->getPCIeCardsOnRiser($configUuid, $riser['component_uuid']));
+                if ($dependentCount > $slotCount) {
+                    $errors[] = "Riser {$riser['component_uuid']} has $dependentCount cards but only provides $slotCount slots";
+                }
+            }
+
+            return [
+                'valid' => empty($errors),
+                'errors' => $errors,
+                'warnings' => $warnings,
+                'riser_count' => count($riserCards),
+                'configuration_valid' => empty($errors)
+            ];
+
+        } catch (Exception $e) {
+            error_log("Error validating riser slot integrity: " . $e->getMessage());
+            return [
+                'valid' => false,
+                'errors' => ['Validation error: ' . $e->getMessage()],
+                'warnings' => []
+            ];
         }
     }
 }
