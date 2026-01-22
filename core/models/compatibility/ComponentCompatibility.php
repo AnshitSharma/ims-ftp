@@ -851,8 +851,22 @@ class ComponentCompatibility {
                         'pcie_version' => $this->dataExtractor->extractPCIeVersion($data, 'nic'),
                         'power_consumption' => $this->dataExtractor->extractPowerConsumption($data)
                     ];
+                    // Add SFP compatibility fields from raw data
+                    $specs['port_type'] = $data['port_type'] ?? '';
+                    $specs['ports'] = $data['ports'] ?? 0;
+                    $specs['speeds'] = $data['speeds'] ?? [];
                     break;
                     
+                case 'sfp':
+                    $specs['compatibility_fields'] = [];
+                    // Add SFP-specific fields from raw data
+                    $specs['type'] = $data['type'] ?? '';
+                    $specs['speed'] = $data['speed'] ?? '';
+                    $specs['fiber_type'] = $data['fiber_type'] ?? '';
+                    $specs['reach'] = $data['reach'] ?? '';
+                    $specs['compatible_interfaces'] = $data['compatible_interfaces'] ?? [];
+                    break;
+
                 case 'caddy':
                     $specs['compatibility_fields'] = [
                         'supported_form_factors' => $this->dataExtractor->extractSupportedFormFactors($data),
