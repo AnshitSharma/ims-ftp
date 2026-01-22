@@ -418,7 +418,8 @@ function handleAddComponent($serverBuilder, $user) {
     $portIndex = null;
     if ($componentType === 'sfp') {
         $parentNicUuid = $_POST['parent_nic_uuid'] ?? null;
-        $portIndex = isset($_POST['port_index']) ? (int)$_POST['port_index'] : null;
+        // Accept both port_index and slot_position (alias for backward compatibility)
+        $portIndex = isset($_POST['port_index']) ? (int)$_POST['port_index'] : (isset($_POST['slot_position']) ? (int)$_POST['slot_position'] : null);
 
         if (empty($parentNicUuid)) {
             send_json_response(0, 1, 400, "parent_nic_uuid is required for SFP modules", [
