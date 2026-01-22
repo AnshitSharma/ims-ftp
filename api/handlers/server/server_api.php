@@ -568,6 +568,12 @@ function handleAddComponent($serverBuilder, $user) {
             $compatibilityResult = null;
             $newComponent = ['uuid' => $componentUuid, 'type' => $componentType];
 
+            // Add SFP-specific parameters if this is an SFP component
+            if ($componentType === 'sfp') {
+                $newComponent['parent_nic_uuid'] = $parentNicUuid;
+                $newComponent['port_index'] = $portIndex;
+            }
+
             switch ($componentType) {
                 case 'cpu':
                     $compatibilityResult = $compatibility->checkCPUDecentralizedCompatibility($newComponent, $existingComponentsData);
