@@ -4765,7 +4765,7 @@ class ComponentCompatibility {
         $recommendations = [];
 
         // Get SFP specifications
-        $sfpSpecs = $this->dataLoader->getComponentSpecifications('sfp', $sfpComponent['uuid']);
+        $sfpSpecs = $this->getComponentSpecifications('sfp', $sfpComponent['uuid']);
 
         if (!$sfpSpecs) {
             return [
@@ -4821,7 +4821,7 @@ class ComponentCompatibility {
         }
 
         // Get NIC specifications
-        $nicSpecs = $this->dataLoader->getComponentSpecifications('nic', $parentNicUuid);
+        $nicSpecs = $this->getComponentSpecifications('nic', $parentNicUuid);
 
         if (!$nicSpecs) {
             return [
@@ -5124,7 +5124,7 @@ class ComponentCompatibility {
         $nic = $type1 === 'nic' ? $component1 : $component2;
         
         // Get NIC specs
-        $nicSpecs = $this->dataLoader->getComponentSpecifications('nic', $nic['uuid']);
+        $nicSpecs = $this->getComponentSpecifications('nic', $nic['uuid']);
         if (!$nicSpecs) {
             return [
                 'compatible' => false,
@@ -5135,7 +5135,7 @@ class ComponentCompatibility {
         }
         
         // Get SFP specs
-        $sfpSpecs = $this->dataLoader->getComponentSpecifications('sfp', $sfp['uuid']);
+        $sfpSpecs = $this->getComponentSpecifications('sfp', $sfp['uuid']);
         if (!$sfpSpecs) {
             return [
                 'compatible' => false,
