@@ -150,11 +150,7 @@ try {
     $lockWaitTimeout = getenv('DB_LOCK_WAIT_TIMEOUT') ?: 50;
     $pdo->exec("SET innodb_lock_wait_timeout = " . (int)$lockWaitTimeout);
 
-    // Also set max_execution_time for query operations
-    $maxExecutionTime = getenv('DB_MAX_EXECUTION_TIME') ?: 300;
-    $pdo->exec("SET max_execution_time = " . (int)$maxExecutionTime . "000"); // Convert to milliseconds
-
-    error_log("P4.2: Transaction timeout configured: lock_wait=$lockWaitTimeout sec, max_execution=" . ($maxExecutionTime/60) . " min");
+    error_log("P4.2: Transaction timeout configured: lock_wait=$lockWaitTimeout sec");
 
 } catch (PDOException $e) {
     http_response_code(500);
