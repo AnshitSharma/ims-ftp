@@ -16,10 +16,9 @@
             "reach": "300m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.5W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "RoHS Compliant", "Hot-pluggable"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-intel-ftlx8571d3bcl-001"
           }
         ]
@@ -37,10 +36,9 @@
             "reach": "10km",
             "connector": "LC",
             "fiber_type": "SMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "RoHS Compliant", "Hot-pluggable"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-intel-ftlx1471d3bcl-001"
           }
         ]
@@ -64,10 +62,9 @@
             "reach": "300m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-cisco-sfp10gsr-001"
           }
         ]
@@ -85,10 +82,9 @@
             "reach": "10km",
             "connector": "LC",
             "fiber_type": "SMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-cisco-sfp10glr-001"
           }
         ]
@@ -106,10 +102,9 @@
             "reach": "550m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "0.5W",
-            "compatible_interfaces": ["SFP"],
-            "features": ["DDM/DOM", "Hot-pluggable", "Cisco Compatible"],
+            "compatible_interfaces": [
+              "SFP"
+            ],
             "uuid": "sfp-cisco-glcsxmmd-001"
           }
         ]
@@ -133,10 +128,9 @@
             "reach": "300m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "HPE ProCurve Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-hpe-j9150a-001"
           }
         ]
@@ -154,10 +148,9 @@
             "reach": "10km",
             "connector": "LC",
             "fiber_type": "SMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "HPE ProCurve Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-hpe-j9151a-001"
           }
         ]
@@ -181,10 +174,9 @@
             "reach": "300m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.5W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "Dell Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-dell-sfp10gsr-001"
           }
         ]
@@ -202,10 +194,9 @@
             "reach": "10km",
             "connector": "LC",
             "fiber_type": "SMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.0W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["DDM/DOM", "Hot-pluggable", "Dell Compatible"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-dell-sfp10glr-001"
           }
         ]
@@ -229,10 +220,9 @@
             "reach": "100m",
             "connector": "LC",
             "fiber_type": "MMF",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "1.5W",
-            "compatible_interfaces": ["SFP28"],
-            "features": ["DDM/DOM", "Hot-pluggable", "IEEE 802.3by compliant"],
+            "compatible_interfaces": [
+              "SFP28"
+            ],
             "uuid": "sfp-mellanox-mma2p00as-001"
           }
         ]
@@ -256,10 +246,9 @@
             "reach": "1m",
             "connector": "SFP+ to SFP+",
             "fiber_type": "Copper",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "0.1W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-dac-10g-1m-001"
           },
           {
@@ -270,10 +259,9 @@
             "reach": "3m",
             "connector": "SFP+ to SFP+",
             "fiber_type": "Copper",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "0.1W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-dac-10g-3m-001"
           },
           {
@@ -284,10 +272,9 @@
             "reach": "5m",
             "connector": "SFP+ to SFP+",
             "fiber_type": "Copper",
-            "temperature_range": "0°C to 70°C",
-            "power_consumption": "0.1W",
-            "compatible_interfaces": ["SFP+"],
-            "features": ["Passive DAC", "Low latency", "Hot-pluggable"],
+            "compatible_interfaces": [
+              "SFP+"
+            ],
             "uuid": "sfp-dac-10g-5m-001"
           }
         ]

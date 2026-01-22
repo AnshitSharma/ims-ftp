@@ -1,0 +1,666 @@
+[
+  {
+    "brand": "Supermicro",
+    "series": "X13",
+    "family": "X13DRG",
+    "models": [
+      {
+        "model": "X13DRG-H",
+        "uuid": "8c5f2b87-1e5b-4e8c-a1d2-0b1a5e3f4d6c",
+        "form_factor": "EATX",
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 6,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 4,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ]
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ]
+        }
+      },
+      {
+        "model": "X13DRi-N",
+        "uuid": "7a3b9c8d-2f1a-4b7e-8c6d-5a9f2b3e8c7d",
+        "form_factor": "EATX",
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 4,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 4,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ]
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "brand": "GIGABYTE",
+    "series": "MZ",
+    "family": "MZ93",
+    "models": [
+      {
+        "model": "MZ93-FS0",
+        "uuid": "6e4c2a5b-3a8e-4f7d-8b2c-9d1a4e5b6f7c",
+        "form_factor": "EATX",
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 148
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 6,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 3,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 2,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ]
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "brand": "ASRock Rack",
+    "series": "ROMED",
+    "family": "ROMED8",
+    "models": [
+      {
+        "model": "ROMED8-9001",
+        "uuid": "4f8e6c3d-2b7a-4c9e-8d1b-5e6f7a3d9c8b",
+        "form_factor": "EATX",
+        "socket": {
+          "type": "SP5",
+          "count": 2,
+          "spacing_mm": 150
+        },
+        "chipset": "AMD SP5 Integrated",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 6,
+          "slots": 24,
+          "channels": 12,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 5,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 2,
+              "lanes": 8,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x4",
+              "count": 1,
+              "lanes": 4,
+              "bifurcation_support": false
+            }
+          ]
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "AMD Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 4,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 2,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57414",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            },
+            {
+              "type": "6-pin PCIe Aux",
+              "count": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "brand": "Supermicro",
+    "series": "SYS-1U",
+    "family": "SYS-1029U",
+    "models": [
+      {
+        "model": "SYS-1029U-TR4",
+        "uuid": "9d2e4f6a-7b8c-4d9e-8f1a-6c3d5e7f9a2b",
+        "form_factor": "Proprietary 1U",
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 140
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "max_capacity_TB": 4,
+          "slots": 16,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {},
+        "storage": {
+          "sata": {
+            "ports": 4,
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": [
+                  "M.2 2280"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 4,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Intel X710",
+              "ports": 2,
+              "speed": "10GbE",
+              "connector": "SFP+"
+            }
+          ],
+          "management": {
+            "type": "IPMI 2.0",
+            "controller": "AST2600",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 12,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "brand": "Dell",
+    "series": "PowerEdge",
+    "family": "R760",
+    "models": [
+      {
+        "model": "PowerEdge R760",
+        "uuid": "5a7c9e2b-4d6f-8a1c-3e5b-7f9d2a4c6e8b",
+        "form_factor": "2U Rack",
+        "socket": {
+          "type": "LGA 4189",
+          "count": 2,
+          "spacing_mm": 145
+        },
+        "chipset": "Intel C741",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 8,
+          "slots": 32,
+          "channels": 8,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {
+          "pcie_slots": [
+            {
+              "type": "PCIe 5.0 x16",
+              "count": 3,
+              "lanes": 16,
+              "bifurcation_support": true
+            },
+            {
+              "type": "PCIe 5.0 x8",
+              "count": 2,
+              "lanes": 8,
+              "bifurcation_support": true
+            }
+          ]
+        },
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "Intel C741 Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 8,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57416",
+              "ports": 4,
+              "speed": "10GbE",
+              "connector": "RJ45"
+            }
+          ],
+          "management": {
+            "type": "iDRAC 9",
+            "controller": "Dedicated iDRAC",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "brand": "HPE",
+    "series": "ProLiant",
+    "family": "DL385",
+    "models": [
+      {
+        "model": "ProLiant DL385 Gen11",
+        "uuid": "3f8d6b2e-9a4c-7e1f-5b3d-8a2c6f4e9d7b",
+        "form_factor": "2U Rack",
+        "socket": {
+          "type": "SP5",
+          "count": 2,
+          "spacing_mm": 150
+        },
+        "chipset": "AMD SP5 Integrated",
+        "memory": {
+          "type": "DDR5",
+          "module_types": [
+            "RDIMM",
+            "LRDIMM"
+          ],
+          "max_capacity_TB": 6,
+          "slots": 24,
+          "channels": 12,
+          "max_frequency_MHz": 4800,
+          "max_modules_per_channel": 2,
+          "ecc_support": true
+        },
+        "expansion_slots": {},
+        "storage": {
+          "sata": {
+            "ports": 8,
+            "sata_controller": "AMD Integrated"
+          },
+          "nvme": {
+            "m2_slots": [
+              {
+                "count": 2,
+                "form_factors": [
+                  "M.2 2280",
+                  "M.2 22110"
+                ],
+                "pcie_lanes": 4,
+                "pcie_generation": 5
+              }
+            ],
+            "u2_slots": {
+              "count": 10,
+              "connection": "PCIe 5.0 x4"
+            }
+          }
+        },
+        "networking": {
+          "onboard_nics": [
+            {
+              "controller": "Broadcom BCM57508",
+              "ports": 2,
+              "speed": "25GbE",
+              "connector": "SFP28"
+            }
+          ],
+          "management": {
+            "type": "iLO 6",
+            "controller": "Dedicated iLO",
+            "dedicated_port": true,
+            "kvm_support": true,
+            "remote_power": true
+          }
+        },
+        "power_management": {
+          "vrm_phases": 16,
+          "power_connectors": [
+            {
+              "type": "24-pin ATX",
+              "count": 1
+            },
+            {
+              "type": "8-pin CPU",
+              "count": 4
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

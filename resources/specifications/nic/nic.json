@@ -12,40 +12,72 @@
             "model": "I350-T4",
             "ports": 4,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.1 x4",
             "power": "8W",
-            "features": ["SR-IOV", "VMDq", "IEEE 1588"],
+            "features": [
+              "SR-IOV",
+              "VMDq",
+              "IEEE 1588"
+            ],
             "uuid": "64992d14-c775-4002-8ed5-419404909d75"
           },
           {
             "model": "I350-T4",
             "ports": 4,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.1 x4",
             "power": "8W",
-            "features": ["SR-IOV", "VMDq", "IEEE 1588"],
+            "features": [
+              "SR-IOV",
+              "VMDq",
+              "IEEE 1588"
+            ],
             "uuid": "i350-t4-1234-5678-90ab-cdef01234567"
           },
           {
             "model": "I350-T2",
             "ports": 2,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.1 x4",
             "power": "6W",
-            "features": ["SR-IOV", "VMDq", "IEEE 1588"],
+            "features": [
+              "SR-IOV",
+              "VMDq",
+              "IEEE 1588"
+            ],
             "uuid": "f85c377e-f4a2-46eb-9f2e-a466581d1ee4"
           },
           {
             "model": "I350-T2",
             "ports": 2,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.1 x4",
             "power": "6W",
-            "features": ["SR-IOV", "VMDq", "IEEE 1588"],
+            "features": [
+              "SR-IOV",
+              "VMDq",
+              "IEEE 1588"
+            ],
             "uuid": "i350-t2-2345-6789-01bc-def012345678"
           }
         ]
@@ -59,30 +91,52 @@
             "model": "X520-DA2",
             "ports": 2,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 2.0 x8",
             "power": "12W",
-            "features": ["SR-IOV", "DCB", "FCoE"],
+            "features": [
+              "SR-IOV",
+              "DCB",
+              "FCoE"
+            ],
             "uuid": "bbad8dd7-bc61-4297-9067-9155c35ef89b"
           },
           {
             "model": "X520-DA2",
             "ports": 2,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 2.0 x8",
             "power": "12W",
-            "features": ["SR-IOV", "DCB", "FCoE"],
+            "features": [
+              "SR-IOV",
+              "DCB",
+              "FCoE"
+            ],
             "uuid": "x520-da2-3456-789a-bcde-f01234567890"
           },
           {
             "model": "X520-T2",
             "ports": 2,
             "port_type": "RJ45",
-            "speeds": ["10GbE", "5GbE", "2.5GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "5GbE",
+              "2.5GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 2.0 x8",
             "power": "15W",
-            "features": ["SR-IOV", "DCB"],
+            "features": [
+              "SR-IOV",
+              "DCB"
+            ],
             "uuid": "5a63e63f-9a08-4c60-956b-f57d857ca25b"
           }
         ]
@@ -96,20 +150,35 @@
             "model": "X710-DA4",
             "ports": 4,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "20W",
-            "features": ["SR-IOV", "VXLAN", "NVGRE", "RDMA"],
+            "features": [
+              "SR-IOV",
+              "VXLAN",
+              "NVGRE",
+              "RDMA"
+            ],
             "uuid": "x710-da4-5678-9abc-def0-123456789012"
           },
           {
             "model": "X710-DA2",
             "ports": 2,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "15W",
-            "features": ["SR-IOV", "VXLAN", "NVGRE"],
+            "features": [
+              "SR-IOV",
+              "VXLAN",
+              "NVGRE"
+            ],
             "uuid": "x710-da2-6789-abcd-ef01-234567890123"
           }
         ]
@@ -123,10 +192,18 @@
             "model": "XXV710-DA2",
             "ports": 2,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "18W",
-            "features": ["SR-IOV", "VXLAN", "RDMA", "Application Device Queues"],
+            "features": [
+              "SR-IOV",
+              "VXLAN",
+              "RDMA",
+              "Application Device Queues"
+            ],
             "uuid": "xxv710-da2-789a-bcde-f012-345678901234"
           }
         ]
@@ -140,20 +217,35 @@
             "model": "XL710-QDA2",
             "ports": 2,
             "port_type": "QSFP+",
-            "speeds": ["40GbE", "10GbE"],
+            "speeds": [
+              "40GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "22W",
-            "features": ["SR-IOV", "VXLAN", "NVGRE", "RDMA"],
+            "features": [
+              "SR-IOV",
+              "VXLAN",
+              "NVGRE",
+              "RDMA"
+            ],
             "uuid": "xl710-qda2-89ab-cdef-0123-456789012345"
           },
           {
             "model": "XL710-QDA1",
             "ports": 1,
             "port_type": "QSFP+",
-            "speeds": ["40GbE", "10GbE"],
+            "speeds": [
+              "40GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "18W",
-            "features": ["SR-IOV", "VXLAN", "NVGRE"],
+            "features": [
+              "SR-IOV",
+              "VXLAN",
+              "NVGRE"
+            ],
             "uuid": "xl710-qda1-9abc-def0-1234-567890123456"
           }
         ]
@@ -167,30 +259,58 @@
             "model": "E810-CQDA2",
             "ports": 2,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE", "10GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "25W",
-            "features": ["SR-IOV", "ADQ", "RoCE", "Dynamic Device Personalization"],
+            "features": [
+              "SR-IOV",
+              "ADQ",
+              "RoCE",
+              "Dynamic Device Personalization"
+            ],
             "uuid": "e810-cqda2-abcd-ef01-2345-678901234567"
           },
           {
             "model": "E810-XXVDA4",
             "ports": 4,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE", "1GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "22W",
-            "features": ["SR-IOV", "ADQ", "RoCE"],
+            "features": [
+              "SR-IOV",
+              "ADQ",
+              "RoCE"
+            ],
             "uuid": "e810-xxvda4-bcde-f012-3456-789012345678"
           },
           {
             "model": "E810-CQDA1",
             "ports": 1,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "20W",
-            "features": ["SR-IOV", "ADQ", "RoCE"],
+            "features": [
+              "SR-IOV",
+              "ADQ",
+              "RoCE"
+            ],
             "uuid": "e810-cqda1-cdef-0123-4567-890123456789"
           }
         ]
@@ -210,20 +330,35 @@
             "model": "BCM5720-2P",
             "ports": 2,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.0 x4",
             "power": "7W",
-            "features": ["SR-IOV", "NPAR", "RDMA"],
+            "features": [
+              "SR-IOV",
+              "NPAR",
+              "RDMA"
+            ],
             "uuid": "bcm5720-2p-def0-1234-5678-901234567890"
           },
           {
             "model": "BCM5720-4P",
             "ports": 4,
             "port_type": "RJ45",
-            "speeds": ["1GbE", "100Mbps", "10Mbps"],
+            "speeds": [
+              "1GbE",
+              "100Mbps",
+              "10Mbps"
+            ],
             "interface": "PCIe 2.0 x4",
             "power": "10W",
-            "features": ["SR-IOV", "NPAR"],
+            "features": [
+              "SR-IOV",
+              "NPAR"
+            ],
             "uuid": "bcm5720-4p-ef01-2345-6789-012345678901"
           }
         ]
@@ -237,20 +372,33 @@
             "model": "BCM57414-2x25G",
             "ports": 2,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "18W",
-            "features": ["SR-IOV", "RoCE", "OVS offload"],
+            "features": [
+              "SR-IOV",
+              "RoCE",
+              "OVS offload"
+            ],
             "uuid": "bcm57414-25g-f012-3456-789a-123456789012"
           },
           {
             "model": "BCM57414-2x10G",
             "ports": 2,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "15W",
-            "features": ["SR-IOV", "RoCE"],
+            "features": [
+              "SR-IOV",
+              "RoCE"
+            ],
             "uuid": "bcm57414-10g-0123-4567-89ab-234567890123"
           }
         ]
@@ -264,20 +412,40 @@
             "model": "BCM57508-P2100G",
             "ports": 2,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE", "10GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "28W",
-            "features": ["SR-IOV", "RoCE", "TruFlow", "OVS offload"],
+            "features": [
+              "SR-IOV",
+              "RoCE",
+              "TruFlow",
+              "OVS offload"
+            ],
             "uuid": "bcm57508-100g-1234-5678-9abc-345678901234"
           },
           {
             "model": "BCM57508-P1100G",
             "ports": 1,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "22W",
-            "features": ["SR-IOV", "RoCE", "TruFlow"],
+            "features": [
+              "SR-IOV",
+              "RoCE",
+              "TruFlow"
+            ],
             "uuid": "bcm57508-p1-2345-6789-abcd-456789012345"
           }
         ]
@@ -297,20 +465,35 @@
             "model": "MCX4121A-ACAT",
             "ports": 2,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "16W",
-            "features": ["SR-IOV", "RoCE v2", "VXLAN", "Overlay Networks"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "VXLAN",
+              "Overlay Networks"
+            ],
             "uuid": "mcx4121a-acat-3456-789a-bcde-567890123456"
           },
           {
             "model": "MCX4131A-GCAT",
             "ports": 1,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "12W",
-            "features": ["SR-IOV", "RoCE v2", "VXLAN"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "VXLAN"
+            ],
             "uuid": "mcx4131a-gcat-4567-89ab-cdef-678901234567"
           }
         ]
@@ -324,20 +507,40 @@
             "model": "MCX516A-CCAT",
             "ports": 2,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE", "10GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x16",
             "power": "30W",
-            "features": ["SR-IOV", "RoCE v2", "GPUDirect", "IPsec/TLS offload"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "GPUDirect",
+              "IPsec/TLS offload"
+            ],
             "uuid": "mcx516a-ccat-5678-9abc-def0-789012345678"
           },
           {
             "model": "MCX515A-CCAT",
             "ports": 1,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 3.0 x16",
             "power": "25W",
-            "features": ["SR-IOV", "RoCE v2", "GPUDirect"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "GPUDirect"
+            ],
             "uuid": "mcx515a-ccat-6789-abcd-ef01-890123456789"
           }
         ]
@@ -351,20 +554,43 @@
             "model": "MCX653106A-HDAT",
             "ports": 1,
             "port_type": "QSFP56",
-            "speeds": ["200GbE", "100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "200GbE",
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "35W",
-            "features": ["SR-IOV", "RoCE v2", "SHARP", "GPUDirect", "RDMA"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "SHARP",
+              "GPUDirect",
+              "RDMA"
+            ],
             "uuid": "mcx653106a-hdat-789a-bcde-f012-901234567890"
           },
           {
             "model": "MCX654106A-HCAT",
             "ports": 2,
             "port_type": "QSFP56",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE", "10GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "32W",
-            "features": ["SR-IOV", "RoCE v2", "SHARP", "GPUDirect"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "SHARP",
+              "GPUDirect"
+            ],
             "uuid": "mcx654106a-hcat-89ab-cdef-0123-012345678901"
           }
         ]
@@ -378,20 +604,43 @@
             "model": "MCX75310A-AEAT",
             "ports": 1,
             "port_type": "OSFP",
-            "speeds": ["400GbE", "200GbE", "100GbE", "50GbE", "25GbE"],
+            "speeds": [
+              "400GbE",
+              "200GbE",
+              "100GbE",
+              "50GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 5.0 x16",
             "power": "45W",
-            "features": ["SR-IOV", "RoCE v2", "SHARP", "In-Network Computing", "GPUDirect"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "SHARP",
+              "In-Network Computing",
+              "GPUDirect"
+            ],
             "uuid": "mcx75310a-aeat-9abc-def0-1234-123456789012"
           },
           {
             "model": "MCX75320A-AEAT",
             "ports": 2,
             "port_type": "QSFP112",
-            "speeds": ["200GbE", "100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "200GbE",
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 5.0 x16",
             "power": "45W",
-            "features": ["SR-IOV", "RoCE v2", "SHARP", "In-Network Computing"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "SHARP",
+              "In-Network Computing"
+            ],
             "uuid": "mcx75320a-aeat-abcd-ef01-2345-234567890123"
           }
         ]
@@ -411,20 +660,34 @@
             "model": "T520-CR",
             "ports": 2,
             "port_type": "SFP+",
-            "speeds": ["10GbE", "1GbE"],
+            "speeds": [
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "14W",
-            "features": ["iWARP RDMA", "TCP offload", "SR-IOV"],
+            "features": [
+              "iWARP RDMA",
+              "TCP offload",
+              "SR-IOV"
+            ],
             "uuid": "t520-cr-bcde-f012-3456-345678901234"
           },
           {
             "model": "T540-CR",
             "ports": 1,
             "port_type": "QSFP+",
-            "speeds": ["40GbE", "10GbE"],
+            "speeds": [
+              "40GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "18W",
-            "features": ["iWARP RDMA", "TCP offload", "SR-IOV"],
+            "features": [
+              "iWARP RDMA",
+              "TCP offload",
+              "SR-IOV"
+            ],
             "uuid": "t540-cr-cdef-0123-4567-456789012345"
           }
         ]
@@ -438,20 +701,40 @@
             "model": "T6225-CR",
             "ports": 2,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE", "1GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE",
+              "1GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "16W",
-            "features": ["iWARP RDMA", "TLS offload", "SR-IOV", "NVMe-oF"],
+            "features": [
+              "iWARP RDMA",
+              "TLS offload",
+              "SR-IOV",
+              "NVMe-oF"
+            ],
             "uuid": "t6225-cr-def0-1234-5678-567890123456"
           },
           {
             "model": "T62100-LP-CR",
             "ports": 2,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE", "10GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x16",
             "power": "28W",
-            "features": ["iWARP RDMA", "TLS offload", "SR-IOV", "NVMe-oF"],
+            "features": [
+              "iWARP RDMA",
+              "TLS offload",
+              "SR-IOV",
+              "NVMe-oF"
+            ],
             "uuid": "t62100-lp-ef01-2345-6789-678901234567"
           }
         ]
@@ -471,20 +754,35 @@
             "model": "QL41232HLCU",
             "ports": 2,
             "port_type": "SFP28",
-            "speeds": ["25GbE", "10GbE"],
+            "speeds": [
+              "25GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "17W",
-            "features": ["SR-IOV", "RoCE", "VXLAN", "NVGRE"],
+            "features": [
+              "SR-IOV",
+              "RoCE",
+              "VXLAN",
+              "NVGRE"
+            ],
             "uuid": "ql41232-hlcu-f012-3456-789a-789012345678"
           },
           {
             "model": "QL41262HLCU",
             "ports": 2,
             "port_type": "QSFP+",
-            "speeds": ["40GbE", "10GbE"],
+            "speeds": [
+              "40GbE",
+              "10GbE"
+            ],
             "interface": "PCIe 3.0 x8",
             "power": "20W",
-            "features": ["SR-IOV", "RoCE", "VXLAN"],
+            "features": [
+              "SR-IOV",
+              "RoCE",
+              "VXLAN"
+            ],
             "uuid": "ql41262-hlcu-0123-4567-89ab-890123456789"
           }
         ]
@@ -498,20 +796,39 @@
             "model": "QL45212H-LC",
             "ports": 2,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "30W",
-            "features": ["SR-IOV", "RoCE v2", "VXLAN", "Application offload"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "VXLAN",
+              "Application offload"
+            ],
             "uuid": "ql45212h-lc-1234-5678-9abc-901234567890"
           },
           {
             "model": "QL45611H-LC",
             "ports": 1,
             "port_type": "QSFP28",
-            "speeds": ["100GbE", "50GbE", "40GbE", "25GbE"],
+            "speeds": [
+              "100GbE",
+              "50GbE",
+              "40GbE",
+              "25GbE"
+            ],
             "interface": "PCIe 4.0 x16",
             "power": "24W",
-            "features": ["SR-IOV", "RoCE v2", "VXLAN"],
+            "features": [
+              "SR-IOV",
+              "RoCE v2",
+              "VXLAN"
+            ],
             "uuid": "ql45611h-lc-2345-6789-abcd-012345678901"
           }
         ]

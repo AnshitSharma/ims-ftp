@@ -1,0 +1,186 @@
+[
+  {
+    "brand": "Samsung",
+    "series": "Server Premier",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 64,
+        "frequency_MHz": 6000,
+        "speed_MTs": 6000,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "uuid": "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+      },
+      {
+        "memory_type": "DDR5",
+        "module_type": "LRDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 128,
+        "frequency_MHz": 4800,
+        "speed_MTs": 4800,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "uuid": "e5f6a7b8-c9d0-1234-5678-90abcdef1234"
+      }
+    ]
+  },
+  {
+    "brand": "Crucial",
+    "series": "Server Memory",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "frequency_MHz": 4800,
+        "speed_MTs": 4800,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": true
+        },
+        "uuid": "c3d4e5f6-a7b8-9012-3456-7890abcdef12"
+      }
+    ]
+  },
+  {
+    "brand": "Corsair",
+    "series": "Vengeance",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 16,
+        "kit_capacity_GB": 32,
+        "kit_configuration": "2x16GB",
+        "frequency_MHz": 5200,
+        "speed_MTs": 5200,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.25,
+        "features": {
+          "ecc_support": false,
+          "xmp_support": true,
+          "rgb_lighting": true
+        },
+        "uuid": "d4e5f6a7-b8c9-0123-4567-890abcdef123"
+      }
+    ]
+  },
+  {
+    "brand": "Kingston",
+    "series": "ValueRAM",
+    "models": [
+      {
+        "memory_type": "DDR4",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "frequency_MHz": 3200,
+        "speed_MTs": 3200,
+        "timing": {
+          "cas_latency": 22
+        },
+        "voltage_V": 1.2,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "uuid": "f5f6a7b8-c9d0-1234-5678-90abcdef999"
+      }
+    ]
+  },
+  {
+    "brand": "G.Skill",
+    "series": "Ripjaws V",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "kit_capacity_GB": 64,
+        "kit_configuration": "2x32GB",
+        "frequency_MHz": 5600,
+        "speed_MTs": 5600,
+        "timing": {
+          "cas_latency": 36
+        },
+        "voltage_V": 1.25,
+        "features": {
+          "ecc_support": false,
+          "xmp_support": true,
+          "rgb_lighting": false
+        },
+        "uuid": "897472c6-7b40-411b-80ef-31a6ca3156ea"
+      }
+    ]
+  },
+  {
+    "brand": "Micron",
+    "series": "Server Premium",
+    "models": [
+      {
+        "memory_type": "DDR4",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 64,
+        "frequency_MHz": 3200,
+        "speed_MTs": 3200,
+        "timing": {
+          "cas_latency": 22
+        },
+        "voltage_V": 1.2,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "uuid": "82827c01-6e89-4d6a-bf2d-e62c929e2080"
+      }
+    ]
+  },
+  {
+    "brand": "SK Hynix",
+    "series": "Performance Plus",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 96,
+        "frequency_MHz": 5200,
+        "speed_MTs": 5200,
+        "timing": {
+          "cas_latency": 42
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "uuid": "ef5798f2-fdc4-4e5d-9364-6971995002ea"
+      }
+    ]
+  }
+]

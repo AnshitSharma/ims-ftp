@@ -9,17 +9,18 @@ class ComponentDataService {
     private $cacheStats = [];
     private $maxCacheSize = 1000; // Maximum cached components
     private $specCache; // ComponentSpecCache instance
+    private $uuidIndex = []; // UUID → component location index for O(1) lookups
 
     private $componentJsonPaths = [
-        'cpu' => 'cpu/Cpu-details-level-3.json',
-        'motherboard' => 'motherboard/motherboard-level-3.json',
-        'ram' => 'ram/ram_detail.json',
-        'storage' => 'storage/storage-level-3.json',
-        'nic' => 'nic/nic-level-3.json',
-        'caddy' => 'caddy/caddy_details.json',
-        'pciecard' => 'pciecard/pci-level-3.json',
-        'hbacard' => 'hbacard/hbacard-level-3.json',
-        'sfp' => 'sfp/sfp-level-3.json'
+        'cpu' => 'cpu/cpu.json',
+        'motherboard' => 'motherboard/motherboard.json',
+        'ram' => 'ram/ram.json',
+        'storage' => 'storage/storage.json',
+        'nic' => 'nic/nic.json',
+        'caddy' => 'caddy/caddy.json',
+        'pciecard' => 'pciecard/pciecard.json',
+        'hbacard' => 'hbacard/hbacard.json',
+        'sfp' => 'sfp/sfp.json'
     ];
 
     private function __construct() {
@@ -78,6 +79,9 @@ class ComponentDataService {
 
         $this->jsonCache[$componentType] = $data;
 
+        // Build UUID index for O(1) lookups
+        $this->buildUuidIndex($componentType, $data);
+
         // Store in persistent cache before returning (if cache is available)
         if ($this->specCache !== null) {
             $this->specCache->setAllSpecsForType($componentType, $data);
@@ -86,7 +90,160 @@ class ComponentDataService {
         return $data;
     }
 
+    /**
+     * Build UUID index for O(1) lookups when JSON is first loaded
+     * Stores mapping of UUID -> [type, indices, parent_data]
+     */
+    private function buildUuidIndex($componentType, $jsonData) {
+        $index = [];
+
+        // Handle different JSON structures
+        switch ($componentType) {
+            case 'caddy':
+                if (isset($jsonData['caddies'])) {
+                    foreach ($jsonData['caddies'] as $idx => $caddy) {
+                        $uuid = $caddy['uuid'] ?? $caddy['UUID'] ?? null;
+                        if ($uuid) {
+                            $index[$uuid] = ['type' => 'caddy', 'idx' => $idx];
+                        }
+                    }
+                }
+                break;
+
+            case 'chassis':
+                if (isset($jsonData['chassis_specifications']['manufacturers'])) {
+                    foreach ($jsonData['chassis_specifications']['manufacturers'] as $mIdx => $mfr) {
+                        foreach ($mfr['series'] ?? [] as $sIdx => $series) {
+                            foreach ($series['models'] ?? [] as $modelIdx => $model) {
+                                $uuid = $model['uuid'] ?? $model['UUID'] ?? null;
+                                if ($uuid) {
+                                    $index[$uuid] = [
+                                        'type' => 'chassis',
+                                        'mfr_idx' => $mIdx,
+                                        'series_idx' => $sIdx,
+                                        'model_idx' => $modelIdx,
+                                        'manufacturer' => $mfr['manufacturer'] ?? null,
+                                        'series' => $series['series_name'] ?? null
+                                    ];
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+
+            case 'nic':
+            case 'sfp':
+                foreach ($jsonData as $brandIdx => $brand) {
+                    foreach ($brand['series'] ?? [] as $seriesIdx => $series) {
+                        foreach ($series['models'] ?? [] as $modelIdx => $model) {
+                            $uuid = $model['uuid'] ?? $model['UUID'] ?? null;
+                            if ($uuid) {
+                                $index[$uuid] = [
+                                    'type' => $componentType,
+                                    'brand_idx' => $brandIdx,
+                                    'series_idx' => $seriesIdx,
+                                    'model_idx' => $modelIdx,
+                                    'brand' => $brand['brand'] ?? null,
+                                    'series' => $series['name'] ?? null
+                                ];
+                            }
+                        }
+                    }
+                }
+                break;
+
+            default:
+                // Standard: brand -> models (CPU, RAM, storage, motherboard, pciecard, hbacard)
+                foreach ($jsonData as $brandIdx => $brand) {
+                    foreach ($brand['models'] ?? [] as $modelIdx => $model) {
+                        $uuid = $model['uuid'] ?? $model['UUID'] ?? null;
+                        if ($uuid) {
+                            $index[$uuid] = [
+                                'type' => $componentType,
+                                'brand_idx' => $brandIdx,
+                                'model_idx' => $modelIdx,
+                                'brand' => $brand['brand'] ?? null,
+                                'series' => $brand['series'] ?? null,
+                                'family' => $brand['family'] ?? null,
+                                'component_subtype' => $brand['component_subtype'] ?? null
+                            ];
+                        }
+                    }
+                }
+        }
+
+        $this->uuidIndex[$componentType] = $index;
+    }
+
+    /**
+     * Find component by UUID using pre-built index for O(1) performance
+     * Falls back to linear search if index lookup fails
+     */
+    private function findComponentByUuidIndexed($componentType, $uuid) {
+        // Check if index exists for this component type
+        if (!isset($this->uuidIndex[$componentType]) || !isset($this->uuidIndex[$componentType][$uuid])) {
+            return null; // Not in index, caller will use fallback
+        }
+
+        $loc = $this->uuidIndex[$componentType][$uuid];
+        $data = $this->jsonCache[$componentType];
+
+        // Direct access based on stored indices
+        try {
+            switch ($loc['type']) {
+                case 'caddy':
+                    $model = $data['caddies'][$loc['idx']];
+                    return array_merge($model, [
+                        'uuid' => $uuid,
+                        'component_type' => 'caddy'
+                    ]);
+
+                case 'chassis':
+                    $model = $data['chassis_specifications']['manufacturers']
+                        [$loc['mfr_idx']]['series'][$loc['series_idx']]['models'][$loc['model_idx']];
+                    return array_merge($model, [
+                        'uuid' => $uuid,
+                        'manufacturer' => $loc['manufacturer'],
+                        'series' => $loc['series']
+                    ]);
+
+                case 'nic':
+                case 'sfp':
+                    $model = $data[$loc['brand_idx']]['series'][$loc['series_idx']]['models'][$loc['model_idx']];
+                    return array_merge($model, [
+                        'uuid' => $uuid,
+                        'brand' => $loc['brand'],
+                        'series' => $loc['series']
+                    ]);
+
+                default:
+                    $model = $data[$loc['brand_idx']]['models'][$loc['model_idx']];
+                    return array_merge($model, [
+                        'uuid' => $uuid,
+                        'brand' => $loc['brand'] ?? null,
+                        'series' => $loc['series'] ?? null,
+                        'family' => $loc['family'] ?? null,
+                        'component_subtype' => $loc['component_subtype'] ?? null
+                    ]);
+            }
+        } catch (Exception $e) {
+            // Index inconsistency, fallback to linear search
+            error_log("UUID index lookup failed for $componentType/$uuid: " . $e->getMessage());
+            return null;
+        }
+    }
+
     public function findComponentByUuid($componentType, $uuid, $databaseRecord = null) {
+        $jsonData = $this->loadJsonData($componentType);
+
+        // Try indexed lookup first (O(1))
+        $indexed = $this->findComponentByUuidIndexed($componentType, $uuid);
+        if ($indexed !== null) {
+            return $indexed;
+        }
+
+        // Fallback to linear search (O(n)) for robustness
         $jsonData = $this->loadJsonData($componentType);
 
         // Handle caddy JSON structure: {"caddies": [...]}

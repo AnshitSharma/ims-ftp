@@ -7,15 +7,11 @@
       "models": [
         {
           "model": "Platinum 8480+",
-          "architecture": "Sapphire Rapids",
           "base_frequency_GHz": 2.0,
           "max_frequency_GHz": 3.8,
           "all_core_turbo_GHz": 3.0,
           "cores": 56,
           "threads": 112,
-          "l1_cache": "56 × 80 KB",
-          "l2_cache": "56 × 2 MB",
-          "l3_cache": "105 MB",
           "tdp_W": 350,
           "max_memory_capacity_TB": 8,
           "memory_channels": 8,
@@ -23,28 +19,15 @@
           "pcie_lanes": 80,
           "pcie_generation": 5,
           "socket": "LGA 4189",
-          "dimensions_mm": {
-            "width": 76.0,
-            "height": 56.5
-          },
-          "power_efficiency": {
-            "idle_power_W": 65,
-            "avg_power_under_load_W": 280,  
-            "perf_per_watt_score": 8.2
-          },
           "UUID": "545e143b-57b3-419e-86e5-1df6f7aa8fd3"
         },
         {
           "model": "Platinum 8470",
-          "architecture": "Sapphire Rapids",
           "base_frequency_GHz": 2.0,
           "max_frequency_GHz": 3.7,
           "all_core_turbo_GHz": 2.9,
           "cores": 52,
           "threads": 104,
-          "l1_cache": "52 × 80 KB",
-          "l2_cache": "52 × 2 MB",
-          "l3_cache": "97.5 MB",
           "tdp_W": 300,
           "max_memory_capacity_TB": 8,
           "memory_channels": 8,
@@ -52,17 +35,7 @@
           "pcie_lanes": 80,
           "pcie_generation": 5,
           "socket": "LGA 4189",
-          "dimensions_mm": {
-            "width": 76.0,
-            "height": 56.5
-          },
-          "power_efficiency": {
-            "idle_power_W": 60,
-            "avg_power_under_load_W": 265,
-            "perf_per_watt_score": 8.4
-          },
           "UUID": "545e143b-57b3-419e-86e5-1df6f7aa8fxx"
-
         }
       ]
     },
@@ -73,25 +46,15 @@
       "family": "EPYC 9004",
       "models": [
         {
-          "model": "EPYC 9534",
-          "power_efficiency": {
-            "idle_power_W": 65,
-            "avg_power_under_load_W": 245,
-            "perf_per_watt_score": 9.3
-          }
-
+          "model": "EPYC 9534"
         },
         {
           "model": "EPYC 9374F",
-          "architecture": "Zen 4",
           "base_frequency_GHz": 3.85,
           "max_frequency_GHz": 4.3,
           "all_core_turbo_GHz": 4.0,
           "cores": 32,
           "threads": 64,
-          "l1_cache": "32 × 64 KB",
-          "l2_cache": "32 × 1 MB",
-          "l3_cache": "128 MB",
           "tdp_W": 320,
           "max_memory_capacity_TB": 6,
           "memory_channels": 12,
@@ -99,17 +62,7 @@
           "pcie_lanes": 128,
           "pcie_generation": 5,
           "socket": "SP5",
-          "dimensions_mm": {
-            "width": 75.4,
-            "height": 58.5
-          },
-          "power_efficiency": {
-            "idle_power_W": 68,
-            "avg_power_under_load_W": 285,
-            "perf_per_watt_score": 8.7
-          },
           "UUID": "d3b5f1c2-9f4e-4c2a-8e6b-7a9f3e2d1c4b"
-          
         }
       ]
     }

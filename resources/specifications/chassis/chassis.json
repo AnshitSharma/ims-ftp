@@ -45,7 +45,11 @@
                   "redundant": true,
                   "wattage": 900,
                   "efficiency": "80_plus_gold",
-                  "connector_types": ["24_pin_atx", "8_pin_eps", "6_pin_pcie"]
+                  "connector_types": [
+                    "24_pin_atx",
+                    "8_pin_eps",
+                    "6_pin_pcie"
+                  ]
                 },
                 "cooling": {
                   "fans": 3,
@@ -55,10 +59,6 @@
                 "expansion_slots": {
                   "pcie_slots": 7,
                   "low_profile": false
-                },
-                "connectivity": {
-                  "required_motherboard_connectors": ["SAS3_8643"],
-                  "cable_requirements": ["SFF-8643_to_SFF-8643"]
                 },
                 "dimensions": {
                   "height": "7.0_inches",
@@ -198,10 +198,6 @@
                   "wattage": 750,
                   "efficiency": "80_plus_platinum",
                   "dell_proprietary": true
-                },
-                "connectivity": {
-                  "required_motherboard_connectors": ["Mini-SAS_HD"],
-                  "cable_requirements": ["Mini-SAS_HD_to_Mini-SAS_HD"]
                 }
               },
               {
@@ -649,7 +645,10 @@
             "description": "Storage device form factor must match available drive bays",
             "validation": {
               "storage_form_factor": "2.5_inch",
-              "chassis_bay_types": ["2.5_inch", "universal"],
+              "chassis_bay_types": [
+                "2.5_inch",
+                "universal"
+              ],
               "compatible": true
             }
           },
@@ -658,7 +657,9 @@
             "description": "Storage interface must be supported by chassis backplane",
             "validation": {
               "storage_interface": "NVMe",
-              "backplane_support": ["supports_nvme"],
+              "backplane_support": [
+                "supports_nvme"
+              ],
               "compatible": true
             }
           },
@@ -666,8 +667,12 @@
             "rule_name": "Connector Availability",
             "description": "Required connectors must be available on motherboard",
             "validation": {
-              "chassis_connectors": ["SFF-8643"],
-              "motherboard_connectors": ["SAS3_controller"],
+              "chassis_connectors": [
+                "SFF-8643"
+              ],
+              "motherboard_connectors": [
+                "SAS3_controller"
+              ],
               "compatible": true
             }
           },
