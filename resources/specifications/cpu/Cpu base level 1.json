@@ -1,0 +1,47 @@
+[
+    {
+      "brand": "Intel",
+      "series": [
+        {
+          "name": "Xeon Scalable",
+          "description": "Enterprise-grade processors for mission-critical applications",
+          "tiers": ["Platinum", "Gold", "Silver", "Bronze"],
+          "core_range": "4-80 cores",
+          "generation_range": "1st Gen to 4th Gen"
+        },
+        {
+          "name": "Xeon E5",
+          "description": "Balanced performance for mainstream server applications",
+          "tiers": ["v1", "v2", "v3", "v4"],
+          "core_range": "4-22 cores",
+          "generation_range": "Sandy Bridge to Broadwell"
+        },
+        {
+          "name": "Xeon E7",
+          "description": "Maximum reliability for mission-critical enterprise servers",
+          "tiers": ["v1", "v2", "v3", "v4"],
+          "core_range": "4-24 cores",
+          "generation_range": "Westmere to Broadwell"
+        }
+      ]
+    },
+    {
+      "brand": "AMD",
+      "series": [
+        {
+          "name": "EPYC",
+          "description": "High-performance processors with industry-leading core counts",
+          "tiers": ["7001", "7002", "7003", "9004"],
+          "core_range": "8-96 cores",
+          "generation_range": "Naples to Genoa"
+        },
+        {
+          "name": "Opteron",
+          "description": "Legacy enterprise processors for older infrastructure",
+          "tiers": ["6100", "6200", "6300"],
+          "core_range": "4-16 cores",
+          "generation_range": "Magny-Cours to Abu Dhabi"
+        }
+      ]
+    }
+  ]

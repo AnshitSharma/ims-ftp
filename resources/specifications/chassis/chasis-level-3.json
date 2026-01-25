@@ -1,0 +1,687 @@
+{
+  "chassis_specifications": {
+    "version": "1.0",
+    "last_updated": "2025-09-06",
+    "manufacturers": [
+      {
+        "manufacturer": "Supermicro",
+        "series": [
+          {
+            "series_name": "SuperChassis 4U",
+            "models": [
+              {
+                "uuid": "sm-sc846be1c-r90jbod-001",
+                "model": "SC846BE1C-R90JBOD",
+                "brand": "Supermicro",
+                "series": "SuperChassis 4U",
+                "type": "Rack",
+                "u_size": 4,
+                "height": 17.78,
+                "form_factor": "4U",
+                "chassis_type": "Storage Server",
+                "drive_bays": {
+                  "total_bays": 24,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 24,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "BPN-SAS3-846EL1",
+                  "interface": "SAS3",
+                  "ports": 24,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": false,
+                  "expander_chip": "LSI SAS3008"
+                },
+                "power_supply": {
+                  "redundant": true,
+                  "wattage": 900,
+                  "efficiency": "80_plus_gold",
+                  "connector_types": ["24_pin_atx", "8_pin_eps", "6_pin_pcie"]
+                },
+                "cooling": {
+                  "fans": 3,
+                  "fan_size": "80mm",
+                  "airflow_direction": "front_to_back"
+                },
+                "expansion_slots": {
+                  "pcie_slots": 7,
+                  "low_profile": false
+                },
+                "connectivity": {
+                  "required_motherboard_connectors": ["SAS3_8643"],
+                  "cable_requirements": ["SFF-8643_to_SFF-8643"]
+                },
+                "dimensions": {
+                  "height": "7.0_inches",
+                  "width": "17.2_inches",
+                  "depth": "26.0_inches"
+                }
+              },
+              {
+                "uuid": "sm-sc216be1c-r920lpb-001",
+                "model": "SC216BE1C-R920LPB",
+                "brand": "Supermicro",
+                "series": "SuperChassis 4U",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Dual Node Server",
+                "drive_bays": {
+                  "total_bays": 24,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 24,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "BPN-SAS3-216EL1",
+                  "interface": "SAS3",
+                  "ports": 24,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4
+                },
+                "power_supply": {
+                  "redundant": true,
+                  "wattage": 920,
+                  "efficiency": "80_plus_platinum"
+                },
+                "cooling": {
+                  "fans": 4,
+                  "fan_size": "40mm",
+                  "airflow_direction": "front_to_back"
+                }
+              }
+            ]
+          },
+          {
+            "series_name": "SuperChassis 1U",
+            "models": [
+              {
+                "uuid": "sm-sc113tq-r700cb-001",
+                "model": "SC113TQ-R700CB",
+                "brand": "Supermicro",
+                "series": "SuperChassis 1U",
+                "type": "Rack",
+                "u_size": 1,
+                "height": 4.45,
+                "form_factor": "1U",
+                "chassis_type": "Rack Server",
+                "drive_bays": {
+                  "total_bays": 4,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 4,
+                      "hot_swap": true,
+                      "tool_less": false,
+                      "position": "internal"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "BPN-SAS3-113TQ",
+                  "interface": "SAS3",
+                  "ports": 4,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": false
+                },
+                "power_supply": {
+                  "redundant": false,
+                  "wattage": 700,
+                  "efficiency": "80_plus_bronze"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "manufacturer": "Dell",
+        "series": [
+          {
+            "series_name": "PowerEdge R-Series",
+            "models": [
+              {
+                "uuid": "dell-r740-chassis-001",
+                "model": "PowerEdge R740",
+                "brand": "Dell",
+                "series": "PowerEdge R-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Rack Server",
+                "drive_bays": {
+                  "total_bays": 16,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 16,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Dell SAS/SATA Backplane",
+                  "interface": "SAS3",
+                  "ports": 16,
+                  "connector_type": "Mini-SAS_HD",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4
+                },
+                "power_supply": {
+                  "redundant": true,
+                  "wattage": 750,
+                  "efficiency": "80_plus_platinum",
+                  "dell_proprietary": true
+                },
+                "connectivity": {
+                  "required_motherboard_connectors": ["Mini-SAS_HD"],
+                  "cable_requirements": ["Mini-SAS_HD_to_Mini-SAS_HD"]
+                }
+              },
+              {
+                "uuid": "dell-r750xs-chassis-001",
+                "model": "PowerEdge R750xs",
+                "brand": "Dell",
+                "series": "PowerEdge R-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Storage Optimized",
+                "drive_bays": {
+                  "total_bays": 24,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 24,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Dell NVMe/SAS Backplane",
+                  "interface": "NVMe_SAS3_Hybrid",
+                  "ports": 24,
+                  "connector_type": "MCIO",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4,
+                  "hybrid_configuration": true
+                }
+              },
+              {
+                "uuid": "dell-r740xd-chassis-001",
+                "model": "PowerEdge R740xd",
+                "brand": "Dell",
+                "series": "PowerEdge R-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Storage Dense",
+                "drive_bays": {
+                  "total_bays": 32,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 24,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    },
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 8,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "rear"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Dell Dual Backplane",
+                  "interface": "SAS3_Dual",
+                  "ports": 32,
+                  "connector_type": "Mini-SAS_HD",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "manufacturer": "HPE",
+        "series": [
+          {
+            "series_name": "ProLiant DL-Series",
+            "models": [
+              {
+                "uuid": "hpe-dl380-gen10-001",
+                "model": "ProLiant DL380 Gen10",
+                "brand": "HPE",
+                "series": "ProLiant DL-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Rack Server",
+                "drive_bays": {
+                  "total_bays": 12,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 12,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "HPE Smart Array Backplane",
+                  "interface": "SAS3",
+                  "ports": 12,
+                  "connector_type": "Mini-SAS_HD",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": false
+                },
+                "power_supply": {
+                  "redundant": true,
+                  "wattage": 800,
+                  "efficiency": "80_plus_platinum",
+                  "hpe_proprietary": true
+                }
+              },
+              {
+                "uuid": "hpe-dl560-gen10-001",
+                "model": "ProLiant DL560 Gen10",
+                "brand": "HPE",
+                "series": "ProLiant DL-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "4-Socket Server",
+                "drive_bays": {
+                  "total_bays": 8,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 8,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "HPE NVMe/SAS Backplane",
+                  "interface": "NVMe_SAS3",
+                  "ports": 8,
+                  "connector_type": "Mini-SAS_HD",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "manufacturer": "Lenovo",
+        "series": [
+          {
+            "series_name": "ThinkSystem SR-Series",
+            "models": [
+              {
+                "uuid": "lenovo-sr650-chassis-001",
+                "model": "ThinkSystem SR650",
+                "brand": "Lenovo",
+                "series": "ThinkSystem SR-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Rack Server",
+                "drive_bays": {
+                  "total_bays": 16,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 16,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Lenovo SAS/SATA Backplane",
+                  "interface": "SAS3",
+                  "ports": 16,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_bays": 8
+                }
+              },
+              {
+                "uuid": "lenovo-sr850-chassis-001",
+                "model": "ThinkSystem SR850",
+                "brand": "Lenovo",
+                "series": "ThinkSystem SR-Series",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "4-Socket Server",
+                "drive_bays": {
+                  "total_bays": 8,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 8,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Lenovo High-Performance Backplane",
+                  "interface": "NVMe_SAS3",
+                  "ports": 8,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "manufacturer": "Generic/Custom",
+        "series": [
+          {
+            "series_name": "Standard ATX Cases",
+            "models": [
+              {
+                "uuid": "abaa2c58-c08c-46f0-abcf-2242400e907c",
+                "model": "Generic 4U Server Case",
+                "brand": "Generic/Custom",
+                "series": "Standard ATX Cases",
+                "type": "Rack",
+                "u_size": 4,
+                "height": 17.78,
+                "form_factor": "4U",
+                "chassis_type": "Server Case",
+                "drive_bays": {
+                  "total_bays": 8,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 8,
+                      "hot_swap": false,
+                      "tool_less": false,
+                      "position": "internal"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Generic SATA Backplane",
+                  "interface": "SATA3",
+                  "ports": 8,
+                  "connector_type": "SATA",
+                  "supports_sata": true,
+                  "supports_sas": false,
+                  "supports_nvme": false
+                },
+                "power_supply": {
+                  "redundant": false,
+                  "wattage": 650,
+                  "efficiency": "80_plus_bronze",
+                  "standard_atx": true
+                }
+              },
+              {
+                "uuid": "f0bb3152-1157-40d4-9547-5a1654cd29dd",
+                "model": "Generic 4U Server Case",
+                "brand": "Generic/Custom",
+                "series": "Standard ATX Cases",
+                "type": "Rack",
+                "u_size": 4,
+                "height": 17.78,
+                "form_factor": "4U",
+                "chassis_type": "Server Case",
+                "drive_bays": {
+                  "total_bays": 8,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 8,
+                      "hot_swap": false,
+                      "tool_less": false,
+                      "position": "internal"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Generic SATA Backplane",
+                  "interface": "SATA3",
+                  "ports": 8,
+                  "connector_type": "SATA",
+                  "supports_sata": true,
+                  "supports_sas": false,
+                  "supports_nvme": false
+                },
+                "power_supply": {
+                  "redundant": false,
+                  "wattage": 650,
+                  "efficiency": "80_plus_bronze",
+                  "standard_atx": true
+                }
+              },
+              {
+                "uuid": "generic-nvme-case-001",
+                "model": "High-Density NVMe Case",
+                "brand": "Generic/Custom",
+                "series": "Standard ATX Cases",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "NVMe Storage",
+                "drive_bays": {
+                  "total_bays": 32,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "M.2_slot",
+                      "count": 32,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front_rear"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "NVMe Switch Backplane",
+                  "interface": "PCIe_Gen4",
+                  "ports": 32,
+                  "connector_type": "MCIO",
+                  "supports_sata": false,
+                  "supports_sas": false,
+                  "supports_nvme": true,
+                  "nvme_lanes_per_bay": 4,
+                  "pcie_switch": true
+                }
+              },
+              {
+                "uuid": "generic-2u-mixed-001",
+                "model": "Generic 2U Mixed Drive Case",
+                "brand": "Generic/Custom",
+                "series": "Standard ATX Cases",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Mixed Storage",
+                "drive_bays": {
+                  "total_bays": 12,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "2.5_inch",
+                      "count": 8,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    },
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 4,
+                      "hot_swap": true,
+                      "tool_less": false,
+                      "position": "rear"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Generic SAS/SATA Backplane",
+                  "interface": "SAS3",
+                  "ports": 12,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "manufacturer": "Intel",
+        "series": [
+          {
+            "series_name": "Server System",
+            "models": [
+              {
+                "uuid": "intel-r2312wftzs-001",
+                "model": "R2312WFTZS",
+                "brand": "Intel",
+                "series": "Server System",
+                "type": "Rack",
+                "u_size": 2,
+                "height": 8.89,
+                "form_factor": "2U",
+                "chassis_type": "Rack Server",
+                "drive_bays": {
+                  "total_bays": 12,
+                  "bay_configuration": [
+                    {
+                      "bay_type": "3.5_inch",
+                      "count": 12,
+                      "hot_swap": true,
+                      "tool_less": true,
+                      "position": "front"
+                    }
+                  ]
+                },
+                "backplane": {
+                  "model": "Intel SAS Backplane",
+                  "interface": "SAS3",
+                  "ports": 12,
+                  "connector_type": "SFF-8643",
+                  "supports_sata": true,
+                  "supports_sas": true,
+                  "supports_nvme": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "compatibility_matrix": {
+      "storage_to_chassis": {
+        "rules": [
+          {
+            "rule_name": "Drive Bay Form Factor Match",
+            "description": "Storage device form factor must match available drive bays",
+            "validation": {
+              "storage_form_factor": "2.5_inch",
+              "chassis_bay_types": ["2.5_inch", "universal"],
+              "compatible": true
+            }
+          },
+          {
+            "rule_name": "Interface Compatibility",
+            "description": "Storage interface must be supported by chassis backplane",
+            "validation": {
+              "storage_interface": "NVMe",
+              "backplane_support": ["supports_nvme"],
+              "compatible": true
+            }
+          },
+          {
+            "rule_name": "Connector Availability",
+            "description": "Required connectors must be available on motherboard",
+            "validation": {
+              "chassis_connectors": ["SFF-8643"],
+              "motherboard_connectors": ["SAS3_controller"],
+              "compatible": true
+            }
+          },
+          {
+            "rule_name": "PCIe Lane Requirements",
+            "description": "NVMe drives must have sufficient PCIe lanes available",
+            "validation": {
+              "storage_pcie_lanes": 4,
+              "chassis_lanes_per_bay": 4,
+              "compatible": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

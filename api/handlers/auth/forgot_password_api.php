@@ -51,7 +51,8 @@ try {
     
     // Here you would typically send an email with the reset link
     // For now, we'll just return the token (remove this in production)
-    $resetLink = "https://shubham.staging.cloudmate.in/bdc_ims/reset-password.php?token=" . $resetToken;
+    $frontendUrl = getenv('FRONTEND_URL') ?: 'https://localhost';
+    $resetLink = $frontendUrl . "/reset-password.php?token=" . $resetToken;
     
     send_json_response(1, 1, 200, "Password reset link has been sent to your email", [
         'reset_link' => $resetLink, // Remove this in production

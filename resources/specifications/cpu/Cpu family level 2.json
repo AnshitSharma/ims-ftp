@@ -1,0 +1,169 @@
+[
+    {
+      "brand": "Intel",
+      "series": "Xeon Scalable",
+      "generations": [
+        {
+          "name": "4th Gen (Sapphire Rapids)",
+          "release_year": 2023,
+          "families": [
+            {
+              "name": "Platinum 8400",
+              "core_ranges": [
+                {"min": 52, "max": 60, "threads_per_core": 2, "qty_available": 12},
+                {"min": 32, "max": 48, "threads_per_core": 2, "qty_available": 28}
+              ],
+              "max_tdp_range": "270W-350W",
+              "recommended_for": ["Mission-critical enterprise", "High-performance computing"]
+            },
+            {
+              "name": "Gold 6400",
+              "core_ranges": [
+                {"min": 24, "max": 32, "threads_per_core": 2, "qty_available": 32},
+                {"min": 16, "max": 20, "threads_per_core": 2, "qty_available": 45}
+              ],
+              "max_tdp_range": "165W-270W",
+              "recommended_for": ["Database servers", "Virtualization"]
+            },
+            {
+              "name": "Silver 4400",
+              "core_ranges": [
+                {"min": 12, "max": 24, "threads_per_core": 2, "qty_available": 38},
+                {"min": 8, "max": 10, "threads_per_core": 2, "qty_available": 52}
+              ],
+              "max_tdp_range": "120W-210W",
+              "recommended_for": ["Web servers", "Cloud infrastructure"]
+            },
+            {
+              "name": "Bronze 3400",
+              "core_ranges": [
+                {"min": 4, "max": 8, "threads_per_core": 2, "qty_available": 60}
+              ],
+              "max_tdp_range": "105W-150W",
+              "recommended_for": ["Basic infrastructure", "Storage servers"]
+            }
+          ],
+          "socket": "LGA 4189",
+          "memory_support": {
+            "type": "DDR5",
+            "max_channels": 8,
+            "max_capacity_per_socket": "8TB",
+            "max_frequency": "4800 MHz"
+          },
+          "pcie_lanes": 80,
+          "pcie_generation": 5,
+          "qty_available": 132
+        },
+        {
+          "name": "3rd Gen (Ice Lake)",
+          "release_year": 2021,
+          "families": [
+            {
+              "name": "Platinum 8300",
+              "core_ranges": [
+                {"min": 32, "max": 40, "threads_per_core": 2, "qty_available": 24},
+                {"min": 24, "max": 28, "threads_per_core": 2, "qty_available": 31}
+              ],
+              "max_tdp_range": "205W-270W",
+              "recommended_for": ["Enterprise databases", "Mission-critical applications"]
+            },
+            {
+              "name": "Gold 6300",
+              "core_ranges": [
+                {"min": 16, "max": 24, "threads_per_core": 2, "qty_available": 36},
+                {"min": 12, "max": 14, "threads_per_core": 2, "qty_available": 43}
+              ],
+              "max_tdp_range": "165W-205W",
+              "recommended_for": ["Virtualization", "Application servers"]
+            },
+            {
+              "name": "Silver 4300",
+              "core_ranges": [
+                {"min": 8, "max": 16, "threads_per_core": 2, "qty_available": 49}
+              ],
+              "max_tdp_range": "120W-185W",
+              "recommended_for": ["Web services", "Edge computing"]
+            },
+            {
+              "name": "Bronze 3300",
+              "core_ranges": [
+                {"min": 4, "max": 8, "threads_per_core": 2, "qty_available": 65}
+              ],
+              "max_tdp_range": "105W-150W",
+              "recommended_for": ["File servers", "Basic infrastructure"]
+            }
+          ],
+          "socket": "LGA 4189",
+          "memory_support": {
+            "type": "DDR4",
+            "max_channels": 8,
+            "max_capacity_per_socket": "6TB",
+            "max_frequency": "3200 MHz"
+          },
+          "pcie_lanes": 64,
+          "pcie_generation": 4,
+          "qty_available": 248
+        }
+      ]
+    },
+    {
+      "brand": "AMD",
+      "series": "EPYC",
+      "generations": [
+        {
+          "name": "4th Gen (Genoa)",
+          "release_year": 2022,
+          "families": [
+            {
+              "name": "EPYC 9004",
+              "core_ranges": [
+                {"min": 84, "max": 96, "threads_per_core": 2, "qty_available": 18},
+                {"min": 64, "max": 72, "threads_per_core": 2, "qty_available": 24},
+                {"min": 32, "max": 48, "threads_per_core": 2, "qty_available": 36},
+                {"min": 16, "max": 24, "threads_per_core": 2, "qty_available": 42}
+              ],
+              "max_tdp_range": "200W-400W",
+              "recommended_for": ["High-performance computing", "Virtualization", "Cloud infrastructure"]
+            }
+          ],
+          "socket": "SP5",
+          "memory_support": {
+            "type": "DDR5",
+            "max_channels": 12,
+            "max_capacity_per_socket": "6TB",
+            "max_frequency": "4800 MHz"
+          },
+          "pcie_lanes": 128,
+          "pcie_generation": 5,
+          "qty_available": 120
+        },
+        {
+          "name": "3rd Gen (Milan)",
+          "release_year": 2021,
+          "families": [
+            {
+              "name": "EPYC 7003",
+              "core_ranges": [
+                {"min": 56, "max": 64, "threads_per_core": 2, "qty_available": 28},
+                {"min": 32, "max": 48, "threads_per_core": 2, "qty_available": 34},
+                {"min": 16, "max": 24, "threads_per_core": 2, "qty_available": 46},
+                {"min": 8, "max": 12, "threads_per_core": 2, "qty_available": 52}
+              ],
+              "max_tdp_range": "155W-280W",
+              "recommended_for": ["Database servers", "Virtualization", "Cloud computing"]
+            }
+          ],
+          "socket": "SP3",
+          "memory_support": {
+            "type": "DDR4",
+            "max_channels": 8,
+            "max_capacity_per_socket": "4TB",
+            "max_frequency": "3200 MHz"
+          },
+          "pcie_lanes": 128,
+          "pcie_generation": 4,
+          "qty_available": 160
+        }
+      ]
+    }
+  ]

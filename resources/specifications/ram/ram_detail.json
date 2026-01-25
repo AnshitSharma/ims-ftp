@@ -1,0 +1,380 @@
+[
+  {
+    "brand": "Samsung",
+    "series": "Server Premier",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 64,
+        "frequency_MHz": 6000,
+        "speed_MTs": 6000,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "inventory": {
+          "quantity_available": 48,
+          "quantity_reserved": 12,
+          "location": "Rack A1, Storage Unit 1",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-11-01",
+          "warranty_expiration": "2028-11-01",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Xeon Scalable",
+            "generation": "4th Gen (Sapphire Rapids)"
+          },
+          {
+            "brand": "AMD",
+            "series": "EPYC",
+            "generation": "4th Gen (Genoa)"
+          }
+        ],
+        "uuid": "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+      },
+      {
+        "memory_type": "DDR5",
+        "module_type": "LRDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 128,
+        "frequency_MHz": 4800,
+        "speed_MTs": 4800,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "inventory": {
+          "quantity_available": 24,
+          "quantity_reserved": 8,
+          "location": "Rack A1, Storage Unit 2",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-11-05",
+          "warranty_expiration": "2028-11-05",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Xeon Scalable",
+            "generation": "4th Gen (Sapphire Rapids)"
+          },
+          {
+            "brand": "AMD",
+            "series": "EPYC",
+            "generation": "4th Gen (Genoa)"
+          }
+        ],
+        "uuid": "e5f6a7b8-c9d0-1234-5678-90abcdef1234"
+      }
+    ]
+  },
+  {
+    "brand": "Crucial",
+    "series": "Server Memory",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "frequency_MHz": 4800,
+        "speed_MTs": 4800,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": true
+        },
+        "inventory": {
+          "quantity_available": 35,
+          "quantity_reserved": 5,
+          "location": "Rack A2, Storage Unit 3",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-10-28",
+          "warranty_expiration": "2028-10-28",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Core",
+            "generation": "13th Gen (Raptor Lake)"
+          },
+          {
+            "brand": "AMD",
+            "series": "Ryzen",
+            "generation": "7000 Series (Raphael)"
+          }
+        ],
+        "uuid": "c3d4e5f6-a7b8-9012-3456-7890abcdef12"
+      }
+    ]
+  },
+  {
+    "brand": "Corsair",
+    "series": "Vengeance",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 16,
+        "kit_capacity_GB": 32,
+        "kit_configuration": "2x16GB",
+        "frequency_MHz": 5200,
+        "speed_MTs": 5200,
+        "timing": {
+          "cas_latency": 40
+        },
+        "voltage_V": 1.25,
+        "features": {
+          "ecc_support": false,
+          "xmp_support": true,
+          "rgb_lighting": true
+        },
+        "inventory": {
+          "quantity_available": 18,
+          "quantity_reserved": 4,
+          "location": "Rack D5, Storage Unit 8",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-11-12",
+          "warranty_expiration": "2033-11-12",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+           {
+            "brand": "Intel",
+            "series": "Core",
+            "generation": "12th, 13th Gen"
+          },
+          {
+            "brand": "AMD",
+            "series": "Ryzen",
+            "generation": "7000 Series"
+          }
+        ],
+        "uuid": "d4e5f6a7-b8c9-0123-4567-890abcdef123"
+      }
+    ]
+  },
+  {
+    "brand": "Kingston",
+    "series": "ValueRAM",
+    "models": [
+      {
+        "memory_type": "DDR4",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "frequency_MHz": 3200,
+        "speed_MTs": 3200,
+        "timing": {
+          "cas_latency": 22
+        },
+        "voltage_V": 1.2,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "inventory": {
+          "quantity_available": 42,
+          "quantity_reserved": 6,
+          "location": "Rack B3, Storage Unit 4",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-09-15",
+          "warranty_expiration": "2028-09-15",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Xeon Scalable",
+            "generation": "3rd Gen (Ice Lake)"
+          },
+          {
+            "brand": "Intel",
+            "series": "Core",
+            "generation": "10th, 11th Gen"
+          },
+          {
+            "brand": "AMD",
+            "series": "EPYC",
+            "generation": "3rd Gen (Milan)"
+          },
+          {
+            "brand": "AMD",
+            "series": "Ryzen",
+            "generation": "3000, 5000 Series"
+          }
+        ],
+        "uuid": "f5f6a7b8-c9d0-1234-5678-90abcdef999"
+      }
+    ]
+  },
+  {
+    "brand": "G.Skill",
+    "series": "Ripjaws V",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "UDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 32,
+        "kit_capacity_GB": 64,
+        "kit_configuration": "2x32GB",
+        "frequency_MHz": 5600,
+        "speed_MTs": 5600,
+        "timing": {
+          "cas_latency": 36
+        },
+        "voltage_V": 1.25,
+        "features": {
+          "ecc_support": false,
+          "xmp_support": true,
+          "rgb_lighting": false
+        },
+        "inventory": {
+          "quantity_available": 28,
+          "quantity_reserved": 4,
+          "location": "Rack C2, Storage Unit 5",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2024-01-10",
+          "warranty_expiration": "2034-01-10",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Core",
+            "generation": "12th, 13th, 14th Gen"
+          },
+          {
+            "brand": "AMD",
+            "series": "Ryzen",
+            "generation": "7000 Series"
+          }
+        ],
+        "uuid": "897472c6-7b40-411b-80ef-31a6ca3156ea"
+      }
+    ]
+  },
+  {
+    "brand": "Micron",
+    "series": "Server Premium",
+    "models": [
+      {
+        "memory_type": "DDR4",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 64,
+        "frequency_MHz": 3200,
+        "speed_MTs": 3200,
+        "timing": {
+          "cas_latency": 22
+        },
+        "voltage_V": 1.2,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "inventory": {
+          "quantity_available": 32,
+          "quantity_reserved": 8,
+          "location": "Rack B4, Storage Unit 6",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2023-12-20",
+          "warranty_expiration": "2028-12-20",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Xeon Scalable",
+            "generation": "2nd Gen (Cascade Lake), 3rd Gen (Ice Lake)"
+          },
+          {
+            "brand": "AMD",
+            "series": "EPYC",
+            "generation": "2nd Gen (Rome), 3rd Gen (Milan)"
+          }
+        ],
+        "uuid": "82827c01-6e89-4d6a-bf2d-e62c929e2080"
+      }
+    ]
+  },
+  {
+    "brand": "SK Hynix",
+    "series": "Performance Plus",
+    "models": [
+      {
+        "memory_type": "DDR5",
+        "module_type": "RDIMM",
+        "form_factor": "DIMM (288-pin)",
+        "capacity_GB": 96,
+        "frequency_MHz": 5200,
+        "speed_MTs": 5200,
+        "timing": {
+          "cas_latency": 42
+        },
+        "voltage_V": 1.1,
+        "features": {
+          "ecc_support": true,
+          "xmp_support": false
+        },
+        "inventory": {
+          "quantity_available": 20,
+          "quantity_reserved": 4,
+          "location": "Rack A3, Storage Unit 7",
+          "status": "Available",
+          "condition": "New",
+          "purchase_date": "2024-02-05",
+          "warranty_expiration": "2029-02-05",
+          "serial_numbers": [],
+          "sys_score": ""
+        },
+        "compatible_platforms": [
+          {
+            "brand": "Intel",
+            "series": "Xeon Scalable",
+            "generation": "4th Gen (Sapphire Rapids), 5th Gen (Emerald Rapids)"
+          },
+          {
+            "brand": "AMD",
+            "series": "EPYC",
+            "generation": "4th Gen (Genoa)"
+          }
+        ],
+        "uuid": "ef5798f2-fdc4-4e5d-9364-6971995002ea"
+      }
+    ]
+  }
+]

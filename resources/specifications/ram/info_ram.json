@@ -1,0 +1,9 @@
+{
+  "RAM": {
+    "type": ["DDR3", "DDR4", "DDR5"],
+    "Rank": ["4DRx4", "2Rx4"],
+    "ECC": ["yes", "no"],
+    "DIMM": ["LRDIMM", "RDIMM", "SODIMM"],
+    "size": [8, 16, 32, 64, 128]
+  }
+}

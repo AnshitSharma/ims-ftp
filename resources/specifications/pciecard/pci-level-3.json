@@ -1,0 +1,1112 @@
+[
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "Supermicro",
+    "series": "M.2 to PCIe",
+    "generation": "AOM-SNG-4M2P",
+    "family": "Quad M.2 NVMe",
+    "models": [
+      {
+        "model": "AOM-SNG-4M2P",
+        "part_number": "MCP-220-00142-0N",
+        "interface": "PCIe 3.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2242", "2260", "2280", "22110"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "idle_W": 2.5,
+          "typical_W": 15,
+          "max_W": 25
+        },
+        "performance": {
+          "max_sequential_read": "13000 MB/s",
+          "max_sequential_write": "12000 MB/s",
+          "max_iops_read": "1200000",
+          "max_iops_write": "1100000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power + optional 6-pin"
+        },
+        "UUID": "nvme-adaptor-4m2p-001-ijkl9012"
+      },
+      {
+        "model": "AOM-SNG-2M2P",
+        "part_number": "MCP-220-00141-0N",
+        "interface": "PCIe 3.0 x8",
+        "m2_slots": 2,
+        "m2_form_factors": ["2242", "2260", "2280"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "16TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "idle_W": 1.5,
+          "typical_W": 8,
+          "max_W": 15
+        },
+        "performance": {
+          "max_sequential_read": "6500 MB/s",
+          "max_sequential_write": "6000 MB/s",
+          "max_iops_read": "600000",
+          "max_iops_write": "550000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-2m2p-001-mnop3456"
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "ASUS",
+    "series": "Hyper M.2",
+    "generation": "Gen 4",
+    "family": "Hyper M.2 x16",
+    "models": [
+      {
+        "model": "Hyper M.2 x16 Gen 4",
+        "part_number": "HYPER-M2-X16-GEN4",
+        "interface": "PCIe 4.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2242", "2260", "2280", "22110"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 170,
+          "width": 70,
+          "height": 15
+        },
+        "power_consumption": {
+          "idle_W": 3.0,
+          "typical_W": 18,
+          "max_W": 30
+        },
+        "performance": {
+          "max_sequential_read": "28000 MB/s",
+          "max_sequential_write": "24000 MB/s",
+          "max_iops_read": "2400000",
+          "max_iops_write": "2000000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-asus-hyper-x16-gen4-abcd1234"
+      },
+      {
+        "model": "Hyper M.2 x16 Gen 5",
+        "part_number": "HYPER-M2-X16-GEN5",
+        "interface": "PCIe 5.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2242", "2260", "2280", "22110"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 170,
+          "width": 70,
+          "height": 15
+        },
+        "power_consumption": {
+          "idle_W": 3.5,
+          "typical_W": 22,
+          "max_W": 40
+        },
+        "performance": {
+          "max_sequential_read": "56000 MB/s",
+          "max_sequential_write": "48000 MB/s",
+          "max_iops_read": "4800000",
+          "max_iops_write": "4000000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power + 6-pin PCIe"
+        },
+        "UUID": "nvme-adaptor-asus-hyper-x16-gen5-efgh5678"
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "GIGABYTE",
+    "series": "AORUS Gen4 AIC",
+    "generation": "Gen 4",
+    "family": "AORUS Gen4 AIC Adaptor",
+    "models": [
+      {
+        "model": "AORUS Gen4 AIC Adaptor",
+        "part_number": "GC-A4000S",
+        "interface": "PCIe 4.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2280"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 168,
+          "width": 69,
+          "height": 16
+        },
+        "power_consumption": {
+          "idle_W": 2.8,
+          "typical_W": 16,
+          "max_W": 28
+        },
+        "performance": {
+          "max_sequential_read": "28000 MB/s",
+          "max_sequential_write": "24000 MB/s",
+          "max_iops_read": "2400000",
+          "max_iops_write": "2000000"
+        },
+        "cooling": {
+          "heatsink": true,
+          "thermal_pads": true,
+          "fan_support": false
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-gigabyte-gen4-aic-ijkl9012"
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "HighPoint",
+    "series": "SSD7000 Series",
+    "generation": "Gen 4",
+    "family": "SSD7000 Series",
+    "models": [
+      {
+        "model": "SSD7580A",
+        "part_number": "SSD7580A",
+        "interface": "PCIe 4.0 x16",
+        "m2_slots": 8,
+        "m2_form_factors": ["2280", "22110"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "64TB",
+        "form_factor": "FHFL (Full Height Full Length)",
+        "dimensions_mm": {
+          "length": 312,
+          "width": 120,
+          "height": 75
+        },
+        "power_consumption": {
+          "idle_W": 5.0,
+          "typical_W": 35,
+          "max_W": 60
+        },
+        "performance": {
+          "max_sequential_read": "56000 MB/s",
+          "max_sequential_write": "48000 MB/s",
+          "max_iops_read": "4800000",
+          "max_iops_write": "4000000"
+        },
+        "cooling": {
+          "heatsink": true,
+          "thermal_pads": true,
+          "fan_support": true,
+          "active_cooling": true
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power + 8-pin PCIe"
+        },
+        "UUID": "nvme-adaptor-highpoint-ssd7580a-mnop3456"
+      },
+      {
+        "model": "SSD7540",
+        "part_number": "SSD7540",
+        "interface": "PCIe 4.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2280", "22110"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 168,
+          "width": 69,
+          "height": 18
+        },
+        "power_consumption": {
+          "idle_W": 3.2,
+          "typical_W": 20,
+          "max_W": 35
+        },
+        "performance": {
+          "max_sequential_read": "28000 MB/s",
+          "max_sequential_write": "24000 MB/s",
+          "max_iops_read": "2400000",
+          "max_iops_write": "2000000"
+        },
+        "cooling": {
+          "heatsink": true,
+          "thermal_pads": true,
+          "fan_support": false
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": false,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-highpoint-ssd7540-qrst7890"
+      }
+    ]
+  },
+  {
+    "component_subtype": "NVMe Adaptor",
+    "brand": "StarTech",
+    "series": "M.2 PCIe Adapters",
+    "generation": "Gen 3/4",
+    "family": "M.2 PCIe Adapters",
+    "models": [
+      {
+        "model": "PEX4M2E1",
+        "part_number": "PEX4M2E1",
+        "interface": "PCIe 3.0 x16",
+        "m2_slots": 4,
+        "m2_form_factors": ["2230", "2242", "2260", "2280"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "32TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 165,
+          "width": 68,
+          "height": 14
+        },
+        "power_consumption": {
+          "idle_W": 2.0,
+          "typical_W": 12,
+          "max_W": 20
+        },
+        "performance": {
+          "max_sequential_read": "13000 MB/s",
+          "max_sequential_write": "12000 MB/s",
+          "max_iops_read": "1200000",
+          "max_iops_write": "1100000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-startech-pex4m2e1-uvwx4567"
+      },
+      {
+        "model": "PEX2M2E1",
+        "part_number": "PEX2M2E1",
+        "interface": "PCIe 3.0 x8",
+        "m2_slots": 2,
+        "m2_form_factors": ["2230", "2242", "2260", "2280"],
+        "max_capacity_per_slot": "8TB",
+        "total_max_capacity": "16TB",
+        "form_factor": "HHHL (Half Height Half Length)",
+        "dimensions_mm": {
+          "length": 165,
+          "width": 68,
+          "height": 14
+        },
+        "power_consumption": {
+          "idle_W": 1.2,
+          "typical_W": 7,
+          "max_W": 12
+        },
+        "performance": {
+          "max_sequential_read": "6500 MB/s",
+          "max_sequential_write": "6000 MB/s",
+          "max_iops_read": "600000",
+          "max_iops_write": "550000"
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "nvme-adaptor-startech-pex2m2e1-yzab8901"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Supermicro",
+    "series": "RSC Riser Cards",
+    "generation": "Multiple Form Factors",
+    "family": "1U and 2U Riser Cards",
+    "models": [
+      {
+        "model": "RSC-R1UU-E8R",
+        "part_number": "CSE-815TQ-R500WB",
+        "interface": "PCIe 3.0/4.0",
+        "pcie_slots": 1,
+        "slot_type": "x8",
+        "form_factor": "1U Low Profile",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "150mm",
+        "low_profile_only": true,
+        "clearance_height_mm": 64.41,
+        "dimensions_mm": {
+          "length": 120,
+          "width": 80,
+          "height": 15
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-815TQ", "CSE-815TQC", "CSE-813MFTQC"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x8 or x16 slot",
+          "expansion_slot": "1x PCIe x8 low profile",
+          "power_passthrough": true
+        },
+        "UUID": "riser-1u-e8r-001-qrst7890"
+      },
+      {
+        "model": "RSC-R1UU-2E8R",
+        "part_number": "CSE-815TQ-R500WB-2E8R",
+        "interface": "PCIe 3.0/4.0",
+        "pcie_slots": 2,
+        "slot_type": "x8",
+        "form_factor": "1U Low Profile",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "150mm",
+        "low_profile_only": true,
+        "clearance_height_mm": 64.41,
+        "dimensions_mm": {
+          "length": 180,
+          "width": 80,
+          "height": 15
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-815TQ", "CSE-815TQC"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x8 low profile",
+          "power_passthrough": true
+        },
+        "UUID": "riser-1u-2e8r-001-uvwx4567"
+      },
+      {
+        "model": "RSC-R2UU-E16R",
+        "part_number": "CSE-825TQ-R720LPB-E16R",
+        "interface": "PCIe 3.0/4.0",
+        "pcie_slots": 1,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "200mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 180,
+          "width": 120,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-825TQ", "CSE-825TQC", "CSE-826BE1C"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slot": "1x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-2u-e16r-001-yzab8901"
+      },
+      {
+        "model": "RSC-R2UU-2E16R",
+        "part_number": "CSE-825TQ-R720LPB-2E16R",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "200mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 220,
+          "width": 120,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-825TQ", "CSE-825TQC", "CSE-826BE1C"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-2u-2e16r-001-cdef2345"
+      },
+      {
+        "model": "RSC-R2UU-3E8R",
+        "part_number": "CSE-825TQ-R720LPB-3E8R",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 3,
+        "slot_type": "x8",
+        "form_factor": "2U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "200mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 220,
+          "width": 120,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-825TQ", "CSE-825TQC"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "3x PCIe x8 standard height",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-2u-3e8r-001-ghij6789"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Dell",
+    "series": "PowerEdge Riser Cards",
+    "generation": "Gen 4",
+    "family": "PowerEdge R750 Riser Cards",
+    "models": [
+      {
+        "model": "PowerEdge R750 Riser 1",
+        "part_number": "DELL-R750-RSR1",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 1,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 175,
+          "width": 115,
+          "height": 70
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Dell",
+            "models": ["PowerEdge R750", "PowerEdge R750xs"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slot": "1x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-dell-r750-rsr1-klmn0123"
+      },
+      {
+        "model": "PowerEdge R750 Riser 2",
+        "part_number": "DELL-R750-RSR2",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 220,
+          "width": 115,
+          "height": 70
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Dell",
+            "models": ["PowerEdge R750", "PowerEdge R750xs"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-dell-r750-rsr2-opqr4567"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "HPE",
+    "series": "ProLiant Riser Cards",
+    "generation": "Gen 10+",
+    "family": "ProLiant DL380 Gen10+ Riser Cards",
+    "models": [
+      {
+        "model": "DL380 Gen10+ Primary Riser",
+        "part_number": "HPE-DL380-G10P-RSR1",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 1,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 180,
+          "width": 110,
+          "height": 68
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "HPE",
+            "models": ["ProLiant DL380 Gen10+", "ProLiant DL380 Gen11"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slot": "1x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-hpe-dl380-g10p-rsr1-stuv8901"
+      },
+      {
+        "model": "DL380 Gen10+ Secondary Riser",
+        "part_number": "HPE-DL380-G10P-RSR2",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x8",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 200,
+          "width": 110,
+          "height": 68
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "HPE",
+            "models": ["ProLiant DL380 Gen10+", "ProLiant DL380 Gen11"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x8 standard height",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-hpe-dl380-g10p-rsr2-wxyz2345"
+      },
+      {
+        "model": "DL380 Gen10+ Tertiary Riser",
+        "part_number": "HPE-DL380-G10P-RSR3",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 3,
+        "slot_type": "x8",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 230,
+          "width": 110,
+          "height": 68
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "HPE",
+            "models": ["ProLiant DL380 Gen10+"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "3x PCIe x8 standard height",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-hpe-dl380-g10p-rsr3-abcd6789"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Supermicro",
+    "series": "RSC Riser Cards",
+    "generation": "Gen 5",
+    "family": "4U and Tower Riser Cards",
+    "models": [
+      {
+        "model": "RSC-W4-66G4",
+        "part_number": "RSC-W4-66G4",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 4,
+        "slot_type": "x16",
+        "form_factor": "4U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "250mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 167.64,
+        "dimensions_mm": {
+          "length": 280,
+          "width": 140,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-847E16", "CSE-846BE1C", "CSE-848E1C"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "4x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-4u-w4-66g4-efgh0123"
+      },
+      {
+        "model": "RSC-W-68G4",
+        "part_number": "RSC-W-68G4",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 6,
+        "slot_type": "x8",
+        "form_factor": "4U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "250mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 167.64,
+        "dimensions_mm": {
+          "length": 320,
+          "width": 140,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-847E16", "CSE-846BE1C"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "2x PCIe x16 slots",
+          "expansion_slots": "6x PCIe x8 standard height",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-4u-w-68g4-ijkl4567"
+      },
+      {
+        "model": "RSC-W2-66",
+        "part_number": "RSC-W2-66",
+        "interface": "PCIe 3.0/4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "Tower/Workstation",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "200mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 200,
+          "width": 120,
+          "height": 75
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Supermicro",
+            "models": ["CSE-743T", "CSE-745TQ"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-tower-w2-66-mnop8901"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "ASUS",
+    "series": "Server Riser Cards",
+    "generation": "Gen 4",
+    "family": "RS Series Riser Cards",
+    "models": [
+      {
+        "model": "PIKE II 3108",
+        "part_number": "PIKE-II-3108",
+        "interface": "PCIe 3.0",
+        "pcie_slots": 1,
+        "slot_type": "x8",
+        "form_factor": "Proprietary",
+        "cable_type": "Direct mount",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 140,
+          "width": 100,
+          "height": 25
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 3.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "ASUS",
+            "models": ["RS720-E9", "RS520-E9"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x8 slot",
+          "expansion_slot": "1x PCIe x8 standard height",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-asus-pike-3108-qrst2345"
+      },
+      {
+        "model": "HYPER DUAL Riser",
+        "part_number": "HYPER-DUAL-RSR",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "Flexible PCIe",
+        "cable_length": "180mm",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 210,
+          "width": 115,
+          "height": 70
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "ASUS",
+            "models": ["RS720A-E11", "RS720-E11"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-asus-hyper-dual-uvwx6789"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Lenovo",
+    "series": "ThinkSystem Riser Cards",
+    "generation": "Gen 4",
+    "family": "ThinkSystem SR650 V2 Riser Cards",
+    "models": [
+      {
+        "model": "SR650 V2 PCIe FH/FL Riser 1",
+        "part_number": "4XH7A08794",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 1,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 178,
+          "width": 112,
+          "height": 69
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Lenovo",
+            "models": ["ThinkSystem SR650 V2", "ThinkSystem SR630 V2"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slot": "1x PCIe x16 FHFL",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-lenovo-sr650v2-rsr1-yzab0123"
+      },
+      {
+        "model": "SR650 V2 PCIe FH/FL Riser 2",
+        "part_number": "4XH7A08795",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 218,
+          "width": 112,
+          "height": 69
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Lenovo",
+            "models": ["ThinkSystem SR650 V2", "ThinkSystem SR630 V2"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 FHFL",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-lenovo-sr650v2-rsr2-cdef4567"
+      },
+      {
+        "model": "SR650 V2 PCIe LP Riser",
+        "part_number": "4XH7A08796",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 3,
+        "slot_type": "x8",
+        "form_factor": "2U Low Profile",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": true,
+        "clearance_height_mm": 64.41,
+        "dimensions_mm": {
+          "length": 220,
+          "width": 112,
+          "height": 18
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Lenovo",
+            "models": ["ThinkSystem SR650 V2"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "3x PCIe x8 low profile",
+          "power_passthrough": true,
+          "supports_gpu": false
+        },
+        "UUID": "riser-lenovo-sr650v2-lp-ghij8901"
+      }
+    ]
+  },
+  {
+    "component_subtype": "Riser Card",
+    "brand": "Cisco",
+    "series": "UCS Riser Cards",
+    "generation": "Gen 4",
+    "family": "UCS C240 M6 Riser Cards",
+    "models": [
+      {
+        "model": "UCS C240 M6 PCIe Riser 1",
+        "part_number": "UCSC-PCI-1C-240M6",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 1,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 175,
+          "width": 110,
+          "height": 68
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Cisco",
+            "models": ["UCS C240 M6", "UCS C240 M6SX"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slot": "1x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-cisco-c240m6-rsr1-klmn2345"
+      },
+      {
+        "model": "UCS C240 M6 PCIe Riser 2",
+        "part_number": "UCSC-PCI-2C-240M6",
+        "interface": "PCIe 4.0",
+        "pcie_slots": 2,
+        "slot_type": "x16",
+        "form_factor": "2U Standard Height",
+        "cable_type": "PCIe Riser",
+        "cable_length": "N/A",
+        "low_profile_only": false,
+        "clearance_height_mm": 106.68,
+        "dimensions_mm": {
+          "length": 215,
+          "width": 110,
+          "height": 68
+        },
+        "electrical_specs": {
+          "signal_integrity": "PCIe 4.0 compliant",
+          "insertion_loss": "<3dB @ 8GHz",
+          "return_loss": ">10dB @ 8GHz"
+        },
+        "compatible_chassis": [
+          {
+            "brand": "Cisco",
+            "models": ["UCS C240 M6", "UCS C240 M6SX"]
+          }
+        ],
+        "slot_compatibility": {
+          "motherboard_connection": "PCIe x16 slot",
+          "expansion_slots": "2x PCIe x16 standard height",
+          "power_passthrough": true,
+          "supports_gpu": true
+        },
+        "UUID": "riser-cisco-c240m6-rsr2-opqr6789"
+      }
+    ]
+  }
+]

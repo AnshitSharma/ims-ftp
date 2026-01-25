@@ -1,0 +1,488 @@
+[
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Broadcom",
+    "series": "HBA 9400",
+    "generation": "9400-16i",
+    "family": "HBA 9400-16i",
+    "models": [
+      {
+        "model": "LSI 9400-16i",
+        "part_number": "05-50008-00",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 16,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 14.8,
+          "max_W": 16.5
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9400-16i-001-abcd1234"
+      },
+      {
+        "model": "LSI 9400-8i",
+        "part_number": "05-50008-01",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 12.5,
+          "max_W": 14.2
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9400-8i-001-efgh5678"
+      },
+      {
+        "model": "LSI 9400-16e",
+        "part_number": "05-50008-02",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 0,
+        "external_ports": 16,
+        "connector_type": "SFF-8644 (Mini SAS HD)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 15.2,
+          "max_W": 17.0
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9400-16e-001-ijkl9012"
+      },
+      {
+        "model": "LSI 9400-8e",
+        "part_number": "05-50008-03",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 0,
+        "external_ports": 8,
+        "connector_type": "SFF-8644 (Mini SAS HD)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 13.0,
+          "max_W": 14.8
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9400-8e-001-mnop3456"
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Broadcom",
+    "series": "HBA 9500",
+    "generation": "9500-16i",
+    "family": "HBA 9500-16i Tri-Mode",
+    "models": [
+      {
+        "model": "LSI 9500-16i",
+        "part_number": "05-50077-00",
+        "interface": "PCIe 4.0 x8",
+        "protocol": "SAS/SATA/NVMe Tri-Mode",
+        "data_rate": "12Gb/s per lane (SAS/SATA), PCIe 4.0 (NVMe)",
+        "internal_ports": 16,
+        "external_ports": 0,
+        "connector_type": "SFF-8654 (SlimSAS 8i)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 18.5,
+          "max_W": 21.0
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9500-16i-001-qrst7890"
+      },
+      {
+        "model": "LSI 9500-8i",
+        "part_number": "05-50077-01",
+        "interface": "PCIe 4.0 x8",
+        "protocol": "SAS/SATA/NVMe Tri-Mode",
+        "data_rate": "12Gb/s per lane (SAS/SATA), PCIe 4.0 (NVMe)",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8654 (SlimSAS 8i)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 16.0,
+          "max_W": 18.5
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9500-8i-001-uvwx4567"
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Broadcom",
+    "series": "HBA 9300",
+    "generation": "9300-16i",
+    "family": "HBA 9300-16i",
+    "models": [
+      {
+        "model": "LSI 9300-16i",
+        "part_number": "LSI00344",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 16,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 13.5,
+          "max_W": 15.0
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9300-16i-001-yzab8901"
+      },
+      {
+        "model": "LSI 9300-8i",
+        "part_number": "LSI00343",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 11.8,
+          "max_W": 13.2
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9300-8i-001-cdef2345"
+      },
+      {
+        "model": "LSI 9300-16e",
+        "part_number": "LSI00341",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 0,
+        "external_ports": 16,
+        "connector_type": "SFF-8644 (Mini SAS HD)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 14.0,
+          "max_W": 15.8
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9300-16e-001-ghij6789"
+      },
+      {
+        "model": "LSI 9300-8e",
+        "part_number": "LSI00342",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 0,
+        "external_ports": 8,
+        "connector_type": "SFF-8644 (Mini SAS HD)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 12.2,
+          "max_W": 13.8
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9300-8e-001-klmn0123"
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Microchip",
+    "series": "Adaptec SmartHBA",
+    "generation": "2100",
+    "family": "SmartHBA 2100",
+    "models": [
+      {
+        "model": "SmartHBA 2100-8i",
+        "part_number": "2290300-R",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS/SATA",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 256,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 10.5,
+          "max_W": 12.0
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "smarthba-2100-8i-001-opqr4567"
+      },
+      {
+        "model": "SmartHBA 2100-4i",
+        "part_number": "2290400-R",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS/SATA",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 4,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 128,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 9.0,
+          "max_W": 10.5
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "smarthba-2100-4i-001-stuv8901"
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "Broadcom",
+    "series": "HBA 9600",
+    "generation": "9600-16i",
+    "family": "HBA 9600 Tri-Mode",
+    "models": [
+      {
+        "model": "LSI 9600-16i",
+        "part_number": "05-50078-00",
+        "interface": "PCIe 4.0 x16",
+        "protocol": "SAS/SATA/NVMe Tri-Mode",
+        "data_rate": "24Gb/s per lane (SAS), PCIe 4.0 (NVMe)",
+        "internal_ports": 16,
+        "external_ports": 0,
+        "connector_type": "SFF-8654 (SlimSAS 8i)",
+        "max_devices": 2048,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 22.0,
+          "max_W": 25.5
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9600-16i-001-wxyz2345"
+      },
+      {
+        "model": "LSI 9600-8i",
+        "part_number": "05-50078-01",
+        "interface": "PCIe 4.0 x8",
+        "protocol": "SAS/SATA/NVMe Tri-Mode",
+        "data_rate": "24Gb/s per lane (SAS), PCIe 4.0 (NVMe)",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8654 (SlimSAS 8i)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 18.0,
+          "max_W": 21.0
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "hba-9600-8i-001-abcd6789"
+      }
+    ]
+  },
+  {
+    "component_subtype": "HBA Card",
+    "brand": "ATTO",
+    "series": "ExpressSAS",
+    "generation": "H1280",
+    "family": "ExpressSAS H1280",
+    "models": [
+      {
+        "model": "ExpressSAS H1280",
+        "part_number": "ESAS-H1280-000",
+        "interface": "PCIe 4.0 x8",
+        "protocol": "SAS/SATA",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 16,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 1024,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 14.5,
+          "max_W": 16.8
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "atto-h1280-001-efgh0123"
+      },
+      {
+        "model": "ExpressSAS H680",
+        "part_number": "ESAS-H680-000",
+        "interface": "PCIe 3.0 x8",
+        "protocol": "SAS/SATA",
+        "data_rate": "12Gb/s per lane",
+        "internal_ports": 8,
+        "external_ports": 0,
+        "connector_type": "SFF-8643 (Mini SAS HD)",
+        "max_devices": 512,
+        "form_factor": "Low Profile/Standard Height",
+        "dimensions_mm": {
+          "length": 167,
+          "width": 69,
+          "height": 14.5
+        },
+        "power_consumption": {
+          "typical_W": 11.0,
+          "max_W": 12.8
+        },
+        "slot_compatibility": {
+          "required_slot": "PCIe x8 or x16",
+          "low_profile_bracket": true,
+          "power_requirements": "PCIe slot power only"
+        },
+        "UUID": "atto-h680-001-ijkl4567"
+      }
+    ]
+  }
+]

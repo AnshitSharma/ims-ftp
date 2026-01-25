@@ -1,0 +1,272 @@
+[
+    {
+      "brand": "Supermicro",
+      "series": [
+        {
+          "name": "X13",
+          "generation": "Intel 4th Gen Xeon Scalable",
+          "release_year": 2023,
+          "families": [
+            {
+              "name": "X13DRG",
+              "form_factors": ["EATX", "SSI EEB"],
+              "socket_type": "LGA 4189",
+              "socket_count": 2,
+              "chipset": "Intel C741",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "8TB",
+                "slots": 32,
+                "channels": 8,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 6,
+                "pcie_5_x8": 4,
+                "pcie_5_x4": 2,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 4,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 10GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1600W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "Intel Xeon Platinum 8400",
+                "Intel Xeon Gold 6400"
+              ],
+              "qty_available": 15
+            },
+            {
+              "name": "X13DRi",
+              "form_factors": ["EATX", "SSI CEB"],
+              "socket_type": "LGA 4189",
+              "socket_count": 2,
+              "chipset": "Intel C741",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "8TB",
+                "slots": 32,
+                "channels": 8,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 4,
+                "pcie_5_x8": 4,
+                "pcie_5_x4": 2,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 2,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 10GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1400W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "Intel Xeon Platinum 8400",
+                "Intel Xeon Gold 6400",
+                "Intel Xeon Silver 4400"
+              ],
+              "qty_available": 18
+            }
+          ]
+        },
+        {
+          "name": "H13",
+          "generation": "AMD EPYC 9004",
+          "release_year": 2022,
+          "families": [
+            {
+              "name": "H13DSU",
+              "form_factors": ["EATX", "SSI EEB"],
+              "socket_type": "SP5",
+              "socket_count": 2,
+              "chipset": "AMD SP5 Integrated",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "6TB",
+                "slots": 24,
+                "channels": 12,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 5,
+                "pcie_5_x8": 2,
+                "pcie_5_x4": 3,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 4,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 25GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1600W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "AMD EPYC 9004"
+              ],
+              "qty_available": 12
+            },
+            {
+              "name": "H13DSG",
+              "form_factors": ["EATX", "SSI CEB"],
+              "socket_type": "SP5",
+              "socket_count": 2,
+              "chipset": "AMD SP5 Integrated",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "6TB",
+                "slots": 24,
+                "channels": 12,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 4,
+                "pcie_5_x8": 2,
+                "pcie_5_x4": 2,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 2,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 10GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1400W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "AMD EPYC 9004"
+              ],
+              "qty_available": 14
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "brand": "GIGABYTE",
+      "series": [
+        {
+          "name": "MZ",
+          "generation": "Intel 4th Gen Xeon Scalable",
+          "release_year": 2023,
+          "families": [
+            {
+              "name": "MZ93-FS0",
+              "form_factors": ["EATX", "SSI EEB"],
+              "socket_type": "LGA 4189",
+              "socket_count": 2,
+              "chipset": "Intel C741",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "8TB",
+                "slots": 32,
+                "channels": 8,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 6,
+                "pcie_5_x8": 3,
+                "pcie_5_x4": 2,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 4,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 10GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1600W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "Intel Xeon Platinum 8400",
+                "Intel Xeon Gold 6400"
+              ],
+              "qty_available": 10
+            }
+          ]
+        },
+        {
+          "name": "MC",
+          "generation": "AMD EPYC 9004",
+          "release_year": 2022,
+          "families": [
+            {
+              "name": "MC63-4S0",
+              "form_factors": ["EATX", "SSI EEB"],
+              "socket_type": "SP5",
+              "socket_count": 2,
+              "chipset": "AMD SP5 Integrated",
+              "memory": {
+                "type": "DDR5",
+                "max_capacity": "6TB",
+                "slots": 24,
+                "channels": 12,
+                "max_frequency": "4800MHz"
+              },
+              "expansion_slots": {
+                "pcie_5_x16": 5,
+                "pcie_5_x8": 3,
+                "pcie_5_x4": 2,
+                "other_slots": ["OCP 3.0", "M.2"]
+              },
+              "storage": {
+                "sata_ports": 8,
+                "sas_ports": 4,
+                "m2_slots": 4,
+                "u2_slots": 2
+              },
+              "networking": {
+                "onboard_lan": "Dual 25GbE",
+                "management": "IPMI 2.0 with KVM"
+              },
+              "power_requirements": {
+                "recommended_psu": "1600W Redundant",
+                "power_connectors": ["24-pin ATX", "Dual 8-pin CPU"]
+              },
+              "supported_cpu_families": [
+                "AMD EPYC 9004"
+              ],
+              "qty_available": 8
+            }
+          ]
+        }
+      ]
+    }
+  ]
