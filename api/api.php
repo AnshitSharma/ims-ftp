@@ -520,21 +520,139 @@ function handleRegistration() {
  * Handle forgot password
  */
 function handleForgotPassword() {
+    global $pdo;
+
     $email = trim($_POST['email'] ?? '');
-    
+
     if (empty($email)) {
         send_json_response(0, 0, 400, "Email is required");
     }
-    
-    // For security, always return success even if email doesn't exist
-    send_json_response(1, 1, 200, "If an account with that email exists, a password reset link has been sent");
+
+    // Validate email format
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        send_json_response(0, 0, 400, "Invalid email format");
+    }
+
+    try {
+        // Look up user by email
+        $stmt = $pdo->prepare("SELECT id, username, email FROM users WHERE email = :email AND status = 'active'");
+        $stmt->execute(['email' => $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // If user exists, generate and send reset token
+        if ($user) {
+            // Generate secure token
+            $resetToken = bin2hex(random_bytes(32)); // 64-char hex string
+            $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
+
+            // Clean up old unused tokens for this user (prevent token spam)
+            $stmt = $pdo->prepare("DELETE FROM password_resets WHERE user_id = :user_id AND used_at IS NULL");
+            $stmt->execute(['user_id' => $user['id']]);
+
+            // Store new token
+            $stmt = $pdo->prepare(
+                "INSERT INTO password_resets (user_id, token, expires_at) VALUES (:user_id, :token, :expires_at)"
+            );
+            $stmt->execute([
+                'user_id' => $user['id'],
+                'token' => $resetToken,
+                'expires_at' => $expiresAt
+            ]);
+
+            // Construct reset link
+            $frontendUrl = getenv('FRONTEND_URL') ?: 'http://localhost:3000';
+            $resetLink = $frontendUrl . '/reset-password?token=' . $resetToken;
+
+            // Send email
+            require_once __DIR__ . '/../core/helpers/EmailHelper.php';
+            $emailSent = EmailHelper::sendPasswordResetEmail($user['email'], $user['username'], $resetLink);
+
+            if (!$emailSent) {
+                error_log("[handleForgotPassword] Failed to send email to {$user['email']}. Reset link: {$resetLink}");
+            }
+        }
+
+        // ALWAYS return success (security: don't leak user existence)
+        send_json_response(1, 1, 200, "If an account with that email exists, a password reset link has been sent");
+
+    } catch (PDOException $e) {
+        error_log("[handleForgotPassword] Database error: " . $e->getMessage());
+        send_json_response(0, 0, 500, "An error occurred. Please try again later");
+    }
 }
 
 /**
  * Handle password reset
  */
 function handleResetPassword() {
-    send_json_response(0, 0, 501, "Password reset functionality not implemented");
+    global $pdo;
+
+    $token = trim($_POST['token'] ?? $_GET['token'] ?? '');
+    $newPassword = trim($_POST['new_password'] ?? '');
+
+    // Validate input
+    if (empty($token)) {
+        send_json_response(0, 0, 400, "Reset token is required");
+    }
+
+    if (empty($newPassword)) {
+        send_json_response(0, 0, 400, "New password is required");
+    }
+
+    // Enforce password strength (minimum 8 characters)
+    if (strlen($newPassword) < 8) {
+        send_json_response(0, 0, 400, "Password must be at least 8 characters long");
+    }
+
+    try {
+        // Look up token
+        $stmt = $pdo->prepare(
+            "SELECT user_id, expires_at, used_at FROM password_resets WHERE token = :token"
+        );
+        $stmt->execute(['token' => $token]);
+        $resetRecord = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Validate token exists
+        if (!$resetRecord) {
+            send_json_response(0, 0, 400, "Invalid or expired reset token");
+        }
+
+        // Check if already used
+        if ($resetRecord['used_at'] !== null) {
+            send_json_response(0, 0, 400, "This reset link has already been used");
+        }
+
+        // Check if expired
+        if (strtotime($resetRecord['expires_at']) < time()) {
+            send_json_response(0, 0, 400, "This reset link has expired");
+        }
+
+        // Hash new password
+        $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+
+        // Update user password
+        $stmt = $pdo->prepare("UPDATE users SET password = :password WHERE id = :user_id");
+        $stmt->execute([
+            'password' => $hashedPassword,
+            'user_id' => $resetRecord['user_id']
+        ]);
+
+        // Mark token as used
+        $stmt = $pdo->prepare("UPDATE password_resets SET used_at = NOW() WHERE token = :token");
+        $stmt->execute(['token' => $token]);
+
+        // Invalidate all user's refresh tokens (force logout everywhere)
+        $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = :user_id");
+        $stmt->execute(['user_id' => $resetRecord['user_id']]);
+
+        error_log("[handleResetPassword] Password successfully reset for user_id {$resetRecord['user_id']}");
+
+        send_json_response(1, 1, 200, "Password has been reset successfully. Please login with your new password.");
+
+    } catch (PDOException $e) {
+        error_log("[handleResetPassword] Database error: " . $e->getMessage());
+        send_json_response(0, 0, 500, "An error occurred. Please try again later");
+    }
 }
 
 /**
