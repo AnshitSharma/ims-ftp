@@ -2330,7 +2330,7 @@ function handleGetCompatible($serverBuilder, $user) {
         $compatibleComponents = [];
         
         // Always try to load the ComponentCompatibility class first
-        $compatibilityClassFile = __DIR__ . '/../../core/models/compatibility/ComponentCompatibility.php';
+        $compatibilityClassFile = __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
         if (file_exists($compatibilityClassFile)) {
             require_once $compatibilityClassFile;
             error_log("DEBUG: ComponentCompatibility.php loaded successfully");

@@ -430,7 +430,9 @@ class ServerBuilder {
             }
 
             // Extract the actual serial number from component details (in case it wasn't provided in options)
-            $serialNumber = $componentDetails['SerialNumber'] ?? $serialNumber;
+            // CRITICAL: Keep $serialNumber as original user input (null if not provided) for JSON config logic.
+            // $resolvedSerialNumber is used only for inventory DB row targeting.
+            $resolvedSerialNumber = $componentDetails['SerialNumber'] ?? $serialNumber;
             
             // Phase 5: Chassis-specific validations BEFORE adding
             // Validation already done in Phase 3 for chassis, skip here
@@ -548,7 +550,7 @@ class ServerBuilder {
             if (!$this->isVirtualConfig($configUuid)) {
                 // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
                 // CRITICAL: Pass serial number to update only the specific physical component
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $serialNumber);
+                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $resolvedSerialNumber);
             }
             
             // Update calculated fields (power, compatibility, etc.)
@@ -1002,8 +1004,11 @@ class ServerBuilder {
                             }
                             // If existing CPU doesn't have serial_number, it's NOT a match (different physical component)
                         } else {
-                            // Legacy: When adding without serial_number, match by UUID only
-                            $isMatch = ($cpu['uuid'] === $componentUuid);
+                            // When adding without serial_number, only match if existing entry also has no serial
+                            // (same-model CPUs with serial numbers are different physical units)
+                            if (!isset($cpu['serial_number'])) {
+                                $isMatch = ($cpu['uuid'] === $componentUuid);
+                            }
                         }
 
                         if ($isMatch) {
@@ -2121,8 +2126,11 @@ class ServerBuilder {
                     // If existing component doesn't have serial_number, it's NOT a match
                     // (they're different physical components)
                 } else {
-                    // Legacy: When no serial_number provided, match by UUID only
-                    $isMatch = ($comp['component_uuid'] === $componentUuid);
+                    // When adding without serial_number, only match if existing entry also has no serial
+                    // (same-model components with serial numbers are different physical units)
+                    if (!isset($comp['serial_number'])) {
+                        $isMatch = ($comp['component_uuid'] === $componentUuid);
+                    }
                 }
 
                 if ($isMatch) {
@@ -3065,11 +3073,14 @@ class ServerBuilder {
                 ");
                 $stmt->execute([$componentUuid, $serialNumber]);
             } else {
-                // Lock by UUID only
+                // Lock by UUID only, preferring available (Status=1) rows first.
+                // This ensures a second available unit is picked for multi-socket configurations
+                // rather than re-fetching the already-in-use unit.
                 $stmt = $this->pdo->prepare("
                     SELECT UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                     FROM `$table`
                     WHERE UUID = ?
+                    ORDER BY Status ASC
                     FOR UPDATE
                 ");
                 $stmt->execute([$componentUuid]);
