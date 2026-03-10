@@ -14,3 +14,6 @@ logs/*.log
 .claude/
 .claude-memory.md
 .claude/settings.local.json
+
+# Zip files
+ims-ftp.zip
