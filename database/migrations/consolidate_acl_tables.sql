@@ -6,7 +6,7 @@
 -- ============================================================================
 
 -- BACKUP NOTE: Before running this migration, backup your database:
--- mysqldump -u username -p shubhams_ims_dev > backup_before_acl_migration.sql
+-- mysqldump -u username -p imsbdcmsbharatda_Ims_Production > backup_before_acl_migration.sql
 
 START TRANSACTION;
 
@@ -61,4 +61,4 @@ COMMIT;
 -- If something goes wrong, run:
 -- ROLLBACK;
 -- Then restore from backup:
--- mysql -u username -p shubhams_ims_dev < backup_before_acl_migration.sql
+-- mysql -u username -p imsbdcmsbharatda_Ims_Production < backup_before_acl_migration.sql

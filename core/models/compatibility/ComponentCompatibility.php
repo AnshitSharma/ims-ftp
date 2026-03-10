@@ -1545,7 +1545,7 @@ class ComponentCompatibility {
      * JSON-DRIVEN: No hardcoded compatibility rules - uses protocol/generation normalization
      */
     private function checkStorageInterfaceCompatibility($storageSpecs, $motherboardSpecs) {
-        $storageInterface = $storageSpecs['interface_type'];
+        $storageInterface = $storageSpecs['interface'] ?? $storageSpecs['interface_type'] ?? '';
         $mbInterfaces = $motherboardSpecs['storage_interfaces'];
 
         // Direct interface match (exact string - highest score)
@@ -1775,7 +1775,7 @@ class ComponentCompatibility {
      */
     
     private function isNVMeStorage($storageSpecs) {
-        $interface = strtolower($storageSpecs['interface_type']);
+        $interface = strtolower($storageSpecs['interface'] ?? $storageSpecs['interface_type'] ?? '');
         return strpos($interface, 'nvme') !== false || strpos($interface, 'pcie') !== false;
     }
 
@@ -2990,16 +2990,16 @@ class ComponentCompatibility {
                 $result['score_breakdown'] = [
                     'base_score' => 100,
                     'penalty_applied' => -100,
-                    'reason' => 'JSON specifications not found in resources/specifications/chassis/ directory',
+                    'reason' => 'JSON specifications not found in the configured ims-data/chassis directory',
                     'final_score' => 0,
                     'missing_data' => [
                         'JSON specification file for UUID: ' . $chassisComponent['uuid'],
-                        'Expected location: resources/specifications/chassis/*.json',
+                        'Expected location: <IMS_DATA_PATH>/chassis/*.json or ../ims-data/chassis/*.json',
                         'Required fields: form_factor, chassis_type, drive_bays, backplane'
                     ],
                     'validation_status' => 'FAILED',
                     'impact' => 'Cannot validate compatibility without JSON specifications',
-                    'recommendation' => 'Add chassis JSON specification file with UUID: ' . $chassisComponent['uuid'],
+                    'recommendation' => 'Add the chassis JSON specification file with UUID: ' . $chassisComponent['uuid'] . ' to the shared ims-data folder',
                     'severity' => 'CRITICAL'
                 ];
                 return $result;

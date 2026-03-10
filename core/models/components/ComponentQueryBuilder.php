@@ -349,18 +349,6 @@ class ComponentQueryBuilder {
     }
 
     /**
-     * Get server configuration components
-     *
-     * @param string $configUuid Configuration UUID
-     * @return array Configuration components
-     */
-    public function getConfigurationComponents($configUuid) {
-        return $this->select('server_configuration_components')
-            ->where('config_uuid = ?', [$configUuid])
-            ->get();
-    }
-
-    /**
      * Get component compatibility status
      *
      * @param string $configUuid Configuration UUID
@@ -370,21 +358,6 @@ class ComponentQueryBuilder {
         return $this->select('component_compatibility')
             ->where('config_uuid = ?', [$configUuid])
             ->get();
-    }
-
-    /**
-     * Check if component is in use in any configuration
-     *
-     * @param string $componentType Component type
-     * @param string $uuid Component UUID
-     * @return bool True if in use
-     */
-    public function isComponentInUse($componentType, $uuid) {
-        $count = $this->select('server_configuration_components')
-            ->where('component_type = ? AND component_uuid = ?', [$componentType, $uuid])
-            ->count();
-
-        return $count > 0;
     }
 
     // ==================== Private Methods ====================

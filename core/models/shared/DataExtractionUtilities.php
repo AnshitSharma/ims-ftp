@@ -6,19 +6,23 @@
  * Comprehensive utilities for extracting component specifications from JSON files
  */
 
+require_once __DIR__ . '/../components/ComponentSpecPaths.php';
+
 class DataExtractionUtilities {
     private $jsonCache = [];
     private $cacheTimeout = 3600; // 1 hour
-    private $paths = [
-        'storage' => __DIR__ . '/../../../resources/specifications/storage/storage-level-3.json',
-        'motherboard' => __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json',
-        'chassis' => __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json',
-        'cpu' => __DIR__ . '/../../../resources/specifications/cpu/Cpu-details-level-3.json',
-        'ram' => __DIR__ . '/../../../resources/specifications/ram/ram_detail.json',
-        'pciecard' => __DIR__ . '/../../../resources/specifications/pciecard/pci-level-3.json',
-        'hbacard' => __DIR__ . '/../../../resources/specifications/hbacard/hbacard-level-3.json',
-        'nic' => __DIR__ . '/../../../resources/specifications/nic/nic-level-3.json'
-    ];
+    private $paths = [];
+
+    public function __construct(...$unused) {
+        // paths are lazy-loaded on first use via getPaths()
+    }
+
+    private function getPaths(): array {
+        if (empty($this->paths)) {
+            $this->paths = ComponentSpecPaths::getAll();
+        }
+        return $this->paths;
+    }
     
     /**
      * Load JSON data with caching
@@ -33,7 +37,7 @@ class DataExtractionUtilities {
             return $this->jsonCache[$cacheKey];
         }
         
-        $path = $this->paths[$type] ?? null;
+        $path = $this->getPaths()[$type] ?? null;
         if (!$path || !file_exists($path)) {
             throw new Exception("JSON file not found for type: $type");
         }

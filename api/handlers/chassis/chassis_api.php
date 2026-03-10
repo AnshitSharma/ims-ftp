@@ -380,21 +380,6 @@ function handleChassisDelete($pdo, $baseFunctions) {
         ]);
     }
     
-    // Check for active assignments
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM storage_chassis_mapping WHERE chassis_uuid = ?");
-    $stmt->execute([$uuid]);
-    $activeAssignments = $stmt->fetchColumn();
-    
-    if ($activeAssignments > 0) {
-        http_response_code(400);
-        return json_encode([
-            'success' => false,
-            'authenticated' => true,
-            'message' => "Cannot delete chassis: {$activeAssignments} active storage assignments found",
-            'timestamp' => date('Y-m-d H:i:s')
-        ]);
-    }
-    
     $stmt = $pdo->prepare("DELETE FROM chassisinventory WHERE UUID = ?");
     $stmt->execute([$uuid]);
     

@@ -115,11 +115,6 @@ function handleGetComponent() {
             $component['history'] = [];
         }
         
-        // Get server configurations using this component (if server system is available)
-        if (function_exists('serverSystemInitialized') && serverSystemInitialized($pdo)) {
-            $component['server_usage'] = getComponentServerUsage($pdo, $componentType, $component['UUID']);
-        }
-        
         // Parse JSON specifications if available
         $jsonFields = ['Specifications', 'JsonData', 'TechnicalSpecs'];
         foreach ($jsonFields as $field) {
@@ -382,9 +377,6 @@ function handleAddComponent() {
         
         $insertId = $pdo->lastInsertId();
         
-        // Log the addition
-        logComponentAction($pdo, $componentType, $insertId, 'create', 'Component created', $fields, $user['id']);
-        
         // Get the inserted component
         $getStmt = $pdo->prepare("SELECT * FROM $table WHERE ID = ?");
         $getStmt->execute([$insertId]);
@@ -524,9 +516,6 @@ function handleUpdateComponent() {
         $stmt = $pdo->prepare($query);
         $stmt->execute($updateValues);
         
-        // Log the update
-        logComponentAction($pdo, $componentType, $id, 'update', 'Component updated', $changes, $user['id']);
-        
         // Get updated component
         $getStmt = $pdo->prepare("SELECT * FROM $table WHERE ID = ?");
         $getStmt->execute([$id]);
@@ -580,25 +569,10 @@ function handleDeleteComponent() {
             ]);
         }
         
-        // Check for server configurations using this component
-        $usageInfo = getComponentServerUsage($pdo, $componentType, $component['UUID']);
-        if (!empty($usageInfo['configurations']) && !$hardDelete) {
-            send_json_response(0, 1, 400, "Component is used in server configurations", [
-                'server_configurations' => $usageInfo['configurations'],
-                'usage_count' => count($usageInfo['configurations']),
-                'can_force_delete' => hasPermission($pdo, "$componentType.force_delete", $user['id'])
-            ]);
-        }
-        
         if ($hardDelete) {
             // Hard delete requires special permission
             if (!hasPermission($pdo, "$componentType.force_delete", $user['id'])) {
                 send_json_response(0, 1, 403, "Insufficient permissions for hard delete");
-            }
-            
-            // Remove from server configurations first
-            if (function_exists('removeComponentFromAllConfigurations')) {
-                removeComponentFromAllConfigurations($pdo, $componentType, $component['UUID']);
             }
             
             // Delete component record
@@ -615,12 +589,6 @@ function handleDeleteComponent() {
             $message = "Component marked as failed/decommissioned";
             $logAction = 'soft_delete';
         }
-        
-        // Log the deletion
-        logComponentAction($pdo, $componentType, $id, $logAction, $message, [
-            'component_data' => $component,
-            'hard_delete' => $hardDelete
-        ], $user['id']);
         
         send_json_response(1, 1, 200, $message, [
             'component_id' => $id,
@@ -665,79 +633,6 @@ function generateUUID() {
         mt_rand(0, 0x3fff) | 0x8000,
         mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
     );
-}
-
-/**
- * Log component actions
- */
-function logComponentAction($pdo, $componentType, $componentId, $action, $description, $details = [], $userId = null) {
-    try {
-        $stmt = $pdo->prepare("
-            INSERT INTO component_action_log 
-            (component_type, component_id, action, description, action_details, user_id, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
-        ");
-        $stmt->execute([
-            $componentType,
-            $componentId,
-            $action,
-            $description,
-            json_encode($details),
-            $userId
-        ]);
-    } catch (Exception $e) {
-        error_log("Failed to log component action: " . $e->getMessage());
-        // Don't fail the main operation if logging fails
-    }
-}
-
-/**
- * Get component server usage information
- */
-function getComponentServerUsage($pdo, $componentType, $componentUuid) {
-    try {
-        if (!function_exists('serverSystemInitialized') || !serverSystemInitialized($pdo)) {
-            return ['configurations' => [], 'usage_count' => 0];
-        }
-        
-        $stmt = $pdo->prepare("
-            SELECT sc.config_uuid, sc.server_name, sc.configuration_status, scc.added_at, scc.quantity
-            FROM server_configuration_components scc
-            JOIN server_configurations sc ON scc.config_uuid = sc.config_uuid
-            WHERE scc.component_type = ? AND scc.component_uuid = ?
-            ORDER BY scc.added_at DESC
-        ");
-        $stmt->execute([$componentType, $componentUuid]);
-        $configurations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        return [
-            'configurations' => $configurations,
-            'usage_count' => count($configurations)
-        ];
-        
-    } catch (Exception $e) {
-        error_log("Error getting component server usage: " . $e->getMessage());
-        return ['configurations' => [], 'usage_count' => 0];
-    }
-}
-
-/**
- * Remove component from all server configurations
- */
-function removeComponentFromAllConfigurations($pdo, $componentType, $componentUuid) {
-    try {
-        $stmt = $pdo->prepare("
-            DELETE FROM server_configuration_components 
-            WHERE component_type = ? AND component_uuid = ?
-        ");
-        $stmt->execute([$componentType, $componentUuid]);
-        
-        return $stmt->rowCount();
-        
-    } catch (Exception $e) {
-        error_log("Error removing component from configurations: " . $e->getMessage());
-        return 0;
-    }
 }
 
 /**
@@ -941,19 +836,6 @@ function updateComponentStatusWithValidation($pdo, $componentType, $componentUui
         ");
         $stmt->execute([$newStatus, $componentUuid]);
         
-        // Log the status change
-        try {
-            $stmt = $pdo->prepare("
-                INSERT INTO component_status_history 
-                (component_type, component_uuid, old_status, new_status, reason, changed_by, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([$componentType, $componentUuid, $oldStatus, $newStatus, $reason, $userId]);
-        } catch (Exception $e) {
-            // History table might not exist, that's okay
-            error_log("Could not log status change: " . $e->getMessage());
-        }
-        
         return [
             'success' => true,
             'message' => 'Component status updated successfully',
@@ -966,39 +848,6 @@ function updateComponentStatusWithValidation($pdo, $componentType, $componentUui
         return [
             'success' => false,
             'message' => 'Database error occurred while updating component status'
-        ];
-    }
-}
-
-/**
- * Get component usage information
- */
-function getComponentUsageInfo($pdo, $componentType, $componentUuid) {
-    try {
-        // Check if component is used in any server configurations
-        $stmt = $pdo->prepare("
-            SELECT sc.config_uuid, sc.server_name, sc.configuration_status, scc.added_at
-            FROM server_configuration_components scc
-            JOIN server_configurations sc ON scc.config_uuid = sc.config_uuid
-            WHERE scc.component_type = ? AND scc.component_uuid = ?
-            ORDER BY scc.added_at DESC
-        ");
-        $stmt->execute([$componentType, $componentUuid]);
-        $configurations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        return [
-            'is_in_use' => !empty($configurations),
-            'configurations' => $configurations,
-            'usage_count' => count($configurations)
-        ];
-        
-    } catch (Exception $e) {
-        error_log("Error getting component usage info: " . $e->getMessage());
-        return [
-            'is_in_use' => false,
-            'configurations' => [],
-            'usage_count' => 0,
-            'error' => 'Could not retrieve usage information'
         ];
     }
 }
@@ -1030,23 +879,6 @@ function validateComponentForConfiguration($pdo, $componentType, $componentUuid,
         } else {
             $result['issues'][] = $availability['message'];
             return $result;
-        }
-    }
-    
-    // Check component usage
-    $usage = getComponentUsageInfo($pdo, $componentType, $componentUuid);
-    if ($usage['is_in_use'] && $configUuid) {
-        // Check if it's used in the same configuration (which is okay)
-        $usedInSameConfig = false;
-        foreach ($usage['configurations'] as $config) {
-            if ($config['config_uuid'] === $configUuid) {
-                $usedInSameConfig = true;
-                break;
-            }
-        }
-        
-        if (!$usedInSameConfig) {
-            $result['warnings'][] = 'Component is currently used in other configurations';
         }
     }
     

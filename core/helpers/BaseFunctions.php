@@ -542,23 +542,6 @@ if (!function_exists('serverSystemInitialized')) {
 }
 
 /**
- * Get system setting
- */
-if (!function_exists('getSystemSetting')) {
-    function getSystemSetting($pdo, $setting, $default = null) {
-        try {
-            $stmt = $pdo->prepare("SELECT value FROM system_settings WHERE name = ?");
-            $stmt->execute([$setting]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            return $result ? $result['value'] : $default;
-        } catch (Exception $e) {
-            return $default;
-        }
-    }
-}
-
-/**
  * Get dashboard data - OPTIMIZED: 13 queries reduced to 2 queries
  */
 if (!function_exists('getDashboardData')) {

@@ -5,7 +5,7 @@
  *
  * Unified tracker for both PCIe and Riser slot availability and assignments
  * Replaces: PCIeSlotTracker.php and ExpansionSlotTracker.php
- * Calculates slot usage on-demand from server_configuration_components table
+ * Calculates slot usage on-demand from server configuration JSON columns
  */
 
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';

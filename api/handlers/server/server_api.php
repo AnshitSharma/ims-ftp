@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../../../core/config/app.php';
 require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
+require_once __DIR__ . '/../../../core/models/components/ComponentSpecPaths.php';
 require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
 require_once __DIR__ . '/../../../core/models/server/ServerConfiguration.php';
 require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
@@ -738,8 +739,8 @@ function handleAddComponent($serverBuilder, $user) {
             }
 
             // 3. Validate SFP type compatibility with NIC port type
-            $nicSpecs = $componentDataService->getComponentSpecs('nic', $parentNicUuid);
-            $sfpSpecs = $componentDataService->getComponentSpecs('sfp', $componentUuid);
+            $nicSpecs = $componentDataService->getComponentSpecifications('nic', $parentNicUuid);
+            $sfpSpecs = $componentDataService->getComponentSpecifications('sfp', $componentUuid);
 
             if (!$nicSpecs || !isset($nicSpecs['port_type'])) {
                 send_json_response(0, 1, 500,
@@ -1734,69 +1735,96 @@ function handleGetConfiguration($serverBuilder, $user) {
  */
 function handleListConfigurations($serverBuilder, $user) {
     global $pdo;
-    
-    $limit = (int)($_GET['limit'] ?? 20);
-    $offset = (int)($_GET['offset'] ?? 0);
-    $status = $_GET['status'] ?? null;
-    $includeVirtual = $_GET['include_virtual'] ?? 'all'; // 'all', 'true', 'false'
+
+    $request = array_merge($_GET, $_POST);
+    $limit = isset($request['limit']) ? max(1, min(200, (int)$request['limit'])) : 20;
+    $offset = isset($request['offset']) ? max(0, (int)$request['offset']) : 0;
+
+    $statusInput = $request['status'] ?? null;
+    $status = null;
+    if ($statusInput !== null && $statusInput !== '') {
+        $status = (int)$statusInput;
+    }
+
+    $includeVirtual = strtolower(trim((string)($request['include_virtual'] ?? 'all'))); // all, true/1, false/0
 
     try {
-        $whereClause = "WHERE 1=1";
-        $params = [];
+        $whereParts = ["1=1"];
+        $filterParams = [];
 
         // Filter by user if no admin permissions
         if (!hasPermission($pdo, 'server.view_all', $user['id'])) {
-            $whereClause .= " AND created_by = ?";
-            $params[] = $user['id'];
+            $whereParts[] = "sc.created_by = :created_by";
+            $filterParams[':created_by'] = (int)$user['id'];
         }
 
         // Filter by status if provided
         if ($status !== null) {
-            $whereClause .= " AND configuration_status = ?";
-            $params[] = $status;
+            $whereParts[] = "sc.configuration_status = :status";
+            $filterParams[':status'] = $status;
         }
 
         // Filter by is_virtual flag
-        if ($includeVirtual === 'true') {
-            $whereClause .= " AND is_virtual = 1";
-        } elseif ($includeVirtual === 'false') {
-            $whereClause .= " AND is_virtual = 0";
+        if (in_array($includeVirtual, ['true', '1', 'yes'], true)) {
+            $whereParts[] = "sc.is_virtual = 1";
+        } elseif (in_array($includeVirtual, ['false', '0', 'no'], true)) {
+            $whereParts[] = "sc.is_virtual = 0";
         }
         // If 'all' or any other value, no filtering on is_virtual
-        
+
+        $whereClause = "WHERE " . implode(' AND ', $whereParts);
+
         $stmt = $pdo->prepare("
-            SELECT sc.*, u.username as created_by_username 
-            FROM server_configurations sc 
-            LEFT JOIN users u ON sc.created_by = u.id 
-            $whereClause 
-            ORDER BY sc.created_at DESC 
-            LIMIT ? OFFSET ?
+            SELECT sc.*, u.username as created_by_username
+            FROM server_configurations sc
+            LEFT JOIN users u ON sc.created_by = u.id
+            $whereClause
+            ORDER BY sc.created_at DESC
+            LIMIT :limit OFFSET :offset
         ");
-        
-        $params[] = $limit;
-        $params[] = $offset;
-        $stmt->execute($params);
+
+        foreach ($filterParams as $name => $value) {
+            $stmt->bindValue($name, $value, PDO::PARAM_INT);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $stmt->execute();
         $configurations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
         // Add configuration status text and component count for each configuration
         foreach ($configurations as &$config) {
             $config['configuration_status_text'] = getConfigurationStatusText($config['configuration_status']);
-            $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0); // Convert to boolean
+            $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0);
 
-            // Count distinct component types in this configuration
-            $components = extractComponentsFromConfigData($config);
+            try {
+                $components = extractComponentsFromConfigData(is_array($config) ? $config : []);
+            } catch (Throwable $parseError) {
+                error_log("Error parsing configuration components for list view ({$config['config_uuid']}): " . $parseError->getMessage());
+                $components = [];
+            }
+
             $componentTypes = [];
             foreach ($components as $component) {
-                $componentTypes[$component['component_type']] = true;
+                if (!empty($component['component_type'])) {
+                    $componentTypes[$component['component_type']] = true;
+                }
             }
             $config['total_component_types'] = count($componentTypes);
         }
-        
+        unset($config);
+
         // Get total count
-        $countStmt = $pdo->prepare("SELECT COUNT(*) as total FROM server_configurations sc $whereClause");
-        $countStmt->execute(array_slice($params, 0, -2)); // Remove limit and offset
-        $totalCount = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
-        
+        $countStmt = $pdo->prepare("
+            SELECT COUNT(*) as total
+            FROM server_configurations sc
+            $whereClause
+        ");
+        foreach ($filterParams as $name => $value) {
+            $countStmt->bindValue($name, $value, PDO::PARAM_INT);
+        }
+        $countStmt->execute();
+        $totalCount = (int)($countStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
         send_json_response(1, 1, 200, "Configurations retrieved successfully", [
             'configurations' => $configurations,
             'pagination' => [
@@ -1806,9 +1834,10 @@ function handleListConfigurations($serverBuilder, $user) {
                 'has_more' => ($offset + $limit) < $totalCount
             ]
         ]);
-        
-    } catch (Exception $e) {
+
+    } catch (Throwable $e) {
         error_log("Error listing configurations: " . $e->getMessage());
+        error_log("Stack trace: " . $e->getTraceAsString());
         send_json_response(0, 1, 500, "Failed to list configurations: " . $e->getMessage());
     }
 }
@@ -2486,7 +2515,7 @@ function handleGetCompatible($serverBuilder, $user) {
                         $nicDetails = [];
                         foreach ($existingComponentsData as $existingComp) {
                             if ($existingComp['type'] === 'nic') {
-                                $nicSpecs = $componentDataService->getComponentSpecs('nic', $existingComp['uuid']);
+                                $nicSpecs = $componentDataService->getComponentSpecifications('nic', $existingComp['uuid']);
                                 if ($nicSpecs && isset($nicSpecs['port_type'])) {
                                     $portType = $nicSpecs['port_type'];
                                     $nicPortTypes[] = $portType;
@@ -2506,7 +2535,7 @@ function handleGetCompatible($serverBuilder, $user) {
                             $compatibilityReasons = ['SFP can be added now - will be assigned when compatible NIC is added'];
                         } else {
                             // Get SFP type from specs
-                            $sfpSpecs = $componentDataService->getComponentSpecs('sfp', $component['UUID']);
+                            $sfpSpecs = $componentDataService->getComponentSpecifications('sfp', $component['UUID']);
                             $sfpType = $sfpSpecs['type'] ?? null;
 
                             if (!$sfpType) {
@@ -3434,7 +3463,7 @@ function parseMotherboardSpecs($motherboardDetails) {
     try {
         // Try to find matching motherboard JSON data
         $jsonFiles = [
-            __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json'
+            ComponentSpecPaths::getPath('motherboard')
         ];
         
         $serialNumber = $motherboardDetails['SerialNumber'];
@@ -4780,12 +4809,10 @@ function checkRAMCompatibilityWithExistingComponents($ramComponent, $existingCom
  */
 function loadComponentSpecsFromJSON($componentUUID, $componentType) {
     try {
-        $jsonDir = __DIR__ . '/../../../resources/specifications';
-
         $jsonFiles = [
-            'cpu' => $jsonDir . '/cpu/Cpu-details-level-3.json',
-            'ram' => $jsonDir . '/ram/ram_detail.json',
-            'motherboard' => $jsonDir . '/motherboard/motherboard-level-3.json'
+            'cpu' => ComponentSpecPaths::getPath('cpu'),
+            'ram' => ComponentSpecPaths::getPath('ram'),
+            'motherboard' => ComponentSpecPaths::getPath('motherboard')
         ];
 
         if (!isset($jsonFiles[$componentType])) {
@@ -4808,7 +4835,8 @@ function loadComponentSpecsFromJSON($componentUUID, $componentType) {
         foreach ($jsonData as $brand) {
             if (isset($brand['models'])) {
                 foreach ($brand['models'] as $model) {
-                    if (isset($model['uuid']) && $model['uuid'] === $componentUUID) {
+                    $modelUuid = $model['uuid'] ?? $model['UUID'] ?? null;
+                    if ($modelUuid === $componentUUID) {
                         return $model;
                     }
                 }
@@ -5080,98 +5108,104 @@ function extractSlotTypeFromSlotId($slotId) {
 function extractComponentsFromConfigData($configData) {
     $components = [];
 
+    if (!is_array($configData)) {
+        return $components;
+    }
+
+    $decodeConfigField = function ($value, $fieldName) {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (is_object($value)) {
+            return (array)$value;
+        }
+
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("Error parsing {$fieldName} JSON: " . json_last_error_msg());
+            return [];
+        }
+
+        return is_array($decoded) ? $decoded : [];
+    };
+
     // CPU configuration (JSON)
     if (!empty($configData['cpu_configuration'])) {
-        try {
-            $cpuConfig = json_decode($configData['cpu_configuration'], true);
-            if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                foreach ($cpuConfig['cpus'] as $cpu) {
-                    if (!empty($cpu['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'cpu',
-                            'component_uuid' => $cpu['uuid']
-                        ];
-                    }
+        $cpuConfig = $decodeConfigField($configData['cpu_configuration'], 'cpu_configuration');
+        if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
+            foreach ($cpuConfig['cpus'] as $cpu) {
+                if (!empty($cpu['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'cpu',
+                        'component_uuid' => $cpu['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing cpu_configuration JSON: " . $e->getMessage());
         }
     }
 
     // RAM configuration (JSON array)
     if (!empty($configData['ram_configuration'])) {
-        try {
-            $ramConfigs = json_decode($configData['ram_configuration'], true);
-            if (is_array($ramConfigs)) {
-                foreach ($ramConfigs as $ram) {
-                    if (!empty($ram['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'ram',
-                            'component_uuid' => $ram['uuid']
-                        ];
-                    }
+        $ramConfigs = $decodeConfigField($configData['ram_configuration'], 'ram_configuration');
+        if (is_array($ramConfigs)) {
+            foreach ($ramConfigs as $ram) {
+                if (!empty($ram['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'ram',
+                        'component_uuid' => $ram['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing ram_configuration JSON: " . $e->getMessage());
         }
     }
 
     // Storage configuration (JSON array)
     if (!empty($configData['storage_configuration'])) {
-        try {
-            $storageConfigs = json_decode($configData['storage_configuration'], true);
-            if (is_array($storageConfigs)) {
-                foreach ($storageConfigs as $storage) {
-                    if (!empty($storage['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'storage',
-                            'component_uuid' => $storage['uuid']
-                        ];
-                    }
+        $storageConfigs = $decodeConfigField($configData['storage_configuration'], 'storage_configuration');
+        if (is_array($storageConfigs)) {
+            foreach ($storageConfigs as $storage) {
+                if (!empty($storage['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'storage',
+                        'component_uuid' => $storage['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing storage_configuration JSON: " . $e->getMessage());
         }
     }
 
     // Caddy configuration (JSON array)
     if (!empty($configData['caddy_configuration'])) {
-        try {
-            $caddyConfigs = json_decode($configData['caddy_configuration'], true);
-            if (is_array($caddyConfigs)) {
-                foreach ($caddyConfigs as $caddy) {
-                    if (!empty($caddy['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'caddy',
-                            'component_uuid' => $caddy['uuid']
-                        ];
-                    }
+        $caddyConfigs = $decodeConfigField($configData['caddy_configuration'], 'caddy_configuration');
+        if (is_array($caddyConfigs)) {
+            foreach ($caddyConfigs as $caddy) {
+                if (!empty($caddy['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'caddy',
+                        'component_uuid' => $caddy['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing caddy_configuration JSON: " . $e->getMessage());
         }
     }
 
     // NIC configuration (JSON object with nics array)
     if (!empty($configData['nic_config'])) {
-        try {
-            $nicConfig = json_decode($configData['nic_config'], true);
-            if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                foreach ($nicConfig['nics'] as $nic) {
-                    if (!empty($nic['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'nic',
-                            'component_uuid' => $nic['uuid']
-                        ];
-                    }
+        $nicConfig = $decodeConfigField($configData['nic_config'], 'nic_config');
+        if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
+            foreach ($nicConfig['nics'] as $nic) {
+                if (!empty($nic['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'nic',
+                        'component_uuid' => $nic['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing nic_config JSON: " . $e->getMessage());
         }
     }
 
@@ -5201,20 +5235,16 @@ function extractComponentsFromConfigData($configData) {
 
     // PCIe Card configuration (JSON array)
     if (!empty($configData['pciecard_configurations'])) {
-        try {
-            $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
-            if (is_array($pcieConfigs)) {
-                foreach ($pcieConfigs as $pcie) {
-                    if (!empty($pcie['uuid'])) {
-                        $components[] = [
-                            'component_type' => 'pciecard',
-                            'component_uuid' => $pcie['uuid']
-                        ];
-                    }
+        $pcieConfigs = $decodeConfigField($configData['pciecard_configurations'], 'pciecard_configurations');
+        if (is_array($pcieConfigs)) {
+            foreach ($pcieConfigs as $pcie) {
+                if (!empty($pcie['uuid'])) {
+                    $components[] = [
+                        'component_type' => 'pciecard',
+                        'component_uuid' => $pcie['uuid']
+                    ];
                 }
             }
-        } catch (Exception $e) {
-            error_log("Error parsing pciecard_configurations JSON: " . $e->getMessage());
         }
     }
 

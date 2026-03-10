@@ -145,8 +145,8 @@ class ComponentSpecificationAdapter {
             'form_factor' => $component['form_factor'] ?? null,
             'interface' => $component['interface'] ?? null,
             'capacity_gb' => $this->safeInt($component['capacity_GB'] ?? null),
-            'rpm' => $this->safeInt($component['rpm'] ?? null),
-            'cache_mb' => $this->safeInt($component['cache_MB'] ?? null),
+            'rpm' => $this->safeInt($component['specifications']['rpm'] ?? $component['rpm'] ?? null),
+            'cache_mb' => $this->safeInt($component['specifications']['cache_MB'] ?? $component['cache_MB'] ?? null),
             'power_consumption_w' => $component['power_consumption_W'] ?? [],
             'specifications' => $component['specifications'] ?? [],
             'series' => $metadata['series'] ?? $component['series'] ?? null
@@ -161,11 +161,11 @@ class ComponentSpecificationAdapter {
             'uuid' => $component['uuid'] ?? null,
             'brand' => $metadata['brand'] ?? $component['brand'] ?? null,
             'model' => $component['model'] ?? null,
-            'interface_type' => $component['interface_type'] ?? null,
+            'interface_type' => $component['interface'] ?? null,
             'form_factor' => $component['form_factor'] ?? null,
-            'ports' => $component['ports'] ?? [],
-            'speed_gbps' => $this->safeInt($component['speed_Gbps'] ?? null),
-            'power_consumption_w' => $this->safeFloat($component['power_consumption_W'] ?? null),
+            'ports' => $this->safeInt($component['ports'] ?? null),
+            'speeds' => $component['speeds'] ?? [],
+            'power_consumption_w' => is_string($component['power'] ?? null) ? (float)rtrim($component['power'] ?? '0', 'W') : 0.0,
             'specifications' => $component['specifications'] ?? [],
             'series' => $metadata['series'] ?? $component['series'] ?? null
         ];
@@ -198,7 +198,7 @@ class ComponentSpecificationAdapter {
             'form_factor' => $component['form_factor'] ?? null,
             'pcie_generation' => $this->safeInt($component['pcie_generation'] ?? null),
             'pcie_lanes' => $this->safeInt($component['pcie_lanes'] ?? null),
-            'power_consumption_w' => $this->safeFloat($component['power_consumption_W'] ?? null),
+            'power_consumption_w' => $component['power_consumption']['typical_W'] ?? $component['power_consumption']['max_W'] ?? 0,
             'specifications' => $component['specifications'] ?? [],
             'series' => $metadata['series'] ?? $component['series'] ?? null
         ];
@@ -212,12 +212,12 @@ class ComponentSpecificationAdapter {
             'uuid' => $component['uuid'] ?? null,
             'brand' => $metadata['brand'] ?? $component['brand'] ?? null,
             'model' => $component['model'] ?? null,
-            'interface_type' => $component['interface_type'] ?? null,
+            'interface_type' => $component['interface'] ?? null,
             'form_factor' => $component['form_factor'] ?? null,
-            'port_count' => $this->safeInt($component['port_count'] ?? null),
+            'port_count' => $this->safeInt(($component['internal_ports'] ?? 0) + ($component['external_ports'] ?? 0)),
             'pcie_generation' => $this->safeInt($component['pcie_generation'] ?? null),
             'pcie_lanes' => $this->safeInt($component['pcie_lanes'] ?? null),
-            'power_consumption_w' => $this->safeFloat($component['power_consumption_W'] ?? null),
+            'power_consumption_w' => $component['power_consumption']['typical_W'] ?? $component['power_consumption']['max_W'] ?? 0,
             'specifications' => $component['specifications'] ?? [],
             'series' => $metadata['series'] ?? $component['series'] ?? null
         ];

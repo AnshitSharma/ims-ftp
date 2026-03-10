@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../components/ComponentSpecPaths.php';
+
 class ServerBuilder {
 
     private $pdo;
@@ -3117,7 +3119,8 @@ class ServerBuilder {
             'caddy' => 5,
             'pciecard' => 30,
             'hbacard' => 20,
-            'chassis' => 0  // Chassis doesn't consume power directly
+            'chassis' => 0,  // Chassis doesn't consume power directly
+            'sfp' => 2  // SFP modules: typically 1-3W
         ];
 
         try {
@@ -3183,15 +3186,18 @@ class ServerBuilder {
                 case 'nic':
                     $specs = $this->dataUtils->getNICByUUID($componentUuid);
                     if ($specs) {
-                        $speed = $specs['speed'] ?? '';
-                        // 10GbE NICs: ~20-30W
-                        // 25GbE NICs: ~25-35W
-                        // 1GbE NICs: ~5-10W
-                        if (strpos($speed, '25') !== false) {
+                        // JSON has power as string like "8W", parse numeric value
+                        if (isset($specs['power']) && is_string($specs['power'])) {
+                            return (int)$specs['power'];
+                        }
+                        // Fallback: estimate from speeds array
+                        $speeds = $specs['speeds'] ?? [];
+                        $speedStr = implode(' ', $speeds);
+                        if (strpos($speedStr, '25GbE') !== false || strpos($speedStr, '25G') !== false) {
                             return 30;
-                        } elseif (strpos($speed, '10') !== false) {
+                        } elseif (strpos($speedStr, '10GbE') !== false || strpos($speedStr, '10G') !== false) {
                             return 25;
-                        } elseif (strpos($speed, '1') !== false) {
+                        } elseif (strpos($speedStr, '1GbE') !== false || strpos($speedStr, '1G') !== false) {
                             return 8;
                         }
                     }
@@ -3199,8 +3205,8 @@ class ServerBuilder {
 
                 case 'pciecard':
                     $specs = $this->dataUtils->getPCIeCardByUUID($componentUuid);
-                    if ($specs && isset($specs['tdp_W'])) {
-                        return (int)$specs['tdp_W'];
+                    if ($specs && isset($specs['power_consumption']['typical_W'])) {
+                        return (int)$specs['power_consumption']['typical_W'];
                     }
                     // Estimate based on card type
                     $cardType = strtolower($specs['type'] ?? '');
@@ -3217,6 +3223,13 @@ class ServerBuilder {
                         return (int)$specs['power_consumption']['typical_W'];
                     }
                     return 20; // Default HBA card power
+
+                case 'sfp':
+                    $specs = $this->dataUtils->findComponentByUuid('sfp', $componentUuid);
+                    if ($specs && isset($specs['power_consumption']) && is_string($specs['power_consumption'])) {
+                        return (int)$specs['power_consumption']; // e.g. "1.5W" -> 1
+                    }
+                    return 2; // Default SFP power
 
                 case 'caddy':
                     return 0; // Caddies don't consume power
@@ -5110,7 +5123,7 @@ class ServerBuilder {
                 $availableCaddies = [];
                 if (isset($componentsByType['caddy'])) {
                     // Load caddy JSON specifications
-                    $caddyJsonPath = __DIR__ . '/../../resources/specifications/caddy-jsons/caddy_details.json';
+                    $caddyJsonPath = ComponentSpecPaths::getPath('caddy');
                     $caddySpecs = [];
                     if (file_exists($caddyJsonPath)) {
                         $caddyJson = json_decode(file_get_contents($caddyJsonPath), true);
@@ -5753,7 +5766,7 @@ class ServerBuilder {
             // P5.1: Validate based on component type
             switch ($componentType) {
                 case 'ram':
-                    $dimms = $mbSpecs['ram']['dimm_slots'] ?? 0;
+                    $dimms = $mbSpecs['memory']['slots'] ?? 0;
                     // Count existing RAM
                     $existingRam = [];
                     if (!empty($config['ram_configurations'])) {

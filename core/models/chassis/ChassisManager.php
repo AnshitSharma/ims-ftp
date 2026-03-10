@@ -6,6 +6,8 @@
  * Manages chassis JSON data loading, caching, and validation
  */
 
+require_once __DIR__ . '/../components/ComponentSpecPaths.php';
+
 class ChassisManager {
     private $chassisJsonPath;
     private $jsonCache = [];
@@ -13,7 +15,7 @@ class ChassisManager {
     private $cacheTimeout = 3600; // 1 hour cache
     
     public function __construct() {
-        $this->chassisJsonPath = __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json';
+        $this->chassisJsonPath = ComponentSpecPaths::getPath('chassis');
     }
     
     /**

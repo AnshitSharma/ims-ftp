@@ -29,7 +29,7 @@ class NICPortTracker {
      */
     public function getPortAvailability($configUuid, $nicUuid) {
         // Get NIC specifications to determine total ports and port type
-        $nicSpecs = $this->componentDataService->getComponentSpecs('nic', $nicUuid);
+        $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
         if (!$nicSpecs || !isset($nicSpecs['ports']) || !isset($nicSpecs['port_type'])) {
             return [
@@ -120,7 +120,7 @@ class NICPortTracker {
             $sourceType = $nic['source_type'] ?? 'component';
 
             // Get NIC specs
-            $nicSpecs = $this->componentDataService->getComponentSpecs('nic', $nicUuid);
+            $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
             if (!$nicSpecs) {
                 continue; // Skip if specs not found
@@ -191,7 +191,7 @@ class NICPortTracker {
         // Enrich with SFP model info
         $assignments = [];
         foreach ($sfpConfig['sfps'] as $sfp) {
-            $sfpSpecs = $this->componentDataService->getComponentSpecs('sfp', $sfp['uuid']);
+            $sfpSpecs = $this->componentDataService->getComponentSpecifications('sfp', $sfp['uuid']);
             $sfp['sfp_model'] = $sfpSpecs['model'] ?? null;
             $assignments[] = $sfp;
         }

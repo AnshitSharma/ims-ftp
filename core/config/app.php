@@ -57,7 +57,7 @@ function loadEnvFile($path) {
 }
 
 // Load .env file from project root
-$envPath = __DIR__ . '/../.env';
+$envPath = __DIR__ . '/../../.env';
 loadEnvFile($envPath);
 
 // =============================================================================
@@ -129,7 +129,7 @@ define('AUTO_GENERATE_UUIDS', filter_var(getenv('AUTO_GENERATE_UUIDS') ?: 'true'
 $dbHost = getenv('DB_HOST') ?: 'localhost';
 $dbUser = getenv('DB_USER') ?: 'shubhams_api';
 $dbPass = getenv('DB_PASS') ?: '5C8R.wRErC_(';
-$dbName = getenv('DB_NAME') ?: 'shubhams_ims_dev';
+$dbName = getenv('DB_NAME') ?: 'imsbdcmsbharatda_Ims_Production';
 
 try {
     // PDO connection with proper options

@@ -465,12 +465,6 @@ function handleTokenVerification() {
 function handleRegistration() {
     global $pdo;
 
-    // Check if registration is enabled (default to true if system_settings doesn't exist)
-    $registrationEnabled = getSystemSetting($pdo, 'registration_enabled', true);
-    if (!$registrationEnabled) {
-        send_json_response(0, 0, 403, "Registration is disabled");
-    }
-    
     $username = trim($_POST['username'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -501,7 +495,7 @@ function handleRegistration() {
         $userId = $pdo->lastInsertId();
         
         // Assign default role
-        $defaultRoleId = getSystemSetting($pdo, 'default_user_role', 2); // Assume role ID 2 is default
+        $defaultRoleId = 2; // Default role ID
         assignRoleToUser($pdo, $userId, $defaultRoleId);
         
         send_json_response(1, 1, 201, "Registration successful", [
@@ -1176,21 +1170,6 @@ function serverSystemInitialized($pdo) {
         return $stmt->rowCount() > 0;
     } catch (Exception $e) {
         return false;
-    }
-}
-
-/**
- * Get system setting
- */
-function getSystemSetting($pdo, $setting, $default = null) {
-    try {
-        $stmt = $pdo->prepare("SELECT value FROM system_settings WHERE name = ?");
-        $stmt->execute([$setting]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        return $result ? $result['value'] : $default;
-    } catch (Exception $e) {
-        return $default;
     }
 }
 

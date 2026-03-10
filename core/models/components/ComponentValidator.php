@@ -462,7 +462,7 @@ class ComponentValidator {
     public function validateRAMSlotAvailability($configUuid, $motherboardSpecs) {
         try {
             $usedSlots = $this->countUsedMemorySlots($configUuid);
-            $totalSlots = $motherboardSpecs['memory']['max_slots'] ?? 4;
+            $totalSlots = $motherboardSpecs['memory']['slots'] ?? $motherboardSpecs['memory']['max_slots'] ?? 4;
 
             return [
                 'available' => $usedSlots < $totalSlots,

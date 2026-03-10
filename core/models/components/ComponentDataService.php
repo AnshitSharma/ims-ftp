@@ -1,31 +1,18 @@
 <?php
 
+require_once __DIR__ . '/ComponentSpecPaths.php';
+
 class ComponentDataService {
     private static $instance = null;
     private $jsonCache = [];
     private $componentSpecsCache = [];
     private $componentSearchCache = [];
-    private $jsonBasePath;
     private $cacheStats = [];
     private $maxCacheSize = 1000; // Maximum cached components
     private $specCache; // ComponentSpecCache instance
     private $uuidIndex = []; // UUID → component location index for O(1) lookups
 
-    private $componentJsonPaths = [
-        'cpu' => 'cpu/cpu.json',
-        'motherboard' => 'motherboard/motherboard.json',
-        'ram' => 'ram/ram.json',
-        'storage' => 'storage/storage.json',
-        'nic' => 'nic/nic.json',
-        'caddy' => 'caddy/caddy.json',
-        'pciecard' => 'pciecard/pciecard.json',
-        'hbacard' => 'hbacard/hbacard.json',
-        'sfp' => 'sfp/sfp.json'
-    ];
-
     private function __construct() {
-        $this->jsonBasePath = dirname(__DIR__, 3) . '/resources/specifications/';
-
         // Initialize ComponentSpecCache if available
         $cacheFile = __DIR__ . '/../../cache/ComponentSpecCache.php';
         if (file_exists($cacheFile)) {
@@ -57,11 +44,7 @@ class ComponentDataService {
             }
         }
 
-        if (!isset($this->componentJsonPaths[$componentType])) {
-            throw new InvalidArgumentException("Unsupported component type: $componentType");
-        }
-
-        $filePath = $this->jsonBasePath . $this->componentJsonPaths[$componentType];
+        $filePath = ComponentSpecPaths::getPath($componentType);
 
         if (!file_exists($filePath)) {
             throw new RuntimeException("JSON file not found: $filePath");
@@ -626,9 +609,13 @@ class ComponentDataService {
         return [
             'brand' => $component['brand'] ?? '',
             'model' => $component['model'] ?? '',
-            'interface_type' => $component['interface_type'] ?? '',
+            'interface_type' => $component['interface'] ?? '',
             'form_factor' => $component['form_factor'] ?? '',
-            'ports' => $component['ports'] ?? [],
+            'ports' => $component['ports'] ?? 0,
+            'port_type' => $component['port_type'] ?? '',
+            'speeds' => $component['speeds'] ?? [],
+            'power_consumption' => is_string($component['power'] ?? null) ? (float)rtrim($component['power'] ?? '0', 'W') : 0.0,
+            'features' => $component['features'] ?? [],
             'specifications' => $component['specifications'] ?? []
         ];
     }

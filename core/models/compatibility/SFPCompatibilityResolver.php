@@ -41,7 +41,7 @@ class SFPCompatibilityResolver {
         $sfpDetails = [];
 
         foreach ($sfpUuids as $sfpUuid) {
-            $specs = $this->componentDataService->getComponentSpecs('sfp', $sfpUuid);
+            $specs = $this->componentDataService->getComponentSpecifications('sfp', $sfpUuid);
 
             if (!$specs) {
                 return [
@@ -126,7 +126,7 @@ class SFPCompatibilityResolver {
         }
 
         // Get NIC specifications
-        $nicSpecs = $this->componentDataService->getComponentSpecs('nic', $nicUuid);
+        $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
         if (!$nicSpecs) {
             return [
@@ -157,7 +157,7 @@ class SFPCompatibilityResolver {
         $errors = [];
 
         foreach ($unassignedSfps as $sfpUuid) {
-            $sfpSpecs = $this->componentDataService->getComponentSpecs('sfp', $sfpUuid);
+            $sfpSpecs = $this->componentDataService->getComponentSpecifications('sfp', $sfpUuid);
 
             if (!$sfpSpecs) {
                 $errors[] = "SFP {$sfpUuid} specifications not found";
@@ -317,7 +317,7 @@ class SFPCompatibilityResolver {
 
         foreach ($availableNICs as $nic) {
             $nicUuid = $nic['uuid'];
-            $nicSpecs = $this->componentDataService->getComponentSpecs('nic', $nicUuid);
+            $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
             if (!$nicSpecs) continue;
 
@@ -381,7 +381,7 @@ class SFPCompatibilityResolver {
      * @return array List of compatible SFP UUIDs and specs
      */
     public function getCompatibleSFPsForNIC($nicUuid) {
-        $nicSpecs = $this->componentDataService->getComponentSpecs('nic', $nicUuid);
+        $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
         if (!$nicSpecs) {
             return [

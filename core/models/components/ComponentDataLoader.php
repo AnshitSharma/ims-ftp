@@ -7,6 +7,8 @@
  * Extracted from ComponentCompatibility.php for better maintainability
  */
 
+require_once __DIR__ . '/ComponentSpecPaths.php';
+
 class ComponentDataLoader {
     private $pdo;
     private $jsonDataCache = [];
@@ -92,18 +94,7 @@ class ComponentDataLoader {
      * @return array Mapping of component types to JSON file paths
      */
     public function getJSONFilePaths() {
-        return [
-            'chassis' => __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json',
-            'cpu' => __DIR__ . '/../../../resources/specifications/cpu/Cpu-details-level-3.json',
-            'motherboard' => __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json',
-            'ram' => __DIR__ . '/../../../resources/specifications/ram/ram_detail.json',
-            'storage' => __DIR__ . '/../../../resources/specifications/storage/storage-level-3.json',
-            'nic' => __DIR__ . '/../../../resources/specifications/nic/nic-level-3.json',
-            'caddy' => __DIR__ . '/../../../resources/specifications/caddy/caddy_details.json',
-            'pciecard' => __DIR__ . '/../../../resources/specifications/pciecard/pci-level-3.json',
-            'hbacard' => __DIR__ . '/../../../resources/specifications/hbacard/hbacard-level-3.json',
-            'sfp' => __DIR__ . '/../../../resources/specifications/sfp/sfp-level-3.json',
-        ];
+        return ComponentSpecPaths::getAll();
     }
 
     /**
@@ -424,7 +415,7 @@ class ComponentDataLoader {
      * @return array|null Storage specifications
      */
     public function loadStorageSpecs($uuid) {
-        $jsonPath = __DIR__ . '/../../../resources/specifications/storage/storage-level-3.json';
+        $jsonPath = ComponentSpecPaths::getPath('storage');
 
         if (!file_exists($jsonPath)) {
             error_log("Storage JSON file not found: $jsonPath");
@@ -473,7 +464,7 @@ class ComponentDataLoader {
      * @return array|null Motherboard specifications
      */
     public function loadMotherboardSpecs($uuid) {
-        $jsonPath = __DIR__ . '/../../../resources/specifications/motherboard/motherboard-level-3.json';
+        $jsonPath = ComponentSpecPaths::getPath('motherboard');
 
         if (!file_exists($jsonPath)) {
             error_log("Motherboard JSON file not found: $jsonPath");
@@ -507,7 +498,7 @@ class ComponentDataLoader {
      * @return array|null Chassis specifications
      */
     public function loadChassisSpecs($uuid) {
-        $jsonPath = __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json';
+        $jsonPath = ComponentSpecPaths::getPath('chassis');
 
         if (!file_exists($jsonPath)) {
             return null;
@@ -551,7 +542,7 @@ class ComponentDataLoader {
      */
     public function getChassisData($uuid) {
         // Parse chassis JSON to get specifications
-        $chassisJsonPath = __DIR__ . '/../../../resources/specifications/chassis/chasis-level-3.json';
+        $chassisJsonPath = ComponentSpecPaths::getPath('chassis');
 
         if (!isset($this->jsonDataCache[$chassisJsonPath])) {
             if (file_exists($chassisJsonPath)) {
@@ -585,7 +576,7 @@ class ComponentDataLoader {
      */
     public function getPCIeCardData($uuid) {
         // Parse PCIe JSON to get specifications
-        $pcieJsonPath = __DIR__ . '/../../../resources/specifications/pciecard/pci-level-3.json';
+        $pcieJsonPath = ComponentSpecPaths::getPath('pciecard');
 
         if (!isset($this->jsonDataCache[$pcieJsonPath])) {
             if (file_exists($pcieJsonPath)) {
