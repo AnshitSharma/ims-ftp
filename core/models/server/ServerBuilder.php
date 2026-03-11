@@ -215,6 +215,45 @@ class ServerBuilder {
     }
 
     /**
+     * Get a human-readable component name from JSON spec files.
+     * Returns model/name from the spec, or null if not found.
+     */
+    private function getComponentNameFromSpec($componentType, $componentUuid) {
+        try {
+            $spec = $this->dataUtils->getComponentSpecifications($componentType, $componentUuid);
+            if (!$spec || empty($spec['found'])) {
+                return null;
+            }
+            $s = $spec['specifications'];
+            // Try common name fields in priority order
+            foreach (['model', 'name', 'model_name', 'product_name'] as $field) {
+                if (!empty($s[$field])) return $s[$field];
+            }
+            // For RAM: build "Brand Type CapacityGB Module"
+            if ($componentType === 'ram') {
+                $parts = array_filter([$s['brand'] ?? null, $s['memory_type'] ?? null,
+                    isset($s['capacity_GB']) ? $s['capacity_GB'] . 'GB' : null,
+                    $s['module_type'] ?? null]);
+                if ($parts) return implode(' ', $parts);
+            }
+            // For Storage: build "Brand Type CapacityGB"
+            if ($componentType === 'storage') {
+                $cap = null;
+                if (isset($s['capacity_GB'])) {
+                    $cap = $s['capacity_GB'] >= 1000
+                        ? round($s['capacity_GB'] / 1000, 1) . 'TB'
+                        : $s['capacity_GB'] . 'GB';
+                }
+                $parts = array_filter([$s['brand'] ?? null, $s['storage_type'] ?? null, $cap]);
+                if ($parts) return implode(' ', $parts);
+            }
+            return null;
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    /**
      * Get component serial number and other details from inventory table
      */
     private function getComponentDetails($componentType, $componentUuid) {
@@ -772,6 +811,7 @@ class ServerBuilder {
                     // CRITICAL: Use serial_number from JSON first (already stored when component was added)
                     // Only fall back to inventory query if not present in JSON
                     'serial_number' => $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? 'Not Found',
+                    'component_name' => $this->getComponentNameFromSpec($type, $uuid),
                     'quantity' => $component['quantity'],
                     'added_at' => $component['added_at']
                 ];

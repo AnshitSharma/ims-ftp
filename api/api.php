@@ -169,7 +169,11 @@ function handleServerModule($operation, $user) {
         'get-config' => 'server.view',
         'finalize-config' => 'server.create',
         'get-available-components' => 'server.view',
-        'import-virtual' => 'server.create'
+        'import-virtual' => 'server.create',
+        'search-by-serial' => 'server.view',
+        'update-location' => 'server.edit',
+        'fix-onboard-nics' => 'server.edit',
+        'debug-motherboard-nics' => 'server.view'
     ];
     
     $requiredPermission = $permissionMap[$operation] ?? 'server.view';
@@ -179,9 +183,9 @@ function handleServerModule($operation, $user) {
     }
     
     // Include appropriate server handler based on operation
-    if (in_array($operation, ['add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components', 'import-virtual'])) {
-        // Use the newer server API implementation
-        global $operation;
+    if (in_array($operation, ['create-start', 'add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components', 'import-virtual', 'search-by-serial', 'update-location', 'fix-onboard-nics', 'debug-motherboard-nics'])) {
+        // Pass operation to server_api.php via global scope
+        $GLOBALS['operation'] = $operation;
         require_once(__DIR__ . '/handlers/server/server_api.php');
     } else {
         // Use the step-by-step server creation implementation
@@ -816,7 +820,36 @@ function handleDashboardOperations($operation, $user) {
             $dashboardData = getDashboardData($pdo, $user);
             send_json_response(1, 1, 200, "Dashboard data retrieved", $dashboardData);
             break;
-            
+
+        case 'get-logs':
+            // Admin/super admin only
+            if (!hasPermission($pdo, 'acl.manage', $user['id']) && !hasPermission($pdo, 'user.view', $user['id'])) {
+                send_json_response(0, 1, 403, "Insufficient permissions to view activity logs");
+            }
+            $limit = max(1, min(200, (int)(($_GET['limit'] ?? $_POST['limit'] ?? 50))));
+            $offset = max(0, (int)(($_GET['offset'] ?? $_POST['offset'] ?? 0)));
+            $stmt = $pdo->prepare("
+                SELECT il.id, il.user_id, u.username, il.component_type, il.component_id,
+                       il.action, il.notes, il.ip_address, il.created_at
+                FROM inventory_log il
+                LEFT JOIN users u ON il.user_id = u.id
+                ORDER BY il.created_at DESC
+                LIMIT :limit OFFSET :offset
+            ");
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+            $stmt->execute();
+            $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $countStmt = $pdo->query("SELECT COUNT(*) FROM inventory_log");
+            $total = (int)$countStmt->fetchColumn();
+
+            send_json_response(1, 1, 200, "Activity logs retrieved", [
+                'logs' => $logs,
+                'pagination' => ['total' => $total, 'limit' => $limit, 'offset' => $offset]
+            ]);
+            break;
+
         default:
             send_json_response(0, 1, 400, "Invalid dashboard operation: $operation");
     }

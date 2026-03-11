@@ -9,16 +9,10 @@ require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.p
 
 header('Content-Type: application/json');
 
-// Initialize database connection and authentication
-global $pdo;
+// Use authentication already performed by api.php
+global $pdo, $user;
 if (!$pdo) {
     require_once __DIR__ . '/../../../core/config/app.php';
-}
-
-$user = authenticateWithJWT($pdo);
-
-if (!$user) {
-    send_json_response(0, 0, 401, "Authentication required");
 }
 
 // Initialize ServerBuilder with enhanced error handling
@@ -143,6 +137,11 @@ switch ($action) {
     case 'debug-motherboard-nics':
     case 'server-debug-motherboard-nics':
         handleDebugMotherboardNICs($user);
+        break;
+
+    case 'search-by-serial':
+    case 'server-search-by-serial':
+        handleSearchBySerial($serverBuilder, $user);
         break;
 
     default:
@@ -305,7 +304,9 @@ function handleUpdateConfiguration($serverBuilder, $user) {
  */
 function handleCreateStart($serverBuilder, $user) {
     global $pdo;
-    
+
+    error_log("[HANDLER] handleCreateStart called for user: " . $user['id']);
+
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $category = trim($_POST['category'] ?? 'custom');
@@ -360,7 +361,12 @@ function handleCreateStart($serverBuilder, $user) {
         
         // Parse motherboard specifications for component limits
         $motherboardSpecs = parseMotherboardSpecs($motherboardDetails);
-        
+
+        // Log server creation start
+        $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server', null,
+            "Started server config creation: $serverName");
+        error_log("Server create-start logging result: " . ($logResult ? 'success' : 'failed'));
+
         send_json_response(1, 1, 200, "Server configuration created successfully with motherboard", [
             'config_uuid' => $configUuid,
             'server_name' => $serverName,
@@ -1283,6 +1289,10 @@ function handleAddComponent($serverBuilder, $user) {
                 }
             }
 
+            // Log the component addition
+            logActivity($pdo, $user['id'], 'Component added', 'server', $config->get('id'),
+                "Added $componentType ($componentUuid) to server config $configUuid");
+
             send_json_response(1, 1, 200, "Component added successfully", $responseData);
         } else {
             // Error response with recommendations
@@ -1452,6 +1462,10 @@ function handleRemoveComponent($serverBuilder, $user) {
                     error_log("Error updating NIC config: " . $nicError->getMessage());
                 }
             }
+
+            // Log the component removal
+            logActivity($pdo, $user['id'], 'Component removed', 'server', $config->get('id'),
+                "Removed $componentType ($componentUuid) from server config $configUuid");
 
             send_json_response(1, 1, 200, "Component removed successfully", [
                 'component_removed' => [
@@ -2001,7 +2015,9 @@ function handleImportVirtual($serverBuilder, $user) {
  */
 function handleFinalizeConfiguration($serverBuilder, $user) {
     global $pdo;
-    
+
+    error_log("[HANDLER] handleFinalizeConfiguration called for user: " . $user['id']);
+
     $configUuid = $_POST['config_uuid'] ?? '';
     $finalNotes = trim($_POST['notes'] ?? '');
     
@@ -2034,8 +2050,16 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         }
         
         $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes);
-        
+
         if ($result['success']) {
+            $configId = $config->get('id');
+            $serverName = $config->get('server_name');
+            error_log("About to log finalize: configId=$configId, serverName=$serverName, uuid=$configUuid");
+
+            $logResult = logActivity($pdo, $user['id'], 'Server created', 'server', $configId,
+                "Created server config $configUuid with name: $serverName");
+            error_log("Server finalize logging result: " . ($logResult ? 'success' : 'failed'));
+
             send_json_response(1, 1, 200, "Configuration finalized successfully", [
                 'config_uuid' => $configUuid,
                 'finalization_details' => $result,
@@ -2081,8 +2105,12 @@ function handleDeleteConfiguration($serverBuilder, $user) {
         }
         
         $result = $serverBuilder->deleteConfiguration($configUuid);
-        
+
         if ($result['success']) {
+            $releasedCount = $result['components_released'] ?? 0;
+            logActivity($pdo, $user['id'], 'Server deleted', 'server', $config->get('id'),
+                "Deleted server config $configUuid, released $releasedCount components");
+
             send_json_response(1, 1, 200, "Configuration deleted successfully", [
                 'components_released' => $result['components_released']
             ]);
@@ -5614,6 +5642,81 @@ function handleGetCompatibleSFPs($serverBuilder, $user) {
     } catch (Exception $e) {
         error_log("Error in handleGetCompatibleSFPs: " . $e->getMessage());
         send_json_response(false, true, 500, 'Server error: ' . $e->getMessage(), []);
+    }
+}
+
+/**
+ * Search server configurations by component serial number.
+ * Searches all inventory tables for the given serial, then finds the associated server config.
+ */
+function handleSearchBySerial($serverBuilder, $user) {
+    global $pdo;
+
+    $request = array_merge($_GET, $_POST);
+    $serial = trim($request['serial_number'] ?? '');
+
+    if (empty($serial)) {
+        send_json_response(0, 1, 400, "serial_number is required");
+    }
+
+    $inventoryTables = [
+        'cpu'         => 'cpuinventory',
+        'ram'         => 'raminventory',
+        'storage'     => 'storageinventory',
+        'motherboard' => 'motherboardinventory',
+        'nic'         => 'nicinventory',
+        'caddy'       => 'caddyinventory',
+        'chassis'     => 'chassisinventory',
+        'pciecard'    => 'pciecardinventory',
+        'hbacard'     => 'hbacardinventory',
+    ];
+
+    try {
+        $matchedConfigUuids = [];
+
+        foreach ($inventoryTables as $type => $table) {
+            $stmt = $pdo->prepare("SELECT SerialNumber, ServerUUID FROM `$table` WHERE SerialNumber LIKE ? LIMIT 50");
+            $stmt->execute(['%' . $serial . '%']);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($rows as $row) {
+                if (!empty($row['ServerUUID']) && $row['ServerUUID'] !== 'null') {
+                    // ServerUUID in inventory tables stores the config_uuid of the assigned server
+                    $matchedConfigUuids[$row['ServerUUID']] = true;
+                }
+            }
+        }
+
+        if (empty($matchedConfigUuids)) {
+            send_json_response(1, 1, 200, "No servers found with that serial number", ['config_uuids' => []]);
+        }
+
+        // Filter to configs the user can actually see
+        $placeholders = implode(',', array_fill(0, count($matchedConfigUuids), '?'));
+        $uuids = array_keys($matchedConfigUuids);
+
+        $canViewAll = hasPermission($pdo, 'server.view_all', $user['id']);
+        if ($canViewAll) {
+            $stmt = $pdo->prepare("
+                SELECT config_uuid FROM server_configurations
+                WHERE config_uuid IN ($placeholders)
+            ");
+            $stmt->execute($uuids);
+        } else {
+            $stmt = $pdo->prepare("
+                SELECT config_uuid FROM server_configurations
+                WHERE config_uuid IN ($placeholders) AND created_by = ?
+            ");
+            $stmt->execute(array_merge($uuids, [$user['id']]));
+        }
+
+        $visibleUuids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        send_json_response(1, 1, 200, "Search complete", ['config_uuids' => $visibleUuids]);
+
+    } catch (Exception $e) {
+        error_log("Error in handleSearchBySerial: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Search failed: " . $e->getMessage());
     }
 }
 

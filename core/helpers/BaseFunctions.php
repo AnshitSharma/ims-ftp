@@ -951,34 +951,41 @@ if (!function_exists('getUserById')) {
 if (!function_exists('logActivity')) {
     function logActivity($pdo, $userId, $action, $module, $objectId = null, $description = '') {
         try {
-            // For now, log to error log since there's no activity_log table in the database
-            // This prevents the API from crashing while providing basic logging functionality
-            $logMessage = sprintf(
-                "[ACTIVITY] User: %s, Action: %s, Module: %s, Object: %s, Description: %s",
-                $userId,
-                $action,
-                $module,
-                $objectId ?? 'N/A',
-                $description
-            );
-            
-            error_log($logMessage);
-            
-            // If you want to implement database logging in the future, 
-            // uncomment and modify the following code:
-            /*
+            // Ensure PDO throws exceptions on errors
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+            $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+
+            error_log("[logActivity] Called with: userId=$userId, action='$action', module='$module', objectId=$objectId");
+
             $stmt = $pdo->prepare("
-                INSERT INTO activity_log (user_id, action, module, object_id, description, created_at) 
-                VALUES (?, ?, ?, ?, ?, NOW())
+                INSERT INTO inventory_log (user_id, component_type, component_id, action, notes, ip_address, user_agent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ");
-            return $stmt->execute([$userId, $action, $module, $objectId, $description]);
-            */
-            
-            return true; // Always return true to prevent API crashes
-            
+
+            if (!$stmt) {
+                error_log("[logActivity] Prepare failed: " . json_encode($pdo->errorInfo()));
+                return false;
+            }
+
+            $params = [$userId, $module, $objectId, $action, $description, $ipAddress, $userAgent];
+            $result = $stmt->execute($params);
+
+            if ($result) {
+                error_log("[logActivity] SUCCESS - Inserted log entry");
+            } else {
+                error_log("[logActivity] Execute failed: " . json_encode($stmt->errorInfo()));
+            }
+
+            return $result;
+
+        } catch (PDOException $e) {
+            error_log("[logActivity] PDOException: " . $e->getMessage());
+            error_log("[logActivity] Error Code: " . $e->getCode());
+            return false;
         } catch (Exception $e) {
-            // Log the error but don't throw exception to prevent API crashes
-            error_log("Error in logActivity function: " . $e->getMessage());
+            error_log("[logActivity] Exception: " . $e->getMessage());
             return false;
         }
     }

@@ -99,16 +99,10 @@ function handleInitializeServerCreation() {
             $location, $rackPosition, $notes, $user['id'], $isVirtual
         ]);
 
-        
-        // Log the initialization with enhanced metadata
-        logServerBuildAction($pdo, $configUuid, 'initialize', null, null, [
-            'server_name' => $serverName,
-            'description' => $description,
-            'location' => $location,
-            'rack_position' => $rackPosition,
-            'notes' => $notes,
-            'is_virtual' => $isVirtual
-        ], $user['id']);
+
+        // Log the initialization
+        logActivity($pdo, $user['id'], 'Server configuration started', 'server', null,
+            "Initialized server config: $serverName (UUID: $configUuid)");
 
 
         $pdo->commit();
@@ -207,12 +201,15 @@ function handleStepAddComponent() {
         $stmt = $pdo->prepare("UPDATE server_configurations SET updated_by = ?, updated_at = NOW() WHERE config_uuid = ?");
         $stmt->execute([$user['id'], $configUuid]);
 
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+
         // Log the action
-        logServerBuildAction($pdo, $configUuid, 'component_added', $componentType, $componentUuid, [
-            'quantity' => $quantity,
-            'slot_position' => $slotPosition,
-            'notes' => $notes
-        ], $user['id']);
+        logActivity($pdo, $user['id'], 'Component added', 'server', $configId,
+            "Added $componentType ($componentUuid) to server config $configUuid");
 
 
         $pdo->commit();
@@ -283,8 +280,15 @@ function handleStepRemoveComponent() {
         $stmt = $pdo->prepare("UPDATE server_configurations SET updated_by = ?, updated_at = NOW() WHERE config_uuid = ?");
         $stmt->execute([$user['id'], $configUuid]);
 
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+
         // Log the action
-        logServerBuildAction($pdo, $configUuid, 'component_removed', $componentType, $componentUuid, [], $user['id']);
+        logActivity($pdo, $user['id'], 'Component removed', 'server', $configId,
+            "Removed $componentType ($componentUuid) from server config $configUuid");
 
 
         $pdo->commit();
@@ -415,12 +419,15 @@ function handleValidateCurrent() {
         ");
         $stmt->execute([json_encode($validation), $user['id'], $configUuid]);
 
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+
         // Log validation
-        logServerBuildAction($pdo, $configUuid, 'validated', null, null, [
-            'is_complete' => $validation['is_complete'],
-            'errors_count' => count($validation['errors']),
-            'warnings_count' => count($validation['warnings'])
-        ], $user['id']);
+        logActivity($pdo, $user['id'], 'Server configuration validated', 'server', $configId,
+            "Validated server config $configUuid");
 
         send_json_response(1, 1, 200, "Configuration validated", [
             'validation_results' => $validation,
@@ -509,13 +516,16 @@ function handleFinalizeServer() {
             $configUuid
         ]);
 
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id, server_name FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+        $serverName = $configData['server_name'] ?? 'Unknown';
+
         // Log the finalization
-        logServerBuildAction($pdo, $configUuid, 'finalized', null, null, [
-            'finalized_by' => $user['id'],
-            'built_date' => $builtDate,
-            'deployed_date' => $deployedDate,
-            'final_notes' => $finalNotes
-        ], $user['id']);
+        logActivity($pdo, $user['id'], 'Server created', 'server', $configId,
+            "Created server config $configUuid with name: $serverName");
 
         $pdo->commit();
 
@@ -569,11 +579,15 @@ function handleSaveDraft() {
         ");
         $stmt->execute([$draftName, $notes, $user['id'], $configUuid]);
         
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+
         // Log the save
-        logServerBuildAction($pdo, $configUuid, 'draft_saved', null, null, [
-            'draft_name' => $draftName,
-            'notes' => $notes
-        ], $user['id']);
+        logActivity($pdo, $user['id'], 'Server configuration saved', 'server', $configId,
+            "Saved server config draft $configUuid");
         
         send_json_response(1, 1, 200, "Draft saved successfully", [
             'config_uuid' => $configUuid,
@@ -686,9 +700,16 @@ function handleResetConfiguration() {
             WHERE config_uuid = ?
         ");
         $stmt->execute([$user['id'], $configUuid]);
-        
+
+        // Get config ID for logging
+        $idStmt = $pdo->prepare("SELECT id FROM server_configurations WHERE config_uuid = ?");
+        $idStmt->execute([$configUuid]);
+        $configData = $idStmt->fetch(PDO::FETCH_ASSOC);
+        $configId = $configData['id'] ?? null;
+
         // Log the reset
-        logServerBuildAction($pdo, $configUuid, 'reset', null, null, [], $user['id']);
+        logActivity($pdo, $user['id'], 'Server configuration reset', 'server', $configId,
+            "Reset server config $configUuid");
         
         $pdo->commit();
         

@@ -383,6 +383,9 @@ function handleAddComponent() {
         $newComponent = $getStmt->fetch(PDO::FETCH_ASSOC);
         $newComponent['StatusText'] = getStatusText($newComponent['Status']);
         
+        logActivity($pdo, $user['id'], 'Component created', $componentType, $insertId,
+            "Created new $componentType component");
+
         send_json_response(1, 1, 201, "Component added successfully", [
             'component' => $newComponent,
             'component_id' => $insertId,
@@ -522,6 +525,9 @@ function handleUpdateComponent() {
         $updatedComponent = $getStmt->fetch(PDO::FETCH_ASSOC);
         $updatedComponent['StatusText'] = getStatusText($updatedComponent['Status']);
         
+        logActivity($pdo, $user['id'], 'Component updated', $componentType, $id,
+            "Updated $componentType component");
+
         send_json_response(1, 1, 200, "Component updated successfully", [
             'component' => $updatedComponent,
             'changes' => $changes,
@@ -590,6 +596,9 @@ function handleDeleteComponent() {
             $logAction = 'soft_delete';
         }
         
+        logActivity($pdo, $user['id'], 'Component deleted', $componentType, $id,
+            "Deleted $componentType component");
+
         send_json_response(1, 1, 200, $message, [
             'component_id' => $id,
             'serial_number' => $component['SerialNumber'],
