@@ -281,15 +281,14 @@ class ServerBuilder {
         try {
             $configUuid = $this->generateUuid();
             $description = $options['description'] ?? '';
-            $category = $options['category'] ?? 'custom';
-            
+
             $stmt = $this->pdo->prepare("
-                INSERT INTO server_configurations 
-                (config_uuid, server_name, description, category, created_by, created_at, updated_at, configuration_status) 
-                VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 0)
+                INSERT INTO server_configurations
+                (config_uuid, server_name, description, created_by, created_at, updated_at, configuration_status)
+                VALUES (?, ?, ?, ?, NOW(), NOW(), 0)
             ");
-            
-            $stmt->execute([$configUuid, $serverName, $description, $category, $createdBy]);
+
+            $stmt->execute([$configUuid, $serverName, $description, $createdBy]);
             
             return $configUuid;
             

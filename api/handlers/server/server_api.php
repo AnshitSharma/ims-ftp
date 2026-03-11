@@ -309,74 +309,26 @@ function handleCreateStart($serverBuilder, $user) {
 
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    $category = trim($_POST['category'] ?? 'custom');
-    $motherboardUuid = trim($_POST['motherboard_uuid'] ?? '');
-    
+
     if (empty($serverName)) {
         send_json_response(0, 1, 400, "Server name is required");
     }
-    
-    if (empty($motherboardUuid)) {
-        send_json_response(0, 1, 400, "Motherboard UUID is required to start server creation");
-    }
-    
+
     try {
-        // Validate motherboard exists and is available in database
-        $motherboardDetails = getComponentDetails($pdo, 'motherboard', $motherboardUuid);
-        if (!$motherboardDetails) {
-            send_json_response(0, 1, 404, "Motherboard not found in inventory database", [
-                'motherboard_uuid' => $motherboardUuid
-            ]);
-        }
-        
-        // Check motherboard availability
-        $motherboardStatus = (int)$motherboardDetails['Status'];
-        if ($motherboardStatus !== 1) {
-            $statusMessage = getStatusText($motherboardStatus);
-            send_json_response(0, 1, 400, "Motherboard is not available", [
-                'motherboard_status' => $motherboardStatus,
-                'status_message' => $statusMessage,
-                'motherboard_uuid' => $motherboardUuid
-            ]);
-        }
-        
         // Create configuration
         $configUuid = $serverBuilder->createConfiguration($serverName, $user['id'], [
             'description' => $description,
-            'category' => $category
         ]);
-        
-        // Add motherboard to configuration
-        $addResult = $serverBuilder->addComponent($configUuid, 'motherboard', $motherboardUuid, [
-            'quantity' => 1,
-            'notes' => 'Initial motherboard for server configuration',
-            'user_id' => $user['id']
-        ]);
-        
-        if (!$addResult['success']) {
-            // If motherboard addition failed, clean up the configuration
-            $serverBuilder->deleteConfiguration($configUuid);
-            send_json_response(0, 1, 400, "Failed to add motherboard to configuration: " . $addResult['message']);
-        }
-        
-        // Parse motherboard specifications for component limits
-        $motherboardSpecs = parseMotherboardSpecs($motherboardDetails);
 
         // Log server creation start
         $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server', null,
             "Started server config creation: $serverName");
         error_log("Server create-start logging result: " . ($logResult ? 'success' : 'failed'));
 
-        send_json_response(1, 1, 200, "Server configuration created successfully with motherboard", [
+        send_json_response(1, 1, 200, "Server configuration created successfully", [
             'config_uuid' => $configUuid,
             'server_name' => $serverName,
             'description' => $description,
-            'category' => $category,
-            'motherboard_added' => [
-                'uuid' => $motherboardUuid,
-                'serial_number' => $motherboardDetails['SerialNumber'],
-                'specifications' => $motherboardSpecs
-            ]
         ]);
         
     } catch (Exception $e) {
