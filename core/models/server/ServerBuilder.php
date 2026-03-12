@@ -256,15 +256,33 @@ class ServerBuilder {
     /**
      * Get component serial number and other details from inventory table
      */
-    private function getComponentDetails($componentType, $componentUuid) {
+    private function getComponentDetails($componentType, $componentUuid, $serverUuid = null, $excludeSerials = []) {
         try {
             $table = $this->getComponentInventoryTable($componentType);
             if (!$table) {
                 return null;
             }
 
-            $stmt = $this->pdo->prepare("SELECT SerialNumber, Status FROM `$table` WHERE UUID = ? LIMIT 1");
-            $stmt->execute([$componentUuid]);
+            $params = [$componentUuid];
+            $sql = "SELECT SerialNumber, Status FROM `$table` WHERE UUID = ?";
+            
+            if ($serverUuid !== null) {
+                $sql .= " AND ServerUUID = ?";
+                $params[] = $serverUuid;
+            }
+            
+            if (!empty($excludeSerials)) {
+                $placeholders = str_repeat('?,', count($excludeSerials) - 1) . '?';
+                $sql .= " AND SerialNumber NOT IN ($placeholders)";
+                foreach ($excludeSerials as $serial) {
+                    $params[] = $serial;
+                }
+            }
+            
+            $sql .= " LIMIT 1";
+
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
             return $result;
@@ -792,6 +810,7 @@ class ServerBuilder {
             $componentDetails = [];
             $componentCounts = [];
             $totalComponents = 0;
+            $assignedSerials = []; // Track to prevent duplicates
 
             foreach ($components as $component) {
                 $type = $component['component_type'];
@@ -802,14 +821,25 @@ class ServerBuilder {
                     $componentCounts[$type] = 0;
                 }
 
-                // Get serial number from inventory table (fallback only)
-                $inventoryDetails = $this->getComponentDetails($type, $uuid);
+                // Get serial number from inventory table (fallback only), excluding already assigned ones
+                $excludeSerials = $assignedSerials[$type] ?? [];
+                $inventoryDetails = $this->getComponentDetails($type, $uuid, $configUuid, $excludeSerials);
+
+                // CRITICAL: Use serial_number from JSON first (already stored when component was added)
+                // Only fall back to inventory query if not present in JSON
+                $serialNumber = $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? 'Not Found';
+                
+                // Track assigned serial to avoid duplicates when multiple identical components exist
+                if ($serialNumber !== 'Not Found' && strpos($serialNumber, 'VIRTUAL-') !== 0) {
+                    if (!isset($assignedSerials[$type])) {
+                        $assignedSerials[$type] = [];
+                    }
+                    $assignedSerials[$type][] = $serialNumber;
+                }
 
                 $simplifiedComponent = [
                     'uuid' => $uuid,
-                    // CRITICAL: Use serial_number from JSON first (already stored when component was added)
-                    // Only fall back to inventory query if not present in JSON
-                    'serial_number' => $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? 'Not Found',
+                    'serial_number' => $serialNumber,
                     'component_name' => $this->getComponentNameFromSpec($type, $uuid),
                     'quantity' => $component['quantity'],
                     'added_at' => $component['added_at']
