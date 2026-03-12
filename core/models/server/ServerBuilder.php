@@ -266,17 +266,18 @@ class ServerBuilder {
             $params = [$componentUuid];
             $sql = "SELECT SerialNumber, Status FROM `$table` WHERE UUID = ?";
             
-            if ($serverUuid !== null) {
-                $sql .= " AND ServerUUID = ?";
-                $params[] = $serverUuid;
-            }
-            
             if (!empty($excludeSerials)) {
                 $placeholders = str_repeat('?,', count($excludeSerials) - 1) . '?';
                 $sql .= " AND SerialNumber NOT IN ($placeholders)";
                 foreach ($excludeSerials as $serial) {
                     $params[] = $serial;
                 }
+            }
+            
+            if ($serverUuid !== null) {
+                // Prioritize exact ServerUUID matches, but allow fallback if DB is inconsistent
+                $sql .= " ORDER BY CASE WHEN ServerUUID = ? THEN 1 ELSE 0 END DESC";
+                $params[] = $serverUuid;
             }
             
             $sql .= " LIMIT 1";
