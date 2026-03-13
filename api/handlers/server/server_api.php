@@ -309,6 +309,9 @@ function handleCreateStart($serverBuilder, $user) {
 
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
+    $location = trim($_POST['location'] ?? '');
+    $rackPosition = trim($_POST['rack_position'] ?? '');
+    $isVirtual = filter_var($_POST['is_virtual'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 
     if (empty($serverName)) {
         send_json_response(0, 1, 400, "Server name is required");
@@ -318,6 +321,9 @@ function handleCreateStart($serverBuilder, $user) {
         // Create configuration
         $configUuid = $serverBuilder->createConfiguration($serverName, $user['id'], [
             'description' => $description,
+            'location' => $location,
+            'rack_position' => $rackPosition,
+            'is_virtual' => $isVirtual,
         ]);
 
         // Log server creation start
@@ -329,6 +335,9 @@ function handleCreateStart($serverBuilder, $user) {
             'config_uuid' => $configUuid,
             'server_name' => $serverName,
             'description' => $description,
+            'location' => $location,
+            'rack_position' => $rackPosition,
+            'is_virtual' => $isVirtual,
         ]);
         
     } catch (Exception $e) {

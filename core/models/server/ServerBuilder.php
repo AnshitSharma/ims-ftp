@@ -300,17 +300,20 @@ class ServerBuilder {
         try {
             $configUuid = $this->generateUuid();
             $description = $options['description'] ?? '';
+            $location = $options['location'] ?? '';
+            $rackPosition = $options['rack_position'] ?? '';
+            $isVirtual = $options['is_virtual'] ?? 0;
 
             $stmt = $this->pdo->prepare("
                 INSERT INTO server_configurations
-                (config_uuid, server_name, description, created_by, created_at, updated_at, configuration_status)
-                VALUES (?, ?, ?, ?, NOW(), NOW(), 0)
+                (config_uuid, server_name, description, location, rack_position, created_by, created_at, updated_at, configuration_status, is_virtual)
+                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?)
             ");
 
-            $stmt->execute([$configUuid, $serverName, $description, $createdBy]);
-            
+            $stmt->execute([$configUuid, $serverName, $description, $location, $rackPosition, $createdBy, $isVirtual]);
+
             return $configUuid;
-            
+
         } catch (Exception $e) {
             error_log("Error creating server configuration: " . $e->getMessage());
             throw new Exception("Failed to create server configuration: " . $e->getMessage());

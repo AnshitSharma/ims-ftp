@@ -158,14 +158,6 @@ function handleServerModule($operation, $user) {
         'update-config' => 'server.edit',
         'get-components' => 'server.view',
         'export-config' => 'server.view',
-        'initialize' => 'server.create',
-        'get_next_options' => 'server.view',
-        'validate_current' => 'server.view',
-        'finalize' => 'server.create',
-        'save_draft' => 'server.create',
-        'load_draft' => 'server.view',
-        'get_server_progress' => 'server.view',
-        'reset_configuration' => 'server.edit',
         'get-config' => 'server.view',
         'finalize-config' => 'server.create',
         'get-available-components' => 'server.view',
@@ -183,30 +175,9 @@ function handleServerModule($operation, $user) {
     }
     
     // Include appropriate server handler based on operation
-    if (in_array($operation, ['create-start', 'add-component', 'remove-component', 'get-compatible', 'validate-config', 'save-config', 'get-config', 'list-configs', 'delete-config', 'clone-config', 'get-statistics', 'update-config', 'get-components', 'export-config', 'finalize-config', 'get-available-components', 'import-virtual', 'search-by-serial', 'update-location', 'fix-onboard-nics', 'debug-motherboard-nics'])) {
-        // Pass operation to server_api.php via global scope
-        $GLOBALS['operation'] = $operation;
-        require_once(__DIR__ . '/handlers/server/server_api.php');
-    } else {
-        // Use the step-by-step server creation implementation
-        $actionMap = [
-            'create-start' => 'initialize',
-            'server-create-start' => 'initialize',
-            'initialize' => 'initialize',
-            'save_draft' => 'save_draft',
-            'load_draft' => 'load_draft',
-            'get_server_progress' => 'get_server_progress',
-            'reset_configuration' => 'reset_configuration',
-            'list_drafts' => 'list_drafts',
-            'delete_draft' => 'delete_draft'
-        ];
-        
-        $internalAction = $actionMap[$operation] ?? $operation;
-        $_POST['action'] = $internalAction;
-        $_GET['action'] = $internalAction;
-        
-        require_once(__DIR__ . '/handlers/server/create_server.php');
-    }
+    // Pass operation to server_api.php via global scope
+    $GLOBALS['operation'] = $operation;
+    require_once(__DIR__ . '/handlers/server/server_api.php');
 }
 
 /**
