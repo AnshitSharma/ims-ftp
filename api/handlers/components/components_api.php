@@ -177,10 +177,14 @@ function handleListComponents() {
         
         // Add search filter
         if (!empty($search)) {
-            $searchFields = ['SerialNumber', 'Location', 'RackPosition', 'Notes'];
+            $searchFields = ['UUID', 'SerialNumber', 'Location', 'RackPosition', 'Notes', 'ServerUUID', 'Specifications'];
             $searchConditions = [];
             foreach ($searchFields as $field) {
-                $searchConditions[] = "$field LIKE ?";
+                if ($field === 'Specifications') {
+                    $searchConditions[] = "CAST(Specifications AS CHAR) LIKE ?";
+                } else {
+                    $searchConditions[] = "$field LIKE ?";
+                }
                 $params[] = "%$search%";
             }
             $whereConditions[] = "(" . implode(" OR ", $searchConditions) . ")";
