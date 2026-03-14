@@ -220,6 +220,11 @@ class ServerBuilder {
      */
     private function getComponentNameFromSpec($componentType, $componentUuid) {
         try {
+            // Handle onboard NICs - they don't exist in the NIC JSON spec file
+            if ($componentType === 'nic' && strpos($componentUuid, 'onboard-') === 0) {
+                return $this->getOnboardNICName($componentUuid);
+            }
+
             $spec = $this->dataUtils->getComponentSpecifications($componentType, $componentUuid);
             if (!$spec || empty($spec['found'])) {
                 return null;
@@ -250,6 +255,44 @@ class ServerBuilder {
             return null;
         } catch (Exception $e) {
             return null;
+        }
+    }
+
+    /**
+     * Get onboard NIC name from motherboard specs via nicinventory
+     */
+    private function getOnboardNICName($onboardNicUuid) {
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT ParentComponentUUID, OnboardNICIndex FROM nicinventory WHERE UUID = ? AND SourceType = 'onboard'"
+            );
+            $stmt->execute([$onboardNicUuid]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row || empty($row['ParentComponentUUID'])) {
+                return 'Onboard NIC';
+            }
+
+            $mbSpecs = $this->dataUtils->findComponentByUuid('motherboard', $row['ParentComponentUUID']);
+            if (!$mbSpecs || !isset($mbSpecs['networking']['onboard_nics'])) {
+                return 'Onboard NIC';
+            }
+
+            $index = ($row['OnboardNICIndex'] ?? 1) - 1;
+            $onboardNICs = $mbSpecs['networking']['onboard_nics'];
+            if (!isset($onboardNICs[$index])) {
+                return 'Onboard NIC';
+            }
+
+            $nic = $onboardNICs[$index];
+            return sprintf('%s %dp %s %s',
+                $nic['controller'] ?? 'Onboard',
+                $nic['ports'] ?? 0,
+                $nic['speed'] ?? '',
+                $nic['connector'] ?? ''
+            );
+        } catch (Exception $e) {
+            return 'Onboard NIC';
         }
     }
 

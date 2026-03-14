@@ -895,17 +895,44 @@ class ComponentValidator {
             return $result;
         }
 
-        // Check if any bay supports the storage form factor
-        $compatibleBay = null;
-        foreach ($chassisBays as $bay) {
-            $bayFormFactor = $bay['form_factor'] ?? null;
-            if ($bayFormFactor && strpos($storageFormFactor, $bayFormFactor) !== false) {
-                $compatibleBay = $bay;
+        // chassis_bays is a summary object with 'bay_types' array, not an array of bay objects
+        $bayTypes = $chassisBays['bay_types'] ?? [];
+
+        if (empty($bayTypes)) {
+            $result['compatible'] = false;
+            $result['issues'][] = "No chassis bay supports $storageFormFactor form factor";
+            return $result;
+        }
+
+        // Normalize storage form factor for comparison
+        $normalizedStorageFF = strtolower(str_replace('_', '-', $storageFormFactor));
+
+        $bayTypeMatch = false;
+        foreach ($bayTypes as $bayType) {
+            $normalizedBayType = strtolower(str_replace('_', '-', $bayType));
+
+            // Direct match
+            if ($normalizedStorageFF === $normalizedBayType) {
+                $bayTypeMatch = true;
+                break;
+            }
+
+            // Partial match (e.g., "2.5" in "2.5-inch")
+            if (strpos($normalizedStorageFF, $normalizedBayType) !== false ||
+                strpos($normalizedBayType, $normalizedStorageFF) !== false) {
+                $bayTypeMatch = true;
+                break;
+            }
+
+            // 2.5" storage in 3.5" bay (with caddy)
+            if (strpos($normalizedStorageFF, '2.5') !== false && strpos($normalizedBayType, '3.5') !== false) {
+                $bayTypeMatch = true;
+                $result['warnings'][] = "2.5-inch storage in 3.5-inch bay requires a caddy adapter";
                 break;
             }
         }
 
-        if (!$compatibleBay) {
+        if (!$bayTypeMatch) {
             $result['compatible'] = false;
             $result['issues'][] = "No chassis bay supports $storageFormFactor form factor";
         }
