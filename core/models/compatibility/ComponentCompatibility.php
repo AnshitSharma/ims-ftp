@@ -851,10 +851,22 @@ class ComponentCompatibility {
                         'pcie_version' => $this->dataExtractor->extractPCIeVersion($data, 'nic'),
                         'power_consumption' => $this->dataExtractor->extractPowerConsumption($data)
                     ];
-                    // Add SFP compatibility fields from raw data
-                    $specs['port_type'] = $data['port_type'] ?? '';
-                    $specs['ports'] = $data['ports'] ?? 0;
-                    $specs['speeds'] = $data['speeds'] ?? [];
+                    // For onboard NICs the JSON UUID doesn't exist in nic JSON files —
+                    // specs live in the parent motherboard's networking.onboard_nics array.
+                    if (($data['SourceType'] ?? '') === 'onboard' && !empty($data['ParentComponentUUID'])) {
+                        $mbData = $this->dataLoader->getComponentData('motherboard', $data['ParentComponentUUID']);
+                        $onboardIndex = (int)($data['OnboardNICIndex'] ?? 1);
+                        $onboardNics = $mbData['networking']['onboard_nics'] ?? [];
+                        $nicSpec = $onboardNics[$onboardIndex - 1] ?? null;
+                        $specs['port_type'] = $nicSpec['connector'] ?? '';
+                        $specs['ports']     = (int)($nicSpec['ports'] ?? 0);
+                        $specs['speeds']    = !empty($nicSpec['speed']) ? [$nicSpec['speed']] : [];
+                    } else {
+                        // Regular component NIC: fields come from the NIC JSON data
+                        $specs['port_type'] = $data['port_type'] ?? '';
+                        $specs['ports']     = $data['ports'] ?? 0;
+                        $specs['speeds']    = $data['speeds'] ?? [];
+                    }
                     break;
                     
                 case 'sfp':

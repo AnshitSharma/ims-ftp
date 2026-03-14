@@ -396,9 +396,15 @@ function handleAddComponent($serverBuilder, $user) {
         }
 
         if (empty($portIndex) || $portIndex < 1) {
-            send_json_response(0, 1, 400, "port_index is required for SFP modules and must be >= 1", [
-                'hint' => 'Specify which port number on the NIC (1, 2, 3, etc.)'
-            ]);
+            // Auto-assign port index: find first available port on this NIC
+            global $pdo;
+            $portIndex = autoAssignSFPPort($pdo, $parentNicUuid, $configUuid);
+            if (!$portIndex) {
+                send_json_response(0, 1, 400, "port_index is required for SFP modules and must be >= 1", [
+                    'hint' => 'Specify which port number on the NIC (1, 2, 3, etc.) - all ports may be occupied'
+                ]);
+            }
+            error_log("SFP port auto-assigned: port $portIndex on NIC $parentNicUuid");
         }
 
         error_log("SFP parameters - Parent NIC: $parentNicUuid, Port: $portIndex");
@@ -677,7 +683,7 @@ function handleAddComponent($serverBuilder, $user) {
             // 1. Check if parent NIC exists in configuration
             $nicExists = false;
             foreach ($existingComponents as $comp) {
-                if ($comp['type'] === 'nic' && $comp['uuid'] === $parentNicUuid) {
+                if ($comp['component_type'] === 'nic' && $comp['component_uuid'] === $parentNicUuid) {
                     $nicExists = true;
                     break;
                 }
@@ -5238,6 +5244,79 @@ function extractComponentsFromConfigData($configData) {
     }
 
     return $components;
+}
+
+/**
+ * Auto-assign the first available port index for an SFP on a given NIC.
+ *
+ * Works for both onboard NICs (SourceType='onboard') and regular component NICs.
+ * For onboard NICs the port count comes from the parent motherboard JSON spec.
+ * For regular NICs the port count comes from the NIC JSON spec.
+ *
+ * @param PDO    $pdo           Database connection
+ * @param string $nicUuid       UUID of the parent NIC (e.g. "onboard-4f8e6c3d-1")
+ * @param string $configUuid    Server configuration UUID (used to read sfp_configuration)
+ * @return int|null             First available port index (1-based), or null if all occupied
+ */
+function autoAssignSFPPort($pdo, $nicUuid, $configUuid) {
+    try {
+        // Step 1: Determine the total port count for this NIC
+        $portCount = 0;
+
+        $stmt = $pdo->prepare("SELECT SourceType, ParentComponentUUID, OnboardNICIndex FROM nicinventory WHERE UUID = ? LIMIT 1");
+        $stmt->execute([$nicUuid]);
+        $nicRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($nicRow && ($nicRow['SourceType'] === 'onboard') && !empty($nicRow['ParentComponentUUID'])) {
+            // Onboard NIC: get port count from parent motherboard JSON
+            require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+            $dataService = ComponentDataService::getInstance();
+            $mbSpecs = $dataService->findComponentByUuid('motherboard', $nicRow['ParentComponentUUID']);
+            $onboardIndex = (int)($nicRow['OnboardNICIndex'] ?? 1);
+            $onboardNics = $mbSpecs['networking']['onboard_nics'] ?? [];
+            $nicSpec = $onboardNics[$onboardIndex - 1] ?? null;
+            $portCount = (int)($nicSpec['ports'] ?? 0);
+        } else {
+            // Regular component NIC: get port count from NIC JSON
+            require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+            $dataService = ComponentDataService::getInstance();
+            $nicSpecs = $dataService->getComponentSpecifications('nic', $nicUuid);
+            $portCount = (int)($nicSpecs['ports'] ?? 0);
+        }
+
+        if ($portCount < 1) {
+            error_log("autoAssignSFPPort: could not determine port count for NIC $nicUuid");
+            return null;
+        }
+
+        // Step 2: Find which ports are already occupied on this NIC
+        $occupiedPorts = [];
+        $stmt = $pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['sfp_configuration'])) {
+            $sfpConfig = json_decode($row['sfp_configuration'], true) ?? [];
+            foreach ($sfpConfig['sfps'] ?? [] as $sfp) {
+                if (($sfp['parent_nic_uuid'] ?? null) === $nicUuid) {
+                    $occupiedPorts[] = (int)$sfp['port_index'];
+                }
+            }
+        }
+
+        // Step 3: Return first port not in occupied list
+        for ($port = 1; $port <= $portCount; $port++) {
+            if (!in_array($port, $occupiedPorts)) {
+                return $port;
+            }
+        }
+
+        error_log("autoAssignSFPPort: all $portCount port(s) occupied on NIC $nicUuid");
+        return null;
+
+    } catch (Exception $e) {
+        error_log("autoAssignSFPPort error: " . $e->getMessage());
+        return null;
+    }
 }
 
 
