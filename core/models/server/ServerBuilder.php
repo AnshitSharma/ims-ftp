@@ -273,7 +273,7 @@ class ServerBuilder {
                 return 'Onboard NIC';
             }
 
-            $mbSpecs = $this->dataUtils->findComponentByUuid('motherboard', $row['ParentComponentUUID']);
+            $mbSpecs = $this->dataUtils->getMotherboardByUUID($row['ParentComponentUUID']);
             if (!$mbSpecs || !isset($mbSpecs['networking']['onboard_nics'])) {
                 return 'Onboard NIC';
             }
