@@ -1439,7 +1439,7 @@ function handleRemoveComponent($serverBuilder, $user) {
             send_json_response(0, 1, 400, $result['message'] ?? "Failed to remove component");
         }
         
-    } catch (Exception $e) {
+    } catch (\Throwable $e) {
         error_log("Error removing component: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to remove component: " . $e->getMessage());
     }

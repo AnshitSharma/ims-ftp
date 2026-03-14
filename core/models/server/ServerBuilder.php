@@ -764,7 +764,7 @@ class ServerBuilder {
                 'message' => "Component removed successfully"
             ];
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             $this->pdo->rollback();
             error_log("Error removing component from configuration: " . $e->getMessage());
             return [
@@ -773,7 +773,7 @@ class ServerBuilder {
             ];
         }
     }
-    
+
     /**
      * Get complete configuration details with proper component handling
      * Now reads components from JSON columns in server_configurations table
@@ -1033,7 +1033,7 @@ class ServerBuilder {
                 $stmt->execute($updateValues);
             }
             
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log("Error updating server configuration table: " . $e->getMessage());
             throw $e;
         }
@@ -1252,23 +1252,37 @@ class ServerBuilder {
                 $nicConfig = [];
             }
 
+            // Detect format: nested {"nics": [...], ...} (from OnboardNICHandler) vs flat array
+            $isNestedFormat = isset($nicConfig['nics']) && is_array($nicConfig['nics']);
+
             if ($action === 'add') {
-                $nicConfig[] = [
+                $newNic = [
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if ($isNestedFormat) {
+                    $nicConfig['nics'][] = $newNic;
+                } else {
+                    $nicConfig[] = $newNic;
+                }
             } elseif ($action === 'remove') {
-                $nicConfig = array_filter($nicConfig, function($nic) use ($componentUuid) {
-                    return $nic['uuid'] !== $componentUuid;
-                });
-                $nicConfig = array_values($nicConfig);
+                if ($isNestedFormat) {
+                    // Filter within the nics array, preserve the rest of the structure
+                    $nicConfig['nics'] = array_values(array_filter($nicConfig['nics'], function($nic) use ($componentUuid) {
+                        return !is_array($nic) || ($nic['uuid'] ?? null) !== $componentUuid;
+                    }));
+                } else {
+                    $nicConfig = array_values(array_filter($nicConfig, function($nic) use ($componentUuid) {
+                        return !is_array($nic) || ($nic['uuid'] ?? null) !== $componentUuid;
+                    }));
+                }
             }
 
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET nic_config = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($nicConfig), $configUuid]);
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log("Error updating NIC configuration: " . $e->getMessage());
             throw $e;
         }
