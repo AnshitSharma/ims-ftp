@@ -54,56 +54,49 @@ class ChassisManager {
     }
     
     /**
+     * Traverse all chassis models, calling $callback for each.
+     * Callback receives ($model, $manufacturer, $series). Return non-null to stop and return that value.
+     */
+    private function traverseChassisModels($callback) {
+        $data = $this->loadChassisSpecifications();
+        if (!isset($data['chassis_specifications']['manufacturers'])) {
+            return null;
+        }
+        foreach ($data['chassis_specifications']['manufacturers'] as $manufacturer) {
+            if (!isset($manufacturer['series'])) continue;
+            foreach ($manufacturer['series'] as $series) {
+                if (!isset($series['models'])) continue;
+                foreach ($series['models'] as $model) {
+                    $result = $callback($model, $manufacturer, $series);
+                    if ($result !== null) {
+                        return $result;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * Load chassis specifications by UUID
      */
     public function loadChassisSpecsByUUID($uuid) {
         try {
-            $data = $this->loadChassisSpecifications();
-            
-            if (!isset($data['chassis_specifications']['manufacturers'])) {
-                return [
-                    'found' => false,
-                    'error' => 'Invalid chassis JSON structure: manufacturers not found'
-                ];
-            }
-            
-            // Search through manufacturers and series
-            $uuidsFound = [];
-            foreach ($data['chassis_specifications']['manufacturers'] as $manufacturer) {
-                if (!isset($manufacturer['series'])) continue;
-
-                foreach ($manufacturer['series'] as $series) {
-                    if (!isset($series['models'])) continue;
-
-                    foreach ($series['models'] as $model) {
-                        // Debug: collect all UUIDs found
-                        if (isset($model['uuid'])) {
-                            $uuidsFound[] = $model['uuid'];
-                        }
-
-                        if (isset($model['uuid']) && $model['uuid'] === $uuid) {
-                            return [
-                                'found' => true,
-                                'specifications' => $model,
-                                'manufacturer' => $manufacturer['manufacturer'],
-                                'series_name' => $series['series_name']
-                            ];
-                        }
-                    }
+            $result = $this->traverseChassisModels(function($model, $manufacturer, $series) use ($uuid) {
+                if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+                    return [
+                        'found' => true,
+                        'specifications' => $model,
+                        'manufacturer' => $manufacturer['manufacturer'],
+                        'series_name' => $series['series_name']
+                    ];
                 }
-            }
+                return null;
+            });
 
-            
-            return [
-                'found' => false,
-                'error' => "Chassis UUID not found: $uuid"
-            ];
-            
+            return $result ?? ['found' => false, 'error' => "Chassis UUID not found: $uuid"];
         } catch (Exception $e) {
-            return [
-                'found' => false,
-                'error' => $e->getMessage()
-            ];
+            return ['found' => false, 'error' => $e->getMessage()];
         }
     }
     
@@ -286,44 +279,29 @@ class ChassisManager {
      */
     private function countTotalModels($data) {
         $count = 0;
-        if (isset($data['chassis_specifications']['manufacturers'])) {
-            foreach ($data['chassis_specifications']['manufacturers'] as $manufacturer) {
-                if (isset($manufacturer['series'])) {
-                    foreach ($manufacturer['series'] as $series) {
-                        if (isset($series['models'])) {
-                            $count += count($series['models']);
-                        }
-                    }
-                }
-            }
+        try {
+            $this->traverseChassisModels(function() use (&$count) {
+                $count++;
+                return null; // continue traversal
+            });
+        } catch (Exception $e) {
+            // ignore
         }
         return $count;
     }
-    
+
     /**
      * Get all chassis UUIDs for validation
      */
     public function getAllChassisUUIDs() {
         try {
-            $data = $this->loadChassisSpecifications();
             $uuids = [];
-            
-            if (isset($data['chassis_specifications']['manufacturers'])) {
-                foreach ($data['chassis_specifications']['manufacturers'] as $manufacturer) {
-                    if (isset($manufacturer['series'])) {
-                        foreach ($manufacturer['series'] as $series) {
-                            if (isset($series['models'])) {
-                                foreach ($series['models'] as $model) {
-                                    if (isset($model['uuid'])) {
-                                        $uuids[] = $model['uuid'];
-                                    }
-                                }
-                            }
-                        }
-                    }
+            $this->traverseChassisModels(function($model) use (&$uuids) {
+                if (isset($model['uuid'])) {
+                    $uuids[] = $model['uuid'];
                 }
-            }
-            
+                return null; // continue traversal
+            });
             return $uuids;
         } catch (Exception $e) {
             error_log("Error getting chassis UUIDs: " . $e->getMessage());

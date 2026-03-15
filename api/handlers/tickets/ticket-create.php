@@ -53,50 +53,29 @@ try {
         exit;
     }
 
-    // Validate required fields
-    $title = $_POST['title'] ?? null;
-    $description = $_POST['description'] ?? null;
-    $itemsJson = $_POST['items'] ?? null;
-    $assignedTo = $_POST['assigned_to'] ?? null;
-    $assignedToRole = $_POST['assigned_to_role'] ?? null;
-
-    if (empty($title)) {
-        send_json_response(false, true, 400, "title is required", null);
-        exit;
-    }
-
-    if (empty($description)) {
-        send_json_response(false, true, 400, "description is required", null);
-        exit;
-    }
-
-    if (empty($itemsJson)) {
-        send_json_response(false, true, 400, "items array is required", null);
-        exit;
-    }
-
     // Parse items JSON
+    $itemsJson = $_POST['items'] ?? '[]';
     $items = json_decode($itemsJson, true);
     if (json_last_error() !== JSON_ERROR_NONE) {
         send_json_response(false, true, 400, "Invalid JSON format for items: " . json_last_error_msg(), null);
         exit;
     }
-
-    // Ensure items is an array
     if (!is_array($items)) {
         send_json_response(false, true, 400, "items must be an array", null);
         exit;
     }
-
     // If items is an associative array (object), wrap it in an array
     if (!empty($items) && !isset($items[0])) {
         $items = [$items];
     }
 
-    // Prepare ticket data
+    $assignedTo = $_POST['assigned_to'] ?? null;
+    $assignedToRole = $_POST['assigned_to_role'] ?? null;
+
+    // Prepare ticket data - TicketValidator handles field validation
     $ticketData = [
-        'title' => trim($title),
-        'description' => trim($description),
+        'title' => trim($_POST['title'] ?? ''),
+        'description' => trim($_POST['description'] ?? ''),
         'priority' => $_POST['priority'] ?? 'medium',
         'target_server_uuid' => $_POST['target_server_uuid'] ?? null,
         'assigned_to' => $assignedTo ? (int)$assignedTo : null,

@@ -117,17 +117,14 @@ class TicketValidator
         $errors = [];
         $validatedItems = [];
 
-        // Allow empty items array for draft tickets
         if (!is_array($items)) {
-            $errors[] = "Items must be an array";
             return [
                 'valid' => false,
-                'errors' => $errors,
+                'errors' => ["Items must be an array"],
                 'validated_items' => []
             ];
         }
 
-        // Empty array is allowed - tickets can be created without components
         if (empty($items)) {
             return [
                 'valid' => true,
@@ -136,8 +133,14 @@ class TicketValidator
             ];
         }
 
+        // Pre-load server config once for all items (fixes N+1)
+        $serverComponents = null;
+        if ($serverUuid) {
+            $serverComponents = $this->loadServerComponents($serverUuid);
+        }
+
         foreach ($items as $index => $item) {
-            $itemErrors = $this->validateSingleItem($item, $index, $serverUuid);
+            $itemErrors = $this->validateSingleItem($item, $index, $serverUuid, $serverComponents);
             if (!empty($itemErrors['errors'])) {
                 $errors = array_merge($errors, $itemErrors['errors']);
             } else {
@@ -160,7 +163,7 @@ class TicketValidator
      * @param string|null $serverUuid Server UUID for compatibility
      * @return array
      */
-    private function validateSingleItem($item, $index, $serverUuid = null)
+    private function validateSingleItem($item, $index, $serverUuid = null, $serverComponents = null)
     {
         $errors = [];
         $validatedItem = $item;
@@ -235,10 +238,10 @@ class TicketValidator
         }
 
         // Compatibility checking (if server UUID provided and item is validated)
-        if ($serverUuid && $validatedItem['is_validated'] == 1) {
-            $compatibilityResult = $this->checkItemCompatibility(
+        if ($serverUuid && $serverComponents !== null && $validatedItem['is_validated'] == 1) {
+            $compatibilityResult = $this->checkItemCompatibilityWithComponents(
                 $validatedItem,
-                $serverUuid
+                $serverComponents
             );
             $validatedItem['is_compatible'] = $compatibilityResult['compatible'] ? 1 : 0;
             $validatedItem['compatibility_notes'] = $compatibilityResult['notes'];
@@ -255,35 +258,34 @@ class TicketValidator
     }
 
     /**
-     * Check if item is compatible with target server
+     * Load server components once for reuse across multiple item checks
      *
-     * @param array $item Validated item
      * @param string $serverUuid Server UUID
-     * @return array ['compatible' => bool, 'notes' => string]
+     * @return array|null List of components or null if not found
      */
-    private function checkItemCompatibility($item, $serverUuid)
+    private function loadServerComponents($serverUuid)
     {
         try {
-            // Load server configuration
-            $stmt = $this->pdo->prepare("
-                SELECT * FROM server_configurations
-                WHERE config_uuid = ?
-                LIMIT 1
-            ");
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ? LIMIT 1");
             $stmt->execute([$serverUuid]);
             $server = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $server ? $this->getServerComponents($server) : null;
+        } catch (Exception $e) {
+            error_log("Server components load error: " . $e->getMessage());
+            return null;
+        }
+    }
 
-            if (!$server) {
-                return [
-                    'compatible' => false,
-                    'notes' => 'Server configuration not found'
-                ];
-            }
-
-            // Get all existing components from server
-            $existingComponents = $this->getServerComponents($server);
-            
-            // Prepare new component for check
+    /**
+     * Check if item is compatible with pre-loaded server components
+     *
+     * @param array $item Validated item
+     * @param array $existingComponents Pre-loaded server components
+     * @return array ['compatible' => bool, 'notes' => string]
+     */
+    private function checkItemCompatibilityWithComponents($item, $existingComponents)
+    {
+        try {
             $newComponent = [
                 'type' => $item['component_type'],
                 'uuid' => $item['component_uuid']
@@ -291,27 +293,21 @@ class TicketValidator
 
             $issues = [];
             $warnings = [];
-            $checkedCount = 0;
 
-            // Check compatibility against all existing components
             foreach ($existingComponents as $existingComponent) {
-                // Skip if comparing against itself (unlikely but possible)
-                if ($existingComponent['type'] === $newComponent['type'] && 
+                if ($existingComponent['type'] === $newComponent['type'] &&
                     $existingComponent['uuid'] === $newComponent['uuid']) {
                     continue;
                 }
 
-                // Check if these types interact
                 if ($this->compatibilityValidator->canComponentTypesBeCompatible($newComponent['type'], $existingComponent['type'])) {
                     $result = $this->compatibilityValidator->checkComponentPairCompatibility($newComponent, $existingComponent);
-                    $checkedCount++;
 
                     if (!$result['compatible']) {
                         foreach ($result['issues'] as $issue) {
                             $issues[] = "Conflict with {$existingComponent['type']}: $issue";
                         }
                     }
-                    
                     if (!empty($result['warnings'])) {
                         foreach ($result['warnings'] as $warning) {
                             $warnings[] = "Warning with {$existingComponent['type']}: $warning";
@@ -320,29 +316,18 @@ class TicketValidator
                 }
             }
 
-            // If no specific checks ran (e.g. first component), it's compatible
             if (empty($issues)) {
                 $notes = "Compatible";
                 if (!empty($warnings)) {
                     $notes .= " (Warnings: " . implode('; ', $warnings) . ")";
                 }
-                return [
-                    'compatible' => true,
-                    'notes' => $notes
-                ];
-            } else {
-                return [
-                    'compatible' => false,
-                    'notes' => implode('; ', $issues)
-                ];
+                return ['compatible' => true, 'notes' => $notes];
             }
 
+            return ['compatible' => false, 'notes' => implode('; ', $issues)];
         } catch (Exception $e) {
             error_log("Compatibility check error: " . $e->getMessage());
-            return [
-                'compatible' => false,
-                'notes' => 'Compatibility check failed: ' . $e->getMessage()
-            ];
+            return ['compatible' => false, 'notes' => 'Compatibility check failed: ' . $e->getMessage()];
         }
     }
 
@@ -551,61 +536,33 @@ class TicketValidator
     }
 
     /**
-     * Check if server exists
-     *
-     * @param string $serverUuid Server UUID
-     * @return bool
+     * Check if a record exists in a table by column
      */
+    private function recordExists($table, $column, $value)
+    {
+        try {
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM $table WHERE $column = ?");
+            $stmt->execute([$value]);
+            return $stmt->fetchColumn() > 0;
+        } catch (Exception $e) {
+            error_log("Existence check error ($table.$column): " . $e->getMessage());
+            return false;
+        }
+    }
+
     private function serverExists($serverUuid)
     {
-        try {
-            $stmt = $this->pdo->prepare("
-                SELECT COUNT(*)
-                FROM server_configurations
-                WHERE config_uuid = ?
-            ");
-            $stmt->execute([$serverUuid]);
-            return $stmt->fetchColumn() > 0;
-        } catch (Exception $e) {
-            error_log("Server existence check error: " . $e->getMessage());
-            return false;
-        }
+        return $this->recordExists('server_configurations', 'config_uuid', $serverUuid);
     }
 
-    /**
-     * Check if user exists
-     *
-     * @param int $userId User ID
-     * @return bool
-     */
     private function userExists($userId)
     {
-        try {
-            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ?");
-            $stmt->execute([$userId]);
-            return $stmt->fetchColumn() > 0;
-        } catch (Exception $e) {
-            error_log("User existence check error: " . $e->getMessage());
-            return false;
-        }
+        return $this->recordExists('users', 'id', $userId);
     }
 
-    /**
-     * Check if role exists
-     *
-     * @param int $roleId Role ID
-     * @return bool
-     */
     private function roleExists($roleId)
     {
-        try {
-            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM roles WHERE id = ?");
-            $stmt->execute([$roleId]);
-            return $stmt->fetchColumn() > 0;
-        } catch (Exception $e) {
-            error_log("Role existence check error: " . $e->getMessage());
-            return false;
-        }
+        return $this->recordExists('roles', 'id', $roleId);
     }
 
     /**

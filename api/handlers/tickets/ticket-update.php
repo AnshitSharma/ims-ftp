@@ -50,20 +50,9 @@
  */
 
 require_once(__DIR__ . '/../../../core/models/tickets/TicketManager.php');
-require_once(__DIR__ . '/../../../core/models/tickets/TicketValidator.php');
 require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 
 try {
-    // === COMPREHENSIVE DEBUG LOGGING ===
-    error_log("=== TICKET-UPDATE DEBUG START ===");
-    error_log("Request Method: " . $_SERVER['REQUEST_METHOD']);
-    error_log("Content-Type: " . ($_SERVER['CONTENT_TYPE'] ?? 'NOT SET'));
-    error_log("Content-Length: " . ($_SERVER['CONTENT_LENGTH'] ?? 'NOT SET'));
-    error_log("POST data: " . json_encode($_POST));
-    error_log("GET data: " . json_encode($_GET));
-    error_log("Raw input: " . file_get_contents('php://input'));
-    error_log("POST keys: " . implode(', ', array_keys($_POST)));
-
     // Use RequestHelper to parse input
     $_POST = RequestHelper::parseRequestData();
 
@@ -97,12 +86,15 @@ try {
         $oldStatus = $ticket['status'];
         $newStatus = $_POST['status'];
 
-        // Validate status transition
-        $validator = new TicketValidator($pdo);
-        $transitionValidation = $validator->validateStatusTransition($oldStatus, $newStatus);
-
-        if (!$transitionValidation['valid']) {
-            send_json_response(false, true, 400, $transitionValidation['error'], null);
+        // Validate status transition via WorkflowConfig
+        require_once(__DIR__ . '/../../../core/config/WorkflowConfig.php');
+        if (!in_array($newStatus, WorkflowConfig::getValidStatuses())) {
+            send_json_response(false, true, 400, "Invalid status: $newStatus", null);
+            exit;
+        }
+        $allowedTransitions = WorkflowConfig::getStatusTransitions()[$oldStatus] ?? [];
+        if (!in_array($newStatus, $allowedTransitions)) {
+            send_json_response(false, true, 400, "Cannot transition from '$oldStatus' to '$newStatus'. Allowed: " . implode(', ', $allowedTransitions), null);
             exit;
         }
 
@@ -130,33 +122,12 @@ try {
             case 'rejected':
                 $permissionNeeded = 'ticket.reject';
 
-                // Rejection reason required
-                error_log("=== REJECTION REASON VALIDATION ===");
-                error_log("isset(\$_POST['rejection_reason']): " . (isset($_POST['rejection_reason']) ? 'TRUE' : 'FALSE'));
-                error_log("empty(\$_POST['rejection_reason']): " . (empty($_POST['rejection_reason']) ? 'TRUE' : 'FALSE'));
-
-                if (isset($_POST['rejection_reason'])) {
-                    $reason = $_POST['rejection_reason'];
-                    error_log("rejection_reason VALUE: '" . $reason . "'");
-                    error_log("rejection_reason LENGTH: " . strlen($reason));
-                    error_log("rejection_reason TYPE: " . gettype($reason));
-                    error_log("rejection_reason === '': " . ($reason === '' ? 'TRUE' : 'FALSE'));
-                    error_log("rejection_reason === '0': " . ($reason === '0' ? 'TRUE' : 'FALSE'));
-                    error_log("rejection_reason == false: " . ($reason == false ? 'TRUE' : 'FALSE'));
-                } else {
-                    error_log("rejection_reason is NOT SET in \$_POST");
-                }
-
                 if (empty($_POST['rejection_reason'])) {
-                    error_log("VALIDATION FAILED: rejection_reason is empty");
                     $validationErrors[] = "rejection_reason is required when rejecting a ticket";
                 } else {
-                    error_log("VALIDATION PASSED: rejection_reason = '" . $_POST['rejection_reason'] . "'");
-                    // Put in BOTH updates (for validator) and extraData (for DB write)
                     $updates['rejection_reason'] = $_POST['rejection_reason'];
                     $extraData['rejection_reason'] = $_POST['rejection_reason'];
                 }
-                error_log("=== END REJECTION REASON VALIDATION ===");
                 break;
 
             case 'in_progress':
@@ -211,27 +182,19 @@ try {
 
     // FIELD UPDATES (title, description, priority) - only if non-empty values provided
     $hasFieldUpdates = false;
-    error_log("Checking field updates - title: " . (isset($_POST['title']) ? "'{$_POST['title']}'" : 'NOT SET') .
-             ", description: " . (isset($_POST['description']) ? "'{$_POST['description']}'" : 'NOT SET') .
-             ", priority: " . (isset($_POST['priority']) ? "'{$_POST['priority']}'" : 'NOT SET'));
 
     if (isset($_POST['title']) && $_POST['title'] !== '') {
         $hasFieldUpdates = true;
         $updates['title'] = $_POST['title'];
-        error_log("Will update title to: " . $_POST['title']);
     }
     if (isset($_POST['description']) && $_POST['description'] !== '') {
         $hasFieldUpdates = true;
         $updates['description'] = $_POST['description'];
-        error_log("Will update description to: " . $_POST['description']);
     }
     if (isset($_POST['priority']) && $_POST['priority'] !== '') {
         $hasFieldUpdates = true;
         $updates['priority'] = $_POST['priority'];
-        error_log("Will update priority to: " . $_POST['priority']);
     }
-
-    error_log("hasFieldUpdates = " . ($hasFieldUpdates ? 'true' : 'false'));
 
     if ($hasFieldUpdates) {
         // Can only edit fields in draft status

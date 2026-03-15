@@ -109,26 +109,15 @@ if (!function_exists('authenticateWithJWT')) {
 if (!function_exists('authenticateUser')) {
     function authenticateUser($pdo, $username, $password) {
         try {
-            error_log("Authentication attempt for: $username");
-            
             $stmt = $pdo->prepare("SELECT id, username, email, firstname, lastname, password FROM users WHERE username = ? AND status = 'active'");
             $stmt->execute([$username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($user) {
-                error_log("User found: " . $user['username'] . " (ID: " . $user['id'] . ")");
-                
-                if (password_verify($password, $user['password'])) {
-                    error_log("Authentication successful for user: " . $user['username']);
-                    unset($user['password']); // Remove password from return data
-                    return $user;
-                } else {
-                    error_log("Password verification failed for user: " . $user['username']);
-                }
-            } else {
-                error_log("User not found or inactive: $username");
+
+            if ($user && password_verify($password, $user['password'])) {
+                unset($user['password']);
+                return $user;
             }
-            
+
             return false;
         } catch (Exception $e) {
             error_log("Authentication error: " . $e->getMessage());
@@ -707,35 +696,20 @@ if (!function_exists('getComponentById')) {
 if (!function_exists('addComponent')) {
     function addComponent($pdo, $type, $data, $userId) {
         try {
-            error_log("=== addComponent V2.0 WITH UUID VALIDATION: type=$type, UUID=" . ($data['UUID'] ?? 'NOT SET') . " ===");
-
-            // CRITICAL: UUID VALIDATION - Component must exist in JSON specifications
+            // UUID VALIDATION - Component must exist in JSON specifications
             if (isset($data['UUID']) && !empty($data['UUID'])) {
-                error_log("UUID validation starting for $type with UUID: {$data['UUID']}");
                 require_once(__DIR__ . '/../models/components/ComponentDataService.php');
                 $componentService = ComponentDataService::getInstance();
 
-                // Map table names to component types (table names are just the component type without 'inventory' suffix)
-                // Only validate UUIDs for components that have JSON specifications
                 $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'sfp'];
 
                 if (in_array($type, $componentTypes)) {
-                    error_log("Component type '$type' requires UUID validation");
-                    $validationResult = $componentService->validateComponentUuid($type, $data['UUID']);
-                    error_log("Validation result for $type UUID {$data['UUID']}: " . ($validationResult ? 'VALID' : 'INVALID'));
-
-                    if (!$validationResult) {
-                        error_log("BLOCKING: UUID '{$data['UUID']}' not found in $type JSON");
+                    if (!$componentService->validateComponentUuid($type, $data['UUID'])) {
                         throw new Exception("Component UUID '{$data['UUID']}' not found in $type JSON specifications");
                     }
-                    error_log("UUID validation passed for $type: {$data['UUID']}");
-                } else {
-                    error_log("Component type '$type' does not require UUID validation");
                 }
             } else {
-                // Generate UUID if not provided
                 $data['UUID'] = generateUUID();
-                error_log("Warning: No UUID provided, generated new UUID: {$data['UUID']}");
             }
 
             // Prepare column names and values
@@ -743,11 +717,8 @@ if (!function_exists('addComponent')) {
             $placeholders = array_fill(0, count($columns), '?');
             $values = array_values($data);
 
-            // Map component type to table name (add 'inventory' suffix)
             $tableName = $type . 'inventory';
             $sql = "INSERT INTO $tableName (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
-
-            error_log("Inserting $type data: " . json_encode($data));
 
             $stmt = $pdo->prepare($sql);
             $result = $stmt->execute($values);
@@ -951,41 +922,18 @@ if (!function_exists('getUserById')) {
 if (!function_exists('logActivity')) {
     function logActivity($pdo, $userId, $action, $module, $objectId = null, $description = '') {
         try {
-            // Ensure PDO throws exceptions on errors
-            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-            $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
-            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
-
-            error_log("[logActivity] Called with: userId=$userId, action='$action', module='$module', objectId=$objectId");
-
             $stmt = $pdo->prepare("
                 INSERT INTO inventory_log (user_id, component_type, component_id, action, notes, ip_address, user_agent, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ");
 
-            if (!$stmt) {
-                error_log("[logActivity] Prepare failed: " . json_encode($pdo->errorInfo()));
-                return false;
-            }
-
-            $params = [$userId, $module, $objectId, $action, $description, $ipAddress, $userAgent];
-            $result = $stmt->execute($params);
-
-            if ($result) {
-                error_log("[logActivity] SUCCESS - Inserted log entry");
-            } else {
-                error_log("[logActivity] Execute failed: " . json_encode($stmt->errorInfo()));
-            }
-
-            return $result;
-
-        } catch (PDOException $e) {
-            error_log("[logActivity] PDOException: " . $e->getMessage());
-            error_log("[logActivity] Error Code: " . $e->getCode());
-            return false;
+            return $stmt->execute([
+                $userId, $module, $objectId, $action, $description,
+                $_SERVER['REMOTE_ADDR'] ?? null,
+                $_SERVER['HTTP_USER_AGENT'] ?? null
+            ]);
         } catch (Exception $e) {
-            error_log("[logActivity] Exception: " . $e->getMessage());
+            error_log("[logActivity] Error: " . $e->getMessage());
             return false;
         }
     }

@@ -23,39 +23,33 @@ class DataExtractionUtilities {
         }
         return $this->paths;
     }
-    
+
     /**
      * Load JSON data with caching
      */
     private function loadJsonData($type) {
-        $cacheKey = $type . '_data';
-        
-        // Check cache validity
-        if (isset($this->jsonCache[$cacheKey]) && 
-            isset($this->jsonCache[$cacheKey . '_timestamp']) &&
-            (time() - $this->jsonCache[$cacheKey . '_timestamp']) < $this->cacheTimeout) {
-            return $this->jsonCache[$cacheKey];
+        if (isset($this->jsonCache[$type]) &&
+            (time() - $this->jsonCache[$type]['timestamp']) < $this->cacheTimeout) {
+            return $this->jsonCache[$type]['data'];
         }
-        
+
         $path = $this->getPaths()[$type] ?? null;
         if (!$path || !file_exists($path)) {
             throw new Exception("JSON file not found for type: $type");
         }
-        
+
         $jsonContent = file_get_contents($path);
         if ($jsonContent === false) {
             throw new Exception("Failed to read JSON file for type: $type");
         }
-        
+
         $data = json_decode($jsonContent, true);
         if ($data === null) {
             throw new Exception("Invalid JSON in file for type: $type - " . json_last_error_msg());
         }
-        
-        // Cache the data
-        $this->jsonCache[$cacheKey] = $data;
-        $this->jsonCache[$cacheKey . '_timestamp'] = time();
-        
+
+        $this->jsonCache[$type] = ['data' => $data, 'timestamp' => time()];
+
         return $data;
     }
     
@@ -64,44 +58,39 @@ class DataExtractionUtilities {
      */
     private function findComponentByUuid($type, $uuid) {
         $data = $this->loadJsonData($type);
-        
-        // Handle different JSON structures
+
         switch ($type) {
             case 'chassis':
                 return $this->findChassisInData($data, $uuid);
-            case 'storage':
-                return $this->findStorageInData($data, $uuid);
-            case 'motherboard':
-                return $this->findMotherboardInData($data, $uuid);
             case 'cpu':
-                return $this->findCpuInData($data, $uuid);
+                // CPU uses both 'UUID' and 'uuid' keys
+                return $this->findInBrandModels($data, $uuid, true);
+            case 'storage':
+            case 'motherboard':
             case 'ram':
-                return $this->findRamInData($data, $uuid);
+                return $this->findInBrandModels($data, $uuid);
             case 'pciecard':
-                return $this->findPCIeCardInData($data, $uuid);
             case 'hbacard':
-                return $this->findHBACardInData($data, $uuid);
+                return $this->findInCategoryModels($data, $uuid);
             case 'nic':
                 return $this->findNICInData($data, $uuid);
             default:
                 return null;
         }
     }
-    
+
     /**
-     * Find chassis in chassis data structure
+     * Find chassis in chassis data structure (manufacturer→series→models)
      */
     private function findChassisInData($data, $uuid) {
         if (!isset($data['chassis_specifications']['manufacturers'])) {
             return null;
         }
-        
+
         foreach ($data['chassis_specifications']['manufacturers'] as $manufacturer) {
             if (!isset($manufacturer['series'])) continue;
-            
             foreach ($manufacturer['series'] as $series) {
                 if (!isset($series['models'])) continue;
-                
                 foreach ($series['models'] as $model) {
                     if (isset($model['uuid']) && $model['uuid'] === $uuid) {
                         return $model;
@@ -109,156 +98,62 @@ class DataExtractionUtilities {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     /**
-     * Find storage in storage data structure
+     * Generic finder for brand→models hierarchy (storage, motherboard, ram, cpu)
      */
-    private function findStorageInData($data, $uuid) {
+    private function findInBrandModels($data, $uuid, $caseInsensitiveUuid = false) {
         foreach ($data as $brand) {
             if (!isset($brand['models'])) continue;
-            
             foreach ($brand['models'] as $model) {
-                if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+                $modelUuid = $caseInsensitiveUuid
+                    ? ($model['UUID'] ?? $model['uuid'] ?? null)
+                    : ($model['uuid'] ?? null);
+                if ($modelUuid === $uuid) {
                     return $model;
                 }
             }
         }
-        
         return null;
     }
-    
+
     /**
-     * Find motherboard in motherboard data structure
+     * Generic finder for category→models hierarchy (pciecard, hbacard)
+     * Merges category-level fields (component_subtype, brand, series) into model
      */
-    private function findMotherboardInData($data, $uuid) {
-        foreach ($data as $brand) {
-            if (!isset($brand['models'])) continue;
-            
-            foreach ($brand['models'] as $model) {
-                if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+    private function findInCategoryModels($data, $uuid) {
+        foreach ($data as $category) {
+            if (!isset($category['models'])) continue;
+            foreach ($category['models'] as $model) {
+                if (isset($model['UUID']) && $model['UUID'] === $uuid) {
+                    foreach (['component_subtype', 'brand', 'series'] as $field) {
+                        if (isset($category[$field])) {
+                            $model[$field] = $category[$field];
+                        }
+                    }
                     return $model;
                 }
             }
         }
-        
-        return null;
-    }
-    
-    /**
-     * Find CPU in CPU data structure
-     */
-    private function findCpuInData($data, $uuid) {
-        // CPU JSON structure: brand → models array with UUID field
-        foreach ($data as $brand) {
-            if (isset($brand['models'])) {
-                foreach ($brand['models'] as $model) {
-                    // Check both 'UUID' and 'uuid' for case-insensitive matching
-                    $modelUuid = $model['UUID'] ?? $model['uuid'] ?? null;
-                    if ($modelUuid === $uuid) {
-                        return $model;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-    
-    /**
-     * Find RAM in RAM data structure
-     */
-    private function findRamInData($data, $uuid) {
-        // RAM JSON structure may vary - implement based on actual structure
-        foreach ($data as $brand) {
-            if (isset($brand['models'])) {
-                foreach ($brand['models'] as $model) {
-                    if (isset($model['uuid']) && $model['uuid'] === $uuid) {
-                        return $model;
-                    }
-                }
-            }
-        }
-
         return null;
     }
 
     /**
-     * Find PCIe card in PCI data structure
-     */
-    private function findPCIeCardInData($data, $uuid) {
-        // PCIe JSON structure: array of categories with models
-        // component_subtype is at category level, must merge it into model data
-        foreach ($data as $category) {
-            if (isset($category['models'])) {
-                foreach ($category['models'] as $model) {
-                    if (isset($model['UUID']) && $model['UUID'] === $uuid) {
-                        // Merge category-level data (like component_subtype) into model
-                        if (isset($category['component_subtype'])) {
-                            $model['component_subtype'] = $category['component_subtype'];
-                        }
-                        if (isset($category['brand'])) {
-                            $model['brand'] = $category['brand'];
-                        }
-                        if (isset($category['series'])) {
-                            $model['series'] = $category['series'];
-                        }
-                        return $model;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Find HBA card in HBA card data structure
-     * HBA JSON structure: array of categories with models (UUID field is capitalized)
-     */
-    private function findHBACardInData($data, $uuid) {
-        foreach ($data as $category) {
-            if (isset($category['models'])) {
-                foreach ($category['models'] as $model) {
-                    // HBA cards use capitalized 'UUID' field
-                    if (isset($model['UUID']) && $model['UUID'] === $uuid) {
-                        // Merge category-level data into model
-                        if (isset($category['component_subtype'])) {
-                            $model['component_subtype'] = $category['component_subtype'];
-                        }
-                        if (isset($category['brand'])) {
-                            $model['brand'] = $category['brand'];
-                        }
-                        if (isset($category['series'])) {
-                            $model['series'] = $category['series'];
-                        }
-                        return $model;
-                    }
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Find NIC in NIC data structure
-     * NIC JSON structure: brand → series (array) → models (with lowercase uuid)
+     * Find NIC in NIC data structure (brand→series→models)
      */
     private function findNICInData($data, $uuid) {
         foreach ($data as $brand) {
-            if (isset($brand['series'])) {
-                foreach ($brand['series'] as $series) {
-                    if (isset($series['models'])) {
-                        foreach ($series['models'] as $model) {
-                            if (isset($model['uuid']) && $model['uuid'] === $uuid) {
-                                // Merge brand and series data into model
-                                $model['brand'] = $brand['brand'] ?? null;
-                                $model['series_name'] = $series['name'] ?? null;
-                                return $model;
-                            }
-                        }
+            if (!isset($brand['series'])) continue;
+            foreach ($brand['series'] as $series) {
+                if (!isset($series['models'])) continue;
+                foreach ($series['models'] as $model) {
+                    if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+                        $model['brand'] = $brand['brand'] ?? null;
+                        $model['series_name'] = $series['name'] ?? null;
+                        return $model;
                     }
                 }
             }
@@ -747,17 +642,13 @@ class DataExtractionUtilities {
      */
     public function getCacheStats() {
         $stats = [];
-        foreach ($this->jsonCache as $key => $value) {
-            if (strpos($key, '_timestamp') === false) {
-                $timestampKey = $key . '_timestamp';
-                $stats[$key] = [
-                    'cached' => true,
-                    'timestamp' => $this->jsonCache[$timestampKey] ?? 0,
-                    'age_seconds' => time() - ($this->jsonCache[$timestampKey] ?? time())
-                ];
-            }
+        foreach ($this->jsonCache as $type => $entry) {
+            $stats[$type] = [
+                'cached' => true,
+                'timestamp' => $entry['timestamp'],
+                'age_seconds' => time() - $entry['timestamp']
+            ];
         }
-
         return $stats;
     }
 
