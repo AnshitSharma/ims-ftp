@@ -244,59 +244,6 @@ function handleGetCompatibleComponents() {
 
     // DEPRECATED: Use server-get-compatible endpoint instead
     send_json_response(0, 1, 501, "This endpoint is deprecated. Use 'server-get-compatible' instead.");
-    return;
-
-    try {
-        $componentCompatibility = new ComponentCompatibility($pdo);
-        $baseComponent = ['type' => $baseComponentType, 'uuid' => $baseComponentUuid];
-        
-        if ($targetType) {
-            // Get compatible components for specific type
-            $compatibleComponents = $compatibilityEngine->getCompatibleComponents($baseComponent, $targetType, $availableOnly);
-            
-            // Apply limit
-            if ($limit > 0) {
-                $compatibleComponents = array_slice($compatibleComponents, 0, $limit);
-            }
-            
-            $response = [
-                'base_component' => $baseComponent,
-                'target_type' => $targetType,
-                'compatible_components' => $compatibleComponents,
-                'total_found' => count($compatibleComponents)
-            ];
-        } else {
-            // Get compatible components for all types
-            $allTypes = ['cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy'];
-            $allCompatible = [];
-            
-            foreach ($allTypes as $type) {
-                if ($type !== $baseComponentType) {
-                    $typeComponents = $compatibilityEngine->getCompatibleComponents($baseComponent, $type, $availableOnly);
-                    
-                    if ($limit > 0) {
-                        $typeComponents = array_slice($typeComponents, 0, $limit);
-                    }
-                    
-                    $allCompatible[$type] = $typeComponents;
-                }
-            }
-            
-            $response = [
-                'base_component' => $baseComponent,
-                'compatible_components' => $allCompatible,
-                'summary' => array_map(function($components) {
-                    return ['count' => count($components)];
-                }, $allCompatible)
-            ];
-        }
-        
-        send_json_response(1, 1, 200, "Compatible components retrieved", $response);
-        
-    } catch (Exception $e) {
-        error_log("Error getting compatible components: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to get compatible components");
-    }
 }
 
 /**
@@ -396,7 +343,7 @@ function handleAnalyzeConfiguration() {
         $componentCompatibility = new ComponentCompatibility($pdo);
         
         // Validate the configuration structure
-        $validationResult = $compatibilityEngine->validateServerConfiguration($configuration);
+        $validationResult = $componentCompatibility->validateServerConfiguration($configuration);
         
         $response = [
             'configuration_analysis' => $validationResult,
@@ -543,7 +490,7 @@ function handleGetCompatibilityStatistics() {
     
     try {
         $componentCompatibility = new ComponentCompatibility($pdo);
-        $statistics = $compatibilityEngine->getCompatibilityStatistics($timeframe);
+        $statistics = $componentCompatibility->getCompatibilityStatistics($timeframe);
         
         $response = [
             'timeframe' => $timeframe,
@@ -964,6 +911,12 @@ function generateConfigurationRecommendations($validationResult) {
  * Get detailed compatibility statistics
  */
 function getDetailedCompatibilityStats($pdo, $timeframe) {
+    // Whitelist allowed timeframe values to prevent SQL injection
+    $allowedTimeframes = ['1 HOUR', '6 HOUR', '12 HOUR', '24 HOUR', '7 DAY', '30 DAY'];
+    if (!in_array(strtoupper($timeframe), $allowedTimeframes)) {
+        $timeframe = '24 HOUR';
+    }
+
     try {
         $stats = [];
         

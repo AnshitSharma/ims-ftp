@@ -34,7 +34,6 @@ class SFPPortTracker {
             $this->nicPortAssignments[$nicUuid] = [];
         }
         $this->nicPortAssignments[$nicUuid][$portIndex] = $sfpUuid;
-        error_log("SFPPortTracker: Assigned SFP $sfpUuid to NIC $nicUuid port $portIndex");
     }
 
     /**
@@ -46,7 +45,6 @@ class SFPPortTracker {
      */
     public function setNICPortCount($nicUuid, $portCount) {
         $this->nicPortCounts[$nicUuid] = $portCount;
-        error_log("SFPPortTracker: Set NIC $nicUuid port count to $portCount");
     }
 
     /**
@@ -57,9 +55,7 @@ class SFPPortTracker {
      * @return bool True if port is occupied, false otherwise
      */
     public function isPortOccupied($nicUuid, $portIndex) {
-        $occupied = isset($this->nicPortAssignments[$nicUuid][$portIndex]);
-        error_log("SFPPortTracker: Port $portIndex on NIC $nicUuid is " . ($occupied ? "occupied" : "available"));
-        return $occupied;
+        return isset($this->nicPortAssignments[$nicUuid][$portIndex]);
     }
 
     /**
@@ -100,7 +96,6 @@ class SFPPortTracker {
             }
         }
 
-        error_log("SFPPortTracker: NIC $nicUuid has " . count($availablePorts) . " available ports out of $totalPorts");
         return $availablePorts;
     }
 
@@ -147,9 +142,7 @@ class SFPPortTracker {
      */
     public function removeSFPAssignment($nicUuid, $portIndex) {
         if (isset($this->nicPortAssignments[$nicUuid][$portIndex])) {
-            $sfpUuid = $this->nicPortAssignments[$nicUuid][$portIndex];
             unset($this->nicPortAssignments[$nicUuid][$portIndex]);
-            error_log("SFPPortTracker: Removed SFP $sfpUuid from NIC $nicUuid port $portIndex");
         }
     }
 
@@ -162,7 +155,6 @@ class SFPPortTracker {
     public function clearNICAssignments($nicUuid) {
         if (isset($this->nicPortAssignments[$nicUuid])) {
             unset($this->nicPortAssignments[$nicUuid]);
-            error_log("SFPPortTracker: Cleared all SFP assignments for NIC $nicUuid");
         }
     }
 

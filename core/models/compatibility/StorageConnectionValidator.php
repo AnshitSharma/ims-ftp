@@ -42,19 +42,13 @@ class StorageConnectionValidator {
      */
     public function validate($configUuid, $storageUuid, $existingComponents) {
         try {
-            error_log("StorageConnectionValidator::validate START");
-            error_log("Config: $configUuid, Storage: $storageUuid");
-            error_log("Existing components structure: " . json_encode(array_keys($existingComponents)));
-
             $errors = [];
             $warnings = [];
             $info = [];
             $connectionPaths = [];
 
             // Get storage specifications from JSON
-            error_log("Getting storage specs for UUID: $storageUuid");
             $storageSpecs = $this->getStorageSpecs($storageUuid);
-            error_log("Storage specs loaded: " . ($storageSpecs ? "YES" : "NO"));
         if (!$storageSpecs) {
             return [
                 'valid' => false,

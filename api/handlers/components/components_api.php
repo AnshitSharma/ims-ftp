@@ -27,8 +27,8 @@ if (preg_match('/^([a-z]+)-(get|add|update|delete|list)$/', $action, $matches)) 
     send_json_response(0, 1, 400, "Invalid action format");
 }
 
-// Map component types to database tables
-$tableMap = [
+// Map component types to database tables (shared across all handler functions)
+$GLOBALS['_componentTableMap'] = [
     'chassis' => 'chassisinventory',
     'cpu' => 'cpuinventory',
     'ram' => 'raminventory',
@@ -37,6 +37,7 @@ $tableMap = [
     'nic' => 'nicinventory',
     'caddy' => 'caddyinventory'
 ];
+$tableMap = $GLOBALS['_componentTableMap'];
 
 if (!isset($tableMap[$componentType])) {
     send_json_response(0, 1, 400, "Invalid component type: $componentType");
@@ -635,45 +636,14 @@ function getStatusText($statusCode) {
     return $statusMap[$statusCode] ?? 'Unknown';
 }
 
-/**
- * Generate UUID v4
- */
-function generateUUID() {
-    return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-        mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-        mt_rand(0, 0xffff),
-        mt_rand(0, 0x0fff) | 0x4000,
-        mt_rand(0, 0x3fff) | 0x8000,
-        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-    );
-}
-
-/**
- * Check if server system is initialized
- */
-function serverSystemInitialized($pdo) {
-    try {
-        $stmt = $pdo->prepare("SHOW TABLES LIKE 'server_configurations'");
-        $stmt->execute();
-        return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
-        return false;
-    }
-}
+// generateUUID() and serverSystemInitialized() are provided by BaseFunctions.php
 
 /**
  * Enhanced component availability checking with detailed status information
  */
 function checkComponentAvailabilityDetailed($pdo, $componentType, $componentUuid) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return [
             'available' => false,
@@ -748,15 +718,8 @@ function checkComponentAvailabilityDetailed($pdo, $componentType, $componentUuid
  * Get alternative components when the requested one is not available
  */
 function getAlternativeComponents($pdo, $componentType, $excludeUuid = null, $limit = 5) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return [];
     }
@@ -794,15 +757,8 @@ function getAlternativeComponents($pdo, $componentType, $excludeUuid = null, $li
  * Enhanced component status update with validation
  */
 function updateComponentStatusWithValidation($pdo, $componentType, $componentUuid, $newStatus, $reason = '', $userId = null) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return [
             'success' => false,
@@ -916,15 +872,8 @@ function validateComponentForConfiguration($pdo, $componentType, $componentUuid,
  * Bulk update component status
  */
 function bulkUpdateComponentStatus($pdo, $componentType, $componentUuids, $newStatus, $reason = '', $userId = null) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return [
             'success' => false,
@@ -979,15 +928,8 @@ function bulkUpdateComponentStatus($pdo, $componentType, $componentUuids, $newSt
  * Export components to CSV
  */
 function exportComponentsToCSV($pdo, $componentType, $filters = []) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return false;
     }
@@ -1057,15 +999,8 @@ function exportComponentsToCSV($pdo, $componentType, $filters = []) {
  * Import components from CSV
  */
 function importComponentsFromCSV($pdo, $componentType, $csvFile, $options = []) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
-    
+    $tableMap = $GLOBALS['_componentTableMap'];
+
     if (!isset($tableMap[$componentType])) {
         return [
             'success' => false,

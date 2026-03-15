@@ -388,7 +388,6 @@ class ServerBuilder {
             $ownTransaction = !$this->pdo->inTransaction();
             if ($ownTransaction) {
                 $this->pdo->beginTransaction();
-                error_log("RACE-FIX: Transaction started for component $componentUuid");
             }
 
             // Phase 1.5: Validate compatibility with existing components (flexible order)
@@ -407,10 +406,8 @@ class ServerBuilder {
                 // Check if this is an orphaned record (component exists in config table but not properly assigned)
                 $componentDetails = $this->getComponentByUuid($componentType, $componentUuid);
                 if ($componentDetails && $componentDetails['ServerUUID'] !== $configUuid) {
-                    error_log("Found orphaned record: Component $componentUuid exists in config table but ServerUUID doesn't match");
-                    error_log("Component ServerUUID: {$componentDetails['ServerUUID']}, Expected: $configUuid");
-
-                    // Note: Component data is now stored in JSON columns, no cleanup needed
+                    // Orphaned record: component exists in config table but ServerUUID doesn't match
+                    // Component data is now stored in JSON columns, no cleanup needed
                 } else {
                     if ($ownTransaction && $this->pdo->inTransaction()) {
                         $this->pdo->rollback();
@@ -483,9 +480,6 @@ class ServerBuilder {
                 }
             } catch (Exception $compatError) {
                 error_log("Error in component validation for type '$componentType': " . $compatError->getMessage());
-                error_log("Stack trace: " . $compatError->getTraceAsString());
-                error_log("ComponentCompatibility.php exists: " . (file_exists(__DIR__ . '/ComponentCompatibility.php') ? 'yes' : 'no'));
-                error_log("CompatibilityEngine.php exists: " . (file_exists(__DIR__ . '/CompatibilityEngine.php') ? 'yes' : 'no'));
                 // Return error instead of skipping
                 if ($ownTransaction && $this->pdo->inTransaction()) {
                     $this->pdo->rollback();
@@ -529,7 +523,6 @@ class ServerBuilder {
                     'Location' => null,
                     'Notes' => 'Virtual component for testing'
                 ];
-                error_log("Virtual config: Created dummy component details for $componentType $componentUuid");
             }
 
             // Extract the actual serial number from component details (in case it wasn't provided in options)
@@ -613,9 +606,6 @@ class ServerBuilder {
             $serverRackPosition = $serverConfig['rack_position'] ?? null;
             $serverRackPosition = $serverConfig['rack_position'] ?? null;
 
-
-            // Log server configuration data for component assignment
-            error_log("Component assignment: Server $configUuid has Location='$serverLocation', RackPosition='$serverRackPosition'");
 
             // RACE CONDITION FIX: Transaction already started at beginning of method
             // Component is already locked with SELECT FOR UPDATE
@@ -759,17 +749,13 @@ class ServerBuilder {
 
             // SPECIAL HANDLING: If removing a motherboard, also remove its onboard NICs
             if ($componentType === 'motherboard') {
-                error_log("Removing motherboard $componentUuid - delegating onboard NIC removal to OnboardNICHandler");
-
-                // Use OnboardNICHandler for centralized onboard NIC management
+                // Remove onboard NICs via OnboardNICHandler
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $removeResult = $nicHandler->removeOnboardNICs($componentUuid, $configUuid);
 
-                if ($removeResult['success']) {
-                    error_log("Successfully removed {$removeResult['removed_count']} onboard NIC(s) via OnboardNICHandler");
-                } else {
-                    error_log("Warning: OnboardNICHandler failed to remove onboard NICs: " . ($removeResult['error'] ?? 'Unknown error'));
+                if (!$removeResult['success']) {
+                    error_log("Warning: Failed to remove onboard NICs: " . ($removeResult['error'] ?? 'Unknown error'));
                 }
             }
 
@@ -827,10 +813,8 @@ class ServerBuilder {
             if ($this->configCache !== null) {
                 $cached = $this->configCache->getConfiguration($configUuid);
                 if ($cached !== null) {
-                    error_log("ConfigurationCache HIT for {$configUuid}");
                     return $cached;
                 }
-                error_log("ConfigurationCache MISS for {$configUuid}");
             }
 
             // Get base configuration
@@ -1037,7 +1021,6 @@ class ServerBuilder {
                                 throw new Exception("No available PCIe slots for HBA card (requires $slotSize slot)");
                             }
 
-                            error_log("HBA-TRACK: Auto-assigned HBA card to slot: $slotPosition");
                         }
 
                         // Build HBA configuration JSON
@@ -1056,14 +1039,10 @@ class ServerBuilder {
                         $updateFields[] = "hbacard_uuid = ?";
                         $updateValues[] = $componentUuid;
 
-                        error_log("HBA-TRACK: Stored HBA config - UUID: $componentUuid, Slot: $slotPosition");
-
                     } elseif ($action === 'remove') {
                         // Clear both old and new format
                         $updateFields[] = "hbacard_config = NULL";
                         $updateFields[] = "hbacard_uuid = NULL";
-
-                        error_log("HBA-TRACK: Removed HBA card from configuration");
                     }
                     break;
             }
@@ -1400,7 +1379,6 @@ class ServerBuilder {
 
                 $sfpData[] = $sfpEntry;
 
-                error_log("Added SFP to configuration: UUID=$componentUuid, NIC=$parentNicUuid, Port=$portIndex");
 
             } elseif ($action === 'remove') {
                 // Remove SFP by UUID and optionally serial number
@@ -1417,7 +1395,6 @@ class ServerBuilder {
                 });
                 $sfpData = array_values($sfpData); // Re-index array
 
-                error_log("Removed SFP from configuration: UUID=$componentUuid" . ($serialNumber ? ", Serial=$serialNumber" : ""));
             }
 
             // Wrap in structure
@@ -1425,8 +1402,6 @@ class ServerBuilder {
 
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET sfp_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($sfpConfig), $configUuid]);
-
-            error_log("SFP configuration updated successfully for config $configUuid");
 
         } catch (Exception $e) {
             error_log("Error updating SFP configuration: " . $e->getMessage());
@@ -1462,20 +1437,16 @@ class ServerBuilder {
                 }
 
                 $pcieConfig[] = $pcieEntry;
-                error_log("Added PCIe card to configuration: UUID=$componentUuid, Quantity=$quantity" . ($slotPosition ? ", Slot=$slotPosition" : ""));
 
             } elseif ($action === 'remove') {
                 $pcieConfig = array_filter($pcieConfig, function($pcie) use ($componentUuid) {
                     return $pcie['uuid'] !== $componentUuid;
                 });
                 $pcieConfig = array_values($pcieConfig); // Re-index array
-                error_log("Removed PCIe card from configuration: UUID=$componentUuid");
             }
 
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET pciecard_configurations = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($pcieConfig), $configUuid]);
-
-            error_log("PCIe card configuration updated successfully for config $configUuid");
 
         } catch (Exception $e) {
             error_log("Error updating PCIe card configuration: " . $e->getMessage());
@@ -1488,66 +1459,32 @@ class ServerBuilder {
      */
     private function createOnboardNICsFromMotherboard($configUuid, $motherboardUuid) {
         try {
-            error_log("========================================");
-            error_log("=== START createOnboardNICsFromMotherboard ===");
-            error_log("Config UUID: $configUuid");
-            error_log("Motherboard UUID: $motherboardUuid");
-            error_log("========================================");
-
             // Load motherboard JSON specs using ComponentDataService
             require_once __DIR__ . '/../components/ComponentDataService.php';
             $dataService = ComponentDataService::getInstance($this->pdo);
 
-            error_log("ComponentDataService instance created");
-            error_log("Calling findComponentByUuid for motherboard...");
-
             $motherboardSpecs = $dataService->findComponentByUuid('motherboard', $motherboardUuid);
 
-            error_log("findComponentByUuid returned: " . ($motherboardSpecs ? 'DATA' : 'NULL'));
-
             if (!$motherboardSpecs) {
-                error_log("ERROR: Could not load motherboard specs for UUID $motherboardUuid");
-                error_log("=== END createOnboardNICsFromMotherboard (NO SPECS) ===");
                 return;
-            }
-
-            error_log("Motherboard specs loaded successfully");
-            error_log("Motherboard data keys: " . implode(', ', array_keys($motherboardSpecs)));
-            error_log("Has 'networking' key: " . (isset($motherboardSpecs['networking']) ? 'YES' : 'NO'));
-
-            if (isset($motherboardSpecs['networking'])) {
-                error_log("Networking keys: " . implode(', ', array_keys($motherboardSpecs['networking'])));
-                error_log("Has 'onboard_nics' key: " . (isset($motherboardSpecs['networking']['onboard_nics']) ? 'YES' : 'NO'));
             }
 
             // Check if motherboard has onboard NICs
             $onboardNics = $motherboardSpecs['networking']['onboard_nics'] ?? [];
-            error_log("onboard_nics array count: " . count($onboardNics));
 
             if (empty($onboardNics)) {
-                error_log("WARNING: Motherboard $motherboardUuid has no onboard NICs in JSON specs");
-                error_log("=== END createOnboardNICsFromMotherboard (NO NICS) ===");
                 return;
             }
-
-            error_log("Found " . count($onboardNics) . " onboard NIC(s) - proceeding with creation");
 
             // Create each onboard NIC
             foreach ($onboardNics as $index => $nicSpec) {
                 $onboardNicIndex = $index + 1;
 
-                error_log("--- Processing onboard NIC #$onboardNicIndex ---");
-                error_log("NIC Spec data: " . json_encode($nicSpec));
-
                 // Generate a unique UUID for this onboard NIC
                 $onboardNicUuid = "onboard-nic-" . substr($motherboardUuid, 0, 24) . "-{$onboardNicIndex}";
 
-                error_log("Generated UUID: $onboardNicUuid");
-
                 // Prepare data for insert
                 $serialNumber = "ONBOARD-NIC-{$motherboardUuid}-{$onboardNicIndex}";
-                $status = 2; // In use (since motherboard is already added to server)
-                $sourceType = 'onboard';
                 $controller = $nicSpec['controller'] ?? 'Unknown';
                 $ports = $nicSpec['ports'] ?? 1;
                 $speed = $nicSpec['speed'] ?? 'Unknown';
@@ -1555,75 +1492,36 @@ class ServerBuilder {
                 $location = "Onboard NIC #{$onboardNicIndex} from Motherboard";
                 $notes = "Auto-created onboard NIC from motherboard $motherboardUuid";
 
-                error_log("Insert data prepared - Controller: $controller, Ports: $ports, Speed: $speed");
-
                 // Insert into nicinventory table
-                try {
-                    error_log("Attempting INSERT into nicinventory...");
-                    $insertNicStmt = $this->pdo->prepare("
-                        INSERT INTO nicinventory
-                        (UUID, SerialNumber, Status, SourceType, ParentComponentUUID, OnboardIndex,
-                         Controller, Ports, Speed, Connector, Location, Notes, ServerUUID)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ");
+                $insertNicStmt = $this->pdo->prepare("
+                    INSERT INTO nicinventory
+                    (UUID, SerialNumber, Status, SourceType, ParentComponentUUID, OnboardIndex,
+                     Controller, Ports, Speed, Connector, Location, Notes, ServerUUID)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
 
-                    $insertNicStmt->execute([
-                        $onboardNicUuid,
-                        $serialNumber,
-                        $status,
-                        $sourceType,
-                        $motherboardUuid,
-                        $onboardNicIndex,
-                        $controller,
-                        $ports,
-                        $speed,
-                        $connector,
-                        $location,
-                        $notes,
-                        $configUuid
-                    ]);
-
-                    error_log("SUCCESS: Created onboard NIC $onboardNicUuid in nicinventory table");
-                } catch (Exception $nicInsertError) {
-                    error_log("ERROR inserting into nicinventory: " . $nicInsertError->getMessage());
-                    error_log("SQL Error Code: " . ($nicInsertError->getCode() ?? 'N/A'));
-                    throw $nicInsertError; // Re-throw to be caught by outer try-catch
-                }
-
-                // Add to server_configuration_components table
-                // NIC configuration is now stored directly in nic_configuration JSON column
-                // No separate server_configuration_components table needed
+                $insertNicStmt->execute([
+                    $onboardNicUuid,
+                    $serialNumber,
+                    2, // In use
+                    'onboard',
+                    $motherboardUuid,
+                    $onboardNicIndex,
+                    $controller,
+                    $ports,
+                    $speed,
+                    $connector,
+                    $location,
+                    $notes,
+                    $configUuid
+                ]);
 
                 // Update nic_configuration JSON column
-                try {
-                    error_log("Attempting to update nic_configuration JSON column...");
-                    $this->updateNicConfiguration($configUuid, $onboardNicUuid, 1, 'add');
-                    error_log("SUCCESS: Updated nic_configuration column for onboard NIC $onboardNicUuid");
-                } catch (Exception $nicConfigError) {
-                    error_log("ERROR updating nic_configuration: " . $nicConfigError->getMessage());
-                    throw $nicConfigError;
-                }
-
-                error_log("--- Completed onboard NIC #$onboardNicIndex ---");
+                $this->updateNicConfiguration($configUuid, $onboardNicUuid, 1, 'add');
             }
 
-            error_log("========================================");
-            error_log("Successfully created " . count($onboardNics) . " onboard NIC(s) for motherboard $motherboardUuid");
-            error_log("=== END createOnboardNICsFromMotherboard (SUCCESS) ===");
-            error_log("========================================");
-
         } catch (Exception $e) {
-            error_log("========================================");
-            error_log("FATAL ERROR in createOnboardNICsFromMotherboard");
-            error_log("Motherboard UUID: $motherboardUuid");
-            error_log("Config UUID: $configUuid");
-            error_log("Error Message: " . $e->getMessage());
-            error_log("Error Code: " . $e->getCode());
-            error_log("Error File: " . $e->getFile() . " (Line " . $e->getLine() . ")");
-            error_log("Stack trace:");
-            error_log($e->getTraceAsString());
-            error_log("=== END createOnboardNICsFromMotherboard (FAILED) ===");
-            error_log("========================================");
+            error_log("Error in createOnboardNICsFromMotherboard: " . $e->getMessage());
             // Don't throw - allow motherboard addition to succeed even if onboard NIC creation fails
         }
     }
@@ -1650,8 +1548,6 @@ class ServerBuilder {
             }
 
             $totalPowerWithOverhead = $totalPower * 1.2;
-
-            error_log("Power calculation for $configUuid: Base={$totalPower}W, WithOverhead={$totalPowerWithOverhead}W");
 
             // Calculate compatibility score
             $compatibilityScore = null;
@@ -1709,7 +1605,6 @@ class ServerBuilder {
                 $stmt = $this->pdo->prepare($sql);
                 $stmt->execute($params);
                 
-                error_log("Updated configuration $configUuid with compatibility score: " . ($compatibilityScore ?? 'null') . " and validation results");
             }
             
         } catch (Exception $e) {
@@ -1741,8 +1636,6 @@ class ServerBuilder {
      */
     public function validateConfiguration($configUuid) {
         try {
-            error_log("Starting validation for config: $configUuid");
-            
             $summary = $this->getConfigurationSummary($configUuid);
             
             $validation = [
@@ -1830,8 +1723,6 @@ class ServerBuilder {
             // Ensure overall_score is within bounds
             $validation['overall_score'] = max(0.0, min(1.0, $validation['overall_score']));
 
-            error_log("Validation complete. Is valid: " . ($validation['is_valid'] ? 'yes' : 'no') . ", Overall Score: " . $validation['overall_score']);
-            
             return $validation;
             
         } catch (Exception $e) {
@@ -2214,10 +2105,6 @@ class ServerBuilder {
         try {
             // RACE CONDITION FIX: Lock configuration row to prevent concurrent JSON updates
             // This REQUIRES being in a transaction (should be started in addComponent)
-            if (!$this->pdo->inTransaction()) {
-                error_log("RACE-FIX WARNING: isDuplicateComponent called outside transaction!");
-            }
-
             // Lock configuration row with FOR UPDATE
             $stmt = $this->pdo->prepare("
                 SELECT cpu_configuration, ram_configuration, storage_configuration,
@@ -2231,11 +2118,8 @@ class ServerBuilder {
             $configData = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$configData) {
-                error_log("RACE-FIX: Configuration $configUuid not found");
                 return false;
             }
-
-            error_log("RACE-FIX: Configuration $configUuid locked for duplicate check");
 
             // Extract components and check for duplicate
             $components = $this->extractComponentsFromJson($configData);
@@ -2270,28 +2154,15 @@ class ServerBuilder {
                 }
             }
 
-            // Debug logging
-            $serialInfo = $serialNumber ? " SerialNumber=$serialNumber" : "";
-            error_log("Duplicate check: ConfigUUID=$configUuid, ComponentUUID=$componentUuid$serialInfo");
-            error_log("RACE-FIX: Duplicate check result - " . ($isDuplicate ? "DUPLICATE FOUND" : "NO DUPLICATE") .
-                     ($componentType ? " (Type: $componentType)" : ""));
-
             return $isDuplicate;
 
         } catch (PDOException $e) {
-            error_log("RACE-FIX: Database error in duplicate check: " . $e->getMessage());
-
-            // Check for lock wait timeout
-            if (strpos($e->getMessage(), 'Lock wait timeout') !== false) {
-                error_log("RACE-FIX: Lock wait timeout - another transaction holds configuration lock");
-            }
-
-            // On error, return true to prevent addition (fail-safe approach)
-            // Better to prevent addition than risk duplicate
+            error_log("Error in duplicate check: " . $e->getMessage());
+            // On error, return true to prevent addition (fail-safe)
             return true;
 
         } catch (Exception $e) {
-            error_log("RACE-FIX: Error checking duplicate component: " . $e->getMessage());
+            error_log("Error checking duplicate component: " . $e->getMessage());
             // On error, return true to prevent addition (fail-safe)
             return true;
         }
@@ -2559,7 +2430,6 @@ class ServerBuilder {
                 case 'ram':
                     // Skip legacy RAM validation - flexible system handles compatibility
                     break;
-                    break;
                     
                 case 'nic':
                     // Skip legacy NIC validation - flexible system handles compatibility
@@ -2705,7 +2575,6 @@ class ServerBuilder {
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($result) {
-                error_log("getComponentByUuid: Found available component (Status=1) for UUID $componentUuid, SerialNumber=" . $result['SerialNumber']);
                 return $result;
             }
 
@@ -2715,7 +2584,6 @@ class ServerBuilder {
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($result) {
-                error_log("getComponentByUuid: Found available component (case-insensitive) for UUID $componentUuid, SerialNumber=" . $result['SerialNumber']);
                 return $result;
             }
 
@@ -2725,7 +2593,6 @@ class ServerBuilder {
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($result) {
-                error_log("getComponentByUuid: No available components, returning Status=" . $result['Status'] . " component for UUID $componentUuid");
                 return $result;
             }
 
@@ -2762,13 +2629,7 @@ class ServerBuilder {
                 $stmt->execute([$componentUuid, $serialNumber]);
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                if ($result) {
-                    error_log("getComponentByUuidAndSerial: Found component UUID=$componentUuid, SerialNumber=$serialNumber, Status=" . $result['Status']);
-                    return $result;
-                }
-
-                error_log("getComponentByUuidAndSerial: Component not found with UUID=$componentUuid and SerialNumber=$serialNumber");
-                return null;
+                return $result ?: null;
             }
 
             // If no serial number provided, fall back to original logic
@@ -3134,10 +2995,6 @@ class ServerBuilder {
                     $locationInfo = " Location: '$serverLocation', RackPosition: '$serverRackPosition'";
                 }
                 $serialInfo = " SerialNumber: '{$current['SerialNumber']}'";
-                error_log("Updated component: $componentUuid$serialInfo in $table - Status: {$current['Status']} -> $newStatus, ServerUUID: '{$current['ServerUUID']}' -> '$serverUuid'$locationInfo - $reason");
-            } else {
-                $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
-                error_log("Failed to update component: $componentUuid$serialInfo in $table");
             }
 
             return $result;
@@ -3227,9 +3084,6 @@ class ServerBuilder {
                 ];
             }
 
-            // Component found and LOCKED - no other transaction can modify it now
-            error_log("RACE-FIX: Component $componentUuid locked (Status={$component['Status']}, ServerUUID={$component['ServerUUID']})");
-
             return [
                 'found' => true,
                 'data' => $component,
@@ -3237,7 +3091,7 @@ class ServerBuilder {
             ];
 
         } catch (PDOException $e) {
-            error_log("RACE-FIX: Database error locking component: " . $e->getMessage());
+            error_log("Error locking component: " . $e->getMessage());
             return [
                 'found' => false,
                 'data' => null,
@@ -3537,14 +3391,6 @@ class ServerBuilder {
     }
     
     /**
-     * Check motherboard-CPU socket compatibility (legacy method)
-     */
-    private function checkMotherboardCpuCompatibility($motherboard, $cpus) {
-        $result = $this->checkMotherboardCpuCompatibilityDetailed($motherboard, $cpus);
-        return $result['score'];
-    }
-    
-    /**
      * Check motherboard-CPU socket compatibility with detailed diagnostics
      */
     private function checkMotherboardCpuCompatibilityDetailed($motherboard, $cpus) {
@@ -3592,14 +3438,6 @@ class ServerBuilder {
             'score' => $score,
             'issues' => $issues
         ];
-    }
-    
-    /**
-     * Check motherboard-RAM compatibility (legacy method)
-     */
-    private function checkMotherboardRamCompatibility($motherboard, $rams) {
-        $result = $this->checkMotherboardRamCompatibilityDetailed($motherboard, $rams);
-        return $result['score'];
     }
     
     /**
@@ -4029,8 +3867,6 @@ class ServerBuilder {
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET additional_components = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($additionalComponents), $configUuid]);
             
-            error_log("Added $componentType component $componentUuid to additional_components for config $configUuid");
-            
         } catch (Exception $e) {
             error_log("Error adding to additional components: " . $e->getMessage());
             throw $e;
@@ -4071,8 +3907,6 @@ class ServerBuilder {
             
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET additional_components = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($additionalComponents), $configUuid]);
-            
-            error_log("Removed $componentType component $componentUuid from additional_components for config $configUuid");
             
         } catch (Exception $e) {
             error_log("Error removing from additional components: " . $e->getMessage());
@@ -4576,8 +4410,6 @@ class ServerBuilder {
      */
     public function validateConfigurationComprehensive($configUuid) {
         try {
-            error_log("=== Starting Comprehensive Validation for config: $configUuid ===");
-
             // Initialize result structure
             $result = [
                 'valid' => true,
@@ -4682,8 +4514,6 @@ class ServerBuilder {
 
             // Step 13: CALCULATE FINAL COMPATIBILITY SCORE
             $this->calculateFinalCompatibilityScore($result);
-
-            error_log("=== Validation Complete: Valid=" . ($result['valid'] ? 'YES' : 'NO') . " ===");
 
             return $result;
 
@@ -6172,10 +6002,7 @@ class ServerBuilder {
     private function releaseDeterministicLocks() {
         // P4.1: Locks are released in reverse order by transaction management
         // This method is for logging/cleanup purposes
-        if (!empty($this->activeLocks)) {
-            error_log("P4.1: Releasing " . count($this->activeLocks) . " locks");
-            $this->activeLocks = [];
-        }
+        $this->activeLocks = [];
     }
 
     /**
@@ -6229,18 +6056,7 @@ class ServerBuilder {
                 }
             }
 
-            // Update form factor lock
-            if (count($formFactors) === 1) {
-                // Only one form factor - set lock
-                $lockedFF = array_key_first($formFactors);
-                error_log("P3.4: Form factor lock set to '$lockedFF' for configuration $configUuid");
-            } else if (count($formFactors) === 0) {
-                // No storage - clear lock
-                error_log("P3.4: Form factor lock cleared for configuration $configUuid (no storage)");
-            } else {
-                // Multiple form factors - no lock
-                error_log("P3.4: Form factor lock cleared for configuration $configUuid (multiple form factors)");
-            }
+            // Form factor lock is informational only (no DB update needed here)
 
         } catch (Exception $e) {
             error_log("Error recalculating form factor lock: " . $e->getMessage());

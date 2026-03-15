@@ -21,12 +21,25 @@ try {
         throw new Exception("Database connection not available");
     }
     $serverBuilder = new ServerBuilder($pdo);
-    error_log("ServerBuilder initialized successfully");
 } catch (Exception $e) {
     error_log("Failed to initialize ServerBuilder: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
     send_json_response(0, 1, 500, "Server system unavailable: " . $e->getMessage());
 }
+
+// Shared component type to table name mapping
+$GLOBALS['_serverComponentTableMap'] = [
+    'cpu' => 'cpuinventory',
+    'motherboard' => 'motherboardinventory',
+    'ram' => 'raminventory',
+    'storage' => 'storageinventory',
+    'nic' => 'nicinventory',
+    'caddy' => 'caddyinventory',
+    'chassis' => 'chassisinventory',
+    'pciecard' => 'pciecardinventory',
+    'hbacard' => 'hbacardinventory',
+    'sfp' => 'sfpinventory'
+];
 
 // Get action from global operation or POST data
 global $operation;
@@ -305,8 +318,6 @@ function handleUpdateConfiguration($serverBuilder, $user) {
 function handleCreateStart($serverBuilder, $user) {
     global $pdo;
 
-    error_log("[HANDLER] handleCreateStart called for user: " . $user['id']);
-
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $location = trim($_POST['location'] ?? '');
@@ -329,8 +340,6 @@ function handleCreateStart($serverBuilder, $user) {
         // Log server creation start
         $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server', null,
             "Started server config creation: $serverName");
-        error_log("Server create-start logging result: " . ($logResult ? 'success' : 'failed'));
-
         send_json_response(1, 1, 200, "Server configuration created successfully", [
             'config_uuid' => $configUuid,
             'server_name' => $serverName,
@@ -354,10 +363,6 @@ function handleAddComponent($serverBuilder, $user) {
     global $pdo;
 
     try {
-        // Enhanced logging for debugging
-        error_log("=== SERVER ADD COMPONENT REQUEST ===");
-        error_log("POST data: " . json_encode($_POST));
-
         $configUuid = $_POST['config_uuid'] ?? '';
         $componentType = $_POST['component_type'] ?? '';
         $componentUuid = $_POST['component_uuid'] ?? '';
@@ -367,11 +372,7 @@ function handleAddComponent($serverBuilder, $user) {
         $notes = $_POST['notes'] ?? '';
         $override = filter_var($_POST['override'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-    $serialInfo = $serialNumber ? " Serial: $serialNumber" : "";
-    error_log("Parsed parameters - Config: $configUuid, Type: $componentType, UUID: $componentUuid$serialInfo, Qty: $quantity");
-    
     if (empty($configUuid) || empty($componentType) || empty($componentUuid)) {
-        error_log("Missing required parameters");
         send_json_response(0, 1, 400, "Configuration UUID, component type, and component UUID are required");
     }
 
@@ -404,10 +405,7 @@ function handleAddComponent($serverBuilder, $user) {
                     'hint' => 'Specify which port number on the NIC (1, 2, 3, etc.) - all ports may be occupied'
                 ]);
             }
-            error_log("SFP port auto-assigned: port $portIndex on NIC $parentNicUuid");
         }
-
-        error_log("SFP parameters - Parent NIC: $parentNicUuid, Port: $portIndex");
     }
 
     try {
@@ -495,8 +493,6 @@ function handleAddComponent($serverBuilder, $user) {
         }
             
         // Compatibility Validation using ComponentCompatibility directly
-        error_log("Starting compatibility validation for $componentType");
-
         try {
             require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
             $compatibility = new ComponentCompatibility($pdo);
@@ -510,20 +506,8 @@ function handleAddComponent($serverBuilder, $user) {
             $existingComponents = extractComponentsFromConfigData($config->getData());
             $existingComponentsData = [];
 
+            $tableMap = $GLOBALS['_serverComponentTableMap'];
             foreach ($existingComponents as $existing) {
-                $tableMap = [
-                    'chassis' => 'chassisinventory',
-                    'cpu' => 'cpuinventory',
-                    'ram' => 'raminventory',
-                    'storage' => 'storageinventory',
-                    'motherboard' => 'motherboardinventory',
-                    'nic' => 'nicinventory',
-                    'caddy' => 'caddyinventory',
-                    'pciecard' => 'pciecardinventory',
-                    'hbacard' => 'hbacardinventory',
-                    'sfp' => 'sfpinventory'
-                ];
-
                 $table = $tableMap[$existing['component_type']];
                 $stmt = $pdo->prepare("SELECT * FROM $table WHERE UUID = ? LIMIT 1");
                 $stmt->execute([$existing['component_uuid']]);
@@ -581,8 +565,6 @@ function handleAddComponent($serverBuilder, $user) {
                     $compatibilityResult = ['compatible' => true, 'warnings' => [], 'recommendations' => []];
             }
 
-            error_log("Validation result: " . json_encode($compatibilityResult));
-
             // Check if component is incompatible
             if (!$compatibilityResult['compatible']) {
                 // Critical errors - BLOCK addition
@@ -607,10 +589,6 @@ function handleAddComponent($serverBuilder, $user) {
             // Store warnings for response (will be added if successful)
             $validationWarnings = $compatibilityResult['warnings'] ?? [];
             $validationInfo = $compatibilityResult['recommendations'] ?? [];
-
-            if (!empty($validationWarnings)) {
-                error_log("Validation warnings: " . json_encode($validationWarnings));
-            }
 
         } catch (Exception $validationError) {
             error_log("Compatibility validation error: " . $validationError->getMessage());
@@ -668,7 +646,6 @@ function handleAddComponent($serverBuilder, $user) {
                     );
                 }
             } else {
-                error_log("PCIe card $componentUuid is not a riser card (subtype: " . ($pcieComponentSubtype ?? 'NULL') . ") - skipping riser validation");
             }
         }
 
@@ -745,7 +722,6 @@ function handleAddComponent($serverBuilder, $user) {
                 );
             }
 
-            error_log("SFP port validation passed - NIC: $parentNicUuid, Port: $portIndex, Types: {$nicPortType} <- {$sfpType}");
         }
 
         if ($componentType === 'motherboard') {
@@ -855,20 +831,14 @@ function handleAddComponent($serverBuilder, $user) {
                         $isRiserCard = false;
                         if ($componentSubtype === 'Riser Card') {
                             $isRiserCard = true;
-                            error_log("🔍 Riser card detected via component_subtype field for UUID=$componentUuid");
                         } elseif (stripos($componentUuid, 'riser-') === 0) {
                             // Fallback: UUID starts with "riser-"
                             $isRiserCard = true;
-                            error_log("🔍 Riser card detected via UUID pattern for UUID=$componentUuid (component_subtype was: " . ($componentSubtype ?? 'NULL') . ")");
                         }
-
-                        error_log("🔎 Component detection: UUID=$componentUuid, component_subtype=" . ($componentSubtype ?? 'NULL') . ", isRiserCard=" . ($isRiserCard ? 'YES' : 'NO'));
 
                         if ($isRiserCard) {
                             // ===== RISER CARD - MUST GO TO RISER SLOTS ONLY =====
                             $riserSlotSize = extractPCIeSlotSizeFromSpecs($cardSpecs);
-
-                            error_log("🎯 RISER CARD DETECTED: UUID=$componentUuid, extracted slot size=" . ($riserSlotSize ?? 'NULL') . ", specs=" . json_encode(['interface' => $cardSpecs['interface'] ?? 'missing', 'slot_type' => $cardSpecs['slot_type'] ?? 'missing', 'component_subtype' => $componentSubtype ?? 'missing']));
 
                             if ($riserSlotSize) {
                                 // Use size-aware assignment (returns string slot ID)
@@ -882,10 +852,8 @@ function handleAddComponent($serverBuilder, $user) {
                                         $assignedSlotType = $matches[1];
                                     }
 
-                                    error_log("✅ Assigned riser slot: $assignedSlot (type: $assignedSlotType) for riser card $componentUuid (requires: $riserSlotSize)");
                                 } else {
                                     // CRITICAL: No compatible riser slots available - BLOCK the addition
-                                    error_log("❌ BLOCKING: No compatible riser slots available for riser card $componentUuid (requires: $riserSlotSize)");
                                     send_json_response(0, 1, 400,
                                         "Cannot add riser card: No compatible riser slots available on motherboard",
                                         [
@@ -899,14 +867,11 @@ function handleAddComponent($serverBuilder, $user) {
                                 }
                             } else {
                                 // Fallback to legacy assignment if size cannot be determined
-                                error_log("⚠️ Riser slot size could not be determined for $componentUuid - using legacy assignment");
                                 $assignedSlot = $slotTracker->assignRiserSlot($configUuid);
                                 if ($assignedSlot) {
                                     $slotPosition = $assignedSlot;
-                                    error_log("✅ Assigned riser slot (legacy): $assignedSlot for riser card $componentUuid");
                                 } else {
                                     // CRITICAL: No riser slots available - BLOCK the addition
-                                    error_log("❌ BLOCKING: No riser slots available for riser card $componentUuid");
                                     send_json_response(0, 1, 400,
                                         "Cannot add riser card: No riser slots available on motherboard",
                                         [
@@ -922,16 +887,12 @@ function handleAddComponent($serverBuilder, $user) {
                             // ===== REGULAR PCIe CARD/NIC - ASSIGN TO PCIe SLOTS =====
                             $cardSlotSize = extractPCIeSlotSizeFromSpecs($cardSpecs);
 
-                            error_log("🔌 Regular PCIe card detected: UUID=$componentUuid, slot size=" . ($cardSlotSize ?? 'NULL'));
-
                             if ($cardSlotSize) {
                                 // Assign optimal PCIe slot
                                 $assignedSlot = $slotTracker->assignSlot($configUuid, $cardSlotSize);
                                 if ($assignedSlot) {
                                     $slotPosition = $assignedSlot;
-                                    error_log("✅ Assigned PCIe slot: $assignedSlot for card $componentUuid");
                                 } else {
-                                    error_log("⚠️ WARNING: No available PCIe slots for card $componentUuid (requires $cardSlotSize)");
                                 }
                             }
                         }
@@ -978,13 +939,11 @@ function handleAddComponent($serverBuilder, $user) {
                     // Check if this was auto-assigned by our new system (format: riser_x16_slot_1)
                     if (preg_match('/^riser_x\d+_slot_\d+$/', $slotPosition)) {
                         // This is a valid auto-assigned slot - don't touch it!
-                        error_log("✅ Riser slot auto-assigned correctly: $slotPosition - skipping validation");
                     }
                     // Check if provided slot_position follows riser_ prefix convention but is old format
                     else if (strpos($providedSlotPosition, 'riser_') !== 0) {
                         // DEPRECATED: This old auto-correction should not run anymore
                         // The new system assigns proper slot IDs directly
-                        error_log("⚠️ WARNING: User provided invalid riser slot format: '$providedSlotPosition' - this should be auto-assigned!");
                     }
                 }
             } catch (Exception $correctionError) {
@@ -1008,8 +967,6 @@ function handleAddComponent($serverBuilder, $user) {
                     // Riser card MUST be in a riser slot (starts with "riser_")
                     if (strpos($slotPosition, 'riser_') !== 0) {
                         // CRITICAL ERROR: Riser card was assigned to non-riser slot!
-                        error_log("❌ CRITICAL: Riser card $componentUuid was incorrectly assigned to slot $slotPosition (should be riser_*)");
-
                         // Rollback the insert
                         $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
 
@@ -1022,8 +979,6 @@ function handleAddComponent($serverBuilder, $user) {
                                 'message' => "Riser cards must be assigned to riser slots only. This is a system error."
                             ]
                         );
-                    } else {
-                        error_log("✅ POST-INSERT VALIDATION PASSED: Riser card $componentUuid correctly in slot $slotPosition");
                     }
                 }
             } catch (Exception $validationError) {
@@ -1034,8 +989,6 @@ function handleAddComponent($serverBuilder, $user) {
 
         if ($result['success']) {
             // Simple success response - avoid complex operations that could fail
-            error_log("Component added successfully: $componentType/$componentUuid to config $configUuid");
-
             // AUTO-ASSIGNMENT TRIGGER: If NIC was added, check for unassigned SFPs and auto-assign (Requirement #2)
             if ($componentType === 'nic') {
                 try {
@@ -1049,8 +1002,6 @@ function handleAddComponent($serverBuilder, $user) {
                         $unassignedSfps = $sfpConfig['unassigned_sfps'] ?? [];
 
                         if (!empty($unassignedSfps)) {
-                            error_log("Found " . count($unassignedSfps) . " unassigned SFPs - attempting auto-assignment to new NIC $componentUuid");
-
                             require_once __DIR__ . '/../../../core/models/compatibility/SFPCompatibilityResolver.php';
                             $resolver = new SFPCompatibilityResolver($pdo);
 
@@ -1080,8 +1031,6 @@ function handleAddComponent($serverBuilder, $user) {
                                 $stmt = $pdo->prepare("UPDATE server_configurations SET sfp_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
                                 $stmt->execute([json_encode($sfpConfig), $configUuid]);
 
-                                error_log("✅ Auto-assigned " . count($assignmentResult['assignments']) . " SFPs to NIC $componentUuid");
-
                                 // Add auto-assignment info to response
                                 $responseData['sfp_auto_assignment'] = [
                                     'success' => true,
@@ -1089,7 +1038,6 @@ function handleAddComponent($serverBuilder, $user) {
                                     'assignments' => $assignmentResult['assignments']
                                 ];
                             } else {
-                                error_log("⚠️ Auto-assignment failed: " . json_encode($assignmentResult['errors'] ?? []));
                                 // Don't fail the NIC addition - just warn
                                 $responseData['sfp_auto_assignment'] = [
                                     'success' => false,
@@ -1232,9 +1180,6 @@ function handleAddComponent($serverBuilder, $user) {
 
                     if ($onboardNICResult['count'] > 0) {
                         $responseData['onboard_nics_added'] = $onboardNICResult;
-                        error_log("Auto-added {$onboardNICResult['count']} onboard NIC(s) from motherboard $componentUuid");
-                    } else {
-                        error_log("No onboard NICs found in motherboard $componentUuid or already added");
                     }
                 } catch (Exception $nicError) {
                     error_log("Error auto-adding onboard NICs: " . $nicError->getMessage());
@@ -1249,7 +1194,6 @@ function handleAddComponent($serverBuilder, $user) {
                     require_once __DIR__ . '/../../../core/models/compatibility/OnboardNICHandler.php';
                     $nicHandler = new OnboardNICHandler($pdo);
                     $nicHandler->updateNICConfigJSON($configUuid);
-                    error_log("Updated NIC configuration JSON after adding component NIC $componentUuid");
                 } catch (Exception $nicError) {
                     error_log("Error updating NIC config: " . $nicError->getMessage());
                     // Don't fail the NIC addition if config update fails
@@ -1424,7 +1368,6 @@ function handleRemoveComponent($serverBuilder, $user) {
                     require_once __DIR__ . '/../../../core/models/compatibility/OnboardNICHandler.php';
                     $nicHandler = new OnboardNICHandler($pdo);
                     $nicHandler->updateNICConfigJSON($configUuid);
-                    error_log("Updated NIC configuration JSON after removing component NIC $componentUuid");
                 } catch (Exception $nicError) {
                     error_log("Error updating NIC config: " . $nicError->getMessage());
                 }
@@ -1983,8 +1926,6 @@ function handleImportVirtual($serverBuilder, $user) {
 function handleFinalizeConfiguration($serverBuilder, $user) {
     global $pdo;
 
-    error_log("[HANDLER] handleFinalizeConfiguration called for user: " . $user['id']);
-
     $configUuid = $_POST['config_uuid'] ?? '';
     $finalNotes = trim($_POST['notes'] ?? '');
     
@@ -2021,12 +1962,8 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         if ($result['success']) {
             $configId = $config->get('id');
             $serverName = $config->get('server_name');
-            error_log("About to log finalize: configId=$configId, serverName=$serverName, uuid=$configUuid");
-
             $logResult = logActivity($pdo, $user['id'], 'Server created', 'server', $configId,
                 "Created server config $configUuid with name: $serverName");
-            error_log("Server finalize logging result: " . ($logResult ? 'success' : 'failed'));
-
             send_json_response(1, 1, 200, "Configuration finalized successfully", [
                 'config_uuid' => $configUuid,
                 'finalization_details' => $result,
@@ -2244,25 +2181,12 @@ function handleGetCompatible($serverBuilder, $user) {
 
         // If no existing components, show all available components of requested type
         if (empty($existingComponents)) {
-            error_log("No existing components found, showing all available components of type: $componentType");
         }
         
         // Process existing components for compatibility checking
         $existingComponentsData = [];
+        $tableMap = $GLOBALS['_serverComponentTableMap'];
         foreach ($existingComponents as $existing) {
-            $tableMap = [
-                'chassis' => 'chassisinventory',
-                'cpu' => 'cpuinventory',
-                'ram' => 'raminventory',
-                'storage' => 'storageinventory',
-                'motherboard' => 'motherboardinventory',
-                'nic' => 'nicinventory',
-                'caddy' => 'caddyinventory',
-                'pciecard' => 'pciecardinventory',
-                'hbacard' => 'hbacardinventory',
-                'sfp' => 'sfpinventory'
-            ];
-
             $table = $tableMap[$existing['component_type']];
             $stmt = $pdo->prepare("SELECT * FROM $table WHERE UUID = ? LIMIT 1");
             $stmt->execute([$existing['component_uuid']]);
@@ -2278,20 +2202,7 @@ function handleGetCompatible($serverBuilder, $user) {
         }
         
         // Step 3: Get all components of requested type with availability filtering
-        $tableMap = [
-            'chassis' => 'chassisinventory',
-            'cpu' => 'cpuinventory',
-            'ram' => 'raminventory',
-            'storage' => 'storageinventory',
-            'motherboard' => 'motherboardinventory',
-            'nic' => 'nicinventory',
-            'caddy' => 'caddyinventory',
-            'pciecard' => 'pciecardinventory',
-            'hbacard' => 'hbacardinventory',
-            'sfp' => 'sfpinventory'
-        ];
-        
-        $table = $tableMap[$componentType];
+        $table = $GLOBALS['_serverComponentTableMap'][$componentType];
 
         // Build WHERE clause based on available_only parameter
         // When available_only=true: Only query Status=1 (available)
@@ -2328,19 +2239,16 @@ function handleGetCompatible($serverBuilder, $user) {
         $compatibilityClassFile = __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
         if (file_exists($compatibilityClassFile)) {
             require_once $compatibilityClassFile;
-            error_log("DEBUG: ComponentCompatibility.php loaded successfully");
         } else {
             error_log("ERROR: ComponentCompatibility.php not found at: $compatibilityClassFile");
         }
         
         if (class_exists('ComponentCompatibility')) {
             $compatibility = new ComponentCompatibility($pdo);
-            error_log("DEBUG: ComponentCompatibility class instantiated successfully");
-            
+
             // Instantiate ComponentDataService for SFP compatibility checks
             require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
             $componentDataService = ComponentDataService::getInstance();
-            error_log("DEBUG: ComponentDataService instantiated successfully");
 
             // STEP 3.5: Pre-filter - Only include components that exist in JSON
             // This prevents "requirements not determined" errors for components lacking specifications
@@ -2369,15 +2277,9 @@ function handleGetCompatible($serverBuilder, $user) {
             }
 
             // Log components without JSON for debugging
-            if (!empty($componentsWithoutJSON)) {
-                error_log("Components excluded (no JSON): " . implode(', ', $componentsWithoutJSON));
-            }
-
             // Replace allComponents with filtered list
             $totalBeforeFiltering = count($allComponents);
             $allComponents = $componentsWithJSON;
-
-            error_log("Filtered components: " . count($allComponents) . " with JSON out of " . $totalBeforeFiltering . " total");
 
             // Add to debug info
             $debugInfo['total_before_json_filter'] = $totalBeforeFiltering;
@@ -2386,8 +2288,6 @@ function handleGetCompatible($serverBuilder, $user) {
             $debugInfo['json_validation_details'] = $jsonValidationDetails;
 
             // Enhanced compatibility checking with flexible component support
-            error_log("DEBUG: Starting flexible compatibility checking for $componentType components");
-            error_log("DEBUG: Checking against " . count($existingComponentsData) . " existing components");
 
             // Add detailed component listing to debug
             $debugInfo['components_to_check'] = array_map(function($c) {
@@ -2463,11 +2363,9 @@ function handleGetCompatible($serverBuilder, $user) {
                         }
                     } elseif ($componentType === 'pciecard') {
                         // Use specialized PCIe card compatibility checking
-                        error_log("DEBUG: Checking PCIe card compatibility for UUID: " . $component['UUID']);
                         $pcieCompatResult = $compatibility->checkPCIeDecentralizedCompatibility(
                             ['uuid' => $component['UUID']], $existingComponentsData
                         );
-                        error_log("DEBUG: PCIe compatibility result for " . $component['UUID'] . ": " . json_encode($pcieCompatResult));
                         $isCompatible = $pcieCompatResult['compatible'];
                         // Use concise compatibility summary instead of verbose details
                         $compatibilityReasons = [$pcieCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
@@ -2614,8 +2512,6 @@ function handleGetCompatible($serverBuilder, $user) {
         } else {
             // Fallback: Simplified compatibility checking without motherboard dependency
             error_log("WARNING: ComponentCompatibility class not available, using simplified fallback");
-            error_log("DEBUG: Class exists check: " . (class_exists('ComponentCompatibility') ? 'true' : 'false'));
-            error_log("DEBUG: File exists check: " . (file_exists($compatibilityClassFile) ? 'true' : 'false'));
 
             foreach ($allComponents as $component) {
                 $isCompatible = true;
@@ -2981,14 +2877,7 @@ function createConfigurationHistoryTable($pdo) {
  * Helper function to get component details
  */
 function getComponentDetails($pdo, $componentType, $componentUuid) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
+    $tableMap = $GLOBALS['_serverComponentTableMap'];
 
     if (!isset($tableMap[$componentType])) {
         return null;
@@ -3331,14 +3220,7 @@ function getSlotValidationWarnings($configUuid) {
  * Helper function to get suggested alternatives
  */
 function getSuggestedAlternatives($pdo, $componentType, $excludeUuid, $limit = 5) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
+    $tableMap = $GLOBALS['_serverComponentTableMap'];
     
     if (!isset($tableMap[$componentType])) {
         return [];
@@ -3366,14 +3248,7 @@ function getSuggestedAlternatives($pdo, $componentType, $excludeUuid, $limit = 5
  * Helper function to get available components
  */
 function getAvailableComponents($pdo, $componentType, $availableOnly = true, $limit = 50) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
+    $tableMap = $GLOBALS['_serverComponentTableMap'];
     
     if (!isset($tableMap[$componentType])) {
         return [];
@@ -3401,14 +3276,7 @@ function getAvailableComponents($pdo, $componentType, $availableOnly = true, $li
  * Helper function to get component count
  */
 function getComponentCount($pdo, $componentType) {
-    $tableMap = [
-        'cpu' => 'cpuinventory',
-        'ram' => 'raminventory',
-        'storage' => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic' => 'nicinventory',
-        'caddy' => 'caddyinventory'
-    ];
+    $tableMap = $GLOBALS['_serverComponentTableMap'];
     
     if (!isset($tableMap[$componentType])) {
         return ['total' => 0, 'available' => 0, 'in_use' => 0, 'failed' => 0];
@@ -3697,14 +3565,7 @@ function handleUpdateLocationAndPropagate($serverBuilder, $user) {
         
         // Update all assigned components with new location and rack position
         $componentUpdateCount = 0;
-        $componentTables = [
-            'cpu' => 'cpuinventory',
-            'ram' => 'raminventory',
-            'storage' => 'storageinventory',
-            'motherboard' => 'motherboardinventory',
-            'nic' => 'nicinventory',
-            'caddy' => 'caddyinventory'
-        ];
+        $componentTables = $GLOBALS['_serverComponentTableMap'];
         
         foreach ($assignedComponents as $component) {
             $componentType = $component['component_type'];
@@ -3739,9 +3600,6 @@ function handleUpdateLocationAndPropagate($serverBuilder, $user) {
                 $compStmt = $pdo->prepare($compSql);
                 if ($compStmt->execute($compUpdateValues)) {
                     $componentUpdateCount++;
-                    error_log("Updated location for component $componentUuid in $table");
-                } else {
-                    error_log("Failed to update location for component $componentUuid in $table");
                 }
             }
         }
@@ -4006,27 +3864,21 @@ function handleReplaceOnboardNIC($user) {
  */
 function checkEnhancedComponentCompatibility($compatibility, $componentType, $component, $motherboard) {
     try {
-        error_log("DEBUG: Checking compatibility for $componentType UUID: " . $component['UUID']);
-        
         // Extract socket types using the existing JSON integration methods
         $componentSocket = null;
         $motherboardSocket = null;
         
         try {
             $componentSocket = $compatibility->extractSocketTypeFromJSON($componentType, $component['UUID']);
-            error_log("DEBUG: Component socket extracted: " . ($componentSocket ?? 'null'));
         } catch (Exception $e) {
             error_log("ERROR: Failed to extract component socket: " . $e->getMessage());
         }
         
         try {
             $motherboardSocket = $compatibility->extractSocketTypeFromJSON('motherboard', $motherboard['UUID']);
-            error_log("DEBUG: Motherboard socket extracted: " . ($motherboardSocket ?? 'null'));
         } catch (Exception $e) {
             error_log("ERROR: Failed to extract motherboard socket: " . $e->getMessage());
         }
-        
-        error_log("DEBUG: Final sockets - Component: " . ($componentSocket ?? 'null') . ", Motherboard: " . ($motherboardSocket ?? 'null'));
         
         // Component-specific compatibility checks
         switch ($componentType) {
@@ -4226,14 +4078,9 @@ function extractSocketFromNotes($notes) {
  */
 function checkDirectNotesCompatibility($componentType, $component, $motherboard) {
     try {
-        error_log("DEBUG: Direct Notes compatibility check for $componentType: " . $component['UUID']);
-        
         $componentNotes = strtoupper($component['Notes'] ?? '');
         $motherboardNotes = strtoupper($motherboard['Notes'] ?? '');
-        
-        error_log("DEBUG: Component notes: " . $componentNotes);
-        error_log("DEBUG: Motherboard notes: " . $motherboardNotes);
-        
+
         switch ($componentType) {
             case 'cpu':
                 return checkDirectCPUNotesCompatibility($component, $motherboard, $componentNotes, $motherboardNotes);
@@ -4299,8 +4146,6 @@ function checkDirectCPUNotesCompatibility($cpu, $motherboard, $cpuNotes, $mother
     if (!$motherboardSocket) {
         $motherboardSocket = extractSocketFromNotes($motherboardNotes);
     }
-    
-    error_log("DEBUG: Extracted sockets - CPU: " . ($cpuSocket ?: 'null') . ", MB: " . ($motherboardSocket ?: 'null'));
     
     // Determine compatibility
     if ($cpuSocket && $motherboardSocket) {
@@ -5699,17 +5544,7 @@ function handleSearchBySerial($serverBuilder, $user) {
         send_json_response(0, 1, 400, "serial_number is required");
     }
 
-    $inventoryTables = [
-        'cpu'         => 'cpuinventory',
-        'ram'         => 'raminventory',
-        'storage'     => 'storageinventory',
-        'motherboard' => 'motherboardinventory',
-        'nic'         => 'nicinventory',
-        'caddy'       => 'caddyinventory',
-        'chassis'     => 'chassisinventory',
-        'pciecard'    => 'pciecardinventory',
-        'hbacard'     => 'hbacardinventory',
-    ];
+    $inventoryTables = $GLOBALS['_serverComponentTableMap'];
 
     try {
         $matchedConfigUuids = [];

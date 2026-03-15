@@ -1276,15 +1276,12 @@ class ComponentCompatibility {
      * Enhanced extractSocketType method to work with JSON data primarily
      */
     public function extractSocketTypeFromJSON($componentType, $componentUuid) {
-        error_log("DEBUG: Extracting socket type for $componentType UUID: $componentUuid");
-        
         $result = null;
-        
+
         if ($componentType === 'cpu') {
             $cpuResult = $this->validator->validateCPUExists($componentUuid);
             if ($cpuResult['exists'] && isset($cpuResult['data'])) {
                 $result = $cpuResult['data']['socket'] ?? null;
-                error_log("DEBUG: CPU socket from JSON: " . ($result ?? 'null'));
             }
         } elseif ($componentType === 'motherboard') {
             $mbResult = $this->dataLoader->loadComponentFromJSON('motherboard', $componentUuid);
@@ -1292,25 +1289,18 @@ class ComponentCompatibility {
                 $data = $mbResult['data'];
                 // Try multiple socket field possibilities
                 $result = $data['socket']['type'] ?? $data['socket'] ?? $data['cpu_socket'] ?? null;
-                error_log("DEBUG: Motherboard socket from JSON: " . ($result ?? 'null'));
             }
         }
-        
+
         // Fallback to database Notes field extraction if JSON doesn't have the data
         if (!$result) {
-            error_log("DEBUG: No socket found in JSON, trying database Notes field");
             $componentData = $this->dataLoader->getComponentData($componentType, $componentUuid);
             if ($componentData) {
                 $notes = strtolower($componentData['Notes'] ?? '');
                 $result = $this->dataExtractor->extractSocketFromNotes($notes);
-                error_log("DEBUG: Socket from Notes field: " . ($result ?? 'null'));
             }
         }
-        
-        if (!$result) {
-            error_log("WARNING: Could not determine socket type for $componentType UUID: $componentUuid");
-        }
-        
+
         return $result;
     }
 
@@ -2088,16 +2078,13 @@ class ComponentCompatibility {
             $cardSlotSize = $this->dataExtractor->extractPCIeSlotSize($pcieCardData);
             $cardSubtype = $pcieCardData['component_subtype'] ?? 'PCIe Card';
 
-            error_log("DEBUG ComponentCompatibility: UUID=" . $pcieCardComponent['uuid'] . ", component_subtype='" . $cardSubtype . "', cardSlotSize=" . $cardSlotSize);
 
             // SPECIAL HANDLING FOR RISER CARDS
             // Riser cards use riser slots, not PCIe slots
             $isRiserCard = ($cardSubtype === 'Riser Card');
 
-            error_log("DEBUG ComponentCompatibility: isRiserCard=" . ($isRiserCard ? 'TRUE' : 'FALSE'));
 
             if ($isRiserCard) {
-                error_log("DEBUG ComponentCompatibility: Entering riser card handling block");
                 // Use UnifiedSlotTracker to check riser slot availability
                 require_once __DIR__ . '/UnifiedSlotTracker.php';
                 $slotTracker = new UnifiedSlotTracker($this->pdo);
@@ -2375,7 +2362,6 @@ class ComponentCompatibility {
                 $usedSlots = $slotAvailability['used_slots'];
                 $availableSlots = $totalAvailableSlots - $usedSlots;
 
-                error_log("DEBUG HBA slot check: total_slots={$slotAvailability['total_slots']}, riser_added={$slotAvailability['riser_added_slots']}, used={$usedSlots}, available={$availableSlots}");
 
                 if ($availableSlots <= 0) {
                     $result['compatible'] = false;
@@ -2439,7 +2425,6 @@ class ComponentCompatibility {
                 $usedSlots = $slotAvailability['used_slots'];
                 $availableSlots = $totalAvailableSlots - $usedSlots;
 
-                error_log("DEBUG HBA slot check (with storage): total_slots={$slotAvailability['total_slots']}, riser_added={$slotAvailability['riser_added_slots']}, used={$usedSlots}, available={$availableSlots}");
 
                 if ($availableSlots <= 0) {
                     $result['compatible'] = false;
@@ -2538,11 +2523,9 @@ class ComponentCompatibility {
         $usedSlots = $slotAvailability['used_slots'];
         $netAvailable = $totalSlots - $usedSlots;
 
-        error_log("DEBUG checkPCIeSlotSizeCompatibility: required={$requiredSlotSize}, total={$totalSlots}, used={$usedSlots}, netAvailable={$netAvailable}, available_by_size=" . json_encode($slotAvailability['available_by_size']));
 
         // If no slots available at all, return false
         if ($netAvailable <= 0) {
-            error_log("DEBUG: No net available slots (netAvailable={$netAvailable}) - returning false");
             return false;
         }
 
@@ -2553,32 +2536,27 @@ class ComponentCompatibility {
 
         // x16 slots can accommodate x16, x8, x4, x1 cards
         if ($slotAvailability['available_by_size']['x16'] > 0) {
-            error_log("DEBUG: Found x16 slot type AND netAvailable={$netAvailable} > 0 - returning true");
             return true;
         }
 
         // x8 slots can accommodate x8, x4, x1 cards
         if (in_array($requiredSlotSize, ['x8', 'x4', 'x1']) &&
             $slotAvailability['available_by_size']['x8'] > 0) {
-            error_log("DEBUG: Found x8 slot type for required {$requiredSlotSize} AND netAvailable={$netAvailable} > 0 - returning true");
             return true;
         }
 
         // x4 slots can accommodate x4, x1 cards
         if (in_array($requiredSlotSize, ['x4', 'x1']) &&
             $slotAvailability['available_by_size']['x4'] > 0) {
-            error_log("DEBUG: Found x4 slot type for required {$requiredSlotSize} AND netAvailable={$netAvailable} > 0 - returning true");
             return true;
         }
 
         // x1 slots can accommodate x1 cards only
         if ($requiredSlotSize === 'x1' &&
             $slotAvailability['available_by_size']['x1'] > 0) {
-            error_log("DEBUG: Found x1 slot type AND netAvailable={$netAvailable} > 0 - returning true");
             return true;
         }
 
-        error_log("DEBUG: No compatible slot type found for required {$requiredSlotSize} (available types: x1={$slotAvailability['available_by_size']['x1']}, x4={$slotAvailability['available_by_size']['x4']}, x8={$slotAvailability['available_by_size']['x8']}, x16={$slotAvailability['available_by_size']['x16']}) - returning false");
         return false;
     }
 
@@ -2588,7 +2566,6 @@ class ComponentCompatibility {
     public function checkCPUDecentralizedCompatibility($cpuComponent, $existingComponents) {
         try {
             $cpuUuid = $cpuComponent['uuid'];
-            error_log("=== CPU COMPATIBILITY CHECK START for UUID: $cpuUuid ===");
 
             $result = [
                 'compatible' => true,
@@ -2600,7 +2577,6 @@ class ComponentCompatibility {
 
             // If no existing components, CPU is always compatible
             if (empty($existingComponents)) {
-                error_log("CPU $cpuUuid: No existing components - compatible");
                 $result['details'][] = 'No existing components - all CPUs compatible';
                 return $result;
             }
@@ -2618,9 +2594,6 @@ class ComponentCompatibility {
             $cpuMemoryTypes = $this->dataExtractor->extractSupportedMemoryTypes($cpuData, 'cpu');
             $cpuMaxMemorySpeed = $this->dataExtractor->extractMaxMemorySpeed($cpuData, 'cpu');
 
-            error_log("CPU $cpuUuid extracted specs - Socket: " . ($cpuSocket ?? 'NULL') .
-                     ", Memory Types: " . json_encode($cpuMemoryTypes) .
-                     ", Max Memory Speed: " . ($cpuMaxMemorySpeed ?? 'NULL'));
 
             // Collect compatibility requirements from existing components
             $compatibilityRequirements = [
@@ -2662,19 +2635,13 @@ class ComponentCompatibility {
 
             // Apply CPU compatibility logic using collected requirements
             if ($result['compatible']) {
-                error_log("CPU $cpuUuid: Applying final compatibility rules with requirements: " . json_encode($compatibilityRequirements));
                 $finalCompatResult = $this->applyCPUCompatibilityRules($cpuData, $compatibilityRequirements);
                 $result = array_merge($result, $finalCompatResult);
-                error_log("CPU $cpuUuid: After applying rules - Compatible: " . ($result['compatible'] ? 'YES' : 'NO') .
-                         ", Issues: " . json_encode($result['issues']));
             }
 
             // Create concise compatibility summary for display
             $result['compatibility_summary'] = $this->createCPUCompatibilitySummary($cpuData, $compatibilityRequirements, $result);
 
-            error_log("=== CPU COMPATIBILITY CHECK END for UUID: $cpuUuid - Result: " .
-                     ($result['compatible'] ? 'COMPATIBLE' : 'INCOMPATIBLE') .
-                     ", Summary: " . $result['compatibility_summary'] . " ===");
 
             return $result;
 
@@ -3446,7 +3413,6 @@ class ComponentCompatibility {
      * Analyze existing PCIe card (track slot usage)
      */
     private function analyzeExistingPCIeCardForPCIe($pcieCardComponent, &$slotAvailability) {
-        error_log("DEBUG analyzeExistingPCIeCardForPCIe: UUID=" . $pcieCardComponent['uuid']);
         $pcieData = $this->dataLoader->getComponentData('pciecard', $pcieCardComponent['uuid']);
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
 
@@ -3454,11 +3420,9 @@ class ComponentCompatibility {
             // Unknown card, assume 1 slot
             $slotAvailability['used_slots'] += 1;
             $result['details'][] = 'Existing PCIe card (specs unknown) - uses 1 slot';
-            error_log("DEBUG: PCIe card specs not found - counted as 1 used slot");
             return $result;
         }
 
-        error_log("DEBUG: PCIe card data loaded: " . json_encode(['model' => $pcieData['model'] ?? 'Unknown', 'subtype' => $pcieData['subtype'] ?? 'Unknown']));
 
         // Check if it's a riser card
         if ($this->isPCIeRiserCard($pcieData)) {
@@ -3481,8 +3445,6 @@ class ComponentCompatibility {
             $slotAvailability['available_by_size'][$riserSlotTypeKey] += $providedSlots;
 
             $result['details'][] = "Riser card installed - provides {$providedSlots} PCIe {$riserSlotTypeKey} slot(s) (uses motherboard riser slot, not PCIe slot)";
-            error_log("DEBUG: RISER CARD DETECTED - provides {$providedSlots} PCIe {$riserSlotTypeKey} slots. Total riser_added_slots now: " . $slotAvailability['riser_added_slots']);
-            error_log("DEBUG: available_by_size after riser: " . json_encode($slotAvailability['available_by_size']));
         } else {
             // Regular PCIe card
             $cardSlotSize = $this->dataExtractor->extractPCIeSlotSize($pcieData);
@@ -3490,7 +3452,6 @@ class ComponentCompatibility {
 
             $cardModel = $pcieData['model'] ?? 'PCIe Card';
             $result['details'][] = "Existing card: {$cardModel} (uses x{$cardSlotSize} slot)";
-            error_log("DEBUG: Regular PCIe card - uses 1 slot. Total used_slots now: " . $slotAvailability['used_slots']);
         }
 
         return $result;
@@ -3703,30 +3664,24 @@ class ComponentCompatibility {
      */
     private function analyzeExistingMotherboardForCPU($motherboardComponent, &$compatibilityRequirements) {
         $motherboardUuid = $motherboardComponent['uuid'];
-        error_log("Analyzing motherboard $motherboardUuid for CPU requirements");
 
         $motherboardData = $this->dataLoader->getComponentData('motherboard', $motherboardUuid);
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
 
         if (!$motherboardData) {
-            error_log("WARNING: Motherboard $motherboardUuid data not found");
             $result['details'][] = 'Motherboard specifications not found - basic compatibility assumed';
             return $result;
         }
 
-        error_log("Motherboard $motherboardUuid data loaded, extracting socket type");
 
         // Extract motherboard socket type
         $socketType = $this->dataExtractor->extractSocketType($motherboardData, 'motherboard');
-        error_log("Motherboard $motherboardUuid socket extracted: " . ($socketType ?? 'NULL'));
 
         if ($socketType) {
             $compatibilityRequirements['required_socket'] = $socketType;
             $compatibilityRequirements['sources'][] = "Motherboard socket: {$socketType}";
             $result['details'][] = "Motherboard requires socket: {$socketType}";
-            error_log("Set required_socket to: $socketType");
         } else {
-            error_log("WARNING: Could not extract socket type from motherboard $motherboardUuid");
         }
 
         return $result;
@@ -3737,13 +3692,11 @@ class ComponentCompatibility {
      */
     private function analyzeExistingRAMForCPU($ramComponent, &$compatibilityRequirements) {
         $ramUuid = $ramComponent['uuid'];
-        error_log("Analyzing RAM $ramUuid for CPU requirements");
 
         $ramData = $this->dataLoader->getComponentData('ram', $ramUuid);
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
 
         if (!$ramData) {
-            error_log("WARNING: RAM $ramUuid data not found");
             $result['details'][] = 'RAM specifications not found - basic compatibility assumed';
             return $result;
         }
@@ -3752,23 +3705,19 @@ class ComponentCompatibility {
         $ramType = $this->dataExtractor->extractMemoryType($ramData);
         $ramSpeed = $this->dataExtractor->extractMemorySpeed($ramData);
 
-        error_log("RAM $ramUuid extracted specs - Type: " . ($ramType ?? 'NULL') . ", Speed: " . ($ramSpeed ?? 'NULL') . "MHz");
 
         if ($ramType) {
             // RAM type is already normalized by extractMemoryType() to base DDR type (DDR5, DDR4, etc.)
             $compatibilityRequirements['memory_types_required'][] = $ramType;
             $compatibilityRequirements['sources'][] = "RAM type: {$ramType}";
             $result['details'][] = "CPU must support memory type: {$ramType}";
-            error_log("Added RAM type requirement: $ramType");
         } else {
-            error_log("WARNING: Could not extract memory type from RAM $ramUuid");
         }
 
         if ($ramSpeed) {
             $compatibilityRequirements['max_memory_speed_required'] = max($compatibilityRequirements['max_memory_speed_required'], $ramSpeed);
             $compatibilityRequirements['sources'][] = "RAM speed: {$ramSpeed}MHz";
             $result['details'][] = "CPU must support memory speed: {$ramSpeed}MHz or higher";
-            error_log("Added RAM speed requirement: {$ramSpeed}MHz");
         }
 
         return $result;
@@ -3817,9 +3766,6 @@ class ComponentCompatibility {
         $cpuMemoryTypes = $this->dataExtractor->extractSupportedMemoryTypes($cpuData, 'cpu');
         $cpuMaxMemorySpeed = $this->dataExtractor->extractMaxMemorySpeed($cpuData, 'cpu');
 
-        error_log("applyCPUCompatibilityRules - CPU Socket: " . ($cpuSocket ?? 'NULL') .
-                 ", Memory Types: " . json_encode($cpuMemoryTypes) .
-                 ", Max Memory Speed: " . ($cpuMaxMemorySpeed ?? 'NULL'));
 
         // Check socket compatibility
         if ($compatibilityRequirements['required_socket']) {
@@ -3829,26 +3775,19 @@ class ComponentCompatibility {
             $cpuSocketNormalized = strtolower(trim($cpuSocket ?? ''));
             $requiredSocketNormalized = strtolower(trim($requiredSocket ?? ''));
 
-            error_log("Socket comparison - CPU: '$cpuSocketNormalized' vs Required: '$requiredSocketNormalized' - Match: " .
-                     ($cpuSocketNormalized === $requiredSocketNormalized ? 'YES' : 'NO'));
 
             if ($cpuSocketNormalized !== $requiredSocketNormalized) {
                 $result['compatible'] = false;
                 $result['issues'][] = "CPU socket ({$cpuSocket}) does not match required socket ({$requiredSocket})";
-                error_log("SOCKET MISMATCH DETECTED!");
             } else {
                 $result['recommendations'][] = "CPU socket ({$cpuSocket}) matches motherboard socket";
-                error_log("Socket match confirmed");
             }
         } else {
-            error_log("No socket requirement specified");
         }
 
         // Check memory type compatibility with smart backward compatibility logic
         if (!empty($compatibilityRequirements['memory_types_required'])) {
             $requiredTypes = array_unique($compatibilityRequirements['memory_types_required']);
-            error_log("Checking memory type compatibility - Required: " . json_encode($requiredTypes) .
-                     ", CPU supports: " . json_encode($cpuMemoryTypes));
 
             foreach ($requiredTypes as $requiredType) {
                 // Normalize the required type
@@ -3868,9 +3807,7 @@ class ComponentCompatibility {
                             // Store warning if backward compatibility scenario (DDR5 CPU + DDR4 RAM)
                             if ($compatCheck['warning']) {
                                 $result['warnings'][] = $compatCheck['warning'];
-                                error_log("Memory type compatible with warning: " . $compatCheck['warning']);
                             } else {
-                                error_log("Memory type perfect match: " . $compatCheck['reason']);
                             }
 
                             $result['recommendations'][] = "CPU supports required memory type: {$normalizedRequired}";
@@ -3887,32 +3824,25 @@ class ComponentCompatibility {
                     $result['compatible'] = false;
                     if ($compatReason) {
                         $result['issues'][] = $compatReason;
-                        error_log("MEMORY TYPE INCOMPATIBLE: " . $compatReason);
                     } else {
                         $result['issues'][] = "CPU does not support required memory type: {$normalizedRequired} (CPU supports: " . implode(', ', $cpuMemoryTypes) . ")";
-                        error_log("MEMORY TYPE MISMATCH: CPU does not support $normalizedRequired");
                     }
                 }
             }
         } else {
-            error_log("No memory type requirements specified");
         }
 
         // Check memory speed compatibility
         if ($compatibilityRequirements['max_memory_speed_required'] > 0 && $cpuMaxMemorySpeed) {
             $requiredSpeed = $compatibilityRequirements['max_memory_speed_required'];
-            error_log("Checking memory speed - CPU max: {$cpuMaxMemorySpeed}MHz, Required: {$requiredSpeed}MHz");
 
             if ($cpuMaxMemorySpeed < $requiredSpeed) {
                 $result['compatible'] = false;
                 $result['issues'][] = "CPU maximum memory speed ({$cpuMaxMemorySpeed}MHz) is lower than required ({$requiredSpeed}MHz)";
-                error_log("MEMORY SPEED MISMATCH: CPU speed too low");
             } else {
                 $result['recommendations'][] = "CPU memory speed ({$cpuMaxMemorySpeed}MHz) supports existing RAM ({$requiredSpeed}MHz)";
-                error_log("Memory speed check passed");
             }
         } else {
-            error_log("No memory speed requirements specified");
         }
 
         return $result;
@@ -3956,7 +3886,6 @@ class ComponentCompatibility {
                 return "Incompatible - motherboard socket requirements not determined";
             } else {
                 // This should rarely happen now - log for debugging
-                error_log("WARNING: CPU compatibility check failed but no specific issues found. CPU Socket: $cpuSocket, Required: $requiredSocket");
                 return "Incompatible - compatibility check failed (CPU: $cpuSocket, Required: $requiredSocket)";
             }
         }
@@ -4004,10 +3933,6 @@ class ComponentCompatibility {
         $ramModuleType = $ramData['module_type'] ?? null; // RDIMM, LRDIMM, UDIMM
 
         // DEBUG: Log RAM data extraction
-        error_log("DEBUG [analyzeExistingRAMForMotherboard] RAM UUID: {$ramComponent['uuid']}");
-        error_log("DEBUG [analyzeExistingRAMForMotherboard] RAM Data Keys: " . json_encode(array_keys($ramData)));
-        error_log("DEBUG [analyzeExistingRAMForMotherboard] Extracted ramModuleType: " . ($ramModuleType ?? 'NULL'));
-        error_log("DEBUG [analyzeExistingRAMForMotherboard] Full RAM Data: " . json_encode($ramData));
 
         if ($ramType) {
             $compatibilityRequirements['required_memory_types'][] = $ramType;
@@ -4035,9 +3960,7 @@ class ComponentCompatibility {
             $result['details'][] = "Motherboard must support RAM module type: {$ramModuleType}";
 
             // DEBUG: Log module type requirement
-            error_log("DEBUG [analyzeExistingRAMForMotherboard] Added required_module_type: " . strtoupper($ramModuleType));
         } else {
-            error_log("DEBUG [analyzeExistingRAMForMotherboard] WARNING: No module_type found in RAM data!");
         }
 
         return $result;
@@ -4121,15 +4044,11 @@ class ComponentCompatibility {
             $motherboardModuleTypes = $this->dataExtractor->extractSupportedModuleTypes($motherboardData);
 
             // DEBUG: Log module type comparison
-            error_log("DEBUG [applyMotherboardCompatibilityRules] Required module types: " . json_encode($requiredModuleTypes));
-            error_log("DEBUG [applyMotherboardCompatibilityRules] Motherboard module types: " . json_encode($motherboardModuleTypes));
-            error_log("DEBUG [applyMotherboardCompatibilityRules] Motherboard data memory section: " . json_encode($motherboardData['memory'] ?? 'NOT FOUND'));
 
             // If motherboard doesn't specify module types, assume it supports all (backward compatibility)
             // This allows older JSON specifications without module_type fields to remain compatible
             if ($motherboardModuleTypes === null) {
                 $result['warnings'][] = "Motherboard module type support not specified - assuming compatible with " . implode('/', $requiredModuleTypes);
-                error_log("DEBUG [applyMotherboardCompatibilityRules] Motherboard module types NULL - assuming compatible");
                 // Don't break - continue with other validations
             } else {
                 // Motherboard has explicit module type support - validate it
@@ -4138,7 +4057,6 @@ class ComponentCompatibility {
                     $motherboardModuleTypesUpper = array_map('strtoupper', $motherboardModuleTypes);
 
                     // DEBUG: Log individual check
-                    error_log("DEBUG [applyMotherboardCompatibilityRules] Checking if '$requiredModuleTypeUpper' is in [" . implode(', ', $motherboardModuleTypesUpper) . "]");
 
                     // Check if motherboard supports the required module type
                     if (!in_array($requiredModuleTypeUpper, $motherboardModuleTypesUpper)) {
@@ -4146,16 +4064,13 @@ class ComponentCompatibility {
                         $result['issues'][] = "Motherboard memory incompatible with existing RAM";
                         $result['details'][] = "Motherboard does not support {$requiredModuleType} modules (supported: " . implode(', ', $motherboardModuleTypes) . ")";
 
-                        error_log("DEBUG [applyMotherboardCompatibilityRules] INCOMPATIBLE: '$requiredModuleTypeUpper' NOT FOUND in motherboard support");
                     } else {
                         $result['recommendations'][] = "Motherboard supports required module type: {$requiredModuleType}";
 
-                        error_log("DEBUG [applyMotherboardCompatibilityRules] COMPATIBLE: '$requiredModuleTypeUpper' FOUND in motherboard support");
                     }
                 }
             }
         } else {
-            error_log("DEBUG [applyMotherboardCompatibilityRules] No required_module_types in compatibility requirements");
         }
 
         return $result;

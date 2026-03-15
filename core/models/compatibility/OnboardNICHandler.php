@@ -25,27 +25,22 @@ class OnboardNICHandler {
      */
     public function autoAddOnboardNICs($configUuid, $motherboardUuid) {
         try {
-            error_log("=== AUTO-ADDING ONBOARD NICs ===");
-            error_log("Config: $configUuid, Motherboard: $motherboardUuid");
+
 
             // Load motherboard specifications from JSON
             $mbSpecs = $this->getMotherboardSpecs($motherboardUuid);
 
             if (!$mbSpecs) {
-                error_log("Could not load motherboard specifications");
                 return ['count' => 0, 'nics' => [], 'message' => 'Motherboard specs not found'];
             }
 
             // Check if motherboard has onboard NICs
             if (!isset($mbSpecs['networking']['onboard_nics']) || empty($mbSpecs['networking']['onboard_nics'])) {
-                error_log("No onboard NICs found in motherboard specs");
                 return ['count' => 0, 'nics' => [], 'message' => 'No onboard NICs in motherboard'];
             }
 
             $onboardNICs = $mbSpecs['networking']['onboard_nics'];
             $addedNICs = [];
-
-            error_log("Found " . count($onboardNICs) . " onboard NIC(s) in motherboard specs");
 
             // Check if onboard NICs already exist in nicinventory (including orphaned ones with NULL ServerUUID)
             $checkExistingStmt = $this->pdo->prepare("
@@ -57,12 +52,8 @@ class OnboardNICHandler {
             $checkExistingStmt->execute([$motherboardUuid, $configUuid]);
             $existingOnboardNICs = $checkExistingStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            error_log("Found " . count($existingOnboardNICs) . " existing onboard NIC(s) in nicinventory");
-
             // If onboard NICs exist, just make sure they're properly tracked in configuration
             if (!empty($existingOnboardNICs)) {
-                error_log("Onboard NICs already exist - ensuring they're properly configured");
-
                 foreach ($existingOnboardNICs as $existingNIC) {
                     // Fix ServerUUID and Status in nicinventory if they're wrong
                     if ($existingNIC['ServerUUID'] !== $configUuid || $existingNIC['Status'] != 2) {
@@ -72,7 +63,6 @@ class OnboardNICHandler {
                             WHERE UUID = ?
                         ");
                         $fixNICStmt->execute([$configUuid, $existingNIC['UUID']]);
-                        error_log("Fixed ServerUUID and Status for onboard NIC {$existingNIC['UUID']}");
                     }
 
                     $addedNICs[] = [
@@ -103,10 +93,6 @@ class OnboardNICHandler {
             ");
             $cleanupStmt->execute([$motherboardUuid, $configUuid]);
             $deletedCount = $cleanupStmt->rowCount();
-            if ($deletedCount > 0) {
-                error_log("Cleaned up $deletedCount orphaned onboard NIC(s) before creating new ones");
-            }
-
             // Note: No need to clean up from server_configuration_components as it's deprecated
             // The nic_config JSON will be updated at the end to reflect current state
 
@@ -116,8 +102,6 @@ class OnboardNICHandler {
                 // Format: onboard-{first_8_chars}-{nic_index} = max 18 chars
                 $mbShort = substr($motherboardUuid, 0, 8);
                 $syntheticUuid = "onboard-{$mbShort}-{$nicIndex}";
-
-                error_log("Processing onboard NIC #{$nicIndex}: $syntheticUuid (full MB UUID: $motherboardUuid)");
 
                 // Create descriptive notes
                 $notes = sprintf(
@@ -152,8 +136,6 @@ class OnboardNICHandler {
                     continue;
                 }
 
-                error_log("Inserted onboard NIC into nicinventory");
-
                 // Note: No need to add to server_configuration_components as it's deprecated
                 // The nic_config JSON will be updated at the end to include this NIC
 
@@ -167,8 +149,6 @@ class OnboardNICHandler {
 
             // Update nic_config JSON in server_build_templates
             $this->updateNICConfigJSON($configUuid);
-
-            error_log("Successfully added " . count($addedNICs) . " onboard NIC(s)");
 
             return [
                 'count' => count($addedNICs),
@@ -210,8 +190,6 @@ class OnboardNICHandler {
      */
     public function updateNICConfigJSON($configUuid) {
         try {
-            error_log("Updating nic_config JSON for config: $configUuid");
-
             // Get all NICs from nicinventory for this configuration
             $stmt = $this->pdo->prepare("
                 SELECT
@@ -228,9 +206,6 @@ class OnboardNICHandler {
             $stmt->execute([$configUuid]);
             $nics = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            error_log("DEBUG: Found " . count($nics) . " NIC(s) in nicinventory for this configuration");
-            error_log("DEBUG: NICs data: " . json_encode($nics));
-
             $nicConfigData = [
                 'nics' => [],
                 'summary' => [
@@ -242,9 +217,6 @@ class OnboardNICHandler {
             ];
 
             foreach ($nics as $nic) {
-                error_log("DEBUG: Processing NIC: " . $nic['component_uuid']);
-                error_log("DEBUG: SourceType: " . ($nic['SourceType'] ?? 'NULL'));
-
                 $isOnboard = $nic['SourceType'] === 'onboard';
 
                 // Determine source type - default to 'component' if NULL (happens when NIC isn't in nicinventory)
@@ -261,17 +233,14 @@ class OnboardNICHandler {
 
                 // Get specs based on type
                 if ($isOnboard) {
-                    error_log("DEBUG: NIC is onboard - getting onboard specs");
                     $nicData['specifications'] = $this->getOnboardNICSpecs(
                         $nic['ParentComponentUUID'],
                         $nic['OnboardNICIndex']
                     );
                     $nicConfigData['summary']['onboard_nics']++;
                 } else {
-                    error_log("DEBUG: NIC is component - getting component specs");
                     // Component NIC - get specs from JSON
                     $specs = $this->getComponentNICSpecs($nic['component_uuid']);
-                    error_log("DEBUG: Component specs retrieved: " . json_encode($specs));
                     $nicData['specifications'] = $specs;
                     $nicData['serial_number'] = $nic['SerialNumber'] ?? 'N/A';
                     $nicConfigData['summary']['component_nics']++;
@@ -279,17 +248,12 @@ class OnboardNICHandler {
 
                 $nicConfigData['nics'][] = $nicData;
                 $nicConfigData['summary']['total_nics']++;
-                error_log("DEBUG: Added NIC to array. Total NICs now: " . $nicConfigData['summary']['total_nics']);
             }
-
-            error_log("DEBUG: Final summary - Total: {$nicConfigData['summary']['total_nics']}, Onboard: {$nicConfigData['summary']['onboard_nics']}, Component: {$nicConfigData['summary']['component_nics']}");
 
             // First, verify the config exists
             $checkStmt = $this->pdo->prepare("SELECT COUNT(*) FROM server_configurations WHERE config_uuid = ?");
             $checkStmt->execute([$configUuid]);
             $exists = $checkStmt->fetchColumn();
-
-            error_log("Config UUID exists in server_configurations: " . ($exists ? 'YES' : 'NO'));
 
             if (!$exists) {
                 error_log("ERROR: config_uuid '$configUuid' not found in server_configurations table");
@@ -304,24 +268,9 @@ class OnboardNICHandler {
             ");
 
             $jsonString = json_encode($nicConfigData, JSON_PRETTY_PRINT);
-            error_log("Updating nic_config with JSON (length: " . strlen($jsonString) . "): " . substr($jsonString, 0, 200));
 
             try {
                 $result = $stmt->execute([$jsonString, $configUuid]);
-                $errorInfo = $stmt->errorInfo();
-
-                error_log("Execute result: " . ($result ? 'true' : 'false'));
-                error_log("Error info: " . json_encode($errorInfo));
-                error_log("Rows affected: " . $stmt->rowCount());
-
-                if (!$result) {
-                    error_log("UPDATE failed with PDO error code: " . $errorInfo[0]);
-                } else if ($stmt->rowCount() === 0) {
-                    error_log("WARNING: UPDATE succeeded but affected 0 rows");
-                } else {
-                    error_log("nic_config JSON updated successfully");
-                }
-
                 return $result;
             } catch (PDOException $pdoEx) {
                 error_log("PDOException during UPDATE: " . $pdoEx->getMessage());
@@ -330,7 +279,6 @@ class OnboardNICHandler {
 
         } catch (Exception $e) {
             error_log("Error updating nic_config JSON: " . $e->getMessage());
-            error_log("Stack trace: " . $e->getTraceAsString());
             return false;
         }
     }
@@ -390,18 +338,13 @@ class OnboardNICHandler {
      */
     public function removeOnboardNICs($motherboardUuid, $configUuid) {
         try {
-            error_log("=== REMOVING ONBOARD NICs ===");
-            error_log("Motherboard: $motherboardUuid, Config: $configUuid");
-
-            // Get onboard NIC UUIDs before deletion for logging
+            // Get onboard NIC UUIDs before deletion
             $stmt = $this->pdo->prepare("
                 SELECT UUID FROM nicinventory
                 WHERE ParentComponentUUID = ? AND SourceType = 'onboard' AND ServerUUID = ?
             ");
             $stmt->execute([$motherboardUuid, $configUuid]);
             $onboardNICs = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-            error_log("Found " . count($onboardNICs) . " onboard NIC(s) to remove");
 
             // Note: No need to delete from server_configuration_components as it's deprecated
             // The nic_config JSON will be updated at the end to reflect current state
@@ -413,8 +356,6 @@ class OnboardNICHandler {
             ");
             $stmt->execute([$motherboardUuid, $configUuid]);
             $deletedFromInventory = $stmt->rowCount();
-
-            error_log("Deleted $deletedFromInventory onboard NIC(s) from nicinventory");
 
             // Update nic_config JSON to reflect removal
             $this->updateNICConfigJSON($configUuid);
@@ -446,9 +387,6 @@ class OnboardNICHandler {
     public function replaceOnboardNIC($configUuid, $onboardNICUuid, $componentNICUuid) {
         try {
             $this->pdo->beginTransaction();
-
-            error_log("=== REPLACING ONBOARD NIC ===");
-            error_log("Onboard NIC: $onboardNICUuid -> Component NIC: $componentNICUuid");
 
             // Verify onboard NIC exists and belongs to this config
             $stmt = $this->pdo->prepare("
@@ -504,8 +442,6 @@ class OnboardNICHandler {
             $this->updateNICConfigJSON($configUuid);
 
             $this->pdo->commit();
-
-            error_log("Successfully replaced onboard NIC with component NIC");
 
             return [
                 'success' => true,

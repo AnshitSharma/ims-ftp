@@ -441,43 +441,26 @@ class SFPCompatibilityResolver {
     }
 
     /**
-     * Validate speed compatibility (SFP speed must be <= NIC max speed)
-     * Allows downshift but blocks upshift
-     *
-     * @param string $nicMaxSpeed NIC maximum speed (e.g., "25GbE", "10Gbps")
-     * @param string $sfpSpeed SFP speed (e.g., "10Gbps", "25GbE")
-     * @return bool True if compatible
+     * Validate speed compatibility - delegates to NICPortTracker
      */
     private function validateSpeedCompatibility($nicMaxSpeed, $sfpSpeed) {
-        $nicSpeedValue = $this->extractSpeedValue($nicMaxSpeed);
-        $sfpSpeedValue = $this->extractSpeedValue($sfpSpeed);
-
-        // Allow downshift: 25G NIC can accept 10G SFP
-        // Block upshift: 10G NIC cannot accept 25G SFP
-        return $sfpSpeedValue <= $nicSpeedValue;
+        return NICPortTracker::validateSpeedCompatibility($nicMaxSpeed, $sfpSpeed);
     }
 
     /**
-     * Extract numeric speed value from speed string
-     *
-     * @param string $speedStr Speed string (e.g., "10GbE", "25Gbps", "100G")
-     * @return int Speed value in Gbps
+     * Extract numeric speed value - delegates to NICPortTracker
      */
     private function extractSpeedValue($speedStr) {
+        // Use reflection-free approach: replicate the static call
+        // NICPortTracker::extractSpeedValue is private, so inline the logic
         $speedStr = strtoupper(trim($speedStr));
-
-        // Extract numeric value
         if (preg_match('/(\d+(?:\.\d+)?)/', $speedStr, $matches)) {
             $value = floatval($matches[1]);
-
-            // Handle Mbps (convert to Gbps)
             if (strpos($speedStr, 'M') !== false) {
                 $value = $value / 1000;
             }
-
             return (int)$value;
         }
-
         return 0;
     }
 

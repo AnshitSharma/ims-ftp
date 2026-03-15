@@ -10,6 +10,7 @@
 
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
+require_once __DIR__ . '/../server/ServerConfiguration.php';
 
 class UnifiedSlotTracker {
 
@@ -359,7 +360,6 @@ class UnifiedSlotTracker {
 
             // Check if PCIe components exist (excluding risers)
             // Load configuration to count PCIe components
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $pcieCount = 0;
@@ -485,7 +485,6 @@ class UnifiedSlotTracker {
 
             // Check if riser components exist
             // Load configuration to count riser cards
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $riserCount = 0;
@@ -821,7 +820,6 @@ class UnifiedSlotTracker {
     private function getMotherboardFromConfig($configUuid) {
         try {
             // Load configuration using ServerConfiguration class (JSON-based storage)
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1015,7 +1013,6 @@ class UnifiedSlotTracker {
     private function getUsedPCIeSlots($configUuid) {
         try {
             // Load configuration using ServerConfiguration class (JSON-based storage)
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1088,7 +1085,6 @@ class UnifiedSlotTracker {
     private function getUsedRiserSlots($configUuid) {
         try {
             // Load configuration using ServerConfiguration class (JSON-based storage)
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1310,7 +1306,6 @@ class UnifiedSlotTracker {
     private function getRiserCardsInConfig($configUuid) {
         try {
             // Load configuration using ServerConfiguration class (JSON-based storage)
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1459,7 +1454,6 @@ class UnifiedSlotTracker {
      */
     private function getUsedM2Slots($configUuid) {
         try {
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1532,7 +1526,6 @@ class UnifiedSlotTracker {
      */
     private function getM2SlotProvidingCards($configUuid) {
         try {
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1661,7 +1654,6 @@ class UnifiedSlotTracker {
 
             // Note: Would need U.2 availability method for complete U.2 support
             // For now, use the CountUsedU2Slots logic from the original
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             $usedU2Slots = [];
@@ -1714,7 +1706,6 @@ class UnifiedSlotTracker {
      */
     public function getPCIeCardsOnRiser($configUuid, $riserUuid) {
         try {
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
@@ -1859,7 +1850,6 @@ class UnifiedSlotTracker {
      */
     public function validateRiserSlotIntegrity($configUuid) {
         try {
-            require_once __DIR__ . '/../server/ServerConfiguration.php';
             $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
