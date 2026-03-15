@@ -175,27 +175,22 @@ class ComponentQueryBuilder {
      * @return array Query results
      */
     public function get() {
-        $cacheKey = $this->generateCacheKey();
+        $sql = $this->buildQuery();
+        $cacheKey = md5($sql . json_encode($this->parameters));
 
         // Try cache first
         if ($this->useCache && $this->cacheManager) {
             $cached = $this->cacheManager->get('queries', $cacheKey);
             if ($cached !== null) {
-                error_log("ComponentQueryBuilder: Cache HIT for $cacheKey");
                 return $cached;
             }
         }
-
-        // Execute query
-        $sql = $this->buildQuery();
-        error_log("ComponentQueryBuilder executing: " . substr($sql, 0, 200));
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($this->parameters);
 
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Cache results
         if ($this->useCache && $this->cacheManager) {
             $this->cacheManager->set('queries', $cacheKey, $results, $this->cacheTtl);
         }

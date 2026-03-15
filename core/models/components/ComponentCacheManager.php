@@ -107,7 +107,7 @@ class ComponentCacheManager {
             'created_at' => time(),
             'last_accessed' => time(),
             'ttl' => $ttl,
-            'size_estimate' => strlen(serialize($value))
+            'size_estimate' => strlen(json_encode($value))
         ];
 
         $this->recordSet($namespace);
@@ -283,7 +283,7 @@ class ComponentCacheManager {
      * Check if value can be added to cache
      */
     private function canAddToCache($value) {
-        $estimated = strlen(serialize($value)) / (1024 * 1024);
+        $estimated = strlen(json_encode($value)) / (1024 * 1024);
         $currentUsage = $this->estimateMemoryUsage();
         return ($currentUsage + $estimated) < $this->maxMemoryMb;
     }

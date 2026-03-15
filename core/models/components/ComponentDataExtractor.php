@@ -208,55 +208,25 @@ class ComponentDataExtractor {
      * @return array|null Array of supported module types, or null if not specified
      */
     public function extractSupportedModuleTypes($data) {
-        // DEBUG: Log extraction attempt
-        error_log("DEBUG [extractSupportedModuleTypes] Starting extraction");
-        error_log("DEBUG [extractSupportedModuleTypes] Has 'memory' key: " . (isset($data['memory']) ? 'YES' : 'NO'));
-
         // Check memory object for module_types array
         if (isset($data['memory']) && is_array($data['memory'])) {
-            error_log("DEBUG [extractSupportedModuleTypes] memory section keys: " . json_encode(array_keys($data['memory'])));
-
             if (isset($data['memory']['module_types']) && is_array($data['memory']['module_types'])) {
-                $result = array_map('strtoupper', $data['memory']['module_types']);
-                error_log("DEBUG [extractSupportedModuleTypes] Found module_types array: " . json_encode($result));
-                return $result;
+                return array_map('strtoupper', $data['memory']['module_types']);
             }
-
-            // Check for single module_type string
             if (isset($data['memory']['module_type'])) {
-                $result = [strtoupper($data['memory']['module_type'])];
-                error_log("DEBUG [extractSupportedModuleTypes] Found module_type string: " . json_encode($result));
-                return $result;
+                return [strtoupper($data['memory']['module_type'])];
             }
         }
 
-        // Check root level supported_module_types
-        if (isset($data['supported_module_types'])) {
-            if (is_array($data['supported_module_types'])) {
-                $result = array_map('strtoupper', $data['supported_module_types']);
-                error_log("DEBUG [extractSupportedModuleTypes] Found root level supported_module_types array: " . json_encode($result));
-                return $result;
+        // Check root level supported_module_types / module_types
+        foreach (['supported_module_types', 'module_types'] as $key) {
+            if (isset($data[$key])) {
+                return is_array($data[$key])
+                    ? array_map('strtoupper', $data[$key])
+                    : [strtoupper($data[$key])];
             }
-            $result = [strtoupper($data['supported_module_types'])];
-            error_log("DEBUG [extractSupportedModuleTypes] Found root level supported_module_types string: " . json_encode($result));
-            return $result;
         }
 
-        // Check root level module_types
-        if (isset($data['module_types'])) {
-            if (is_array($data['module_types'])) {
-                $result = array_map('strtoupper', $data['module_types']);
-                error_log("DEBUG [extractSupportedModuleTypes] Found root level module_types array: " . json_encode($result));
-                return $result;
-            }
-            $result = [strtoupper($data['module_types'])];
-            error_log("DEBUG [extractSupportedModuleTypes] Found root level module_types string: " . json_encode($result));
-            return $result;
-        }
-
-        // No module type specification found - return null to indicate unknown support
-        error_log("DEBUG [extractSupportedModuleTypes] No module types found - returning NULL");
-        // This allows for backward compatibility with older JSON specs
         return null;
     }
 

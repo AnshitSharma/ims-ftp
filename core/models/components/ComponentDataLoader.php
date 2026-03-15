@@ -258,155 +258,97 @@ class ComponentDataLoader {
         $jsonPaths = $this->getJSONFilePaths();
 
         if (!isset($jsonPaths[$type])) {
-            error_log("Unknown component type for JSON loading: $type");
             return null;
         }
 
         $filePath = $jsonPaths[$type];
-
         if (!file_exists($filePath)) {
-            error_log("JSON file not found: $filePath for type: $type");
             return null;
         }
 
         try {
             $jsonContent = file_get_contents($filePath);
             if ($jsonContent === false) {
-                error_log("Failed to read JSON file: $filePath");
                 return null;
             }
 
             $jsonData = json_decode($jsonContent, true);
-
             if (!$jsonData) {
-                error_log("Failed to parse JSON for type: $type, JSON error: " . json_last_error_msg());
                 return null;
             }
-
-            error_log("DEBUG: Successfully loaded JSON for type: $type, searching for UUID: $uuid");
-
         } catch (Exception $e) {
             error_log("Error loading JSON for type $type: " . $e->getMessage());
             return null;
         }
 
-        // Find the specific component by UUID with detailed logging
-        $foundComponents = 0;
-
-        // Special handling for caddy JSON structure: {"caddies": [...]}
+        // Caddy: {"caddies": [...]}
         if ($type === 'caddy' && isset($jsonData['caddies']) && is_array($jsonData['caddies'])) {
             foreach ($jsonData['caddies'] as $caddy) {
-                $foundComponents++;
-                $caddyUuid = $caddy['UUID'] ?? $caddy['uuid'] ?? '';
-                if ($caddyUuid === $uuid) {
-                    error_log("DEBUG: Found caddy $uuid in caddies array");
+                if (($caddy['UUID'] ?? $caddy['uuid'] ?? '') === $uuid) {
                     return $caddy;
                 }
             }
-            error_log("DEBUG: Caddy $uuid not found in caddies array (searched $foundComponents caddies)");
             return null;
         }
 
         foreach ($jsonData as $brandData) {
-            $modelArray = null;
-
-            // Chassis structure: manufacturers -> series -> models
+            // Chassis: manufacturers → series → models
             if ($type === 'chassis' && isset($brandData['manufacturer'])) {
-                if (isset($brandData['series']) && is_array($brandData['series'])) {
-                    foreach ($brandData['series'] as $series) {
-                        if (isset($series['models']) && is_array($series['models'])) {
-                            foreach ($series['models'] as $model) {
-                                $foundComponents++;
-                                $modelUuid = $model['UUID'] ?? $model['uuid'] ?? '';
-                                if ($modelUuid === $uuid) {
-                                    $manufacturerName = $brandData['manufacturer'] ?? 'Unknown';
-                                    error_log("DEBUG: Found chassis $uuid in manufacturer $manufacturerName");
+                foreach ($brandData['series'] ?? [] as $series) {
+                    foreach ($series['models'] ?? [] as $model) {
+                        if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
+                            return $model;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Standard: brand → models
+            if (isset($brandData['models']) && is_array($brandData['models'])) {
+                foreach ($brandData['models'] as $model) {
+                    if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
+                        return $this->enrichModel($model, $brandData);
+                    }
+                }
+            }
+            // Series-based: brand → series → models (NIC, etc.)
+            elseif (isset($brandData['series']) && is_array($brandData['series'])) {
+                foreach ($brandData['series'] as $series) {
+                    if (isset($series['models']) && is_array($series['models'])) {
+                        foreach ($series['models'] as $model) {
+                            if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
+                                return $this->enrichModel($model, $brandData);
+                            }
+                        }
+                    }
+                    // Legacy: families → port_configurations
+                    elseif (isset($series['families'])) {
+                        foreach ($series['families'] as $family) {
+                            foreach ($family['port_configurations'] ?? [] as $model) {
+                                if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
                                     return $model;
                                 }
                             }
                         }
                     }
                 }
-                continue; // Skip to next manufacturer
-            }
-
-            // Standard structure: models array directly in brand
-            if (isset($brandData['models']) && is_array($brandData['models'])) {
-                $modelArray = $brandData['models'];
-            }
-            // NIC structure: brand -> series -> models (NOT families -> port_configurations)
-            elseif (isset($brandData['series']) && is_array($brandData['series'])) {
-                foreach ($brandData['series'] as $series) {
-                    // Check for direct models array in series
-                    if (isset($series['models']) && is_array($series['models'])) {
-                        foreach ($series['models'] as $model) {
-                            $foundComponents++;
-                            $modelUuid = $model['UUID'] ?? $model['uuid'] ?? '';
-                            if ($modelUuid === $uuid) {
-                                $brandName = $brandData['brand'] ?? 'Unknown';
-                                $seriesName = $series['name'] ?? 'Unknown';
-                                error_log("DEBUG: Found component $uuid in brand $brandName, series $seriesName");
-
-                                // IMPORTANT: Merge parent-level fields (like component_subtype) into model data
-                                // This ensures fields like 'component_subtype' from the brand level are available
-                                $enrichedModel = $model;
-                                if (isset($brandData['component_subtype'])) {
-                                    $enrichedModel['component_subtype'] = $brandData['component_subtype'];
-                                }
-                                if (isset($brandData['brand'])) {
-                                    $enrichedModel['brand'] = $brandData['brand'];
-                                }
-
-                                return $enrichedModel;
-                            }
-                        }
-                    }
-                    // Fallback: families -> port_configurations (legacy structure)
-                    elseif (isset($series['families'])) {
-                        foreach ($series['families'] as $family) {
-                            if (isset($family['port_configurations'])) {
-                                foreach ($family['port_configurations'] as $model) {
-                                    $foundComponents++;
-                                    $modelUuid = $model['UUID'] ?? $model['uuid'] ?? '';
-                                    if ($modelUuid === $uuid) {
-                                        $brandName = $brandData['brand'] ?? 'Unknown';
-                                        error_log("DEBUG: Found component $uuid in brand $brandName (port_configurations)");
-                                        return $model;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Search through the model array (for standard structure)
-            if ($modelArray) {
-                foreach ($modelArray as $model) {
-                    $foundComponents++;
-                    $modelUuid = $model['UUID'] ?? $model['uuid'] ?? '';
-                    if ($modelUuid === $uuid) {
-                        $brandName = $brandData['brand'] ?? 'Unknown';
-                        error_log("DEBUG: Found component $uuid in brand $brandName");
-
-                        // IMPORTANT: Merge parent-level fields (like component_subtype) into model data
-                        // This ensures fields like 'component_subtype' from the brand level are available
-                        $enrichedModel = $model;
-                        if (isset($brandData['component_subtype'])) {
-                            $enrichedModel['component_subtype'] = $brandData['component_subtype'];
-                        }
-                        if (isset($brandData['brand'])) {
-                            $enrichedModel['brand'] = $brandData['brand'];
-                        }
-
-                        return $enrichedModel;
-                    }
-                }
             }
         }
 
-        error_log("DEBUG: Component $uuid not found in $type JSON (searched $foundComponents components)");
         return null;
+    }
+
+    /**
+     * Merge parent-level fields (component_subtype, brand) into model data
+     */
+    private function enrichModel($model, $parentData) {
+        foreach (['component_subtype', 'brand'] as $field) {
+            if (isset($parentData[$field])) {
+                $model[$field] = $parentData[$field];
+            }
+        }
+        return $model;
     }
 
     /**
@@ -418,13 +360,11 @@ class ComponentDataLoader {
         $jsonPath = ComponentSpecPaths::getPath('storage');
 
         if (!file_exists($jsonPath)) {
-            error_log("Storage JSON file not found: $jsonPath");
             return null;
         }
 
         $jsonData = json_decode(file_get_contents($jsonPath), true);
         if (!$jsonData) {
-            error_log("Failed to decode storage JSON");
             return null;
         }
 
@@ -454,7 +394,6 @@ class ComponentDataLoader {
             }
         }
 
-        error_log("Storage UUID $uuid not found in storage-level-3.json");
         return null;
     }
 
@@ -467,13 +406,11 @@ class ComponentDataLoader {
         $jsonPath = ComponentSpecPaths::getPath('motherboard');
 
         if (!file_exists($jsonPath)) {
-            error_log("Motherboard JSON file not found: $jsonPath");
             return null;
         }
 
         $jsonData = json_decode(file_get_contents($jsonPath), true);
         if (!$jsonData) {
-            error_log("Failed to decode motherboard JSON");
             return null;
         }
 
@@ -488,7 +425,6 @@ class ComponentDataLoader {
             }
         }
 
-        error_log("Motherboard UUID $uuid not found in motherboard-level-3.json");
         return null;
     }
 
@@ -521,18 +457,6 @@ class ComponentDataLoader {
         }
 
         return null;
-    }
-
-    /**
-     * Get motherboard data by UUID
-     * @param string $uuid Motherboard UUID
-     * @return array Motherboard specifications
-     */
-    public function getMotherboardData($uuid) {
-        // Note: This method uses parseMotherboardSpecifications which is in ComponentCompatibility
-        // This method will need to be refactored when parseMotherboardSpecifications is extracted
-        // For now, we leave it as a placeholder that will be updated in Phase 4
-        return [];
     }
 
     /**
