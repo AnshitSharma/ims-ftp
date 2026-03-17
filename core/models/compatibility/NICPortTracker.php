@@ -337,22 +337,59 @@ class NICPortTracker {
      */
     private function resolveOnboardNicSpecs($nicUuid) {
         try {
+            // Step 1: Query nicinventory for onboard NIC record
             $stmt = $this->pdo->prepare(
                 "SELECT SourceType, ParentComponentUUID, OnboardNICIndex FROM nicinventory WHERE UUID = ? LIMIT 1"
             );
             $stmt->execute([$nicUuid]);
             $nicRow = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$nicRow || $nicRow['SourceType'] !== 'onboard' || empty($nicRow['ParentComponentUUID'])) {
+            if (!$nicRow) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: No nicinventory record found for $nicUuid");
                 return null;
             }
 
-            $mbSpecs = $this->componentDataService->findComponentByUuid('motherboard', $nicRow['ParentComponentUUID']);
+            if ($nicRow['SourceType'] !== 'onboard') {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: NIC $nicUuid is not onboard type (SourceType: {$nicRow['SourceType']})");
+                return null;
+            }
+
+            if (empty($nicRow['ParentComponentUUID'])) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: No ParentComponentUUID for $nicUuid");
+                return null;
+            }
+
+            // Step 2: Get motherboard specs from JSON
+            $mbUuid = $nicRow['ParentComponentUUID'];
+            $mbSpecs = $this->componentDataService->findComponentByUuid('motherboard', $mbUuid);
+
+            if (!$mbSpecs) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: Motherboard specs not found for UUID $mbUuid");
+                return null;
+            }
+
+            // Step 3: Get onboard NIC specs from motherboard
             $onboardIndex = (int)($nicRow['OnboardNICIndex'] ?? 1);
-            $onboardNics = $mbSpecs['networking']['onboard_nics'] ?? [];
+
+            // Try multiple possible paths in the motherboard spec
+            $onboardNics = $mbSpecs['networking']['onboard_nics'] ??
+                          $mbSpecs['onboard_nics'] ??
+                          [];
+
+            if (empty($onboardNics)) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: No onboard_nics found in motherboard spec for $mbUuid");
+                return null;
+            }
+
             $nicSpec = $onboardNics[$onboardIndex - 1] ?? null;
 
-            if (!$nicSpec || !isset($nicSpec['ports'])) {
+            if (!$nicSpec) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: OnboardNICIndex $onboardIndex not found in motherboard spec (available: " . count($onboardNics) . ")");
+                return null;
+            }
+
+            if (!isset($nicSpec['ports'])) {
+                error_log("NICPortTracker::resolveOnboardNicSpecs: 'ports' field not found in onboard NIC spec at index $onboardIndex");
                 return null;
             }
 
@@ -364,7 +401,7 @@ class NICPortTracker {
             ];
 
         } catch (Exception $e) {
-            error_log("NICPortTracker::resolveOnboardNicSpecs error for $nicUuid: " . $e->getMessage());
+            error_log("NICPortTracker::resolveOnboardNicSpecs exception for $nicUuid: " . $e->getMessage() . " (Code: " . $e->getCode() . ")");
             return null;
         }
     }
