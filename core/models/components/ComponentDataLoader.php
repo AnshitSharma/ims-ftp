@@ -65,7 +65,8 @@ class ComponentDataLoader {
             'caddy' => 'caddyinventory',
             'pciecard' => 'pciecardinventory',
             'chassis' => 'chassisinventory',
-            'hbacard' => 'hbacardinventory'
+            'hbacard' => 'hbacardinventory',
+            'sfp' => 'sfpinventory'
         ];
 
         $table = $tableMap[$type] ?? null;
