@@ -21,7 +21,8 @@ class ServerBuilder {
             'nic' => 'nicinventory',
             'caddy' => 'caddyinventory',
             'pciecard' => 'pciecardinventory',
-            'hbacard' => 'hbacardinventory'
+            'hbacard' => 'hbacardinventory',
+            'sfp' => 'sfpinventory'
         ];
 
         // Initialize DataExtractionUtilities for JSON spec lookups
