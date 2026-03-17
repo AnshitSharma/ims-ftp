@@ -3221,7 +3221,7 @@ class ServerBuilder {
                     return 20; // Default HBA card power
 
                 case 'sfp':
-                    $specs = $this->dataUtils->findComponentByUuid('sfp', $componentUuid);
+                    $specs = $this->dataUtils->getSFPByUUID($componentUuid);
                     if ($specs && isset($specs['power_consumption']) && is_string($specs['power_consumption'])) {
                         return (int)$specs['power_consumption']; // e.g. "1.5W" -> 1
                     }

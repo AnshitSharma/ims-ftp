@@ -631,6 +631,13 @@ class DataExtractionUtilities {
     }
 
     /**
+     * Get SFP by UUID (wrapper for findComponentByUuid)
+     */
+    public function getSFPByUUID($uuid) {
+        return $this->findComponentByUuid('sfp', $uuid);
+    }
+
+    /**
      * Clear JSON cache
      */
     public function clearCache() {
