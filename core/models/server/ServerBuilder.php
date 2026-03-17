@@ -392,6 +392,27 @@ class ServerBuilder {
                 $this->pdo->beginTransaction();
             }
 
+            // Phase 1.2: Auto-resolve serial_number if not provided
+            // When multiple inventory items share the same UUID (same model), we need a serial
+            // to identify which specific physical component is being added.
+            // Without this, the duplicate check treats all same-UUID components as identical.
+            if ($serialNumber === null) {
+                $table = $this->getComponentInventoryTable($componentType);
+                if ($table) {
+                    $stmt = $this->pdo->prepare("
+                        SELECT SerialNumber FROM `$table`
+                        WHERE UUID = ? AND Status = 1
+                        ORDER BY ID ASC
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$componentUuid]);
+                    $autoResolved = $stmt->fetchColumn();
+                    if ($autoResolved) {
+                        $serialNumber = $autoResolved;
+                    }
+                }
+            }
+
             // Phase 1.5: Validate compatibility with existing components (flexible order)
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
             if (!$compatibilityValidation['success']) {
@@ -405,20 +426,13 @@ class ServerBuilder {
             // CRITICAL: Pass serial_number to allow multiple components with same UUID but different serials
             // Skip duplicate check for virtual configs (allow same component UUID multiple times for testing)
             if (!$this->isVirtualConfig($configUuid) && $this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
-                // Check if this is an orphaned record (component exists in config table but not properly assigned)
-                $componentDetails = $this->getComponentByUuid($componentType, $componentUuid);
-                if ($componentDetails && $componentDetails['ServerUUID'] !== $configUuid) {
-                    // Orphaned record: component exists in config table but ServerUUID doesn't match
-                    // Component data is now stored in JSON columns, no cleanup needed
-                } else {
-                    if ($ownTransaction && $this->pdo->inTransaction()) {
-                        $this->pdo->rollback();
-                    }
-                    return [
-                        'success' => false,
-                        'message' => "Component $componentUuid is already added to this configuration"
-                    ];
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
                 }
+                return [
+                    'success' => false,
+                    'message' => "Component $componentUuid is already added to this configuration"
+                ];
             }
             
             // Phase 3: Validate component exists in JSON specifications
@@ -535,8 +549,20 @@ class ServerBuilder {
             // Phase 5: Chassis-specific validations BEFORE adding
             // Validation already done in Phase 3 for chassis, skip here
 
-            // Phase 5.1: Skip legacy CPU validation - flexible system handles compatibility
-            // CPU can now be added in any order with proper compatibility checking
+            // Phase 5.1: CPU-specific validations BEFORE adding
+            if ($componentType === 'cpu' && isset($compatibility)) {
+                try {
+                    $cpuValidation = $this->validateCPUAddition($configUuid, $componentUuid, $compatibility);
+                    if (!$cpuValidation['success']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
+                        return $cpuValidation;
+                    }
+                } catch (Exception $cpuError) {
+                    error_log("Error in CPU validation: " . $cpuError->getMessage());
+                }
+            }
             
             // Phase 5.5: RAM-specific validations BEFORE adding
             $ramValidationResults = null;
