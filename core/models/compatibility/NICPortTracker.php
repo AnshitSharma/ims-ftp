@@ -32,12 +32,17 @@ class NICPortTracker {
         $nicSpecs = $this->componentDataService->getComponentSpecifications('nic', $nicUuid);
 
         if (!$nicSpecs || !isset($nicSpecs['ports']) || !isset($nicSpecs['port_type'])) {
-            return [
-                'error' => 'Unable to load NIC specifications',
-                'total_ports' => 0,
-                'port_type' => 'unknown',
-                'ports' => []
-            ];
+            // Fallback: resolve onboard NIC specs via nicinventory + parent motherboard
+            $nicSpecs = $this->resolveOnboardNicSpecs($nicUuid);
+
+            if (!$nicSpecs) {
+                return [
+                    'error' => 'Unable to load NIC specifications',
+                    'total_ports' => 0,
+                    'port_type' => 'unknown',
+                    'ports' => []
+                ];
+            }
         }
 
         $totalPorts = (int)$nicSpecs['ports'];
@@ -99,7 +104,7 @@ class NICPortTracker {
         $stmt = $this->pdo->prepare("
             SELECT nic_config
             FROM server_configurations
-            WHERE uuid = ?
+            WHERE config_uuid = ?
         ");
         $stmt->execute([$configUuid]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -173,7 +178,7 @@ class NICPortTracker {
         $stmt = $this->pdo->prepare("
             SELECT sfp_configuration
             FROM server_configurations
-            WHERE uuid = ?
+            WHERE config_uuid = ?
         ");
         $stmt->execute([$configUuid]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -320,6 +325,48 @@ class NICPortTracker {
         }
 
         return 0;
+    }
+
+    /**
+     * Resolve port count and type for onboard NICs by querying nicinventory + parent motherboard.
+     * Used as fallback when ComponentDataService cannot find specs for synthetic onboard UUIDs
+     * like "onboard-4f8e6c3d-1" which are generated at runtime and not present in NIC JSON files.
+     *
+     * @param string $nicUuid Onboard NIC UUID (e.g., "onboard-4f8e6c3d-1")
+     * @return array|null ['ports' => int, 'port_type' => string] or null on failure
+     */
+    private function resolveOnboardNicSpecs($nicUuid) {
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT SourceType, ParentComponentUUID, OnboardNICIndex FROM nicinventory WHERE UUID = ? LIMIT 1"
+            );
+            $stmt->execute([$nicUuid]);
+            $nicRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$nicRow || $nicRow['SourceType'] !== 'onboard' || empty($nicRow['ParentComponentUUID'])) {
+                return null;
+            }
+
+            $mbSpecs = $this->componentDataService->findComponentByUuid('motherboard', $nicRow['ParentComponentUUID']);
+            $onboardIndex = (int)($nicRow['OnboardNICIndex'] ?? 1);
+            $onboardNics = $mbSpecs['networking']['onboard_nics'] ?? [];
+            $nicSpec = $onboardNics[$onboardIndex - 1] ?? null;
+
+            if (!$nicSpec || !isset($nicSpec['ports'])) {
+                return null;
+            }
+
+            $portType = $nicSpec['connector'] ?? $nicSpec['port_type'] ?? 'SFP+';
+
+            return [
+                'ports'     => (int)$nicSpec['ports'],
+                'port_type' => $portType,
+            ];
+
+        } catch (Exception $e) {
+            error_log("NICPortTracker::resolveOnboardNicSpecs error for $nicUuid: " . $e->getMessage());
+            return null;
+        }
     }
 
 }
