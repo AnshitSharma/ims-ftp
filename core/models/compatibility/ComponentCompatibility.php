@@ -688,7 +688,7 @@ class ComponentCompatibility {
             $caddySupportedFormFactors = $this->dataExtractor->extractSupportedFormFactors($caddyData);
 
             if ($storageFormFactor && $caddySupportedFormFactors) {
-                $normalizedCaddyFFs = array_map([$this, 'normalizeFormFactorForComparison'], $caddySupportedFormFactors);
+                $normalizedCaddyFFs = array_map([DataNormalizationUtils::class, 'normalizeFormFactorForComparison'], $caddySupportedFormFactors);
 
                 if (!in_array($normalizedStorageFF, $normalizedCaddyFFs)) {
                     $result['compatible'] = false;

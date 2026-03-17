@@ -2464,6 +2464,15 @@ function handleGetCompatible($serverBuilder, $user) {
                                 }
                             }
                         }
+                    } elseif ($componentType === 'caddy') {
+                        $newComponent = ['type' => 'caddy', 'uuid' => $component['UUID']];
+                        $compatResult = $compatibility->checkCaddyDecentralizedCompatibility($newComponent, $existingComponentsData);
+                        if (!$compatResult['compatible']) {
+                            $isCompatible = false;
+                            $compatibilityReasons = array_merge($compatibilityReasons, $compatResult['issues'] ?? []);
+                        } else {
+                            $compatibilityReasons[] = $compatResult['compatibility_summary'] ?? 'Compatible';
+                        }
                     } else {
                         // Check compatibility with each existing component for other types
                         foreach ($existingComponentsData as $existingComp) {
