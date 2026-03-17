@@ -1501,6 +1501,63 @@ function getSlotTracking($configUuid) {
 }
 
 /**
+ * Get storage connectivity tracking for a server configuration
+ */
+function getStorageConnectivity($configUuid, $components) {
+    global $pdo;
+
+    try {
+        $stmt = $pdo->prepare("SELECT chassis_uuid FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $chassisUuid = $stmt->fetchColumn();
+
+        $totalBays = 0;
+        if ($chassisUuid) {
+            require_once __DIR__ . '/../../../core/models/chassis/ChassisManager.php';
+            $chassisManager = new ChassisManager();
+            $chassisResult = $chassisManager->loadChassisSpecsByUUID($chassisUuid);
+            if ($chassisResult['found']) {
+                $totalBays = $chassisResult['specifications']['drive_bays']['total_bays'] ?? 0;
+            }
+        }
+
+        $connections = [];
+        $usedBays = 0;
+
+        $storageComponents = $components['storage'] ?? [];
+        foreach ($storageComponents as $storage) {
+            $conn = $storage['connection'] ?? null;
+            if ($conn && ($conn['type'] ?? '') === 'chassis_bay') {
+                $usedBays++;
+            }
+            $connections[] = [
+                'storage_uuid' => $storage['uuid'],
+                'storage_name' => $storage['component_name'] ?? 'Unknown',
+                'serial_number' => $storage['serial_number'] ?? 'Unknown',
+                'connection_type' => $conn['type'] ?? 'not_connected',
+                'bay_number' => $conn['bay_number'] ?? null,
+                'backplane_interface' => $conn['backplane_interface'] ?? null,
+                'storage_interface' => $conn['storage_interface'] ?? null,
+                'compatibility' => $conn['compatibility_type'] ?? null,
+                'description' => $conn['description'] ?? null
+            ];
+        }
+
+        return [
+            'drive_bays' => [
+                'total' => $totalBays,
+                'used' => $usedBays,
+                'available' => max(0, $totalBays - $usedBays)
+            ],
+            'connections' => $connections
+        ];
+    } catch (Exception $e) {
+        error_log("Error getting storage connectivity: " . $e->getMessage());
+        return ['drive_bays' => ['total' => 0, 'used' => 0, 'available' => 0], 'connections' => []];
+    }
+}
+
+/**
  * Get unified network configuration for a server
  * Consolidates NIC data from multiple sources (onboard, component, port tracking)
  *
@@ -1619,6 +1676,9 @@ function handleGetConfiguration($serverBuilder, $user) {
         // Get configuration warnings
         $configWarnings = getConfigurationWarnings($details['components'] ?? []);
 
+        // Get storage connectivity tracking
+        $storageConnectivity = getStorageConnectivity($configUuid, $details['components'] ?? []);
+
         send_json_response(1, 1, 200, "Configuration retrieved successfully", [
             'configuration' => [
                 'config_uuid' => $configuration['config_uuid'],
@@ -1644,7 +1704,8 @@ function handleGetConfiguration($serverBuilder, $user) {
                     'riser' => $slotTracking['riser'],
                     'm2' => $slotTracking['m2']
                 ],
-                'network' => $networkConfig
+                'network' => $networkConfig,
+                'storage_connectivity' => $storageConnectivity
             ],
             'validation' => [
                 'is_valid' => !empty($validationResults),

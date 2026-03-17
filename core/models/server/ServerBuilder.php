@@ -97,7 +97,8 @@ class ServerBuilder {
                         'component_type' => 'storage',
                         'component_uuid' => $storage['uuid'] ?? null,
                         'quantity' => $storage['quantity'] ?? 1,
-                        'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s'),
+                        'connection' => $storage['connection'] ?? null
                     ];
                 }
             }
@@ -632,6 +633,12 @@ class ServerBuilder {
             // Note: Component data is now stored in JSON columns in server_configurations table
             // No separate server_configuration_components table needed
 
+            // For storage components, compute connection path before persisting
+            if ($componentType === 'storage') {
+                $storageConnectionData = $this->computeStorageConnectionPath($configUuid, $componentUuid);
+                $options['connection_data'] = $storageConnectionData;
+            }
+
             // P4.3 FIX: Update JSON BEFORE status (safer transaction order)
             // This ensures JSON is persisted even if status update fails
 
@@ -877,6 +884,15 @@ class ServerBuilder {
                     'added_at' => $component['added_at']
                 ];
 
+                // Include connection data for storage components (with lazy migration)
+                if ($type === 'storage') {
+                    if (!empty($component['connection'])) {
+                        $simplifiedComponent['connection'] = $component['connection'];
+                    } else {
+                        $simplifiedComponent['connection'] = $this->computeStorageConnectionPath($configUuid, $uuid);
+                    }
+                }
+
                 $componentDetails[$type][] = $simplifiedComponent;
                 $componentCounts[$type] += $component['quantity'];
                 $totalComponents += $component['quantity'];
@@ -964,7 +980,7 @@ class ServerBuilder {
                     break;
 
                 case 'storage':
-                    $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action);
+                    $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options);
                     break;
 
                 case 'nic':
@@ -1227,23 +1243,27 @@ class ServerBuilder {
     /**
      * Update storage configuration in JSON format
      */
-    private function updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action) {
+    private function updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT storage_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $currentConfig = $stmt->fetchColumn();
-            
+
             $storageConfig = $currentConfig ? json_decode($currentConfig, true) : [];
             if (!is_array($storageConfig)) {
                 $storageConfig = [];
             }
-            
+
             if ($action === 'add') {
-                $storageConfig[] = [
+                $entry = [
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if (!empty($options['connection_data'])) {
+                    $entry['connection'] = $options['connection_data'];
+                }
+                $storageConfig[] = $entry;
             } elseif ($action === 'remove') {
                 $storageConfig = array_filter($storageConfig, function($storage) use ($componentUuid) {
                     return $storage['uuid'] !== $componentUuid;
@@ -1260,6 +1280,40 @@ class ServerBuilder {
         }
     }
 
+    /**
+     * Compute storage connection path using StorageConnectionValidator
+     */
+    private function computeStorageConnectionPath($configUuid, $storageUuid) {
+        try {
+            require_once __DIR__ . '/../compatibility/StorageConnectionValidator.php';
+            $storageValidator = new StorageConnectionValidator($this->pdo);
+            $existingComponents = $this->getExistingComponentsForValidation($configUuid);
+
+            $validation = $storageValidator->validate($configUuid, $storageUuid, $existingComponents);
+
+            if ($validation['valid'] && isset($validation['primary_path'])) {
+                $path = $validation['primary_path'];
+                $details = $path['details'] ?? [];
+
+                $existingStorageCount = count($existingComponents['storage'] ?? []);
+
+                return [
+                    'type' => $path['type'],
+                    'bay_number' => $existingStorageCount + 1,
+                    'controller_uuid' => $details['chassis_uuid'] ?? $details['hba_uuid'] ?? null,
+                    'backplane_interface' => $details['backplane_interface'] ?? null,
+                    'storage_interface' => $details['storage_interface'] ?? null,
+                    'compatibility_type' => $details['compatibility_type'] ?? null,
+                    'description' => $path['description'] ?? null
+                ];
+            }
+
+            return ['type' => 'not_connected'];
+        } catch (Exception $e) {
+            error_log("Error computing storage connection path: " . $e->getMessage());
+            return ['type' => 'not_connected'];
+        }
+    }
 
     /**
      * Update NIC configuration in JSON format
