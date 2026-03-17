@@ -693,10 +693,16 @@ function handleAddComponent($serverBuilder, $user) {
             $sfpSpecs = $componentDataService->getComponentSpecifications('sfp', $componentUuid);
 
             if (!$nicSpecs || !isset($nicSpecs['port_type'])) {
-                send_json_response(0, 1, 500,
-                    "Unable to load NIC specifications",
-                    ['parent_nic_uuid' => $parentNicUuid]
-                );
+                // Fallback for onboard NICs: get port_type from NICPortTracker
+                $portInfo = $portTracker->getPortAvailability($configUuid, $parentNicUuid);
+                if (!empty($portInfo['port_type']) && $portInfo['port_type'] !== 'unknown') {
+                    $nicSpecs = ['port_type' => $portInfo['port_type'], 'model' => 'Onboard NIC'];
+                } else {
+                    send_json_response(0, 1, 500,
+                        "Unable to load NIC specifications",
+                        ['parent_nic_uuid' => $parentNicUuid]
+                    );
+                }
             }
 
             if (!$sfpSpecs || !isset($sfpSpecs['type'])) {
