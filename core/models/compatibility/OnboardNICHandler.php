@@ -231,17 +231,16 @@ class OnboardNICHandler {
                     'replaceable' => true
                 ];
 
-                // Get specs based on type
+                // Get specs based on type — only include fields needed by frontend
                 if ($isOnboard) {
-                    $nicData['specifications'] = $this->getOnboardNICSpecs(
-                        $nic['ParentComponentUUID'],
-                        $nic['OnboardNICIndex']
+                    $nicData['specifications'] = $this->filterNICSpecs(
+                        $this->getOnboardNICSpecs($nic['ParentComponentUUID'], $nic['OnboardNICIndex'])
                     );
                     $nicConfigData['summary']['onboard_nics']++;
                 } else {
                     // Component NIC - get specs from JSON
                     $specs = $this->getComponentNICSpecs($nic['component_uuid']);
-                    $nicData['specifications'] = $specs;
+                    $nicData['specifications'] = $this->filterNICSpecs($specs);
                     $nicData['serial_number'] = $nic['SerialNumber'] ?? 'N/A';
                     $nicConfigData['summary']['component_nics']++;
                 }
@@ -327,6 +326,17 @@ class OnboardNICHandler {
             error_log("Error loading component NIC specs: " . $e->getMessage());
             return ['error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Filter NIC specs to only include fields needed by the frontend
+     */
+    private function filterNICSpecs($specs) {
+        if (!is_array($specs) || isset($specs['error'])) {
+            return $specs;
+        }
+        $allowedKeys = ['controller', 'model', 'ports', 'port_type', 'speed', 'speeds', 'connector'];
+        return array_intersect_key($specs, array_flip($allowedKeys));
     }
 
     /**

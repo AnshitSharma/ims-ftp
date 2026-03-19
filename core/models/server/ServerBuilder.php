@@ -1027,7 +1027,8 @@ class ServerBuilder {
                     break;
 
                 case 'nic':
-                    $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, $action);
+                    $slotPosition = $options['slot_position'] ?? null;
+                    $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition);
                     break;
 
                 case 'caddy':
@@ -1346,7 +1347,7 @@ class ServerBuilder {
     /**
      * Update NIC configuration in JSON format
      */
-    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action) {
+    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -1363,9 +1364,13 @@ class ServerBuilder {
             if ($action === 'add') {
                 $newNic = [
                     'uuid' => $componentUuid,
+                    'source_type' => 'component',
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if ($slotPosition !== null) {
+                    $newNic['slot_position'] = $slotPosition;
+                }
                 if ($isNestedFormat) {
                     $nicConfig['nics'][] = $newNic;
                 } else {
