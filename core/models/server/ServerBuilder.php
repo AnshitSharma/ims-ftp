@@ -134,8 +134,25 @@ class ServerBuilder {
             }
         }
 
-        // HBA Card (simple column, just one UUID)
-        if (!empty($configData['hbacard_uuid'])) {
+        // HBA Card configuration (JSON array, with legacy scalar fallback)
+        if (!empty($configData['hbacard_config'])) {
+            $hbaConfigs = $this->safeJsonDecode($configData['hbacard_config'], true, 'hbacard_config');
+            if (is_array($hbaConfigs)) {
+                // Handle migration: single object (has 'uuid' at top level) vs array of objects
+                if (isset($hbaConfigs['uuid'])) {
+                    $hbaConfigs = [$hbaConfigs];
+                }
+                foreach ($hbaConfigs as $hba) {
+                    $components[] = [
+                        'component_type' => 'hbacard',
+                        'component_uuid' => $hba['uuid'] ?? null,
+                        'quantity' => 1,
+                        'added_at' => $hba['added_at'] ?? date('Y-m-d H:i:s')
+                    ];
+                }
+            }
+        } elseif (!empty($configData['hbacard_uuid'])) {
+            // Backward compatibility: fall back to legacy scalar column
             $components[] = [
                 'component_type' => 'hbacard',
                 'component_uuid' => $configData['hbacard_uuid'],
@@ -1066,28 +1083,13 @@ class ServerBuilder {
 
                         }
 
-                        // Build HBA configuration JSON
-                        $hbaConfig = [
-                            'uuid' => $componentUuid,
-                            'slot_position' => $slotPosition,
-                            'added_at' => date('Y-m-d H:i:s'),
-                            'serial_number' => $serialNumber
-                        ];
-
-                        // Store in new JSON column
-                        $updateFields[] = "hbacard_config = ?";
-                        $updateValues[] = json_encode($hbaConfig);
-
-                        // BACKWARD COMPATIBILITY: Also store in old column for 2 releases
-                        $updateFields[] = "hbacard_uuid = ?";
-                        $updateValues[] = $componentUuid;
+                        // Delegate to dedicated method (handles JSON array accumulation)
+                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'add', $slotPosition, $serialNumber);
 
                     } elseif ($action === 'remove') {
-                        // Clear both old and new format
-                        $updateFields[] = "hbacard_config = NULL";
-                        $updateFields[] = "hbacard_uuid = NULL";
+                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove');
                     }
-                    break;
+                    break; // Skip generic UPDATE below — method handles its own SQL
             }
 
             if (!empty($updateFields)) {
@@ -1531,6 +1533,73 @@ class ServerBuilder {
 
         } catch (Exception $e) {
             error_log("Error updating PCIe card configuration: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Update HBA card configuration using JSON array (supports multiple HBA cards)
+     * Mirrors updatePcieCardConfiguration() pattern: read array → append/remove → write back
+     */
+    private function updateHbaCardConfiguration($configUuid, $componentUuid, $action, $slotPosition = null, $serialNumber = null) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT hbacard_config, hbacard_uuid FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            $hbaArray = [];
+
+            // Decode existing hbacard_config — handle 3 formats:
+            // 1. JSON array (new format) — use as-is
+            // 2. Single JSON object with 'uuid' key (migration format) — wrap in array
+            // 3. null/empty — seed from legacy hbacard_uuid if present
+            if (!empty($row['hbacard_config'])) {
+                $decoded = json_decode($row['hbacard_config'], true);
+                if (is_array($decoded)) {
+                    if (isset($decoded['uuid'])) {
+                        $hbaArray = [$decoded]; // Single object → array
+                    } else {
+                        $hbaArray = $decoded;
+                    }
+                }
+            } elseif (!empty($row['hbacard_uuid']) && $action === 'add') {
+                // Legacy fallback: seed array from scalar column
+                $hbaArray = [[
+                    'uuid' => $row['hbacard_uuid'],
+                    'slot_position' => null,
+                    'added_at' => date('Y-m-d H:i:s'),
+                    'serial_number' => null
+                ]];
+            }
+
+            if ($action === 'add') {
+                $hbaEntry = [
+                    'uuid' => $componentUuid,
+                    'slot_position' => $slotPosition,
+                    'added_at' => date('Y-m-d H:i:s'),
+                    'serial_number' => $serialNumber
+                ];
+                $hbaArray[] = $hbaEntry;
+
+            } elseif ($action === 'remove') {
+                $hbaArray = array_filter($hbaArray, function($hba) use ($componentUuid) {
+                    return ($hba['uuid'] ?? null) !== $componentUuid;
+                });
+                $hbaArray = array_values($hbaArray); // Re-index
+            }
+
+            // Write back: JSON array + backward-compat scalar (first entry's UUID)
+            $firstUuid = !empty($hbaArray) ? ($hbaArray[0]['uuid'] ?? null) : null;
+
+            $stmt = $this->pdo->prepare("UPDATE server_configurations SET hbacard_config = ?, hbacard_uuid = ?, updated_at = NOW() WHERE config_uuid = ?");
+            $stmt->execute([
+                !empty($hbaArray) ? json_encode($hbaArray) : null,
+                $firstUuid,
+                $configUuid
+            ]);
+
+        } catch (Exception $e) {
+            error_log("Error updating HBA card configuration: " . $e->getMessage());
             throw $e;
         }
     }
@@ -2189,7 +2258,7 @@ class ServerBuilder {
             // Lock configuration row with FOR UPDATE
             $stmt = $this->pdo->prepare("
                 SELECT cpu_configuration, ram_configuration, storage_configuration,
-                       caddy_configuration, nic_config, hbacard_uuid, motherboard_uuid,
+                       caddy_configuration, nic_config, hbacard_uuid, hbacard_config, motherboard_uuid,
                        chassis_uuid, pciecard_configurations, sfp_configuration
                 FROM server_configurations
                 WHERE config_uuid = ?
@@ -2747,7 +2816,7 @@ class ServerBuilder {
                 SELECT
                     cpu_configuration, ram_configuration, storage_configuration,
                     caddy_configuration, nic_config, pciecard_configurations,
-                    hbacard_uuid, sfp_configuration, motherboard_uuid, chassis_uuid
+                    hbacard_uuid, hbacard_config, sfp_configuration, motherboard_uuid, chassis_uuid
                 FROM server_configurations
                 WHERE config_uuid = ?
             ");
@@ -2836,8 +2905,24 @@ class ServerBuilder {
                 }
             }
 
-            // Parse HBA Card (single instance)
-            if (!empty($config['hbacard_uuid'])) {
+            // Parse HBA Cards (JSON array, with legacy fallback)
+            if (!empty($config['hbacard_config'])) {
+                $hbaConfigs = json_decode($config['hbacard_config'], true);
+                if (is_array($hbaConfigs)) {
+                    if (isset($hbaConfigs['uuid'])) {
+                        $hbaConfigs = [$hbaConfigs]; // Single object → array
+                    }
+                    foreach ($hbaConfigs as $hba) {
+                        $components[] = [
+                            'component_type' => 'hbacard',
+                            'uuid' => $hba['uuid'] ?? null,
+                            'quantity' => 1,
+                            'serial_number' => $hba['serial_number'] ?? null,
+                            'slot_position' => $hba['slot_position'] ?? null
+                        ];
+                    }
+                }
+            } elseif (!empty($config['hbacard_uuid'])) {
                 $components[] = [
                     'component_type' => 'hbacard',
                     'uuid' => $config['hbacard_uuid'],

@@ -1036,21 +1036,25 @@ class UnifiedSlotTracker {
                 }
             }
 
-            // HBA-TRACK FIX: Check HBA card with new JSON format (includes slot_position)
+            // HBA-TRACK FIX: Check HBA cards with JSON array format (includes slot_position)
             if (!empty($configData['hbacard_config'])) {
-                $hbaConfig = json_decode($configData['hbacard_config'], true);
-                if (is_array($hbaConfig) && !empty($hbaConfig['slot_position'])) {
-                    if (strpos($hbaConfig['slot_position'], 'pcie_') === 0) {
-                        $usedSlots[$hbaConfig['slot_position']] = $hbaConfig['uuid'];
-                        error_log("HBA-TRACK: HBA card occupies slot: {$hbaConfig['slot_position']}");
+                $hbaConfigs = json_decode($configData['hbacard_config'], true);
+                if (is_array($hbaConfigs)) {
+                    // Handle migration: single object vs array
+                    if (isset($hbaConfigs['uuid'])) {
+                        $hbaConfigs = [$hbaConfigs];
+                    }
+                    foreach ($hbaConfigs as $hba) {
+                        if (!empty($hba['slot_position']) && strpos($hba['slot_position'], 'pcie_') === 0) {
+                            $usedSlots[$hba['slot_position']] = $hba['uuid'];
+                            error_log("HBA-TRACK: HBA card occupies slot: {$hba['slot_position']}");
+                        }
                     }
                 }
             }
             // BACKWARD COMPATIBILITY: Check legacy hbacard_uuid column
             else if (!empty($configData['hbacard_uuid'])) {
                 error_log("HBA-TRACK WARNING: HBA card {$configData['hbacard_uuid']} has no slot position (legacy format)");
-                // Don't block - allow legacy configs to work
-                // TODO: Add migration notice to admin dashboard
             }
 
             // Check NIC config

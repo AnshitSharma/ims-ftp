@@ -5088,7 +5088,18 @@ class ComponentCompatibility {
         
         $nicPortType = strtoupper(trim($nicSpecs['port_type'] ?? ''));
         $sfpType = strtoupper(trim($sfpSpecs['type'] ?? ''));
-        
+
+        // RJ45 NICs use copper cabling and never interact with SFP modules.
+        // They can coexist with SFPs in the same config (SFPs belong to other NICs).
+        if (strpos($nicPortType, 'RJ45') !== false) {
+            return [
+                'compatible' => true,
+                'issues' => [],
+                'warnings' => [],
+                'recommendations' => []
+            ];
+        }
+
         // Check type compatibility using NICPortTracker
         $typeCompatible = NICPortTracker::isCompatible($nicPortType, $sfpType);
         
