@@ -2679,6 +2679,15 @@ class ServerBuilder {
                     'uuid' => $existing['component_uuid']
                 ];
 
+                // Skip NIC-SFP pairwise checks — SFPs are validated against their parent NIC
+                // via checkSFPDecentralizedCompatibility when added. Existing SFPs belong to
+                // other NICs and should not block adding a new NIC.
+                $pairKey = [$componentType, $existing['component_type']];
+                sort($pairKey);
+                if ($pairKey[0] === 'nic' && $pairKey[1] === 'sfp') {
+                    continue;
+                }
+
                 // Check compatibility between new component and each existing one
                 $compatResult = $compatibility->checkComponentPairCompatibility($newComponent, $existingComponent);
 

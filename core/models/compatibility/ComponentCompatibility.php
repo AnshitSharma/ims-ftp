@@ -5128,7 +5128,7 @@ class ComponentCompatibility {
                 'issues' => ["SFP speed {$sfpSpeed} exceeds NIC maximum speed {$nicMaxSpeed}"],
                 'warnings' => [],
                 'recommendations' => [
-                    'Use SFP module with speed <= ' + $nicMaxSpeed
+                    'Use SFP module with speed <= ' . $nicMaxSpeed
                 ]
             ];
         }
