@@ -217,15 +217,43 @@ function handleListComponents() {
         $stmt->execute($params);
         $components = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Add status text to each component
+        // Load component data service for model name resolution
+        $componentService = null;
+        try {
+            require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+            $componentService = ComponentDataService::getInstance();
+        } catch (Exception $e) {
+            // Service unavailable, model names will be omitted
+        }
+
+        // Add status text and model name to each component
         foreach ($components as &$component) {
             $component['StatusText'] = getStatusText($component['Status']);
-            
+
             // Parse JSON specifications if available
             if (isset($component['Specifications']) && !empty($component['Specifications'])) {
                 $decoded = json_decode($component['Specifications'], true);
                 if (json_last_error() === JSON_ERROR_NONE) {
                     $component['Specifications_parsed'] = $decoded;
+                }
+            }
+
+            // Resolve model name from JSON spec via UUID
+            $component['ModelName'] = null;
+            if ($componentService !== null && !empty($component['UUID'])) {
+                try {
+                    $spec = $componentService->findComponentByUuid($componentType, $component['UUID']);
+                    if ($spec !== null) {
+                        $brand = $spec['brand'] ?? null;
+                        $model = $spec['model'] ?? null;
+                        if ($brand && $model) {
+                            $component['ModelName'] = $brand . ' ' . $model;
+                        } elseif ($model) {
+                            $component['ModelName'] = $model;
+                        }
+                    }
+                } catch (Exception $e) {
+                    // Leave ModelName as null
                 }
             }
         }
