@@ -1401,6 +1401,78 @@ function handleRemoveComponent($serverBuilder, $user) {
 }
 
 /**
+ * Lazy migration: assign PCIe slots to component NICs that were added before
+ * slot auto-assignment was implemented. Safe to run on every config load —
+ * only acts on NICs that still have no slot_position stored.
+ */
+function migrateNICSlotPositions($configUuid) {
+    global $pdo;
+
+    try {
+        $stmt = $pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $nicConfigJson = $stmt->fetchColumn();
+
+        if (!$nicConfigJson) {
+            return;
+        }
+
+        $nicConfig = json_decode($nicConfigJson, true);
+        if (!isset($nicConfig['nics']) || !is_array($nicConfig['nics'])) {
+            return;
+        }
+
+        $needsMigration = false;
+        foreach ($nicConfig['nics'] as $nic) {
+            if (($nic['source_type'] ?? '') === 'component' && empty($nic['slot_position'])) {
+                $needsMigration = true;
+                break;
+            }
+        }
+
+        if (!$needsMigration) {
+            return;
+        }
+
+        require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
+        require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+
+        $slotTracker = new UnifiedSlotTracker($pdo);
+        $dataService = ComponentDataService::getInstance();
+
+        foreach ($nicConfig['nics'] as &$nic) {
+            if (($nic['source_type'] ?? '') !== 'component' || !empty($nic['slot_position'])) {
+                continue;
+            }
+
+            $nicUuid = $nic['uuid'];
+            $nicSpecs = $dataService->getComponentSpecifications('nic', $nicUuid);
+
+            if ($nicSpecs && isset($nicSpecs['interface'])) {
+                preg_match('/x(\d+)/', $nicSpecs['interface'], $matches);
+                $slotSize = 'x' . ($matches[1] ?? '8');
+            } else {
+                $slotSize = 'x8';
+            }
+
+            $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
+            if ($slotPosition) {
+                $nic['slot_position'] = $slotPosition;
+                error_log("NIC-MIGRATE: Assigned slot $slotPosition to NIC $nicUuid in config $configUuid");
+            }
+        }
+        unset($nic);
+
+        $updateStmt = $pdo->prepare("UPDATE server_configurations SET nic_config = ? WHERE config_uuid = ?");
+        $updateStmt->execute([json_encode($nicConfig), $configUuid]);
+
+    } catch (Exception $e) {
+        error_log("NIC-MIGRATE: Error migrating NIC slots for config $configUuid: " . $e->getMessage());
+        // Non-fatal — don't block the response
+    }
+}
+
+/**
  * Get unified slot tracking for a server configuration
  * Consolidates PCIe, riser, and M.2 slot information from UnifiedSlotTracker
  *
@@ -1606,6 +1678,39 @@ function getNetworkConfiguration($configUuid) {
             $result['nics'] = $nicConfiguration['nics'];
         }
 
+        // Add SFP port mapping to each NIC
+        $sfpStmt = $pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
+        $sfpStmt->execute([$configUuid]);
+        $sfpConfigJson = $sfpStmt->fetchColumn();
+        $sfps = [];
+        if ($sfpConfigJson) {
+            $sfpDecoded = json_decode($sfpConfigJson, true);
+            $sfps = $sfpDecoded['sfps'] ?? [];
+        }
+
+        foreach ($result['nics'] as &$nic) {
+            $nicUuid = $nic['uuid'];
+            $portCount = $nic['specifications']['ports'] ?? 0;
+            $portMapping = [];
+
+            for ($i = 1; $i <= $portCount; $i++) {
+                $portMapping[$i] = ['status' => 'empty', 'sfp' => null];
+            }
+
+            foreach ($sfps as $sfp) {
+                if (($sfp['parent_nic_uuid'] ?? null) === $nicUuid && isset($sfp['port_index'])) {
+                    $portMapping[$sfp['port_index']] = [
+                        'status' => 'occupied',
+                        'sfp_uuid' => $sfp['uuid'],
+                        'serial_number' => $sfp['serial_number'] ?? null
+                    ];
+                }
+            }
+
+            $nic['port_mapping'] = $portMapping;
+        }
+        unset($nic); // break reference
+
         return $result;
 
     } catch (Exception $e) {
@@ -1666,6 +1771,9 @@ function handleGetConfiguration($serverBuilder, $user) {
 
         // Simplified configuration data - use stored values from database
         $configuration['power_consumption'] = $details['power_consumption']['total_with_overhead_watts'] ?? 0;
+
+        // Migrate any component NICs that pre-date slot auto-assignment
+        migrateNICSlotPositions($configUuid);
 
         // Get unified slot tracking (PCIe, riser, and M.2)
         $slotTracking = getSlotTracking($configUuid);

@@ -936,6 +936,16 @@ class ServerBuilder {
                     }
                 }
 
+                // Include parent NIC mapping for SFP components
+                if ($type === 'sfp') {
+                    if (!empty($component['parent_nic_uuid'])) {
+                        $simplifiedComponent['parent_nic_uuid'] = $component['parent_nic_uuid'];
+                    }
+                    if (isset($component['port_index'])) {
+                        $simplifiedComponent['port_index'] = $component['port_index'];
+                    }
+                }
+
                 $componentDetails[$type][] = $simplifiedComponent;
                 $componentCounts[$type] += $component['quantity'];
                 $totalComponents += $component['quantity'];
@@ -1027,8 +1037,37 @@ class ServerBuilder {
                     break;
 
                 case 'nic':
-                    $slotPosition = $options['slot_position'] ?? null;
-                    $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition);
+                    if ($action === 'add') {
+                        $slotPosition = $options['slot_position'] ?? null;
+
+                        if (!$slotPosition) {
+                            // Auto-assign PCIe slot for NIC card (same pattern as HBA)
+                            require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
+                            require_once __DIR__ . '/../components/ComponentDataService.php';
+
+                            $slotTracker = new UnifiedSlotTracker($this->pdo);
+                            $dataService = ComponentDataService::getInstance();
+
+                            $nicSpecs = $dataService->getComponentSpecifications('nic', $componentUuid);
+
+                            if ($nicSpecs && isset($nicSpecs['interface'])) {
+                                preg_match('/x(\d+)/', $nicSpecs['interface'], $matches);
+                                $slotSize = 'x' . ($matches[1] ?? '8');
+                            } else {
+                                $slotSize = 'x8'; // Default NIC slot size
+                            }
+
+                            $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
+
+                            if (!$slotPosition) {
+                                throw new Exception("No available PCIe slots for NIC (requires $slotSize slot)");
+                            }
+                        }
+
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $slotPosition);
+                    } elseif ($action === 'remove') {
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null);
+                    }
                     break;
 
                 case 'caddy':
