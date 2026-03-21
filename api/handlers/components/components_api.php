@@ -222,8 +222,9 @@ function handleListComponents() {
         try {
             require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
             $componentService = ComponentDataService::getInstance();
+            error_log("[ModelName] ComponentDataService loaded successfully for $componentType");
         } catch (Exception $e) {
-            // Service unavailable, model names will be omitted
+            error_log("[ModelName] ComponentDataService FAILED: " . $e->getMessage());
         }
 
         // Add status text and model name to each component
@@ -251,9 +252,19 @@ function handleListComponents() {
                         } elseif ($model) {
                             $component['ModelName'] = $model;
                         }
+                        error_log("[ModelName] Resolved UUID {$component['UUID']} => {$component['ModelName']}");
+                    } else {
+                        error_log("[ModelName] findComponentByUuid returned NULL for {$componentType}/{$component['UUID']}");
                     }
                 } catch (Exception $e) {
-                    // Leave ModelName as null
+                    error_log("[ModelName] Exception for UUID {$component['UUID']}: " . $e->getMessage());
+                }
+            }
+
+            // Fallback: extract model name from Notes field if JSON lookup failed
+            if ($component['ModelName'] === null && !empty($component['Notes'])) {
+                if (preg_match('/Brand:\s*([^,]+).*Model:\s*(.+)$/i', $component['Notes'], $matches)) {
+                    $component['ModelName'] = trim($matches[1]) . ' ' . trim($matches[2]);
                 }
             }
         }

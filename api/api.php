@@ -1055,6 +1055,43 @@ function handleComponentOperations($module, $operation, $user) {
     switch ($operation) {
         case 'list':
             $components = getComponentsByType($pdo, $module);
+
+            // Resolve ModelName from JSON specs via UUID
+            $componentService = null;
+            try {
+                require_once __DIR__ . '/../core/models/components/ComponentDataService.php';
+                $componentService = ComponentDataService::getInstance();
+            } catch (Exception $e) {
+                error_log("[ModelName] ComponentDataService load failed: " . $e->getMessage());
+            }
+
+            foreach ($components as &$comp) {
+                $comp['ModelName'] = null;
+                if ($componentService !== null && !empty($comp['UUID'])) {
+                    try {
+                        $spec = $componentService->findComponentByUuid($module, $comp['UUID']);
+                        if ($spec !== null) {
+                            $brand = $spec['brand'] ?? null;
+                            $model = $spec['model'] ?? null;
+                            if ($brand && $model) {
+                                $comp['ModelName'] = $brand . ' ' . $model;
+                            } elseif ($model) {
+                                $comp['ModelName'] = $model;
+                            }
+                        }
+                    } catch (Exception $e) {
+                        // Silent fail per component
+                    }
+                }
+                // Fallback: extract from Notes field
+                if ($comp['ModelName'] === null && !empty($comp['Notes'])) {
+                    if (preg_match('/Brand:\s*([^,]+).*Model:\s*(.+?)(\r|\n|$)/i', $comp['Notes'], $matches)) {
+                        $comp['ModelName'] = trim($matches[1]) . ' ' . trim($matches[2]);
+                    }
+                }
+            }
+            unset($comp);
+
             send_json_response(1, 1, 200, ucfirst($module) . " components retrieved", [
                 'components' => $components,
                 'total_count' => count($components)
