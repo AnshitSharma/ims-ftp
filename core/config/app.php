@@ -12,8 +12,8 @@
 
 // Enable error reporting for development
 error_reporting(E_ALL);
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
+ini_set('display_errors', 0);
+ini_set('display_startup_errors', 0);
 
 // =============================================================================
 // ENVIRONMENT LOADING
@@ -72,7 +72,7 @@ date_default_timezone_set($timezone);
 // =============================================================================
 
 define('APP_ENV', getenv('APP_ENV') ?: 'development');
-define('APP_DEBUG', filter_var(getenv('APP_DEBUG') ?: 'true', FILTER_VALIDATE_BOOLEAN));
+define('APP_DEBUG', filter_var(getenv('APP_DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN));
 define('APP_NAME', getenv('APP_NAME') ?: 'BDC Inventory Management System');
 define('MAIN_SITE_URL', getenv('MAIN_SITE_URL') ?: 'https://localhost');
 
@@ -80,7 +80,11 @@ define('MAIN_SITE_URL', getenv('MAIN_SITE_URL') ?: 'https://localhost');
 // JWT CONFIGURATION
 // =============================================================================
 
-define('JWT_SECRET_KEY', getenv('JWT_SECRET') ?: 'bdc-ims-default-secret-change-in-production-environment');
+$jwtSecret = getenv('JWT_SECRET');
+if (!$jwtSecret) {
+    throw new RuntimeException('JWT_SECRET not configured in environment');
+}
+define('JWT_SECRET_KEY', $jwtSecret);
 define('JWT_ALGORITHM', getenv('JWT_ALGORITHM') ?: 'HS256');
 define('JWT_EXPIRY_HOURS', (int)(getenv('JWT_EXPIRY_HOURS') ?: 24));
 define('JWT_ISSUER', getenv('JWT_ISSUER') ?: 'bdc-ims-api');
@@ -127,8 +131,11 @@ define('AUTO_GENERATE_UUIDS', filter_var(getenv('AUTO_GENERATE_UUIDS') ?: 'true'
 
 // Database credentials (from .env or defaults)
 $dbHost = getenv('DB_HOST') ?: 'localhost';
-$dbUser = getenv('DB_USER') ?: 'shubhams_api';
-$dbPass = getenv('DB_PASS') ?: '5C8R.wRErC_(';
+$dbUser = getenv('DB_USER');
+$dbPass = getenv('DB_PASS');
+if (!$dbUser || !$dbPass) {
+    throw new RuntimeException('Database credentials not configured in environment');
+}
 $dbName = getenv('DB_NAME') ?: 'imsbdcmsbharatda_Ims_Production';
 
 try {

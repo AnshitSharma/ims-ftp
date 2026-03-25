@@ -34,7 +34,7 @@ try {
 
         if (password_verify($password, $hash_user_password)) {
             // Initialize JWT
-            JWTHelper::init(JWT_SECRET);
+            JWTHelper::init(JWT_SECRET_KEY);
 
             // Get user permissions
             $acl = new ACL($pdo);
@@ -69,7 +69,7 @@ try {
             send_json_response(0, 0, 401, "Invalid username or password");
         }
     } else {
-        send_json_response(0, 0, 401, "User not found");
+        send_json_response(0, 0, 401, "Invalid credentials");
     }
 } catch (PDOException $e) {
     error_log("Login error: " . $e->getMessage());

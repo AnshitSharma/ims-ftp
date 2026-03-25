@@ -9,7 +9,10 @@ require_once(__DIR__ . '/../auth/JWTHelper.php');
 require_once(__DIR__ . '/../auth/ACL.php');
 
 // Initialize JWT secret
-$jwtSecret = getenv('JWT_SECRET') ?: 'bdc-ims-jwt-secret-key-change-in-production-2025-xyz';
+$jwtSecret = defined('JWT_SECRET_KEY') ? JWT_SECRET_KEY : getenv('JWT_SECRET');
+if (!$jwtSecret) {
+    throw new RuntimeException('JWT_SECRET not configured');
+}
 JWTHelper::init($jwtSecret);
 
 // Initialize permission cache (request-level caching for performance)
@@ -627,7 +630,8 @@ if (!function_exists('performGlobalSearch')) {
                             Location LIKE ? 
                             LIMIT ?";
                     
-                    $searchTerm = '%' . $query . '%';
+                    $escapedQuery = addcslashes($query, '%_\\');
+                    $searchTerm = '%' . $escapedQuery . '%';
                     $stmt = $pdo->prepare($sql);
                     $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $limit]);
                     
@@ -714,6 +718,11 @@ if (!function_exists('addComponent')) {
 
             // Prepare column names and values
             $columns = array_keys($data);
+            foreach ($columns as $col) {
+                if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+                    throw new InvalidArgumentException("Invalid column name: $col");
+                }
+            }
             $placeholders = array_fill(0, count($columns), '?');
             $values = array_values($data);
 
@@ -746,6 +755,11 @@ if (!function_exists('updateComponent')) {
     function updateComponent($pdo, $type, $id, $data, $userId) {
         try {
             $columns = array_keys($data);
+            foreach ($columns as $col) {
+                if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+                    throw new InvalidArgumentException("Invalid column name: $col");
+                }
+            }
             $setClause = implode(' = ?, ', $columns) . ' = ?';
             $values = array_values($data);
             $values[] = $id; // Add ID for WHERE clause
@@ -842,11 +856,17 @@ if (!function_exists('createUser')) {
 if (!function_exists('updateUser')) {
     function updateUser($pdo, $userId, $data) {
         try {
+            $allowedFields = ['username', 'email', 'password', 'firstname', 'lastname', 'status'];
+            $data = array_intersect_key($data, array_flip($allowedFields));
+            if (empty($data)) {
+                return false;
+            }
+
             // Remove password from direct updates for security
             if (isset($data['password'])) {
                 $data['password'] = password_hash($data['password'], PASSWORD_DEFAULT);
             }
-            
+
             $columns = array_keys($data);
             $setClause = implode(' = ?, ', $columns) . ' = ?';
             $values = array_values($data);

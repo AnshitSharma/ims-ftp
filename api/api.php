@@ -16,7 +16,14 @@ ini_set('log_errors', 1);
 
 // Set headers first
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
+$allowedOrigins = defined('CORS_ALLOWED_ORIGINS') ? CORS_ALLOWED_ORIGINS : [];
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+if (is_array($allowedOrigins) && in_array($origin, $allowedOrigins)) {
+    header("Access-Control-Allow-Origin: $origin");
+    header('Vary: Origin');
+} elseif (empty($allowedOrigins) || (is_array($allowedOrigins) && in_array('*', $allowedOrigins))) {
+    header('Access-Control-Allow-Origin: *');
+}
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 
@@ -133,7 +140,7 @@ try {
     
 } catch (Exception $e) {
     error_log("API error: " . $e->getMessage());
-    send_json_response(0, 0, 500, "Internal server error: " . $e->getMessage());
+    send_json_response(0, 0, 500, "Internal server error");
 }
 
 /**
@@ -235,6 +242,14 @@ function handleAuthOperations($operation) {
             break;
             
         case 'register':
+            // Registration requires authentication and user.create permission
+            $regUser = authenticateWithJWT($pdo);
+            if (!$regUser) {
+                send_json_response(0, 0, 401, "Authentication required for registration");
+            }
+            if (!hasPermission($pdo, 'user.create', $regUser['id'])) {
+                send_json_response(0, 1, 403, "Permission denied: user.create required");
+            }
             handleRegistration();
             break;
             
@@ -999,7 +1014,7 @@ function handleTicketOperations($operation, $user) {
             'get' => 'ticket-get.php',
             'update' => 'ticket-update.php',
             'delete' => 'ticket-delete.php',
-            'debug' => 'ticket-debug.php'  // Diagnostic endpoint - REMOVE IN PRODUCTION
+            // 'debug' endpoint removed for security
         ];
 
         if (!isset($endpointMap[$operation])) {
@@ -1021,11 +1036,11 @@ function handleTicketOperations($operation, $user) {
     } catch (Exception $e) {
         error_log("Ticket handler error: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Ticket operation failed: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Ticket operation failed");
     } catch (Error $e) {
         error_log("Ticket handler fatal error: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Ticket operation failed with fatal error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Ticket operation failed");
     }
 }
 
@@ -1142,7 +1157,7 @@ function handleComponentOperations($module, $operation, $user) {
                 }
             } catch (Exception $e) {
                 error_log("Error adding $module component: " . $e->getMessage());
-                send_json_response(0, 1, 500, "Failed to add component: " . $e->getMessage());
+                send_json_response(0, 1, 500, "Failed to add component");
             }
             break;
             
@@ -1170,7 +1185,7 @@ function handleComponentOperations($module, $operation, $user) {
                 }
             } catch (Exception $e) {
                 error_log("Error updating $module component: " . $e->getMessage());
-                send_json_response(0, 1, 500, "Failed to update component: " . $e->getMessage());
+                send_json_response(0, 1, 500, "Failed to update component");
             }
             break;
             
@@ -1191,7 +1206,7 @@ function handleComponentOperations($module, $operation, $user) {
                 }
             } catch (Exception $e) {
                 error_log("Error deleting $module component: " . $e->getMessage());
-                send_json_response(0, 1, 500, "Failed to delete component: " . $e->getMessage());
+                send_json_response(0, 1, 500, "Failed to delete component");
             }
             break;
             
@@ -1305,7 +1320,8 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
                     Location LIKE ? 
                     LIMIT ?";
             
-            $searchTerm = '%' . $query . '%';
+            $escapedQuery = addcslashes($query, '%_\\');
+            $searchTerm = '%' . $escapedQuery . '%';
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $limit]);
             
@@ -1446,9 +1462,14 @@ function addComponent($pdo, $type, $data, $userId) {
         
         // Prepare column names and values
         $columns = array_keys($convertedData);
+        foreach ($columns as $col) {
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+                throw new InvalidArgumentException("Invalid column name: $col");
+            }
+        }
         $placeholders = array_fill(0, count($columns), '?');
         $values = array_values($convertedData);
-        
+
         $sql = "INSERT INTO $tableName (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
         
         error_log("Inserting $type data into $tableName: " . json_encode($convertedData));
@@ -1490,10 +1511,15 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
         }
         
         $columns = array_keys($convertedData);
+        foreach ($columns as $col) {
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+                throw new InvalidArgumentException("Invalid column name: $col");
+            }
+        }
         $setClause = implode(' = ?, ', $columns) . ' = ?';
         $values = array_values($convertedData);
         $values[] = $id; // Add ID for WHERE clause
-        
+
         $sql = "UPDATE $tableName SET $setClause WHERE ID = ?";
         
         $stmt = $pdo->prepare($sql);
@@ -1572,21 +1598,27 @@ function createUser($pdo, $username, $email, $password, $firstname, $lastname) {
  */
 function updateUser($pdo, $userId, $data) {
     try {
+        $allowedFields = ['username', 'email', 'password', 'firstname', 'lastname', 'status'];
+        $data = array_intersect_key($data, array_flip($allowedFields));
+        if (empty($data)) {
+            return false;
+        }
+
         // Remove password from direct updates for security
         if (isset($data['password'])) {
             $data['password'] = password_hash($data['password'], PASSWORD_DEFAULT);
         }
-        
+
         $columns = array_keys($data);
         $setClause = implode(' = ?, ', $columns) . ' = ?';
         $values = array_values($data);
         $values[] = $userId;
-        
+
         $sql = "UPDATE users SET $setClause WHERE id = ?";
-        
+
         $stmt = $pdo->prepare($sql);
         return $stmt->execute($values);
-        
+
     } catch (Exception $e) {
         error_log("Error updating user: " . $e->getMessage());
         return false;

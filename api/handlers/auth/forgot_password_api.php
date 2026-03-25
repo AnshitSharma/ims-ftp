@@ -54,10 +54,7 @@ try {
     $frontendUrl = getenv('FRONTEND_URL') ?: 'https://localhost';
     $resetLink = $frontendUrl . "/reset-password.php?token=" . $resetToken;
     
-    send_json_response(1, 1, 200, "Password reset link has been sent to your email", [
-        'reset_link' => $resetLink, // Remove this in production
-        'token' => $resetToken // Remove this in production
-    ]);
+    send_json_response(1, 1, 200, "Password reset link has been sent to your email");
     
 } catch (PDOException $e) {
     error_log("Forgot password error: " . $e->getMessage());
