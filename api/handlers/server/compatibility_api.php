@@ -929,7 +929,7 @@ function getDetailedCompatibilityStats($pdo, $timeframe) {
                 AVG(compatibility_score) as avg_score
             FROM compatibility_log 
             WHERE compatibility_result = 0 
-                AND created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+                AND created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
             GROUP BY component_type_1, component_type_2
             ORDER BY failure_count DESC
             LIMIT 10
@@ -947,7 +947,7 @@ function getDetailedCompatibilityStats($pdo, $timeframe) {
                 MIN(execution_time_ms) as min_execution_time,
                 MAX(execution_time_ms) as max_execution_time
             FROM compatibility_log 
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
                 AND execution_time_ms IS NOT NULL
             GROUP BY component_type_1, component_type_2
             ORDER BY check_count DESC
@@ -963,7 +963,7 @@ function getDetailedCompatibilityStats($pdo, $timeframe) {
                 SUM(CASE WHEN compatibility_result = 1 THEN 1 ELSE 0 END) as success_count,
                 AVG(compatibility_score) as avg_score
             FROM compatibility_log 
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
                 AND applied_rules IS NOT NULL
                 AND JSON_LENGTH(applied_rules) > 0
             GROUP BY primary_rule
@@ -981,7 +981,7 @@ function getDetailedCompatibilityStats($pdo, $timeframe) {
                 SUM(CASE WHEN compatibility_result = 1 THEN 1 ELSE 0 END) as successful_checks,
                 AVG(execution_time_ms) as avg_execution_time
             FROM compatibility_log 
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
             GROUP BY hour_period
             ORDER BY hour_period DESC
             LIMIT 24
@@ -995,14 +995,14 @@ function getDetailedCompatibilityStats($pdo, $timeframe) {
                 component_type_1 as component_type,
                 COUNT(*) as usage_count
             FROM compatibility_log 
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
             GROUP BY component_type_1
             UNION ALL
             SELECT 
                 component_type_2 as component_type,
                 COUNT(*) as usage_count
             FROM compatibility_log 
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 $timeframe)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL $timeframe)
             GROUP BY component_type_2
         ");
         $stmt->execute();

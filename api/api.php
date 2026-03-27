@@ -14,8 +14,14 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 
-// Set headers first
+// Set content type header early
 header('Content-Type: application/json');
+
+// Include required files BEFORE setting CORS headers (config defines CORS_ALLOWED_ORIGINS)
+require_once(__DIR__ . '/../core/config/app.php');
+require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
+
+// Set CORS headers AFTER config is loaded
 $allowedOrigins = defined('CORS_ALLOWED_ORIGINS') ? CORS_ALLOWED_ORIGINS : [];
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 if (is_array($allowedOrigins) && in_array($origin, $allowedOrigins)) {
@@ -32,10 +38,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
-
-// Include required files
-require_once(__DIR__ . '/../core/config/app.php');
-require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
 
 // Global error handler
 set_error_handler(function($severity, $message, $file, $line) {
@@ -484,8 +486,11 @@ function handleRegistration() {
         
         $userId = $pdo->lastInsertId();
         
-        // Assign default role
-        $defaultRoleId = 2; // Default role ID
+        // Assign default role (read from DB instead of hardcoding)
+        $roleStmt = $pdo->prepare("SELECT id FROM roles WHERE is_default = 1 LIMIT 1");
+        $roleStmt->execute();
+        $defaultRole = $roleStmt->fetch(PDO::FETCH_ASSOC);
+        $defaultRoleId = $defaultRole ? $defaultRole['id'] : 2; // Fallback to 2 if no default set
         assignRoleToUser($pdo, $userId, $defaultRoleId);
         
         send_json_response(1, 1, 201, "Registration successful", [
@@ -1360,7 +1365,10 @@ function getComponentTableName($type) {
         'sfp' => 'sfpinventory'
     ];
 
-    return $tableMap[$type] ?? $type;
+    if (!isset($tableMap[$type])) {
+        throw new InvalidArgumentException("Invalid component type: " . htmlspecialchars($type));
+    }
+    return $tableMap[$type];
 }
 
 /**

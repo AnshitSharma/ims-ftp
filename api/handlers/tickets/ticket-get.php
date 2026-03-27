@@ -68,10 +68,18 @@ try {
     // Permission check
     $canViewAll = $acl->hasPermission($user_id, 'ticket.view_all');
     $canManage = $acl->hasPermission($user_id, 'ticket.manage');
-    $isOwner = ($ticket['created_by'] == $user_id);
-    $isAssigned = ($ticket['assigned_to'] == $user_id);
+    $isOwner = ((int)$ticket['created_by'] === (int)$user_id);
+    $isAssigned = ($ticket['assigned_to'] !== null && (int)$ticket['assigned_to'] === (int)$user_id);
     $canViewOwn = $acl->hasPermission($user_id, 'ticket.view_own');
     $canViewAssigned = $acl->hasPermission($user_id, 'ticket.view_assigned');
+
+    // Check if ticket is assigned to one of the user's roles
+    $isRoleAssigned = false;
+    if (!empty($ticket['assigned_to_role']) && $canViewAssigned) {
+        $roleStmt = $pdo->prepare("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role_id = ?");
+        $roleStmt->execute([$user_id, $ticket['assigned_to_role']]);
+        $isRoleAssigned = ($roleStmt->fetchColumn() > 0);
+    }
 
     // Determine if user can view this ticket
     $canView = false;
@@ -82,8 +90,8 @@ try {
     } elseif ($isOwner && $canViewOwn) {
         // Can view own ticket
         $canView = true;
-    } elseif ($isAssigned && $canViewAssigned) {
-        // Can view assigned ticket
+    } elseif (($isAssigned || $isRoleAssigned) && $canViewAssigned) {
+        // Can view directly assigned or role-assigned ticket
         $canView = true;
     }
 
@@ -99,7 +107,5 @@ try {
 } catch (Exception $e) {
     error_log("ticket-get error: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(false, true, 500, "Failed to retrieve ticket", [
-        'error' => $e->getMessage()
-    ]);
+    send_json_response(false, true, 500, "Failed to retrieve ticket");
 }

@@ -131,6 +131,9 @@ if (!function_exists('authenticateUser')) {
 
 /**
  * Initialize ACL System
+ *
+ * Performs lightweight check on each request; only runs expensive INSERT IGNORE
+ * operations when permissions/roles are missing (first run or after schema update).
  */
 if (!function_exists('initializeACLSystem')) {
     function initializeACLSystem($pdo) {
@@ -146,9 +149,18 @@ if (!function_exists('initializeACLSystem')) {
             require_once(__DIR__ . '/../auth/ACL.php');
             $acl = new ACL($pdo);
 
-            // Always run permission and role initialization (uses INSERT IGNORE to avoid duplicates)
-            // This ensures new permissions are added if the ACL definition is updated
-            $acl->initializeDefaultPermissions();
+            // Store ACL instance globally so handlers can reuse it
+            $GLOBALS['acl'] = $acl;
+
+            // Only run expensive initialization if permissions table is empty
+            // (first deployment or after reset - not on every request)
+            $stmt = $pdo->query("SELECT COUNT(*) as count FROM permissions");
+            $permCount = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($permCount['count'] == 0) {
+                error_log("Initializing default ACL permissions...");
+                $acl->initializeDefaultPermissions();
+            }
 
             // Check if roles table is empty - if so, initialize roles
             $stmt = $pdo->query("SELECT COUNT(*) as count FROM roles");
@@ -159,7 +171,7 @@ if (!function_exists('initializeACLSystem')) {
                 $acl->initializeDefaultRoles();
             }
 
-            // Get admin role ID
+            // Only reassign admin permissions if admin role exists and has fewer permissions than total
             $stmt = $pdo->prepare("SELECT id FROM roles WHERE name = 'admin' LIMIT 1");
             $stmt->execute();
             $adminRole = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -167,22 +179,20 @@ if (!function_exists('initializeACLSystem')) {
             if ($adminRole) {
                 $adminRoleId = $adminRole['id'];
 
-                // Re-assign all permissions to admin role (this updates if permissions were added)
+                // Check if admin role is missing any permissions before doing INSERT IGNORE
                 $stmt = $pdo->prepare("
-                    INSERT IGNORE INTO role_permissions (role_id, permission_id, granted)
-                    SELECT ?, id, 1 FROM permissions
+                    SELECT COUNT(*) as total FROM permissions WHERE id NOT IN
+                    (SELECT permission_id FROM role_permissions WHERE role_id = ?)
                 ");
                 $stmt->execute([$adminRoleId]);
+                $missing = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                // Check if admin user (ID 5) has admin role, if not assign it
-                $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM user_roles WHERE user_id = 5 AND role_id = ?");
-                $stmt->execute([$adminRoleId]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if ($result['count'] == 0) {
-                    error_log("Admin user (ID 5) does not have admin role. Assigning...");
-                    $acl->assignRole(5, $adminRoleId);
-                    error_log("Admin role assigned to user ID 5");
+                if ($missing['total'] > 0) {
+                    $stmt = $pdo->prepare("
+                        INSERT IGNORE INTO role_permissions (role_id, permission_id, granted)
+                        SELECT ?, id, 1 FROM permissions
+                    ");
+                    $stmt->execute([$adminRoleId]);
                 }
             }
 
@@ -619,15 +629,16 @@ if (!function_exists('getDashboardData')) {
 if (!function_exists('performGlobalSearch')) {
     function performGlobalSearch($pdo, $query, $limit, $user) {
         $results = [];
-        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy'];
-        
+        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'sfp', 'chassis', 'pciecard', 'hbacard'];
+
         try {
             foreach ($componentTypes as $type) {
                 try {
-                    $sql = "SELECT *, '$type' as component_type FROM $type WHERE 
-                            SerialNumber LIKE ? OR 
-                            Notes LIKE ? OR 
-                            Location LIKE ? 
+                    $tableName = getComponentTableName($type);
+                    $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE
+                            SerialNumber LIKE ? OR
+                            Notes LIKE ? OR
+                            Location LIKE ?
                             LIMIT ?";
                     
                     $escapedQuery = addcslashes($query, '%_\\');
@@ -705,7 +716,7 @@ if (!function_exists('addComponent')) {
                 require_once(__DIR__ . '/../models/components/ComponentDataService.php');
                 $componentService = ComponentDataService::getInstance();
 
-                $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'sfp'];
+                $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'sfp', 'chassis', 'pciecard', 'hbacard'];
 
                 if (in_array($type, $componentTypes)) {
                     if (!$componentService->validateComponentUuid($type, $data['UUID'])) {

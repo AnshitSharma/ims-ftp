@@ -6106,7 +6106,7 @@ class ServerBuilder {
 
                         if (!$isInConfig) {
                             // P4.4: ORPHANED! Clear ServerUUID
-                            $updateStmt = $this->pdo->prepare("UPDATE $table SET ServerUUID = NULL, server_location = NULL, rack_position = NULL, installation_date = NULL WHERE UUID = ?");
+                            $updateStmt = $this->pdo->prepare("UPDATE $table SET ServerUUID = NULL, Location = NULL, RackPosition = NULL, InstallationDate = NULL WHERE UUID = ?");
                             if ($updateStmt->execute([$uuid])) {
                                 $fixed[] = "Cleared orphaned ServerUUID from $type:$uuid";
                                 error_log("P4.4 AUTOFIX: Cleared orphaned ServerUUID from $type:$uuid in config $configUuid");

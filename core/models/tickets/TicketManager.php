@@ -690,16 +690,18 @@ class TicketManager
         $date = date('Ymd');
         $prefix = "TKT-{$date}-";
 
-        // Get the count of tickets created today
+        // Use MAX to get the highest sequence number for today, avoiding race conditions
+        // with COUNT which can return the same value for concurrent requests
         $stmt = $this->pdo->prepare("
-            SELECT COUNT(*) FROM tickets
-            WHERE DATE(created_at) = CURDATE()
+            SELECT MAX(CAST(SUBSTRING(ticket_number, -4) AS UNSIGNED)) as max_seq
+            FROM tickets
+            WHERE ticket_number LIKE ?
         ");
-        $stmt->execute();
-        $count = (int)$stmt->fetchColumn();
+        $stmt->execute([$prefix . '%']);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $nextSeq = ($result['max_seq'] ?? 0) + 1;
 
-        // Increment and pad to 4 digits
-        $sequence = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+        $sequence = str_pad($nextSeq, 4, '0', STR_PAD_LEFT);
 
         return $prefix . $sequence;
     }

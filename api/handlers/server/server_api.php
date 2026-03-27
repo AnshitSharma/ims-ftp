@@ -24,7 +24,7 @@ try {
 } catch (Exception $e) {
     error_log("Failed to initialize ServerBuilder: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(0, 1, 500, "Server system unavailable: " . $e->getMessage());
+    send_json_response(0, 1, 500, "Server system unavailable");
 }
 
 // Shared component type to table name mapping
@@ -182,7 +182,7 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         }
         
         // Check if user owns this configuration or has edit permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
         
@@ -308,7 +308,7 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error updating configuration: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to update configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to update configuration");
     }
 }
 
@@ -351,7 +351,7 @@ function handleCreateStart($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error in server creation start: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to initialize server creation: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to initialize server creation");
     }
 }
 
@@ -416,7 +416,7 @@ function handleAddComponent($serverBuilder, $user) {
         }
         
         // Check if user owns this configuration or has edit permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
         
@@ -1266,41 +1266,19 @@ function handleAddComponent($serverBuilder, $user) {
         error_log("Stack trace: " . $e->getTraceAsString());
         error_log("Component details: Type=$componentType, UUID=$componentUuid, ConfigUUID=$configUuid");
         
-        // Send detailed error for debugging instead of generic 500
-        send_json_response(0, 1, 500, "Internal server error: " . $e->getMessage(), [
-            'error_type' => 'exception_thrown',
-            'component_type' => $componentType,
-            'component_uuid' => $componentUuid,
-            'config_uuid' => $configUuid,
-            'error_details' => $e->getMessage(),
-            'file' => basename($e->getFile()),
-            'line' => $e->getLine(),
-            'debug_info' => [
-                'php_version' => PHP_VERSION,
-                'timestamp' => date('Y-m-d H:i:s'),
-                'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'unknown'
-            ]
-        ]);
+        send_json_response(0, 1, 500, "Failed to add component");
     }
 
     } catch (Exception $e) {
         error_log("FATAL ERROR in handleAddComponent: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
         error_log("File: " . $e->getFile() . " Line: " . $e->getLine());
-        send_json_response(0, 1, 500, "Component addition failed: " . $e->getMessage(), [
-            'error_file' => basename($e->getFile()),
-            'error_line' => $e->getLine(),
-            'error_type' => get_class($e)
-        ]);
+        send_json_response(0, 1, 500, "Component addition failed");
     } catch (Throwable $t) {
         error_log("FATAL PHP ERROR in handleAddComponent: " . $t->getMessage());
         error_log("Stack trace: " . $t->getTraceAsString());
         error_log("File: " . $t->getFile() . " Line: " . $t->getLine());
-        send_json_response(0, 1, 500, "Fatal error: " . $t->getMessage(), [
-            'error_file' => basename($t->getFile()),
-            'error_line' => $t->getLine(),
-            'error_type' => get_class($t)
-        ]);
+        send_json_response(0, 1, 500, "Component addition failed unexpectedly");
     }
 }
 
@@ -1326,7 +1304,7 @@ function handleRemoveComponent($serverBuilder, $user) {
         }
         
         // Check permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -1396,7 +1374,7 @@ function handleRemoveComponent($serverBuilder, $user) {
         
     } catch (\Throwable $e) {
         error_log("Error removing component: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to remove component: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to remove component");
     }
 }
 
@@ -1825,7 +1803,7 @@ function handleGetConfiguration($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error getting configuration: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to retrieve configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve configuration");
     }
 }
 
@@ -1937,7 +1915,7 @@ function handleListConfigurations($serverBuilder, $user) {
     } catch (Throwable $e) {
         error_log("Error listing configurations: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Failed to list configurations: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to list configurations");
     }
 }
 
@@ -2091,7 +2069,7 @@ function handleImportVirtual($serverBuilder, $user) {
             $pdo->rollBack();
         }
         error_log("Error importing virtual configuration: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to import virtual configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to import virtual configuration");
     }
 }
 
@@ -2151,7 +2129,7 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error finalizing configuration: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to finalize configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to finalize configuration");
     }
 }
 
@@ -2199,7 +2177,7 @@ function handleDeleteConfiguration($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error deleting configuration: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to delete configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to delete configuration");
     }
 }
 
@@ -2242,7 +2220,7 @@ function handleGetAvailableComponents($user) {
 
     } catch (Exception $e) {
         error_log("Error getting available components: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to get available components: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to get available components");
     }
 }
 
@@ -2303,7 +2281,7 @@ function handleValidateConfiguration($serverBuilder, $user) {
     } catch (Exception $e) {
         error_log("Error validating configuration: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Failed to validate configuration: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to validate configuration");
     }
 }
 
@@ -2849,7 +2827,7 @@ function handleGetCompatible($serverBuilder, $user) {
         
     } catch (Exception $e) {
         error_log("Error getting compatible components: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to get compatible components: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to get compatible components");
     }
 }
 
@@ -3692,7 +3670,7 @@ function handleUpdateLocationAndPropagate($serverBuilder, $user) {
         }
         
         // Check if user owns this configuration or has edit permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
         
@@ -3807,7 +3785,7 @@ function handleUpdateLocationAndPropagate($serverBuilder, $user) {
     } catch (Exception $e) {
         $pdo->rollback();
         error_log("Error updating server location: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to update server location: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to update server location");
     }
 }
 
@@ -3875,7 +3853,7 @@ function handleDebugMotherboardNICs($user) {
 
     } catch (Exception $e) {
         error_log("Error in debug endpoint: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to retrieve debug information: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve debug information");
     }
 }
 
@@ -3900,7 +3878,7 @@ function handleFixOnboardNICs($user) {
         }
 
         // Check if user owns this configuration or has edit permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -3982,7 +3960,7 @@ function handleFixOnboardNICs($user) {
 
     } catch (Exception $e) {
         error_log("Error fixing onboard NICs: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to fix onboard NICs: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to fix onboard NICs");
     }
 }
 
@@ -4005,7 +3983,7 @@ function handleReplaceOnboardNIC($user) {
         }
 
         // Check if user owns this configuration or has edit permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -4038,7 +4016,7 @@ function handleReplaceOnboardNIC($user) {
 
     } catch (Exception $e) {
         error_log("Error replacing onboard NIC: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to replace onboard NIC: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to replace onboard NIC");
     }
 }
 

@@ -113,14 +113,14 @@ try {
     }
 
     // Apply permission-based filtering
+    // SECURITY: Always enforce scope for non-admin users, regardless of user-supplied filters
     if (!$canViewAll && !$canManage) {
-        // User can only view own tickets or assigned tickets (including role assignments)
+        // Remove user-supplied filters that could bypass scope
+        unset($filters['created_by'], $filters['assigned_to'], $filters['assigned_to_role']);
+
         if ($canViewOwn && $canViewAssigned) {
-            // Can view both own and assigned - use combined filter
-            // Only apply if no specific user filter is requested
-            if (!isset($filters['created_by']) && !isset($filters['assigned_to']) && !isset($filters['assigned_to_role']) && !isset($filters['my_tickets_user_id'])) {
-                $filters['my_tickets_user_id'] = $user_id;
-            }
+            // Can view both own and assigned tickets
+            $filters['my_tickets_user_id'] = $user_id;
         } elseif ($canViewOwn) {
             // Can only view own tickets
             $filters['created_by'] = $user_id;
@@ -150,7 +150,5 @@ try {
 } catch (Exception $e) {
     error_log("ticket-list error: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(false, true, 500, "Failed to retrieve tickets", [
-        'error' => $e->getMessage()
-    ]);
+    send_json_response(false, true, 500, "Failed to retrieve tickets");
 }

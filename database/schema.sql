@@ -1437,6 +1437,7 @@ CREATE TABLE `tickets` (
   `target_server_uuid` varchar(36) DEFAULT NULL COMMENT 'Server configuration UUID this ticket targets',
   `created_by` int(10) UNSIGNED NOT NULL COMMENT 'User ID who created ticket',
   `assigned_to` int(10) UNSIGNED DEFAULT NULL COMMENT 'User ID assigned to handle ticket',
+  `assigned_to_role` int(11) DEFAULT NULL COMMENT 'Role ID assigned to handle ticket (references roles.id)',
   `rejection_reason` text DEFAULT NULL COMMENT 'Required when status = rejected',
   `deployment_notes` text DEFAULT NULL COMMENT 'Notes added during deployment',
   `completion_notes` text DEFAULT NULL COMMENT 'Notes added when completed',
