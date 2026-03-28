@@ -735,10 +735,11 @@ class ComponentDataService {
     }
 
     public function clearCache($componentType = null) {
-        if ($componentType && isset($this->jsonCache[$componentType])) {
-            unset($this->jsonCache[$componentType]);
+        if ($componentType) {
+            unset($this->jsonCache[$componentType], $this->uuidIndex[$componentType]);
         } else {
             $this->jsonCache = [];
+            $this->uuidIndex = [];
         }
     }
 

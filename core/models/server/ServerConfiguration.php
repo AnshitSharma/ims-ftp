@@ -371,26 +371,6 @@ class ServerConfiguration {
     }
     
     /**
-     * Add component to configuration
-     * DEPRECATED: Components are now managed through ServerBuilder which stores them in JSON columns
-     * This method is kept for backward compatibility but does nothing
-     */
-    public function addComponent($componentType, $componentUuid, $options = []) {
-        error_log("DEPRECATED: ServerConfiguration::addComponent() called. Use ServerBuilder for component management instead.");
-        return true; // No-op, components are managed by ServerBuilder
-    }
-
-    /**
-     * Remove component from configuration
-     * DEPRECATED: Components are now managed through ServerBuilder which stores them in JSON columns
-     * This method is kept for backward compatibility but does nothing
-     */
-    public function removeComponent($componentType, $componentUuid = null) {
-        error_log("DEPRECATED: ServerConfiguration::removeComponent() called. Use ServerBuilder for component management instead.");
-        return true; // No-op, components are managed by ServerBuilder
-    }
-    
-    /**
      * Get configuration status text
      */
     public function getStatusText() {
@@ -398,8 +378,7 @@ class ServerConfiguration {
             0 => 'Draft',
             1 => 'Validated',
             2 => 'Built',
-            3 => 'Deployed',
-            4 => 'Archived'
+            3 => 'Finalized'
         ];
 
         $status = $this->data['configuration_status'] ?? 0;
@@ -564,7 +543,7 @@ class ServerConfiguration {
         }
         
         // Status validation
-        $validStatuses = [0, 1, 2, 3, 4];
+        $validStatuses = [0, 1, 2, 3];
         if (!in_array($this->data['configuration_status'], $validStatuses)) {
             $errors[] = "Invalid configuration status";
         }

@@ -1221,7 +1221,7 @@ CREATE TABLE `server_configurations` (
   `ram_configuration` longtext DEFAULT NULL COMMENT 'JSON array of RAM modules',
   `storage_configuration` longtext DEFAULT NULL COMMENT 'JSON array of storage devices',
   `caddy_configuration` longtext DEFAULT NULL COMMENT 'JSON array of caddies',
-  `configuration_status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '0=Draft, 1=Validated, 2=Built, 3=Deployed',
+  `configuration_status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '0=Draft, 1=Validated, 2=Built, 3=Finalized',
   `is_virtual` tinyint(1) NOT NULL DEFAULT 0 COMMENT '0=Real Server Config, 1=Virtual/Test Config',
   `power_consumption` int(11) DEFAULT NULL COMMENT 'Estimated power consumption in watts',
   `compatibility_score` decimal(3,2) DEFAULT NULL COMMENT 'Overall compatibility score',

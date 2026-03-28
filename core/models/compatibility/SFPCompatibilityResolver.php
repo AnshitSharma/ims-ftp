@@ -451,17 +451,7 @@ class SFPCompatibilityResolver {
      * Extract numeric speed value - delegates to NICPortTracker
      */
     private function extractSpeedValue($speedStr) {
-        // Use reflection-free approach: replicate the static call
-        // NICPortTracker::extractSpeedValue is private, so inline the logic
-        $speedStr = strtoupper(trim($speedStr));
-        if (preg_match('/(\d+(?:\.\d+)?)/', $speedStr, $matches)) {
-            $value = floatval($matches[1]);
-            if (strpos($speedStr, 'M') !== false) {
-                $value = $value / 1000;
-            }
-            return (int)$value;
-        }
-        return 0;
+        return NICPortTracker::extractSpeedValue($speedStr);
     }
 
     /**

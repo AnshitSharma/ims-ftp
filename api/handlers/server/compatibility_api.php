@@ -732,11 +732,24 @@ function handleImportCompatibilityRules() {
     }
     
     $file = $_FILES['rules_file'];
+
+    // Validate file upload
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        send_json_response(0, 1, 400, "File upload failed (error code: {$file['error']})");
+    }
+    if ($file['size'] > 5 * 1024 * 1024) { // 5MB max
+        send_json_response(0, 1, 400, "File too large. Maximum size is 5MB");
+    }
+    $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if ($extension !== 'json') {
+        send_json_response(0, 1, 400, "Invalid file type. Only .json files are accepted");
+    }
+
     $overwriteExisting = filter_var($_POST['overwrite_existing'] ?? false, FILTER_VALIDATE_BOOLEAN);
-    
+
     try {
         $fileContent = file_get_contents($file['tmp_name']);
-        $importData = json_decode($fileContent, true);
+        $importData = json_decode($fileContent, true, 64); // Limit nesting depth to 64
         
         if (json_last_error() !== JSON_ERROR_NONE) {
             send_json_response(0, 1, 400, "Invalid JSON file format");

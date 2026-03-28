@@ -352,6 +352,22 @@ class TicketManager
                 }
             }
 
+            // Assigned-to-me filter (assigned_to OR assigned_to_role, without created_by)
+            if (!empty($filters['assigned_to_me_user_id'])) {
+                $userId = $filters['assigned_to_me_user_id'];
+                $userRoleIds = $this->getUserRoleIds($userId);
+
+                if (!empty($userRoleIds)) {
+                    $rolePlaceholders = implode(',', array_fill(0, count($userRoleIds), '?'));
+                    $where[] = "(t.assigned_to = ? OR t.assigned_to_role IN ($rolePlaceholders))";
+                    $params[] = $userId;
+                    $params = array_merge($params, $userRoleIds);
+                } else {
+                    $where[] = "t.assigned_to = ?";
+                    $params[] = $userId;
+                }
+            }
+
             // Search filter (title, description, ticket_number)
             if (!empty($filters['search'])) {
                 $where[] = "(t.title LIKE ? OR t.description LIKE ? OR t.ticket_number LIKE ?)";

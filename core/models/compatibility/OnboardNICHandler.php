@@ -24,23 +24,25 @@ class OnboardNICHandler {
      * @return array Result with count and NIC details
      */
     public function autoAddOnboardNICs($configUuid, $motherboardUuid) {
+        // Load motherboard specifications from JSON (no DB ops, safe before transaction)
+        $mbSpecs = $this->getMotherboardSpecs($motherboardUuid);
+
+        if (!$mbSpecs) {
+            return ['count' => 0, 'nics' => [], 'message' => 'Motherboard specs not found'];
+        }
+
+        if (!isset($mbSpecs['networking']['onboard_nics']) || empty($mbSpecs['networking']['onboard_nics'])) {
+            return ['count' => 0, 'nics' => [], 'message' => 'No onboard NICs in motherboard'];
+        }
+
+        $onboardNICs = $mbSpecs['networking']['onboard_nics'];
+        $addedNICs = [];
+
+        $ownTransaction = !$this->pdo->inTransaction();
         try {
-
-
-            // Load motherboard specifications from JSON
-            $mbSpecs = $this->getMotherboardSpecs($motherboardUuid);
-
-            if (!$mbSpecs) {
-                return ['count' => 0, 'nics' => [], 'message' => 'Motherboard specs not found'];
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
             }
-
-            // Check if motherboard has onboard NICs
-            if (!isset($mbSpecs['networking']['onboard_nics']) || empty($mbSpecs['networking']['onboard_nics'])) {
-                return ['count' => 0, 'nics' => [], 'message' => 'No onboard NICs in motherboard'];
-            }
-
-            $onboardNICs = $mbSpecs['networking']['onboard_nics'];
-            $addedNICs = [];
 
             // Check if onboard NICs already exist in nicinventory (including orphaned ones with NULL ServerUUID)
             $checkExistingStmt = $this->pdo->prepare("
@@ -77,6 +79,9 @@ class OnboardNICHandler {
                 // Update nic_config JSON (this is the source of truth now)
                 $this->updateNICConfigJSON($configUuid);
 
+                if ($ownTransaction) {
+                    $this->pdo->commit();
+                }
                 return [
                     'count' => count($addedNICs),
                     'nics' => $addedNICs,
@@ -92,7 +97,6 @@ class OnboardNICHandler {
                 AND ServerUUID = ?
             ");
             $cleanupStmt->execute([$motherboardUuid, $configUuid]);
-            $deletedCount = $cleanupStmt->rowCount();
             // Note: No need to clean up from server_configuration_components as it's deprecated
             // The nic_config JSON will be updated at the end to reflect current state
 
@@ -150,6 +154,9 @@ class OnboardNICHandler {
             // Update nic_config JSON in server_build_templates
             $this->updateNICConfigJSON($configUuid);
 
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
             return [
                 'count' => count($addedNICs),
                 'nics' => $addedNICs,
@@ -157,6 +164,9 @@ class OnboardNICHandler {
             ];
 
         } catch (Exception $e) {
+            if ($ownTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
             error_log("Error in autoAddOnboardNICs: " . $e->getMessage());
             return [
                 'count' => 0,

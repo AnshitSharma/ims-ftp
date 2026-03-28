@@ -223,9 +223,27 @@ function handleCompatibilityModule($operation, $user) {
  */
 function handleAuthOperations($operation) {
     error_log("Auth operation: $operation");
-    
+
     global $pdo;
-    
+
+    // Rate limit login, forgot_password, and reset_password
+    if (in_array($operation, ['login', 'forgot_password', 'reset_password'])) {
+        require_once(__DIR__ . '/../core/helpers/RateLimiter.php');
+        $rateLimiter = new RateLimiter();
+        $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+        $limits = [
+            'login' => [10, 60],            // 10 attempts per minute
+            'forgot_password' => [3, 3600], // 3 attempts per hour
+            'reset_password' => [5, 3600],  // 5 attempts per hour
+        ];
+        [$maxAttempts, $window] = $limits[$operation];
+
+        if (!$rateLimiter->attempt("$operation:$clientIp", $maxAttempts, $window)) {
+            send_json_response(0, 0, 429, "Too many requests. Please try again later.");
+        }
+    }
+
     switch ($operation) {
         case 'login':
             handleLogin();
@@ -466,7 +484,19 @@ function handleRegistration() {
     if (empty($username) || empty($email) || empty($password)) {
         send_json_response(0, 0, 400, "Username, email, and password are required");
     }
-    
+
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        send_json_response(0, 0, 400, "Invalid email format");
+    }
+
+    if (strlen($password) < 8) {
+        send_json_response(0, 0, 400, "Password must be at least 8 characters");
+    }
+
+    if (strlen($username) < 3 || strlen($username) > 50) {
+        send_json_response(0, 0, 400, "Username must be between 3 and 50 characters");
+    }
+
     try {
         // Check if username/email already exists
         $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");

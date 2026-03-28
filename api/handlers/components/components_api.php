@@ -35,7 +35,10 @@ $GLOBALS['_componentTableMap'] = [
     'storage' => 'storageinventory',
     'motherboard' => 'motherboardinventory',
     'nic' => 'nicinventory',
-    'caddy' => 'caddyinventory'
+    'caddy' => 'caddyinventory',
+    'pciecard' => 'pciecardinventory',
+    'hbacard' => 'hbacardinventory',
+    'sfp' => 'sfpinventory'
 ];
 $tableMap = $GLOBALS['_componentTableMap'];
 

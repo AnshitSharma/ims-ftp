@@ -278,7 +278,7 @@ class NICPortTracker {
             'QSFP+' => ['QSFP+'],
             'QSFP28' => ['QSFP28', 'QSFP+'],
             'QSFP56' => ['QSFP56', 'QSFP28', 'QSFP+'],
-            'OSFP' => ['OSFP', 'QSFP56', 'QSFP28'],
+            'OSFP' => ['OSFP', 'QSFP56', 'QSFP28', 'QSFP+'],
             'RJ45' => [],
             'RJ-45' => []
         ];
@@ -309,7 +309,7 @@ class NICPortTracker {
      * @param string $speedStr Speed string (e.g., "10GbE", "25Gbps", "100G")
      * @return int Speed value in Gbps
      */
-    private static function extractSpeedValue($speedStr) {
+    public static function extractSpeedValue($speedStr) {
         $speedStr = strtoupper(trim($speedStr));
 
         // Extract numeric value

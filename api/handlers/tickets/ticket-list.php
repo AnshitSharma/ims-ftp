@@ -115,8 +115,9 @@ try {
     // Apply permission-based filtering
     // SECURITY: Always enforce scope for non-admin users, regardless of user-supplied filters
     if (!$canViewAll && !$canManage) {
-        // Remove user-supplied filters that could bypass scope
-        unset($filters['created_by'], $filters['assigned_to'], $filters['assigned_to_role']);
+        // SECURITY: Remove ALL user-supplied scope filters to prevent bypass
+        unset($filters['created_by'], $filters['assigned_to'], $filters['assigned_to_role'],
+              $filters['my_tickets_user_id'], $filters['user_id_or'], $filters['assigned_to_me_user_id']);
 
         if ($canViewOwn && $canViewAssigned) {
             // Can view both own and assigned tickets
@@ -125,8 +126,8 @@ try {
             // Can only view own tickets
             $filters['created_by'] = $user_id;
         } elseif ($canViewAssigned) {
-            // Can only view assigned tickets (user OR role)
-            $filters['my_tickets_user_id'] = $user_id;
+            // Can only view tickets assigned to user or their roles (not created_by)
+            $filters['assigned_to_me_user_id'] = $user_id;
         }
     }
 

@@ -81,8 +81,6 @@ class ComponentValidator {
         $data = $result['data'];
 
         try {
-            error_log("DEBUG: Parsing motherboard specs for UUID: $motherboardUuid");
-            error_log("DEBUG: Motherboard raw data: " . json_encode($data));
 
             $specifications = [
                 'basic_info' => [
@@ -114,7 +112,6 @@ class ComponentValidator {
                 ]
             ];
 
-            error_log("DEBUG: Parsed motherboard memory section: " . json_encode($specifications['memory']));
 
             // Parse M.2 slots
             if (isset($data['storage']['nvme']['m2_slots'])) {
@@ -235,13 +232,11 @@ class ComponentValidator {
      * Validate CPU socket compatibility with motherboard - ENHANCED with proper JSON extraction
      */
     public function validateCPUSocketCompatibility($cpuUuid, $motherboardSpecs) {
-        error_log("DEBUG: Starting CPU socket compatibility check for UUID: $cpuUuid");
 
         // Get CPU socket type using enhanced JSON extraction
         $cpuSocket = $this->extractSocketTypeFromJSON('cpu', $cpuUuid);
         $motherboardSocket = $motherboardSpecs['cpu']['socket_type'] ?? null;
 
-        error_log("DEBUG: CPU socket: " . ($cpuSocket ?? 'null') . ", Motherboard socket: " . ($motherboardSocket ?? 'null'));
 
         // Check if either socket type cannot be found
         if (!$cpuSocket && !$motherboardSocket) {
@@ -291,7 +286,6 @@ class ComponentValidator {
             $errorMessage = "CPU socket $cpuSocket incompatible with motherboard socket $motherboardSocket";
         }
 
-        error_log("DEBUG: Socket compatibility result - Compatible: " . ($compatible ? 'YES' : 'NO') . ", CPU: $cpuSocket, MB: $motherboardSocket");
 
         return [
             'compatible' => $compatible,
@@ -1086,7 +1080,6 @@ class ComponentValidator {
      * Enhanced extractSocketType method to work with JSON data primarily
      */
     public function extractSocketTypeFromJSON($componentType, $componentUuid) {
-        error_log("DEBUG: Extracting socket type for $componentType UUID: $componentUuid");
 
         $result = null;
 
@@ -1094,7 +1087,6 @@ class ComponentValidator {
             $cpuResult = $this->validateCPUExists($componentUuid);
             if ($cpuResult['exists'] && isset($cpuResult['data'])) {
                 $result = $cpuResult['data']['socket'] ?? null;
-                error_log("DEBUG: CPU socket from JSON: " . ($result ?? 'null'));
             }
         } elseif ($componentType === 'motherboard') {
             $mbResult = $this->dataLoader->loadComponentFromJSON('motherboard', $componentUuid);
@@ -1102,18 +1094,15 @@ class ComponentValidator {
                 $data = $mbResult['data'];
                 // Try multiple socket field possibilities
                 $result = $data['socket']['type'] ?? $data['socket'] ?? $data['cpu_socket'] ?? null;
-                error_log("DEBUG: Motherboard socket from JSON: " . ($result ?? 'null'));
             }
         }
 
         // Fallback to database Notes field extraction if JSON doesn't have the data
         if (!$result) {
-            error_log("DEBUG: No socket found in JSON, trying database Notes field");
             $componentData = $this->dataLoader->getComponentData($componentType, $componentUuid);
             if ($componentData) {
                 $notes = strtolower($componentData['Notes'] ?? '');
                 $result = $this->dataExtractor->extractSocketFromNotes($notes);
-                error_log("DEBUG: Socket from Notes field: " . ($result ?? 'null'));
             }
         }
 

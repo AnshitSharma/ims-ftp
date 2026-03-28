@@ -29,7 +29,7 @@ class WorkflowConfig
      */
     public static function getValidComponentTypes()
     {
-        return ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'hbacard'];
+        return ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'hbacard', 'sfp'];
     }
 
     /**
