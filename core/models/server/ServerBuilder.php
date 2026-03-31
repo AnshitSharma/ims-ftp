@@ -929,10 +929,16 @@ class ServerBuilder {
 
                 // Include connection data for storage components (with lazy migration)
                 if ($type === 'storage') {
-                    if (!empty($component['connection'])) {
-                        $simplifiedComponent['connection'] = $component['connection'];
+                    $storedConnection = $component['connection'] ?? null;
+                    $storedType = $storedConnection['type'] ?? 'not_connected';
+                    if (!empty($storedConnection) && $storedType !== 'not_connected') {
+                        $simplifiedComponent['connection'] = $storedConnection;
                     } else {
-                        $simplifiedComponent['connection'] = $this->computeStorageConnectionPath($configUuid, $uuid);
+                        // Recompute: either missing or stored as not_connected (lazy migration for
+                        // storage added before chassis). Bay number is position-based so each
+                        // storage gets a distinct sequential bay slot.
+                        $bayNumber = count($componentDetails[$type] ?? []) + 1;
+                        $simplifiedComponent['connection'] = $this->computeStorageConnectionPath($configUuid, $uuid, $bayNumber);
                     }
                 }
 
@@ -1351,7 +1357,7 @@ class ServerBuilder {
     /**
      * Compute storage connection path using StorageConnectionValidator
      */
-    private function computeStorageConnectionPath($configUuid, $storageUuid) {
+    private function computeStorageConnectionPath($configUuid, $storageUuid, $bayNumber = null) {
         try {
             require_once __DIR__ . '/../compatibility/StorageConnectionValidator.php';
             $storageValidator = new StorageConnectionValidator($this->pdo);
@@ -1363,11 +1369,17 @@ class ServerBuilder {
                 $path = $validation['primary_path'];
                 $details = $path['details'] ?? [];
 
-                $existingStorageCount = count($existingComponents['storage'] ?? []);
+                // Use caller-supplied bay number (position-based, avoids duplication when recomputing
+                // for existing storage). Fall back to count+1 for the add-component flow where
+                // the new storage is not yet in existingComponents.
+                if ($bayNumber === null) {
+                    $existingStorageCount = count($existingComponents['storage'] ?? []);
+                    $bayNumber = $existingStorageCount + 1;
+                }
 
                 return [
                     'type' => $path['type'],
-                    'bay_number' => $existingStorageCount + 1,
+                    'bay_number' => $bayNumber,
                     'controller_uuid' => $details['chassis_uuid'] ?? $details['hba_uuid'] ?? null,
                     'backplane_interface' => $details['backplane_interface'] ?? null,
                     'storage_interface' => $details['storage_interface'] ?? null,
@@ -2716,6 +2728,34 @@ class ServerBuilder {
                 'type' => $componentType,
                 'uuid' => $componentUuid
             ];
+
+            // Caddies are configuration-scoped accessories, not components that must
+            // be pairwise compatible with every installed storage device. Use the same
+            // decentralized chassis-aware validation already used by the API pre-check.
+            if ($componentType === 'caddy') {
+                $existingComponentsData = array_map(function($existing) {
+                    return [
+                        'type' => $existing['component_type'],
+                        'uuid' => $existing['component_uuid']
+                    ];
+                }, $existingComponents);
+
+                $compatResult = $compatibility->checkCaddyDecentralizedCompatibility($newComponent, $existingComponentsData);
+                if (!$compatResult['compatible']) {
+                    $issues = array_values(array_filter(array_merge(
+                        $compatResult['issues'] ?? [],
+                        isset($compatResult['compatibility_summary']) ? [$compatResult['compatibility_summary']] : []
+                    )));
+
+                    return [
+                        'success' => false,
+                        'message' => "Component $componentUuid is not compatible with existing configuration. " .
+                                   implode(', ', $issues)
+                    ];
+                }
+
+                return ['success' => true, 'message' => 'Component is compatible with existing configuration'];
+            }
 
             foreach ($existingComponents as $existing) {
                 $existingComponent = [

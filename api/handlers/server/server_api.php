@@ -3147,7 +3147,12 @@ function getConfigurationWarnings($components) {
                     if ($caddyUuid) {
                         $caddySpecs = $dataUtils->getCaddyByUUID($caddyUuid);
                         if ($caddySpecs) {
-                            $formFactor = strtolower($caddySpecs['form_factor'] ?? '');
+                            $formFactor = strtolower(
+                                $caddySpecs['compatibility']['size'] ??
+                                $caddySpecs['form_factor'] ??
+                                $caddySpecs['type'] ??
+                                ''
+                            );
                             if (strpos($formFactor, '2.5') !== false) {
                                 $caddyByFormFactor['2.5'][] = $caddyUuid;
                             } elseif (strpos($formFactor, '3.5') !== false) {

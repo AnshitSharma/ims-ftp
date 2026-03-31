@@ -74,6 +74,8 @@ class DataExtractionUtilities {
                 return $this->findInCategoryModels($data, $uuid);
             case 'nic':
                 return $this->findNICInData($data, $uuid);
+            case 'caddy':
+                return $this->findCaddyInData($data, $uuid);
             default:
                 return null;
         }
@@ -156,6 +158,19 @@ class DataExtractionUtilities {
                         return $model;
                     }
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find caddy in caddy data structure (top-level caddies array)
+     */
+    private function findCaddyInData($data, $uuid) {
+        foreach ($data['caddies'] ?? [] as $caddy) {
+            $caddyUuid = $caddy['uuid'] ?? $caddy['UUID'] ?? null;
+            if ($caddyUuid === $uuid) {
+                return $caddy;
             }
         }
         return null;

@@ -1288,6 +1288,43 @@ class StorageConnectionValidator {
             return ['valid' => true, 'error' => null, 'info' => null];
         }
 
+        // Priority 1: Validate directly against chassis bay configuration.
+        // A hybrid chassis (e.g. 24× 2.5" + 8× 3.5") supports both sizes; we must check
+        // ALL bay types rather than locking on the first one found (which is what
+        // getFormFactorLock does). Only fall through to caddy/storage lock when no chassis.
+        if (!empty($existingComponents['chassis']) && isset($existingComponents['chassis']['component_uuid'])) {
+            $chassisSpecs = $this->getChassisSpecs($existingComponents['chassis']['component_uuid']);
+            if ($chassisSpecs) {
+                $bayConfig = $chassisSpecs['drive_bays']['bay_configuration'] ?? [];
+                $chassisSizes = [];
+                foreach ($bayConfig as $bay) {
+                    $bn = $this->normalizeFormFactor($bay['bay_type'] ?? '');
+                    if ($bn === '2.5-inch' || $bn === '3.5-inch') {
+                        $chassisSizes[] = $bn;
+                    }
+                }
+                if (!empty($chassisSizes)) {
+                    if (in_array($normalized, $chassisSizes)) {
+                        return ['valid' => true, 'error' => null, 'info' => null];
+                    }
+                    $supported = implode(' and ', array_unique($chassisSizes));
+                    return [
+                        'valid' => false,
+                        'error' => [
+                            'type' => 'form_factor_mismatch',
+                            'message' => "Chassis only supports $supported bays - cannot add $normalized storage",
+                            'locked_size' => implode(',', array_unique($chassisSizes)),
+                            'incoming_size' => $normalized,
+                            'locked_by' => 'chassis_bay_configuration',
+                            'resolution' => "Select storage with a $supported form factor"
+                        ],
+                        'info' => null
+                    ];
+                }
+            }
+        }
+
+        // Priority 2 / 3: Caddy or existing-storage lock (no chassis in config yet)
         $lock = $this->getFormFactorLock($existingComponents);
 
         if (!$lock['locked']) {
