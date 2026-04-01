@@ -4,6 +4,7 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
 require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
 require_once __DIR__ . '/../chassis/ChassisManager.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
+require_once __DIR__ . '/ServerConfiguration.php';
 
 class ServerBuilder {
 
@@ -626,7 +627,10 @@ class ServerBuilder {
                 try {
                     $parentNicUuid = $options['parent_nic_uuid'] ?? null;
                     $portIndex = $options['port_index'] ?? null;
-                    $compatibilityValidation = $this->validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $config->getData(), $parentNicUuid, $portIndex);
+                    $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+                    $stmt->execute([$configUuid]);
+                    $configDataForValidation = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                    $compatibilityValidation = $this->validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configDataForValidation, $parentNicUuid, $portIndex);
                     if (!$compatibilityValidation['success']) {
                         if ($ownTransaction && $this->pdo->inTransaction()) {
                             $this->pdo->rollback();
@@ -696,6 +700,56 @@ class ServerBuilder {
                 ];
             }
             $slotPosition = $options['slot_position'] ?? null;
+
+            // Phase 10.5: Expansion slot assignment for PCIe cards, NICs, HBA cards
+            // Moved from handleAddComponent() lines 503-600
+            if (in_array($componentType, ['pciecard', 'nic', 'hbacard'])) {
+                try {
+                    // Load component specs for slot assignment
+                    $componentDataService = ComponentDataService::getInstance();
+                    $componentSpecs = $componentDataService->getComponentSpecifications(
+                        $componentType,
+                        $componentUuid,
+                        $componentDetails
+                    );
+
+                    // Attempt to assign slot (may return null if no suitable slots)
+                    $slotAssignmentResult = $this->assignComponentSlot(
+                        $configUuid,
+                        $componentType,
+                        $componentUuid,
+                        $componentSpecs ?? [],
+                        $slotPosition ?? null  // Pass manual override if provided
+                    );
+
+                    if (!$slotAssignmentResult['success']) {
+                        // Riser card error is blocking - cannot proceed
+                        if (isset($slotAssignmentResult['error_code']) &&
+                            $slotAssignmentResult['error_code'] === 'no_riser_slots_available') {
+                            if ($ownTransaction && $this->pdo->inTransaction()) {
+                                $this->pdo->rollback();
+                            }
+                            return [
+                                'success' => false,
+                                'message' => $slotAssignmentResult['message'],
+                                'details' => [
+                                    'component_type' => $componentType,
+                                    'component_uuid' => $componentUuid,
+                                    'required_slot_type' => $slotAssignmentResult['required_slot_type'] ?? null
+                                ]
+                            ];
+                        }
+                    }
+
+                    // Update $slotPosition with assigned slot ID if successful
+                    if ($slotAssignmentResult['success'] && $slotAssignmentResult['slot_id']) {
+                        $slotPosition = $slotAssignmentResult['slot_id'];
+                    }
+                } catch (Exception $slotError) {
+                    error_log("Slot assignment exception: " . $slotError->getMessage());
+                    // Continue without slot assignment - not fatal for non-riser cards
+                }
+            }
 
             // Note: Component data is now stored in JSON columns in server_configurations table
             // No separate server_configuration_components table needed
@@ -1735,6 +1789,212 @@ class ServerBuilder {
                 'error' => $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * Get current configuration warnings
+     */
+    public function getConfigurationWarnings(array $components): array {
+        $dataUtils = $this->dataUtils;
+
+        $warnings = [];
+
+        try {
+            // Check M.2 slot capacity
+            $m2Count = 0;
+            $m2TotalSlots = 0;
+
+            if (isset($components['motherboard']) && !empty($components['motherboard'])) {
+                $mbUuid = $components['motherboard'][0]['uuid'] ?? null;
+                if ($mbUuid) {
+                    $mbSpecs = $dataUtils->getMotherboardByUUID($mbUuid);
+                    // P3.1 FIX: Sum ALL M.2 slot types (NVMe + SATA), not just the first one
+                    if ($mbSpecs && isset($mbSpecs['storage']['nvme']['m2_slots'])) {
+                        $m2TotalSlots = 0;
+                        foreach ($mbSpecs['storage']['nvme']['m2_slots'] as $slotConfig) {
+                            $m2TotalSlots += $slotConfig['count'] ?? 0;
+                        }
+                    }
+                }
+            }
+
+            if (isset($components['storage']) && !empty($components['storage'])) {
+                foreach ($components['storage'] as $storage) {
+                    $storageUuid = $storage['uuid'] ?? null;
+                    if ($storageUuid) {
+                        $storageSpecs = $dataUtils->getStorageByUUID($storageUuid);
+                        if ($storageSpecs) {
+                            $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                            if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) {
+                                $m2Count++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($m2Count > $m2TotalSlots && $m2TotalSlots > 0) {
+                $warnings[] = [
+                    'type' => 'm2_slots_exceeded',
+                    'severity' => 'high',
+                    'message' => "M.2 slots exceeded: Using $m2Count slots but only $m2TotalSlots available",
+                    'recommendation' => "Remove " . ($m2Count - $m2TotalSlots) . " M.2 storage device(s)"
+                ];
+            } elseif ($m2Count == $m2TotalSlots && $m2TotalSlots > 0) {
+                $warnings[] = [
+                    'type' => 'm2_slots_full',
+                    'severity' => 'info',
+                    'message' => "All M.2 slots are in use ($m2Count/$m2TotalSlots)",
+                    'recommendation' => "No additional M.2 storage can be added"
+                ];
+            }
+
+            // Check for missing critical components (CPU, Motherboard, RAM, Chassis)
+            $criticalComponents = ['cpu', 'motherboard', 'ram', 'chassis'];
+            foreach ($criticalComponents as $type) {
+                if (empty($components[$type])) {
+                    $warnings[] = [
+                        'type' => 'missing_component',
+                        'severity' => 'critical',
+                        'message' => ucfirst($type) . " is required but not present",
+                        'recommendation' => "Add " . ucfirst($type) . " to complete server configuration"
+                    ];
+                }
+            }
+
+            // Check caddy-storage compatibility and count matching
+            if (!empty($components['storage'])) {
+                $storageByFormFactor = [
+                    '2.5' => [],
+                    '3.5' => []
+                ];
+                $caddyByFormFactor = [
+                    '2.5' => [],
+                    '3.5' => []
+                ];
+
+                // Count storage devices by form factor (2.5" and 3.5" only)
+                foreach ($components['storage'] as $storage) {
+                    $storageUuid = $storage['uuid'] ?? null;
+                    if ($storageUuid) {
+                        $storageSpecs = $dataUtils->getStorageByUUID($storageUuid);
+                        if ($storageSpecs) {
+                            $formFactor = strtolower($storageSpecs['form_factor'] ?? '');
+                            // Only check for 2.5" and 3.5" drives (not M.2 or other form factors)
+                            if (strpos($formFactor, '2.5') !== false) {
+                                $storageByFormFactor['2.5'][] = $storageUuid;
+                            } elseif (strpos($formFactor, '3.5') !== false) {
+                                $storageByFormFactor['3.5'][] = $storageUuid;
+                            }
+                        }
+                    }
+                }
+
+                // Count caddies by form factor
+                if (!empty($components['caddy'])) {
+                    foreach ($components['caddy'] as $caddy) {
+                        $caddyUuid = $caddy['uuid'] ?? null;
+                        if ($caddyUuid) {
+                            $caddySpecs = $dataUtils->getCaddyByUUID($caddyUuid);
+                            if ($caddySpecs) {
+                                $formFactor = strtolower(
+                                    $caddySpecs['compatibility']['size'] ??
+                                    $caddySpecs['form_factor'] ??
+                                    $caddySpecs['type'] ??
+                                    ''
+                                );
+                                if (strpos($formFactor, '2.5') !== false) {
+                                    $caddyByFormFactor['2.5'][] = $caddyUuid;
+                                } elseif (strpos($formFactor, '3.5') !== false) {
+                                    $caddyByFormFactor['3.5'][] = $caddyUuid;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check 2.5" storage vs caddy count
+                $storage25Count = count($storageByFormFactor['2.5']);
+                $caddy25Count = count($caddyByFormFactor['2.5']);
+
+                if ($storage25Count > 0 && $caddy25Count < $storage25Count) {
+                    $missing = $storage25Count - $caddy25Count;
+                    $warnings[] = [
+                        'type' => 'caddy_shortage',
+                        'severity' => 'high',
+                        'message' => "Insufficient 2.5\" caddies: {$storage25Count} 2.5\" storage device(s) require {$storage25Count} caddies, but only {$caddy25Count} available",
+                        'recommendation' => "Add {$missing} 2.5\" caddy/caddies to match storage devices"
+                    ];
+                } elseif ($storage25Count > 0 && $caddy25Count > $storage25Count) {
+                    $excess = $caddy25Count - $storage25Count;
+                    $warnings[] = [
+                        'type' => 'caddy_excess',
+                        'severity' => 'info',
+                        'message' => "Excess 2.5\" caddies: {$excess} extra 2.5\" caddy/caddies not currently needed",
+                        'recommendation' => "You have {$caddy25Count} 2.5\" caddies for {$storage25Count} 2.5\" storage device(s)"
+                    ];
+                }
+
+                // Check 3.5" storage vs caddy count
+                $storage35Count = count($storageByFormFactor['3.5']);
+                $caddy35Count = count($caddyByFormFactor['3.5']);
+
+                if ($storage35Count > 0 && $caddy35Count < $storage35Count) {
+                    $missing = $storage35Count - $caddy35Count;
+                    $warnings[] = [
+                        'type' => 'caddy_shortage',
+                        'severity' => 'high',
+                        'message' => "Insufficient 3.5\" caddies: {$storage35Count} 3.5\" storage device(s) require {$storage35Count} caddies, but only {$caddy35Count} available",
+                        'recommendation' => "Add {$missing} 3.5\" caddy/caddies to match storage devices"
+                    ];
+                } elseif ($storage35Count > 0 && $caddy35Count > $storage35Count) {
+                    $excess = $caddy35Count - $storage35Count;
+                    $warnings[] = [
+                        'type' => 'caddy_excess',
+                        'severity' => 'info',
+                        'message' => "Excess 3.5\" caddies: {$excess} extra 3.5\" caddy/caddies not currently needed",
+                        'recommendation' => "You have {$caddy35Count} 3.5\" caddies for {$storage35Count} 3.5\" storage device(s)"
+                    ];
+                }
+            }
+
+            // Check for missing NIC - only warn if no onboard NICs are present
+            if (empty($components['nic']) && isset($components['motherboard']) && !empty($components['motherboard'])) {
+                // Check if motherboard has onboard NICs
+                $hasOnboardNICs = false;
+                $mbUuid = $components['motherboard'][0]['uuid'] ?? null;
+
+                if ($mbUuid) {
+                    $mbSpecs = $dataUtils->getMotherboardByUUID($mbUuid);
+                    if ($mbSpecs && isset($mbSpecs['networking']['onboard_nics']) && !empty($mbSpecs['networking']['onboard_nics'])) {
+                        $hasOnboardNICs = true;
+                    }
+                }
+
+                // Only warn if no onboard NICs are available
+                if (!$hasOnboardNICs) {
+                    $warnings[] = [
+                        'type' => 'missing_nic',
+                        'severity' => 'high',
+                        'message' => "No NIC component found in configuration",
+                        'recommendation' => "Add a NIC component for network connectivity"
+                    ];
+                }
+            } elseif (empty($components['nic']) && empty($components['motherboard'])) {
+                // No motherboard and no NIC - warn about NIC
+                $warnings[] = [
+                    'type' => 'missing_nic',
+                    'severity' => 'high',
+                    'message' => "No NIC component found in configuration",
+                    'recommendation' => "Add a NIC component for network connectivity"
+                ];
+            }
+
+        } catch (Exception $e) {
+            error_log("Error getting configuration warnings: " . $e->getMessage());
+        }
+
+        return $warnings;
     }
 
     /**
@@ -3567,7 +3827,7 @@ class ServerBuilder {
      * Comprehensive component validation before adding - consolidates all validation logic
      * Phase 2 Consolidation: Moves SFP, riser, singleton, and compatibility validation from handler
      */
-    private function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null) {
+    public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null) {
         try {
             $warnings = [];
 
@@ -3852,7 +4112,236 @@ class ServerBuilder {
             ];
         }
     }
-    
+
+    /**
+     * Validate component inventory status with override support
+     * Moved from handleAddComponent() early validation
+     *
+     * @return array ['valid' => bool, 'message' => string, 'override_used' => bool, 'status_code' => int]
+     */
+    private function validateComponentInventoryStatus(
+        $componentType,
+        $componentUuid,
+        $configUuid,
+        $componentDetails,
+        $overrideUsed = false
+    ) {
+        $componentStatus = (int)($componentDetails['Status'] ?? -1);
+        $componentServerUuid = $componentDetails['ServerUUID'] ?? null;
+        $isAvailable = false;
+        $statusMessage = '';
+
+        switch ($componentStatus) {
+            case 0:
+                $statusMessage = "Component is marked as Failed/Defective";
+                break;
+            case 1:
+                $isAvailable = true;
+                $statusMessage = "Component is Available";
+                break;
+            case 2:
+                if ($componentServerUuid === $configUuid) {
+                    $isAvailable = true;
+                    $statusMessage = "Component is already assigned to this configuration";
+                } else {
+                    if ($overrideUsed) {
+                        $isAvailable = true;
+                        $statusMessage = $componentServerUuid ?
+                            "Component is In Use in configuration $componentServerUuid (override enabled)" :
+                            "Component is In Use (override enabled)";
+                    } else {
+                        $statusMessage = $componentServerUuid ?
+                            "Component is currently In Use in configuration: $componentServerUuid" :
+                            "Component is currently In Use";
+                    }
+                }
+                break;
+            default:
+                $statusMessage = "Component has unknown status: $componentStatus";
+        }
+
+        return [
+            'valid' => $isAvailable || $overrideUsed,
+            'message' => $statusMessage,
+            'override_used' => $isAvailable && $overrideUsed,
+            'status_code' => $componentStatus
+        ];
+    }
+
+    /**
+     * Assign expansion slot for PCIe cards, NICs, HBA cards
+     * Moved from handleAddComponent() lines 503-600
+     *
+     * Handles:
+     * - Size-aware riser slot assignment
+     * - PCIe slot assignment with size matching
+     * - Fallback to legacy assignment
+     *
+     * @param string $configUuid
+     * @param string $componentType One of: 'pciecard', 'nic', 'hbacard'
+     * @param string $componentUuid
+     * @param array $componentSpecs Specs from ComponentDataService
+     * @param string|null $manualSlotPosition User-provided slot (optional override)
+     * @return array ['success' => bool, 'slot_id' => string|null, 'message' => string]
+     */
+    private function assignComponentSlot(
+        $configUuid,
+        $componentType,
+        $componentUuid,
+        $componentSpecs,
+        $manualSlotPosition = null
+    ) {
+        try {
+            // Only relevant for PCIe-capable components
+            if (!in_array($componentType, ['pciecard', 'nic', 'hbacard'])) {
+                return [
+                    'success' => true,
+                    'slot_id' => null,
+                    'message' => 'Component type does not require slot assignment'
+                ];
+            }
+
+            // Initialize UnifiedSlotTracker (already required at top of file)
+            $slotTracker = new UnifiedSlotTracker($this->pdo);
+
+            // Check if motherboard exists in configuration
+            $stmt = $this->pdo->prepare("SELECT motherboard_uuid FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $configResult = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$configResult || empty($configResult['motherboard_uuid'])) {
+                // No motherboard - cannot assign slots
+                return [
+                    'success' => true,
+                    'slot_id' => null,
+                    'message' => 'No motherboard in configuration - slot assignment skipped'
+                ];
+            }
+
+            // Get component specifications (already provided as parameter, use it directly)
+            if (!$componentSpecs || empty($componentSpecs)) {
+                return [
+                    'success' => true,
+                    'slot_id' => null,
+                    'message' => 'Component specs not found - slot assignment skipped'
+                ];
+            }
+
+            // Check component subtype to determine if riser or regular PCIe card
+            $componentSubtype = $componentSpecs['component_subtype'] ?? null;
+            $isRiserCard = false;
+
+            if ($componentSubtype === 'Riser Card') {
+                $isRiserCard = true;
+            } elseif (stripos($componentUuid, 'riser-') === 0) {
+                // Fallback: UUID starts with "riser-"
+                $isRiserCard = true;
+            }
+
+            // Extract PCIe slot size from specs
+            $slotSize = $this->extractPCIeSlotSize($componentSpecs);
+
+            if ($isRiserCard) {
+                // ===== RISER CARD - MUST GO TO RISER SLOTS ONLY =====
+                if ($slotSize) {
+                    // Use size-aware assignment (returns string slot ID)
+                    $assignedSlot = $slotTracker->assignRiserSlotBySize($configUuid, $slotSize);
+                    if ($assignedSlot) {
+                        return [
+                            'success' => true,
+                            'slot_id' => $assignedSlot,
+                            'message' => "Riser card assigned to slot $assignedSlot"
+                        ];
+                    } else {
+                        return [
+                            'success' => false,
+                            'slot_id' => null,
+                            'message' => "Cannot add riser card: No compatible riser slots available on motherboard",
+                            'required_slot_type' => $slotSize,
+                            'error_code' => 'no_riser_slots_available'
+                        ];
+                    }
+                } else {
+                    // Fallback to legacy assignment if size cannot be determined
+                    $assignedSlot = $slotTracker->assignRiserSlot($configUuid);
+                    if ($assignedSlot) {
+                        return [
+                            'success' => true,
+                            'slot_id' => $assignedSlot,
+                            'message' => "Riser card assigned to slot $assignedSlot (size-aware assignment unavailable)"
+                        ];
+                    } else {
+                        return [
+                            'success' => false,
+                            'slot_id' => null,
+                            'message' => "Cannot add riser card: No riser slots available on motherboard",
+                            'error_code' => 'no_riser_slots_available'
+                        ];
+                    }
+                }
+            } else {
+                // ===== REGULAR PCIe CARD/NIC - ASSIGN TO PCIe SLOTS =====
+                if ($slotSize) {
+                    // Assign optimal PCIe slot
+                    $assignedSlot = $slotTracker->assignSlot($configUuid, $slotSize);
+                    if ($assignedSlot) {
+                        return [
+                            'success' => true,
+                            'slot_id' => $assignedSlot,
+                            'message' => "PCIe card assigned to slot $assignedSlot"
+                        ];
+                    } else {
+                        return [
+                            'success' => true,
+                            'slot_id' => null,
+                            'message' => 'No suitable PCIe slots available - component added without slot assignment'
+                        ];
+                    }
+                } else {
+                    return [
+                        'success' => true,
+                        'slot_id' => null,
+                        'message' => 'Could not determine PCIe slot size - component added without slot assignment'
+                    ];
+                }
+            }
+
+        } catch (Exception $slotError) {
+            error_log("Slot assignment error: " . $slotError->getMessage());
+            return [
+                'success' => true,
+                'slot_id' => null,
+                'message' => 'Slot assignment unavailable - component added without slot assignment'
+            ];
+        }
+    }
+
+    /**
+     * Helper: Extract PCIe slot size from component specs
+     * Returns string like 'x16', 'x8', 'x4', 'x1' or null
+     */
+    private function extractPCIeSlotSize($specs) {
+        // Check interface field (most common)
+        $interface = $specs['interface'] ?? '';
+        if (preg_match('/x(\d+)/i', $interface, $matches)) {
+            return 'x' . $matches[1];
+        }
+
+        // Check slot_type field
+        $slotType = $specs['slot_type'] ?? '';
+        if (preg_match('/x(\d+)/i', $slotType, $matches)) {
+            return 'x' . $matches[1];
+        }
+
+        // Check pcie_interface field
+        $pcieInterface = $specs['pcie_interface'] ?? '';
+        if (preg_match('/x(\d+)/i', $pcieInterface, $matches)) {
+            return 'x' . $matches[1];
+        }
+
+        return null;
+    }
+
     /**
      * Generate UUID for configuration
      */
