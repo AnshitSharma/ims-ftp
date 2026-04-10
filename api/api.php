@@ -1122,8 +1122,27 @@ function handleComponentOperations($module, $operation, $user) {
                         $spec = $componentService->findComponentByUuid($module, $comp['UUID']);
                         if ($spec !== null) {
                             $brand = $spec['brand'] ?? null;
-                            $model = $spec['model'] ?? null;
-                            if ($brand && $model) {
+                            $model = $spec['model'] ?? $spec['name'] ?? $spec['model_name'] ?? $spec['product_name'] ?? null;
+
+                            // RAM: build "Brand Type CapacityGB Module"
+                            if ($model === null && $module === 'ram') {
+                                $parts = array_filter([$brand, $spec['memory_type'] ?? null,
+                                    isset($spec['capacity_GB']) ? $spec['capacity_GB'] . 'GB' : null,
+                                    $spec['module_type'] ?? null]);
+                                $comp['ModelName'] = $parts ? implode(' ', $parts) : null;
+                            }
+                            // Storage: build "Brand Type CapacityGB"
+                            elseif ($model === null && $module === 'storage') {
+                                $cap = null;
+                                if (isset($spec['capacity_GB'])) {
+                                    $cap = $spec['capacity_GB'] >= 1000
+                                        ? round($spec['capacity_GB'] / 1000, 1) . 'TB'
+                                        : $spec['capacity_GB'] . 'GB';
+                                }
+                                $parts = array_filter([$brand, $spec['storage_type'] ?? null, $cap]);
+                                $comp['ModelName'] = $parts ? implode(' ', $parts) : null;
+                            }
+                            elseif ($brand && $model) {
                                 $comp['ModelName'] = $brand . ' ' . $model;
                             } elseif ($model) {
                                 $comp['ModelName'] = $model;
@@ -1311,6 +1330,7 @@ function getDashboardData($pdo, $user) {
                 SUM(CASE WHEN configuration_status = 2 THEN 1 ELSE 0 END) as built,
                 SUM(CASE WHEN configuration_status = 3 THEN 1 ELSE 0 END) as finalized
             FROM server_configurations
+            WHERE is_virtual = 0
         ");
         $serverStmt->execute();
         $serverResult = $serverStmt->fetch(PDO::FETCH_ASSOC);

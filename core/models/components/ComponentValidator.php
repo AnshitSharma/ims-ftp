@@ -14,6 +14,8 @@
  * Extracted from ComponentCompatibility.php for better maintainability
  */
 
+require_once __DIR__ . '/../shared/DataNormalizationUtils.php';
+
 class ComponentValidator {
     private $pdo;
     private $dataLoader;
@@ -275,9 +277,9 @@ class ComponentValidator {
             ];
         }
 
-        // Normalize socket types for comparison
-        $cpuSocketNormalized = strtolower(trim($cpuSocket));
-        $motherboardSocketNormalized = strtolower(trim($motherboardSocket));
+        // Normalize socket types for comparison (handles FC prefix, spaces, case)
+        $cpuSocketNormalized = DataNormalizationUtils::normalizeSocketType($cpuSocket);
+        $motherboardSocketNormalized = DataNormalizationUtils::normalizeSocketType($motherboardSocket);
 
         $compatible = ($cpuSocketNormalized === $motherboardSocketNormalized);
 
@@ -376,9 +378,9 @@ class ComponentValidator {
             if ($existingCpuResult['exists']) {
                 $existingSocket = $existingCpuResult['data']['socket'] ?? null;
 
-                // Normalize socket types for comparison
-                $existingSocketNormalized = strtolower(trim($existingSocket ?? ''));
-                $newCpuSocketNormalized = strtolower(trim($newCpuSocket ?? ''));
+                // Normalize socket types for comparison (handles FC prefix, spaces, case)
+                $existingSocketNormalized = DataNormalizationUtils::normalizeSocketType($existingSocket);
+                $newCpuSocketNormalized = DataNormalizationUtils::normalizeSocketType($newCpuSocket);
 
                 if ($existingSocket && $existingSocketNormalized !== $newCpuSocketNormalized) {
                     return [

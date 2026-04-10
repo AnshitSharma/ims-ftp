@@ -387,9 +387,9 @@ class ComponentCompatibility {
             $cpuSocket = $this->dataExtractor->extractSocketType($cpuData, 'cpu');
             $motherboardSocket = $this->dataExtractor->extractSocketType($motherboardData, 'motherboard');
 
-            // Normalize socket types for comparison (case-insensitive, trim whitespace)
-            $cpuSocketNormalized = strtolower(trim($cpuSocket ?? ''));
-            $motherboardSocketNormalized = strtolower(trim($motherboardSocket ?? ''));
+            // Normalize socket types for comparison (handles FC prefix, spaces, case)
+            $cpuSocketNormalized = DataNormalizationUtils::normalizeSocketType($cpuSocket);
+            $motherboardSocketNormalized = DataNormalizationUtils::normalizeSocketType($motherboardSocket);
 
             if ($cpuSocket && $motherboardSocket && $cpuSocketNormalized !== $motherboardSocketNormalized) {
                 $result['compatible'] = false;
@@ -3737,9 +3737,9 @@ class ComponentCompatibility {
 
         $existingSocket = $this->dataExtractor->extractSocketType($existingCpuData, 'cpu');
 
-        // Normalize socket types for comparison
-        $existingSocketNormalized = strtolower(trim($existingSocket ?? ''));
-        $newCpuSocketNormalized = strtolower(trim($newCpuSocket ?? ''));
+        // Normalize socket types for comparison (handles FC prefix, spaces, case)
+        $existingSocketNormalized = DataNormalizationUtils::normalizeSocketType($existingSocket);
+        $newCpuSocketNormalized = DataNormalizationUtils::normalizeSocketType($newCpuSocket);
 
         if ($existingSocket && $newCpuSocket && $existingSocketNormalized !== $newCpuSocketNormalized) {
             $result['compatible'] = false;
@@ -3771,10 +3771,9 @@ class ComponentCompatibility {
         if ($compatibilityRequirements['required_socket']) {
             $requiredSocket = $compatibilityRequirements['required_socket'];
 
-            // Normalize socket types for comparison (case-insensitive, trim whitespace)
-            $cpuSocketNormalized = strtolower(trim($cpuSocket ?? ''));
-            $requiredSocketNormalized = strtolower(trim($requiredSocket ?? ''));
-
+            // Normalize socket types for comparison (handles FC prefix, spaces, case)
+            $cpuSocketNormalized = DataNormalizationUtils::normalizeSocketType($cpuSocket);
+            $requiredSocketNormalized = DataNormalizationUtils::normalizeSocketType($requiredSocket);
 
             if ($cpuSocketNormalized !== $requiredSocketNormalized) {
                 $result['compatible'] = false;
@@ -3999,9 +3998,9 @@ class ComponentCompatibility {
         if ($compatibilityRequirements['required_cpu_socket']) {
             $requiredSocket = $compatibilityRequirements['required_cpu_socket'];
 
-            // Normalize socket types for comparison
-            $motherboardSocketNormalized = strtolower(trim($motherboardSocket ?? ''));
-            $requiredSocketNormalized = strtolower(trim($requiredSocket ?? ''));
+            // Normalize socket types for comparison (handles FC prefix, spaces, case)
+            $motherboardSocketNormalized = DataNormalizationUtils::normalizeSocketType($motherboardSocket);
+            $requiredSocketNormalized = DataNormalizationUtils::normalizeSocketType($requiredSocket);
 
             if ($motherboardSocketNormalized !== $requiredSocketNormalized) {
                 $result['compatible'] = false;

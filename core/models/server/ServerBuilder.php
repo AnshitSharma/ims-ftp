@@ -271,9 +271,12 @@ class ServerBuilder {
                 return null;
             }
             $s = $spec['specifications'];
+            $brand = $s['brand'] ?? null;
             // Try common name fields in priority order
             foreach (['model', 'name', 'model_name', 'product_name'] as $field) {
-                if (!empty($s[$field])) return $s[$field];
+                if (!empty($s[$field])) {
+                    return $brand ? trim($brand . ' ' . $s[$field]) : $s[$field];
+                }
             }
             // For RAM: build "Brand Type CapacityGB Module"
             if ($componentType === 'ram') {
@@ -1318,6 +1321,7 @@ class ServerBuilder {
 
                     $compatibleComponent = [
                         'uuid' => $component['UUID'],
+                        'component_name' => $this->getComponentNameFromSpec($componentType, $component['UUID']),
                         'serial_number' => $component['SerialNumber'],
                         'status' => $componentStatus,
                         'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
@@ -1349,6 +1353,7 @@ class ServerBuilder {
 
                     $compatibleComponent = [
                         'uuid' => $component['UUID'],
+                        'component_name' => $this->getComponentNameFromSpec($componentType, $component['UUID']),
                         'serial_number' => $component['SerialNumber'],
                         'status' => $componentStatus,
                         'status_label' => $statusLabels[$componentStatus] ?? 'unknown',

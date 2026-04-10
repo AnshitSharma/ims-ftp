@@ -1,0 +1,126 @@
+# ============================================================
+# BDC IMS — Backend Root Security
+# ims-ftp/.htaccess
+# Single entry point: api/api.php  Everything else is internal.
+# ============================================================
+
+# ── Directory listing & symlinks ─────────────────────────────
+Options -Indexes -MultiViews +FollowSymLinks
+AddDefaultCharset UTF-8
+
+# ── HTTPS redirect ───────────────────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# ── Block every PHP file except api/api.php ──────────────────
+<FilesMatch "\.php$">
+    Order Deny,Allow
+    Deny from all
+</FilesMatch>
+
+# ── Block sensitive dot-files and config ─────────────────────
+<FilesMatch "^(\.env|\.env\..+|\.git|\.gitignore|\.htaccess|\.htpasswd|composer\.json|composer\.lock)$">
+    Order Deny,Allow
+    Deny from all
+</FilesMatch>
+
+# ── Block logs, SQL, archives, docs ──────────────────────────
+<FilesMatch "\.(log|sql|zip|tar|gz|bak|swp|md|txt|postman_collection\.json)$">
+    Order Deny,Allow
+    Deny from all
+</FilesMatch>
+
+# ── Rewrite rules ────────────────────────────────────────────
+<IfModule mod_rewrite.c>
+    # Block .git / .svn directories
+    RewriteRule ^\.git(/.*)?$  - [F,L]
+    RewriteRule ^\.svn(/.*)?$  - [F,L]
+
+    # Block any PHP that is not api/api.php
+    RewriteCond %{REQUEST_FILENAME} !api/api\.php$
+    RewriteRule \.php$ - [F,L]
+
+    # ── SQL injection patterns ──────────────────────────────
+    RewriteCond %{QUERY_STRING} (union.*select|select.*from|insert.*into|drop.*table|update.*set|delete.*from) [NC]
+    RewriteRule .* - [F,L]
+
+    # ── XSS patterns ───────────────────────────────────────
+    RewriteCond %{QUERY_STRING} (<script|javascript:|vbscript:|onload=|onerror=) [NC]
+    RewriteRule .* - [F,L]
+
+    # ── Path traversal ─────────────────────────────────────
+    RewriteCond %{QUERY_STRING} (\.\.\/|\.\.\\|%2e%2e%2f|%252e%252e%252f) [NC]
+    RewriteRule .* - [F,L]
+
+    # ── Code execution attempts ────────────────────────────
+    RewriteCond %{QUERY_STRING} (base64_encode|base64_decode|eval\(|gzdeflate|gzinflate) [NC]
+    RewriteRule .* - [F,L]
+
+    # ── Bad bots / scanners ────────────────────────────────
+    RewriteCond %{HTTP_USER_AGENT} (sqlmap|nikto|nmap|masscan|zgrab|dirbuster|gobuster|wfuzz|hydra) [NC]
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# ── Security headers ─────────────────────────────────────────
+<IfModule mod_headers.c>
+    # CSP — API only returns JSON; no HTML, no scripts, no frames
+    Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+
+    # Prevent MIME sniffing
+    Header always set X-Content-Type-Options "nosniff"
+
+    # Clickjacking
+    Header always set X-Frame-Options "DENY"
+
+    # Cross-Origin Resource Policy — restrict to same site (frontend is same domain)
+    Header always set Cross-Origin-Resource-Policy "same-site"
+
+    # Cross-Origin Opener Policy
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+
+    # Cross-Origin Embedder Policy
+    Header always set Cross-Origin-Embedder-Policy "require-corp"
+
+    # Referrer policy
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    # HSTS — 1 year, include subdomains
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+    # XSS protection (legacy browsers)
+    Header always set X-XSS-Protection "1; mode=block"
+
+    # Permissions policy
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+
+    # Hide server tokens
+    Header unset Server
+    Header unset X-Powered-By
+    Header always unset X-Powered-By
+</IfModule>
+
+# ── PHP security ─────────────────────────────────────────────
+<IfModule mod_php7.c>
+    php_flag  expose_php                Off
+    php_flag  display_errors            Off
+    php_flag  display_startup_errors    Off
+    php_flag  log_errors                On
+    php_flag  allow_url_fopen           Off
+    php_flag  allow_url_include         Off
+    php_value upload_max_filesize       2M
+    php_value post_max_size             4M
+    php_value disable_functions         "exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source,phpinfo"
+    php_value session.cookie_httponly   1
+    php_value session.cookie_secure     1
+    php_value session.use_strict_mode   1
+    php_value session.cookie_samesite   "Strict"
+</IfModule>
+
+# ── Allowed HTTP methods ──────────────────────────────────────
+<LimitExcept GET POST PUT DELETE OPTIONS>
+    Order Deny,Allow
+    Deny from all
+</LimitExcept>

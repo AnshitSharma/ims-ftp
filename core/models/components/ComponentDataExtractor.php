@@ -174,7 +174,9 @@ class ComponentDataExtractor {
             // Server/workstation motherboards with DDR4/DDR5 use DIMM
             // Desktop/laptop motherboards might use SO-DIMM (we'll default to DIMM for servers)
             $memoryType = $data['memory']['type'] ?? '';
-            if (in_array($memoryType, ['DDR3', 'DDR4', 'DDR5'])) {
+            // Normalize memory type to base DDR type for comparison (e.g., "DDR4 ECC" → "DDR4")
+            $baseMemoryType = DataNormalizationUtils::normalizeMemoryType($memoryType);
+            if (in_array($baseMemoryType, ['DDR3', 'DDR4', 'DDR5'])) {
                 // Server motherboards (EATX, ATX) use DIMM
                 $mbFormFactor = $data['form_factor'] ?? '';
                 if (in_array($mbFormFactor, ['EATX', 'ATX', 'E-ATX', 'SSI EEB'])) {

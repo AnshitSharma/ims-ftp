@@ -249,8 +249,27 @@ function handleListComponents() {
                     $spec = $componentService->findComponentByUuid($componentType, $component['UUID']);
                     if ($spec !== null) {
                         $brand = $spec['brand'] ?? null;
-                        $model = $spec['model'] ?? null;
-                        if ($brand && $model) {
+                        $model = $spec['model'] ?? $spec['name'] ?? $spec['model_name'] ?? $spec['product_name'] ?? null;
+
+                        // RAM: build "Brand Type CapacityGB Module"
+                        if ($model === null && $componentType === 'ram') {
+                            $parts = array_filter([$brand, $spec['memory_type'] ?? null,
+                                isset($spec['capacity_GB']) ? $spec['capacity_GB'] . 'GB' : null,
+                                $spec['module_type'] ?? null]);
+                            $component['ModelName'] = $parts ? implode(' ', $parts) : null;
+                        }
+                        // Storage: build "Brand Type CapacityGB"
+                        elseif ($model === null && $componentType === 'storage') {
+                            $cap = null;
+                            if (isset($spec['capacity_GB'])) {
+                                $cap = $spec['capacity_GB'] >= 1000
+                                    ? round($spec['capacity_GB'] / 1000, 1) . 'TB'
+                                    : $spec['capacity_GB'] . 'GB';
+                            }
+                            $parts = array_filter([$brand, $spec['storage_type'] ?? null, $cap]);
+                            $component['ModelName'] = $parts ? implode(' ', $parts) : null;
+                        }
+                        elseif ($brand && $model) {
                             $component['ModelName'] = $brand . ' ' . $model;
                         } elseif ($model) {
                             $component['ModelName'] = $model;

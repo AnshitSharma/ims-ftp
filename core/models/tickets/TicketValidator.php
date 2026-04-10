@@ -203,7 +203,32 @@ class TicketValidator
                                 $item['component_type'],
                                 $item['component_uuid']
                             );
-                            $validatedItem['component_name'] = $component['name'] ?? $component['model'] ?? 'Unknown';
+                            $brand = $component['brand'] ?? null;
+                            $name = $component['name'] ?? $component['model'] ?? $component['model_name'] ?? $component['product_name'] ?? null;
+
+                            // RAM: build "Brand Type CapacityGB Module"
+                            if ($name === null && $item['component_type'] === 'ram') {
+                                $parts = array_filter([$brand, $component['memory_type'] ?? null,
+                                    isset($component['capacity_GB']) ? $component['capacity_GB'] . 'GB' : null,
+                                    $component['module_type'] ?? null]);
+                                $name = $parts ? implode(' ', $parts) : 'Unknown';
+                                $brand = null; // already included in parts
+                            }
+                            // Storage: build "Brand Type CapacityGB"
+                            if ($name === null && $item['component_type'] === 'storage') {
+                                $cap = null;
+                                if (isset($component['capacity_GB'])) {
+                                    $cap = $component['capacity_GB'] >= 1000
+                                        ? round($component['capacity_GB'] / 1000, 1) . 'TB'
+                                        : $component['capacity_GB'] . 'GB';
+                                }
+                                $parts = array_filter([$brand, $component['storage_type'] ?? null, $cap]);
+                                $name = $parts ? implode(' ', $parts) : 'Unknown';
+                                $brand = null; // already included in parts
+                            }
+
+                            $name = $name ?? 'Unknown';
+                            $validatedItem['component_name'] = $brand ? trim($brand . ' ' . $name) : $name;
                             $validatedItem['component_specs'] = json_encode($component);
                         } catch (Exception $e) {
                             $validatedItem['component_name'] = 'Unknown';

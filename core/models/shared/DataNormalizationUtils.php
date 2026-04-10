@@ -25,7 +25,13 @@ class DataNormalizationUtils {
         $normalized = preg_replace('/-\d+$/', '', trim($memoryType));
 
         // Uppercase for consistency (DDR5, DDR4, etc.)
-        return strtoupper($normalized);
+        $normalized = strtoupper($normalized);
+
+        // Remove ECC/non-ECC suffixes (e.g., "DDR4 ECC" → "DDR4")
+        // ECC is a feature flag, not a memory generation identifier
+        $normalized = preg_replace('/\s+(ECC|NON-ECC|NONECC|REGISTERED|UNBUFFERED)$/i', '', $normalized);
+
+        return $normalized;
     }
 
     /**
@@ -213,6 +219,24 @@ class DataNormalizationUtils {
         // Ensure consistent format: "2.5-inch" or "3.5-inch"
         $normalized = preg_replace('/(\d+\.?\d*)\s*-?\s*inch/', '$1-inch', $normalized);
 
+        return $normalized;
+    }
+    /**
+     * Normalize CPU/motherboard socket type for comparison
+     * Handles: FC prefix (FCLGA2011-3 → lga2011-3), internal spaces (LGA 4189 → lga4189), case
+     *
+     * @param string|null $socketType The socket type to normalize
+     * @return string Normalized socket type (lowercase, no spaces, no FC prefix), or '' if empty
+     */
+    public static function normalizeSocketType($socketType) {
+        if (!$socketType) {
+            return '';
+        }
+        $normalized = strtolower(trim($socketType));
+        // Strip Intel "FC" (Flip-Chip) prefix: FCLGA2011-3 → lga2011-3
+        $normalized = preg_replace('/^fc/', '', $normalized);
+        // Remove internal spaces: "lga 4189" → "lga4189"
+        $normalized = str_replace(' ', '', $normalized);
         return $normalized;
     }
 }

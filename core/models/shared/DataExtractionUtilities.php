@@ -73,6 +73,7 @@ class DataExtractionUtilities {
             case 'hbacard':
                 return $this->findInCategoryModels($data, $uuid);
             case 'nic':
+            case 'sfp':
                 return $this->findNICInData($data, $uuid);
             case 'caddy':
                 return $this->findCaddyInData($data, $uuid);
@@ -95,6 +96,8 @@ class DataExtractionUtilities {
                 if (!isset($series['models'])) continue;
                 foreach ($series['models'] as $model) {
                     if (isset($model['uuid']) && $model['uuid'] === $uuid) {
+                        $model['manufacturer'] = $manufacturer['manufacturer'] ?? null;
+                        $model['series'] = $series['series_name'] ?? null;
                         return $model;
                     }
                 }
@@ -115,6 +118,12 @@ class DataExtractionUtilities {
                     ? ($model['UUID'] ?? $model['uuid'] ?? null)
                     : ($model['uuid'] ?? null);
                 if ($modelUuid === $uuid) {
+                    // Merge brand-level fields into model (brand, series, family)
+                    foreach (['brand', 'series', 'family'] as $field) {
+                        if (isset($brand[$field]) && !isset($model[$field])) {
+                            $model[$field] = $brand[$field];
+                        }
+                    }
                     return $model;
                 }
             }

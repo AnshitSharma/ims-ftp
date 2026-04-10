@@ -1,0 +1,40 @@
+# ============================================================
+# BDC IMS — API Entry Point Security
+# ims-ftp/api/.htaccess
+# api.php is the ONLY file that may execute. Handlers are
+# included internally and must never be served directly.
+# ============================================================
+
+Options -Indexes -MultiViews
+
+# ── Allow only api.php; deny every other PHP file ────────────
+<FilesMatch "\.php$">
+    Order Deny,Allow
+    Deny from all
+</FilesMatch>
+
+<Files "api.php">
+    Order Allow,Deny
+    Allow from all
+</Files>
+
+# ── Block handlers/ subdirectory ─────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^handlers(/.*)?$ - [F,L]
+</IfModule>
+
+# ── Block non-PHP files that must never be served ────────────
+<FilesMatch "\.(log|sql|json|md|txt|bak|zip)$">
+    Order Deny,Allow
+    Deny from all
+</FilesMatch>
+
+# ── Security headers (inherited from root, reinforced here) ──
+<IfModule mod_headers.c>
+    Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Cross-Origin-Resource-Policy "same-site"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

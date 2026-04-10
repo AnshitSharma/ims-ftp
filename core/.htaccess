@@ -1,0 +1,10 @@
+# ============================================================
+# BDC IMS — Core Library: No Direct Web Access
+# ims-ftp/core/.htaccess
+# Auth, ACL, helpers, models, services — internal PHP only.
+# ============================================================
+
+Options -Indexes -MultiViews
+
+Order Deny,Allow
+Deny from all

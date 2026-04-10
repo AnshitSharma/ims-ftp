@@ -1,0 +1,10 @@
+# ============================================================
+# BDC IMS — Handler Files: No Direct Web Access
+# ims-ftp/api/handlers/.htaccess
+# All handlers are included by api.php — never served directly.
+# ============================================================
+
+Options -Indexes -MultiViews
+
+Order Deny,Allow
+Deny from all
