@@ -87,7 +87,7 @@ try {
     }
 } catch (Exception $e) {
     error_log("Compatibility API error: " . $e->getMessage());
-    send_json_response(0, 1, 500, "Compatibility check failed: " . $e->getMessage());
+    send_json_response(0, 1, 500, "Compatibility check failed");
 }
 
 /**

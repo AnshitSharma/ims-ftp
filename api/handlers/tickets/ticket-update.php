@@ -75,6 +75,13 @@ try {
         exit;
     }
 
+    // Extract creator id once — TicketManager returns it as a nested array,
+    // not a flat integer. Comparing the array directly against $user_id
+    // used to break BOTH ways: the SoD check ($ticket['created_by'] == $user_id)
+    // was always false, and the edit_own check ($ticket['created_by'] != $user_id)
+    // was always true.
+    $ticketCreatorId = isset($ticket['created_by']['id']) ? (int)$ticket['created_by']['id'] : null;
+
     // Determine what's being updated
     $updates = [];
     $extraData = [];
@@ -109,7 +116,8 @@ try {
                 $permissionNeeded = 'ticket.approve';
 
                 // Cannot approve own ticket (separation of duties) - unless user has manage permission
-                if ($ticket['created_by'] == $user_id && !$acl->hasPermission($user_id, 'ticket.manage')) {
+                if ($ticketCreatorId !== null && $ticketCreatorId === (int)$user_id
+                    && !$acl->hasPermission($user_id, 'ticket.manage')) {
                     $validationErrors[] = "Cannot approve your own ticket (separation of duties)";
                 }
 
@@ -125,8 +133,12 @@ try {
                 if (empty($_POST['rejection_reason'])) {
                     $validationErrors[] = "rejection_reason is required when rejecting a ticket";
                 } else {
-                    $updates['rejection_reason'] = $_POST['rejection_reason'];
-                    $extraData['rejection_reason'] = $_POST['rejection_reason'];
+                    if (mb_strlen($_POST['rejection_reason']) > 1000) {
+                        $validationErrors[] = "Rejection reason must not exceed 1000 characters";
+                    } else {
+                        $updates['rejection_reason'] = $_POST['rejection_reason'];
+                        $extraData['rejection_reason'] = $_POST['rejection_reason'];
+                    }
                 }
                 break;
 
@@ -184,10 +196,18 @@ try {
     $hasFieldUpdates = false;
 
     if (isset($_POST['title']) && $_POST['title'] !== '') {
+        if (mb_strlen($_POST['title']) > 255) {
+            send_json_response(false, true, 400, "Title must not exceed 255 characters", null);
+            exit;
+        }
         $hasFieldUpdates = true;
         $updates['title'] = $_POST['title'];
     }
     if (isset($_POST['description']) && $_POST['description'] !== '') {
+        if (mb_strlen($_POST['description']) > 5000) {
+            send_json_response(false, true, 400, "Description must not exceed 5000 characters", null);
+            exit;
+        }
         $hasFieldUpdates = true;
         $updates['description'] = $_POST['description'];
     }
@@ -203,7 +223,7 @@ try {
         }
 
         // Must own ticket or have manage permission
-        if ($ticket['created_by'] != $user_id && !$acl->hasPermission($user_id, 'ticket.manage')) {
+        if ($ticketCreatorId !== (int)$user_id && !$acl->hasPermission($user_id, 'ticket.manage')) {
             $validationErrors[] = "Can only edit own tickets";
         }
 
@@ -279,7 +299,5 @@ try {
 } catch (Exception $e) {
     error_log("ticket-update error: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(false, true, 500, "Failed to update ticket", [
-        'error' => $e->getMessage()
-    ]);
+    send_json_response(false, true, 500, "Failed to update ticket");
 }

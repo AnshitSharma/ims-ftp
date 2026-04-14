@@ -86,7 +86,7 @@ if (!$jwtSecret) {
 }
 define('JWT_SECRET_KEY', $jwtSecret);
 define('JWT_ALGORITHM', getenv('JWT_ALGORITHM') ?: 'HS256');
-define('JWT_EXPIRY_HOURS', (int)(getenv('JWT_EXPIRY_HOURS') ?: 24));
+define('JWT_EXPIRY_HOURS', (float)(getenv('JWT_EXPIRY_HOURS') ?: 24));
 define('JWT_ISSUER', getenv('JWT_ISSUER') ?: 'bdc-ims-api');
 define('JWT_AUDIENCE', getenv('JWT_AUDIENCE') ?: 'bdc-ims-client');
 
@@ -108,8 +108,8 @@ define('API_RATE_LIMIT_REQUESTS', (int)(getenv('API_RATE_LIMIT_REQUESTS') ?: 100
 // CORS CONFIGURATION
 // =============================================================================
 
-$corsOrigins = getenv('CORS_ALLOWED_ORIGINS') ?: '*';
-define('CORS_ALLOWED_ORIGINS', explode(',', $corsOrigins));
+$corsOrigins = getenv('CORS_ALLOWED_ORIGINS') ?: '';
+define('CORS_ALLOWED_ORIGINS', $corsOrigins ? array_map('trim', explode(',', $corsOrigins)) : []);
 
 // =============================================================================
 // LOGGING CONFIGURATION
@@ -161,10 +161,11 @@ try {
 
 } catch (PDOException $e) {
     http_response_code(500);
+    error_log("Database connection failed: " . $e->getMessage());
     echo json_encode([
         'status' => 'error',
         'message' => 'Database connection failed',
-        'error' => APP_DEBUG ? $e->getMessage() : 'Internal server error'
+        'error' => 'Internal server error'
     ]);
     exit;
 }

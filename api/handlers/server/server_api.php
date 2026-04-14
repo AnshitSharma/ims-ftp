@@ -1993,7 +1993,7 @@ function handleSearchBySerial($serverBuilder, $user) {
 
     } catch (Exception $e) {
         error_log("Error in handleSearchBySerial: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Search failed: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Search failed");
     }
 }
 

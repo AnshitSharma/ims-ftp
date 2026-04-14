@@ -144,7 +144,7 @@ function handleGetComponent() {
         
     } catch (PDOException $e) {
         error_log("Database error in handleGetComponent: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Database error occurred: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Database error occurred");
     } catch (Exception $e) {
         error_log("General error in handleGetComponent: " . $e->getMessage());
         send_json_response(0, 1, 500, "An unexpected error occurred");
@@ -769,8 +769,7 @@ function checkComponentAvailabilityDetailed($pdo, $componentType, $componentUuid
             'status' => -1,
             'message' => 'Database error occurred while checking component availability',
             'can_override' => false,
-            'component_exists' => false,
-            'error' => $e->getMessage()
+            'component_exists' => false
         ];
     }
 }
@@ -980,7 +979,7 @@ function bulkUpdateComponentStatus($pdo, $componentType, $componentUuids, $newSt
         error_log("Error in bulk update: " . $e->getMessage());
         return [
             'success' => false,
-            'message' => 'Bulk update failed: ' . $e->getMessage()
+            'message' => 'Bulk update failed'
         ];
     }
 }
@@ -1163,7 +1162,7 @@ function importComponentsFromCSV($pdo, $componentType, $csvFile, $options = []) 
         error_log("Error importing components: " . $e->getMessage());
         return [
             'success' => false,
-            'message' => 'Import failed: ' . $e->getMessage()
+            'message' => 'Import failed'
         ];
     }
 }

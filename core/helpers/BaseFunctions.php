@@ -78,26 +78,29 @@ if (!function_exists('authenticateWithJWT')) {
     function authenticateWithJWT($pdo) {
         try {
             $token = JWTHelper::getTokenFromHeader();
-            
+
             if (!$token) {
                 return false;
             }
-            
-            $payload = JWTHelper::verifyToken($token);
-            
+
+            // Pass $pdo so verifyToken can consult revoked_tokens and the
+            // password_changed_at cutoff. Without it, logout/password-reset
+            // revocation is silently bypassed.
+            $payload = JWTHelper::verifyToken($token, $pdo);
+
             // Get user from database
             $stmt = $pdo->prepare("SELECT id, username, email, firstname, lastname FROM users WHERE id = ?");
             $stmt->execute([$payload['user_id']]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if (!$user) {
                 return false;
             }
-            
+
             // Update last activity
             $stmt = $pdo->prepare("UPDATE auth_tokens SET last_used_at = NOW() WHERE user_id = ?");
             $stmt->execute([$user['id']]);
-            
+
             return $user;
         } catch (Exception $e) {
             error_log("JWT Authentication failed: " . $e->getMessage());

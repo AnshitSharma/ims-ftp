@@ -80,7 +80,5 @@ try {
 } catch (Exception $e) {
     error_log("ticket-delete error: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(false, true, 500, "Failed to delete ticket", [
-        'error' => $e->getMessage()
-    ]);
+    send_json_response(false, true, 500, "Failed to delete ticket");
 }

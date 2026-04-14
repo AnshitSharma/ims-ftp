@@ -74,10 +74,11 @@ try {
     }
 } catch (Exception $e) {
     http_response_code(500);
+    error_log("Chassis API error: " . $e->getMessage());
     echo json_encode([
         'success' => false,
         'authenticated' => true,
-        'message' => 'Server error: ' . $e->getMessage(),
+        'message' => 'Server error',
         'timestamp' => date('Y-m-d H:i:s')
     ]);
 }

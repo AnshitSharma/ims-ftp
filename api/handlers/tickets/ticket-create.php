@@ -83,6 +83,16 @@ try {
         'items' => $items
     ];
 
+    // Validate field length caps
+    if (mb_strlen($ticketData['title']) > 255) {
+        send_json_response(false, true, 400, "Title must not exceed 255 characters", null);
+        exit;
+    }
+    if (mb_strlen($ticketData['description']) > 5000) {
+        send_json_response(false, true, 400, "Description must not exceed 5000 characters", null);
+        exit;
+    }
+
     // Create ticket
     $ticketManager = new TicketManager($pdo);
     $result = $ticketManager->createTicket($ticketData, $user_id);
@@ -106,7 +116,5 @@ try {
 } catch (Exception $e) {
     error_log("ticket-create error: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    send_json_response(false, true, 500, "Failed to create ticket", [
-        'error' => $e->getMessage()
-    ]);
+    send_json_response(false, true, 500, "Failed to create ticket");
 }

@@ -66,18 +66,29 @@ try {
     }
 
     // Permission check
+    //
+    // NOTE: TicketManager::getTicketById() returns nested arrays for the
+    // creator/assignee/role, not flat integer FKs. Earlier code compared
+    // the arrays directly against $user_id which was always false — and
+    // worse, `(int)[]` on a non-empty array evaluates to 1, so user id 1
+    // appeared to "own" every ticket. Read from the structured shape.
     $canViewAll = $acl->hasPermission($user_id, 'ticket.view_all');
     $canManage = $acl->hasPermission($user_id, 'ticket.manage');
-    $isOwner = ((int)$ticket['created_by'] === (int)$user_id);
-    $isAssigned = ($ticket['assigned_to'] !== null && (int)$ticket['assigned_to'] === (int)$user_id);
     $canViewOwn = $acl->hasPermission($user_id, 'ticket.view_own');
     $canViewAssigned = $acl->hasPermission($user_id, 'ticket.view_assigned');
 
+    $creatorId = isset($ticket['created_by']['id']) ? (int)$ticket['created_by']['id'] : null;
+    $assigneeId = isset($ticket['assigned_user']['id']) ? (int)$ticket['assigned_user']['id'] : null;
+    $assignedRoleId = isset($ticket['assigned_role']['id']) ? (int)$ticket['assigned_role']['id'] : null;
+
+    $isOwner    = ($creatorId !== null && $creatorId === (int)$user_id);
+    $isAssigned = ($assigneeId !== null && $assigneeId === (int)$user_id);
+
     // Check if ticket is assigned to one of the user's roles
     $isRoleAssigned = false;
-    if (!empty($ticket['assigned_to_role']) && $canViewAssigned) {
+    if ($assignedRoleId !== null && $canViewAssigned) {
         $roleStmt = $pdo->prepare("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role_id = ?");
-        $roleStmt->execute([$user_id, $ticket['assigned_to_role']]);
+        $roleStmt->execute([$user_id, $assignedRoleId]);
         $isRoleAssigned = ($roleStmt->fetchColumn() > 0);
     }
 

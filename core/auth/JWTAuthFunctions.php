@@ -25,12 +25,22 @@ if (!function_exists('authenticateWithJWT')) {
         }
 
         $token = JWTHelper::getTokenFromHeader();
-        
+
         if (!$token) {
             return false;
         }
 
-        $payload = JWTHelper::verifyToken($token);
+        // verifyToken throws on any failure (bad signature, expired, revoked,
+        // pass-change cutoff, missing revocation table). Catch here so the
+        // caller just sees false and returns 401 instead of a 500.
+        try {
+            $payload = JWTHelper::verifyToken($token, $pdo);
+        } catch (Exception $e) {
+            error_log("JWT verify failed: " . $e->getMessage());
+            $_jwt_auth_cache = false;
+            return false;
+        }
+
         if (!$payload) {
             return false;
         }

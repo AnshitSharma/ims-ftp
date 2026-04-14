@@ -21,15 +21,14 @@ header('Content-Type: application/json');
 require_once(__DIR__ . '/../core/config/app.php');
 require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
 
-// Set CORS headers AFTER config is loaded
+// Set CORS headers AFTER config is loaded (fail-closed: reject unknown origins)
 $allowedOrigins = defined('CORS_ALLOWED_ORIGINS') ? CORS_ALLOWED_ORIGINS : [];
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-if (is_array($allowedOrigins) && in_array($origin, $allowedOrigins)) {
+if (!empty($origin) && is_array($allowedOrigins) && in_array($origin, $allowedOrigins)) {
     header("Access-Control-Allow-Origin: $origin");
     header('Vary: Origin');
-} elseif (empty($allowedOrigins) || (is_array($allowedOrigins) && in_array('*', $allowedOrigins))) {
-    header('Access-Control-Allow-Origin: *');
 }
+// If origin is not in allowlist, do NOT set CORS header (fail-closed)
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 
@@ -355,24 +354,49 @@ function handleLogin() {
 
 /**
  * Handle logout request
+ *
+ * Revokes BOTH the refresh tokens (by deleting auth_tokens rows) AND the
+ * current access token (by inserting its jti into revoked_tokens). Without
+ * the jti blacklist the signed JWT would remain valid until its natural
+ * `exp` even after the user logged out.
+ *
+ * verifyToken is called WITHOUT $pdo on purpose: if the token was already
+ * revoked, we still want to be idempotent and return 200 rather than
+ * refusing to let the client "log out again".
  */
 function handleLogout() {
     global $pdo;
-    
+
     try {
         $token = JWTHelper::getTokenFromHeader();
-        
+
         if ($token) {
             $payload = JWTHelper::verifyToken($token);
             $userId = $payload['user_id'];
-            
-            // Revoke all refresh tokens for this user
+
+            // 1. Revoke all refresh tokens for this user
             $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = ?");
             $stmt->execute([$userId]);
+
+            // 2. Blacklist THIS access token's jti so verifyToken() will
+            //    reject it on subsequent requests until it expires naturally.
+            if (!empty($payload['jti']) && !empty($payload['exp'])) {
+                try {
+                    $expiresAt = date('Y-m-d H:i:s', (int)$payload['exp']);
+                    $stmt = $pdo->prepare(
+                        "INSERT IGNORE INTO revoked_tokens (jti, user_id, expires_at) VALUES (?, ?, ?)"
+                    );
+                    $stmt->execute([$payload['jti'], $userId, $expiresAt]);
+                } catch (PDOException $e) {
+                    // Table missing = migration not applied. Log loudly
+                    // but don't crash the logout request.
+                    error_log("handleLogout: failed to insert revoked_tokens: " . $e->getMessage());
+                }
+            }
         }
-        
+
         send_json_response(1, 1, 200, "Logged out successfully");
-        
+
     } catch (Exception $e) {
         // Even if token verification fails, we consider logout successful
         send_json_response(1, 1, 200, "Logged out successfully");
@@ -492,6 +516,15 @@ function handleRegistration() {
     if (strlen($password) < 8) {
         send_json_response(0, 0, 400, "Password must be at least 8 characters");
     }
+    if (!preg_match('/[A-Z]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one uppercase letter");
+    }
+    if (!preg_match('/[0-9]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one number");
+    }
+    if (!preg_match('/[^A-Za-z0-9]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one special character");
+    }
 
     if (strlen($username) < 3 || strlen($username) > 50) {
         send_json_response(0, 0, 400, "Username must be between 3 and 50 characters");
@@ -587,7 +620,7 @@ function handleForgotPassword() {
             $emailSent = EmailHelper::sendPasswordResetEmail($user['email'], $user['username'], $resetLink);
 
             if (!$emailSent) {
-                error_log("[handleForgotPassword] Failed to send email to {$user['email']}. Reset link: {$resetLink}");
+                error_log("[handleForgotPassword] Failed to send reset email to {$user['email']}");
             }
         }
 
@@ -618,9 +651,18 @@ function handleResetPassword() {
         send_json_response(0, 0, 400, "New password is required");
     }
 
-    // Enforce password strength (minimum 8 characters)
+    // Enforce password strength (minimum 8 characters + uppercase + number + special char)
     if (strlen($newPassword) < 8) {
         send_json_response(0, 0, 400, "Password must be at least 8 characters long");
+    }
+    if (!preg_match('/[A-Z]/', $newPassword)) {
+        send_json_response(0, 0, 400, "Password must contain at least one uppercase letter");
+    }
+    if (!preg_match('/[0-9]/', $newPassword)) {
+        send_json_response(0, 0, 400, "Password must contain at least one number");
+    }
+    if (!preg_match('/[^A-Za-z0-9]/', $newPassword)) {
+        send_json_response(0, 0, 400, "Password must contain at least one special character");
     }
 
     try {
@@ -649,8 +691,11 @@ function handleResetPassword() {
         // Hash new password
         $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
 
-        // Update user password
-        $stmt = $pdo->prepare("UPDATE users SET password = :password WHERE id = :user_id");
+        // Update user password AND stamp password_changed_at. That timestamp
+        // is the cutoff used by JWTHelper::verifyToken — every still-valid
+        // access token issued before this instant becomes unusable, which is
+        // what we want after a password reset.
+        $stmt = $pdo->prepare("UPDATE users SET password = :password, password_changed_at = NOW() WHERE id = :user_id");
         $stmt->execute([
             'password' => $hashedPassword,
             'user_id' => $resetRecord['user_id']
@@ -660,7 +705,8 @@ function handleResetPassword() {
         $stmt = $pdo->prepare("UPDATE password_resets SET used_at = NOW() WHERE token = :token");
         $stmt->execute(['token' => $token]);
 
-        // Invalidate all user's refresh tokens (force logout everywhere)
+        // Invalidate all user's refresh tokens (force logout everywhere).
+        // Access tokens are handled by the password_changed_at cutoff above.
         $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = :user_id");
         $stmt->execute(['user_id' => $resetRecord['user_id']]);
 
@@ -1184,22 +1230,23 @@ function handleComponentOperations($module, $operation, $user) {
             break;
             
         case 'add':
-            $componentData = [];
-            
-            // Extract component data from POST
-            foreach ($_POST as $key => $value) {
-                if ($key !== 'action') {
-                    $componentData[$key] = $value;
-                }
-            }
-            
+            // SECURITY: do NOT loop over $_POST and copy every key into the
+            // payload. That's a mass-assignment hole — an attacker can add
+            // fields like Status=2 to mark inventory in_use, or overwrite
+            // ServerUUID, or stuff arbitrary columns in. The downstream
+            // addComponent() now filters against the real table schema, but
+            // strip well-known request metadata here too so it never even
+            // reaches the handler.
+            $componentData = $_POST;
+            unset($componentData['action']);
+
             if (empty($componentData)) {
                 send_json_response(0, 1, 400, "Component data is required");
             }
-            
+
             try {
                 $result = addComponent($pdo, $module, $componentData, $user['id']);
-                
+
                 if ($result) {
                     error_log("Successfully added $module component with ID: " . $result['id']);
                     send_json_response(1, 1, 201, ucfirst($module) . " component added successfully", [
@@ -1209,34 +1256,37 @@ function handleComponentOperations($module, $operation, $user) {
                 } else {
                     send_json_response(0, 1, 400, "Failed to add " . $module . " component");
                 }
+            } catch (InvalidArgumentException $e) {
+                // Column whitelist / UUID validation rejection — show the
+                // specific reason (it's already our own text, not PDO output).
+                error_log("Validation error adding $module component: " . $e->getMessage());
+                send_json_response(0, 1, 400, $e->getMessage());
             } catch (Exception $e) {
                 error_log("Error adding $module component: " . $e->getMessage());
                 send_json_response(0, 1, 500, "Failed to add component");
             }
             break;
-            
+
         case 'update':
             $componentId = $_POST['id'] ?? '';
-            $updateData = [];
-            
-            foreach ($_POST as $key => $value) {
-                if (!in_array($key, ['action', 'id'])) {
-                    $updateData[$key] = $value;
-                }
-            }
-            
+            $updateData = $_POST;
+            unset($updateData['action'], $updateData['id']);
+
             if (empty($componentId) || empty($updateData)) {
                 send_json_response(0, 1, 400, "Component ID and update data are required");
             }
             
             try {
                 $success = updateComponent($pdo, $module, $componentId, $updateData, $user['id']);
-                
+
                 if ($success) {
                     send_json_response(1, 1, 200, ucfirst($module) . " component updated successfully");
                 } else {
                     send_json_response(0, 1, 400, "Failed to update " . $module . " component");
                 }
+            } catch (InvalidArgumentException $e) {
+                error_log("Validation error updating $module component: " . $e->getMessage());
+                send_json_response(0, 1, 400, $e->getMessage());
             } catch (Exception $e) {
                 error_log("Error updating $module component: " . $e->getMessage());
                 send_json_response(0, 1, 500, "Failed to update component");
@@ -1496,54 +1546,153 @@ function getComponentById($pdo, $type, $id) {
 }
 
 /**
+ * Return the real column list for an inventory table, keyed by lower-case
+ * name for O(1) lookup. Used by addComponent/updateComponent to whitelist
+ * incoming fields — anything the caller sends that isn't a real column in
+ * the target table is dropped (not passed to PDO).
+ *
+ * Cached per-request in a static so we only hit INFORMATION_SCHEMA once
+ * per table per request.
+ */
+function getInventoryTableColumns($pdo, $tableName) {
+    static $cache = [];
+    if (isset($cache[$tableName])) {
+        return $cache[$tableName];
+    }
+
+    $stmt = $pdo->prepare(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?"
+    );
+    $stmt->execute([$tableName]);
+    $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    // Map lower-case → canonical. Callers filter case-insensitively and
+    // then use the canonical casing in the generated SQL.
+    $byLower = [];
+    foreach ($columns as $col) {
+        $byLower[strtolower($col)] = $col;
+    }
+    $cache[$tableName] = $byLower;
+    return $byLower;
+}
+
+/**
+ * Columns that must NEVER be settable through the component CRUD endpoint,
+ * even if the caller has a matching form field. Primary keys and audit
+ * timestamps belong to the system, not the client.
+ */
+function getBlockedComponentColumns() {
+    return [
+        'id',               // primary key
+        'created_at',
+        'updated_at',
+        'createdat',
+        'updatedat',
+    ];
+}
+
+/**
  * Add component
+ *
+ * Hardened against mass-assignment and UUID spoofing:
+ *   1. INFORMATION_SCHEMA whitelist — only real columns of the target
+ *      inventory table are accepted; extras are silently dropped.
+ *   2. Blocked columns (id, created_at, ...) are stripped even if present.
+ *   3. If a UUID is supplied it MUST exist in the ims-data JSON spec for
+ *      this component type. No UUID? We generate one (legacy behaviour for
+ *      virtual / custom records).
  */
 function addComponent($pdo, $type, $data, $userId) {
     try {
         // Get the correct table name
         $tableName = getComponentTableName($type);
-        
-        // Get dynamic field mapping for this component type
+
+        // Get dynamic field mapping for this component type (snake_case →
+        // CamelCase). Fields not in the map pass through untouched and
+        // rely on the column whitelist below.
         $fieldMap = getComponentFieldMap($type);
-        
+
         // Convert field names to match database columns
         $convertedData = [];
         foreach ($data as $key => $value) {
             $dbColumn = $fieldMap[$key] ?? $key;
             $convertedData[$dbColumn] = $value;
         }
-        
+
         // Generate UUID if not provided
         if (!isset($convertedData['UUID']) || empty($convertedData['UUID'])) {
             $convertedData['UUID'] = generateUUID();
+        } else {
+            // SECURITY: when the caller supplies a UUID it must reference a
+            // real component spec in ims-data/. Previously this check only
+            // existed in BaseFunctions::addComponent (which is shadowed by
+            // this function due to PHP function hoisting), so the live path
+            // accepted any UUID and silently skipped validation.
+            require_once(__DIR__ . '/../core/models/components/ComponentDataService.php');
+            $componentService = ComponentDataService::getInstance();
+            if (defined('VALID_COMPONENT_TYPES') && in_array($type, VALID_COMPONENT_TYPES, true)) {
+                if (!$componentService->validateComponentUuid($type, $convertedData['UUID'])) {
+                    throw new InvalidArgumentException(
+                        "Component UUID not found in $type specifications"
+                    );
+                }
+            }
         }
-        
-        // Prepare column names and values
-        $columns = array_keys($convertedData);
+
+        // Whitelist against real table columns
+        $allowedCols = getInventoryTableColumns($pdo, $tableName);
+        $blocked     = array_flip(getBlockedComponentColumns());
+
+        $safeData = [];
+        foreach ($convertedData as $col => $value) {
+            $lc = strtolower($col);
+            if (isset($blocked[$lc])) {
+                continue;
+            }
+            if (!isset($allowedCols[$lc])) {
+                // Unknown column — silently drop rather than error so legacy
+                // clients sending extra fields don't break.
+                continue;
+            }
+            // Use the canonical casing from the DB schema
+            $safeData[$allowedCols[$lc]] = $value;
+        }
+
+        if (empty($safeData)) {
+            throw new InvalidArgumentException("No valid fields provided for $type component");
+        }
+
+        // Defence in depth: even though $safeData keys come from
+        // INFORMATION_SCHEMA we keep the identifier regex as a belt-and-
+        // braces check before the column names hit the SQL string.
+        $columns = array_keys($safeData);
         foreach ($columns as $col) {
             if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
                 throw new InvalidArgumentException("Invalid column name: $col");
             }
         }
         $placeholders = array_fill(0, count($columns), '?');
-        $values = array_values($convertedData);
+        $values = array_values($safeData);
 
         $sql = "INSERT INTO $tableName (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
-        
-        error_log("Inserting $type data into $tableName: " . json_encode($convertedData));
-        
+
+        error_log("Inserting $type data into $tableName: " . json_encode(array_keys($safeData)));
+
         $stmt = $pdo->prepare($sql);
         $result = $stmt->execute($values);
-        
+
         if ($result) {
             return [
                 'id' => $pdo->lastInsertId(),
-                'uuid' => $convertedData['UUID']
+                'uuid' => $safeData['UUID'] ?? ($convertedData['UUID'] ?? null)
             ];
         }
-        
+
         return false;
-        
+
+    } catch (InvalidArgumentException $e) {
+        throw $e;
     } catch (Exception $e) {
         error_log("Error adding $type component: " . $e->getMessage());
         throw $e;
@@ -1552,37 +1701,65 @@ function addComponent($pdo, $type, $data, $userId) {
 
 /**
  * Update component
+ *
+ * Same whitelist rules as addComponent. Additionally forbids changing the
+ * UUID — once an inventory record is tied to a spec it should not be
+ * retargeted via a PATCH.
  */
 function updateComponent($pdo, $type, $id, $data, $userId) {
     try {
         // Get the correct table name
         $tableName = getComponentTableName($type);
-        
+
         // Get dynamic field mapping for this component type
         $fieldMap = getComponentFieldMap($type);
-        
+
         // Convert field names to match database columns
         $convertedData = [];
         foreach ($data as $key => $value) {
             $dbColumn = $fieldMap[$key] ?? $key;
             $convertedData[$dbColumn] = $value;
         }
-        
-        $columns = array_keys($convertedData);
+
+        // Whitelist against real table columns
+        $allowedCols = getInventoryTableColumns($pdo, $tableName);
+        $blocked     = array_flip(getBlockedComponentColumns());
+        // UUID is fine to set on insert but must not change on update.
+        $blocked['uuid'] = true;
+
+        $safeData = [];
+        foreach ($convertedData as $col => $value) {
+            $lc = strtolower($col);
+            if (isset($blocked[$lc])) {
+                continue;
+            }
+            if (!isset($allowedCols[$lc])) {
+                continue;
+            }
+            $safeData[$allowedCols[$lc]] = $value;
+        }
+
+        if (empty($safeData)) {
+            throw new InvalidArgumentException("No valid fields provided for $type update");
+        }
+
+        $columns = array_keys($safeData);
         foreach ($columns as $col) {
             if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
                 throw new InvalidArgumentException("Invalid column name: $col");
             }
         }
         $setClause = implode(' = ?, ', $columns) . ' = ?';
-        $values = array_values($convertedData);
+        $values = array_values($safeData);
         $values[] = $id; // Add ID for WHERE clause
 
         $sql = "UPDATE $tableName SET $setClause WHERE ID = ?";
-        
+
         $stmt = $pdo->prepare($sql);
         return $stmt->execute($values);
-        
+
+    } catch (InvalidArgumentException $e) {
+        throw $e;
     } catch (Exception $e) {
         error_log("Error updating $type component: " . $e->getMessage());
         throw $e;
