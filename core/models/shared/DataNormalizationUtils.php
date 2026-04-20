@@ -137,23 +137,22 @@ class DataNormalizationUtils {
      */
     public static function determineStorageConnectionPath($formFactor, $interface) {
         $formFactorLower = strtolower($formFactor);
-        $interfaceLower = strtolower($interface);
+
+        // 2.5-inch or 3.5-inch drives → chassis bays (regardless of protocol: SATA, SAS, NVMe, U.2)
+        // Physical form factor determines connection path, not protocol
+        // e.g., "2.5-inch U.2" is a 2.5" drive that goes in a chassis bay
+        if (strpos($formFactorLower, '2.5') !== false || strpos($formFactorLower, '3.5') !== false) {
+            return 'chassis_bay';
+        }
 
         // M.2 form factors → motherboard M.2 slots
         if (strpos($formFactorLower, 'm.2') !== false || strpos($formFactorLower, 'm2') !== false) {
             return 'motherboard_m2';
         }
 
-        // U.2 form factors → motherboard U.2 slots or PCIe adapter
+        // Pure U.2/U.3 form factors (no 2.5/3.5 prefix) → motherboard U.2 slots
         if (strpos($formFactorLower, 'u.2') !== false || strpos($formFactorLower, 'u.3') !== false) {
             return 'motherboard_u2';
-        }
-
-        // 2.5-inch or 3.5-inch SATA/SAS → chassis bays
-        if (strpos($formFactorLower, '2.5') !== false || strpos($formFactorLower, '3.5') !== false) {
-            if (strpos($interfaceLower, 'sata') !== false || strpos($interfaceLower, 'sas') !== false) {
-                return 'chassis_bay';
-            }
         }
 
         // Default to chassis bay for traditional drives

@@ -901,7 +901,13 @@ class ComponentValidator {
         }
 
         // Normalize storage form factor for comparison
+        // Extract physical dimension from compound form factors (e.g., "2.5-inch U.2" → "2.5-inch")
         $normalizedStorageFF = strtolower(str_replace('_', '-', $storageFormFactor));
+        if (strpos($normalizedStorageFF, '2.5') !== false) {
+            $normalizedStorageFF = '2.5-inch';
+        } elseif (strpos($normalizedStorageFF, '3.5') !== false) {
+            $normalizedStorageFF = '3.5-inch';
+        }
 
         $bayTypeMatch = false;
         foreach ($bayTypes as $bayType) {

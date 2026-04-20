@@ -522,11 +522,15 @@ class ComponentDataExtractor {
             'generation' => null
         ];
 
-        if (!isset($motherboardData['expansion_slots']['pcie_slots'])) {
+        if (isset($motherboardData['expansion_slots']['pcie_slots'])) {
+            $slotSource = $motherboardData['expansion_slots']['pcie_slots'];
+        } elseif (isset($motherboardData['expansion_slots']['riser_slots'])) {
+            $slotSource = $motherboardData['expansion_slots']['riser_slots'];
+        } else {
             return $slots;
         }
 
-        foreach ($motherboardData['expansion_slots']['pcie_slots'] as $slotType) {
+        foreach ($slotSource as $slotType) {
             $count = $slotType['count'] ?? 0;
             $lanes = $slotType['lanes'] ?? 0;
             $type = $slotType['type'] ?? '';

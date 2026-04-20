@@ -1638,11 +1638,24 @@ class ComponentCompatibility {
         $storageFormFactor = $storageSpecs['form_factor'];
         $mbBays = $motherboardSpecs['drive_bays'];
         $supportedFormFactors = $mbBays['supported_form_factors'];
-        
+
+        // Extract physical form factor from compound form factors for bay matching.
+        // e.g. "2.5-inch U.2" → "2.5-inch": the physical size determines which chassis bay
+        // the drive occupies; the protocol suffix (U.2) is irrelevant for bay compatibility.
+        $physicalFormFactor = $storageFormFactor;
+        $ffLower = strtolower($storageFormFactor);
+        if (strpos($ffLower, '2.5') !== false) {
+            $physicalFormFactor = '2.5-inch';
+        } elseif (strpos($ffLower, '3.5') !== false) {
+            $physicalFormFactor = '3.5-inch';
+        }
+        // Use physical form factor for all checks when it differs from the original
+        $checkFormFactor = ($physicalFormFactor !== $storageFormFactor) ? $physicalFormFactor : $storageFormFactor;
+
         // Direct form factor support
-        if (in_array($storageFormFactor, $supportedFormFactors)) {
+        if (in_array($checkFormFactor, $supportedFormFactors)) {
             // Check bay availability
-            $bayAvailable = $this->checkBayAvailability($storageFormFactor, $mbBays, $existingStorage);
+            $bayAvailable = $this->checkBayAvailability($checkFormFactor, $mbBays, $existingStorage);
             
             if ($bayAvailable) {
                 return [
@@ -2397,24 +2410,36 @@ class ComponentCompatibility {
                 return $result;
             }
 
-            // CASE 3: Storage devices exist - HBA connection to PCIe slot is independent of storage
-            // NOTE: Storage-to-HBA protocol compatibility will be validated when storage is added/modified
-            // HBA validation only checks if HBA can fit in motherboard PCIe slot
+            // CASE 3: Storage devices exist - check HBA protocol supports existing storage
             $storageCount = count($storageDevices);
             $result['details'][] = "Found {$storageCount} storage device(s) in configuration";
 
-            // Extract unique storage interfaces for informational purposes only
+            // Extract unique storage interfaces
             $storageInterfaces = array_unique(array_column($storageDevices, 'interface'));
             $result['details'][] = 'Storage interfaces detected: ' . implode(', ', $storageInterfaces);
 
-            // IMPORTANT: Storage-to-HBA protocol compatibility is checked when storage is added
-            // NOT during HBA addition. HBA can be added independently of storage.
-            $result['details'][] = "Note: Storage-to-HBA protocol compatibility will be validated when storage is added or modified";
-            $result['details'][] = "HBA protocol: {$hbaProtocol} - Storage protocol compatibility will be checked later";
+            // Check if existing storage requires NVMe-capable HBA
+            $hasNvmeStorage = false;
+            foreach ($storageDevices as $device) {
+                if (stripos($device['interface'], 'nvme') !== false || stripos($device['interface'], 'pcie') !== false) {
+                    $hasNvmeStorage = true;
+                    break;
+                }
+            }
 
-            // HBA validation for existing storage is now informational only
-            // The actual compatibility check happens in storage validation (checkStorageDecentralizedCompatibility)
-            $result['details'][] = "HBA connection route: PCIe {$hbaSlotRequired} on motherboard (independent of storage protocol)";
+            if ($hasNvmeStorage) {
+                $hbaSupportsNvme = (stripos($hbaProtocol, 'nvme') !== false || stripos($hbaProtocol, 'tri-mode') !== false);
+                if (!$hbaSupportsNvme) {
+                    $result['compatible'] = false;
+                    $result['issues'][] = "HBA does not support NVMe protocol required by existing storage devices";
+                    $result['recommendations'][] = "Use Tri-Mode HBA (e.g., LSI 9500/9600 series) that supports SAS/SATA/NVMe";
+                    $result['compatibility_summary'] = "Incompatible - HBA protocol '{$hbaProtocol}' does not support NVMe storage in configuration";
+                    return $result;
+                }
+                $result['details'][] = "HBA supports NVMe - compatible with existing NVMe storage devices";
+            }
+
+            $result['details'][] = "HBA connection route: PCIe {$hbaSlotRequired} on motherboard";
 
             // Check PCIe slot availability - this is the ONLY blocker for HBA addition
             // Skip further checks - HBA can be added if there's a PCIe slot available
@@ -3557,6 +3582,7 @@ class ComponentCompatibility {
     private function checkPCIeSlotPhysicalFit($cardSlotSize, $slotAvailability) {
         // Physical compatibility rules:
         // x1 card fits in: x1, x4, x8, x16 slots
+        // x2 card fits in: x2, x4, x8, x16 slots
         // x4 card fits in: x4, x8, x16 slots
         // x8 card fits in: x8, x16 slots
         // x16 card fits in: x16 slots only
@@ -3570,6 +3596,9 @@ class ComponentCompatibility {
         switch ($cardSlotSize) {
             case 1:
                 $compatibleSizes = [1, 4, 8, 16];
+                break;
+            case 2:
+                $compatibleSizes = [2, 4, 8, 16];
                 break;
             case 4:
                 $compatibleSizes = [4, 8, 16];

@@ -64,8 +64,9 @@ class StorageConnectionValidator {
         $storageSubtype = $storageSpecs['subtype'] ?? '';
 
         // PHASE 1: Form Factor Consistency Validation (2.5" and 3.5" only)
-        // Skip for M.2/U.2 drives (Phase 2 handles those)
-        $normalizedFormFactor = $this->normalizeFormFactor($storageFormFactor);
+        // Skip for M.2/pure U.2 drives (Phase 2 handles those)
+        // Use extractPhysicalFormFactor to handle compound form factors like "2.5-inch U.2"
+        $normalizedFormFactor = $this->extractPhysicalFormFactor($storageFormFactor);
         if ($normalizedFormFactor === '2.5-inch' || $normalizedFormFactor === '3.5-inch') {
             $formFactorCheck = $this->validateFormFactorConsistency($storageFormFactor, $existingComponents);
             if (!$formFactorCheck['valid']) {
@@ -225,8 +226,10 @@ class StorageConnectionValidator {
             return ['available' => false, 'reason' => 'm2_bypass_chassis'];
         }
 
-        // U.2/U.3 as form_factor (not subtype) also bypass chassis - they use motherboard U.2 ports
-        if (strpos($normalizedFormFactor, 'u.2') !== false || strpos($normalizedFormFactor, 'u.3') !== false) {
+        // Pure U.2/U.3 form_factor (not combined with 2.5"/3.5") bypass chassis - they use motherboard U.2 ports
+        // "2.5-inch U.2" is a 2.5" drive that physically fits in chassis bays
+        $hasPhysicalSize = (strpos($normalizedFormFactor, '2.5') !== false || strpos($normalizedFormFactor, '3.5') !== false);
+        if (!$hasPhysicalSize && (strpos($normalizedFormFactor, 'u.2') !== false || strpos($normalizedFormFactor, 'u.3') !== false)) {
             return ['available' => false, 'reason' => 'u2_u3_bypass_chassis'];
         }
 
@@ -251,6 +254,28 @@ class StorageConnectionValidator {
         if ($protocol === 'nvme' && $supportsNvme) $compatible = true;
         if ($protocol === 'sata' && $supportsSata) $compatible = true;
         if ($protocol === 'sas' && $supportsSas) $compatible = true;
+
+        // For NVMe drives in 2.5"/3.5" bays: allow chassis connection even if
+        // backplane doesn't natively support NVMe — HBA card provides NVMe connectivity
+        if (!$compatible && $protocol === 'nvme') {
+            $hasPhysicalSize = (strpos($normalizedFormFactor, '2.5') !== false || strpos($normalizedFormFactor, '3.5') !== false);
+            if ($hasPhysicalSize) {
+                return [
+                    'available' => true,
+                    'type' => 'chassis_bay',
+                    'priority' => 1,
+                    'description' => "Storage physically fits in chassis bay - requires NVMe-capable HBA card for data connectivity",
+                    'details' => [
+                        'chassis_uuid' => $existing['chassis']['component_uuid'],
+                        'backplane_model' => $backplane['model'] ?? 'Unknown',
+                        'backplane_interface' => $backplane['interface'] ?? 'Unknown',
+                        'storage_interface' => $storageInterface,
+                        'compatibility_type' => 'hba_required',
+                        'note' => 'NVMe protocol requires Tri-Mode HBA card (e.g., LSI 9500/9600 series)'
+                    ]
+                ];
+            }
+        }
 
         if ($compatible) {
             $backplaneInterface = $backplane['interface'] ?? 'Unknown';
@@ -378,10 +403,10 @@ class StorageConnectionValidator {
             }
         }
 
-        // PHASE 2: U.2 Slot Check with usage tracking
-        // ONLY check if form_factor explicitly says "U.2" or "U.3"
-        // Do NOT check subtype - "2.5-inch" drives with U.3 protocol use chassis bays, not motherboard U.2 ports!
-        if (strpos(strtolower($storageFormFactor), 'u.2') !== false || strpos(strtolower($storageFormFactor), 'u.3') !== false) {
+        // PHASE 2: U.2 Slot Check - ONLY for pure U.2/U.3 form factor (not "2.5-inch U.2")
+        // "2.5-inch U.2" drives use chassis bays, not motherboard U.2 ports
+        $hasPhysicalSize = (strpos(strtolower($storageFormFactor), '2.5') !== false || strpos(strtolower($storageFormFactor), '3.5') !== false);
+        if (!$hasPhysicalSize && (strpos(strtolower($storageFormFactor), 'u.2') !== false || strpos(strtolower($storageFormFactor), 'u.3') !== false)) {
             $u2Slots = $storage['nvme']['u2_slots'] ?? [];
             $totalU2Slots = isset($u2Slots['count']) ? $u2Slots['count'] : 0;
             $usedU2Slots = $this->countUsedU2Slots($existing);
@@ -1158,6 +1183,17 @@ class StorageConnectionValidator {
      */
     private function normalizeFormFactor($formFactor) {
         return strtolower(str_replace(['_', ' '], '-', $formFactor));
+    }
+
+    /**
+     * Extract the physical form factor size from compound form factors
+     * e.g., "2.5-inch U.2" → "2.5-inch", "3.5-inch SAS" → "3.5-inch"
+     */
+    private function extractPhysicalFormFactor($formFactor) {
+        $normalized = strtolower($formFactor);
+        if (strpos($normalized, '2.5') !== false) return '2.5-inch';
+        if (strpos($normalized, '3.5') !== false) return '3.5-inch';
+        return $this->normalizeFormFactor($formFactor);
     }
 
     /**
