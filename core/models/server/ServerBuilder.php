@@ -5,6 +5,7 @@ require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
 require_once __DIR__ . '/../chassis/ChassisManager.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/ServerConfiguration.php';
+require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
 
 class ServerBuilder {
 
@@ -457,7 +458,60 @@ class ServerBuilder {
 
             // Phase 1.5: Validate compatibility with existing components (flexible order)
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
-            if (!$compatibilityValidation['success']) {
+            $legacyPrecheckPassed = (bool)($compatibilityValidation['success'] ?? false);
+
+            // Phase 2 shadow-write precheck + Phase 4 write cutover gate.
+            // Runs in addition to the legacy check. Only blocks when
+            // COMPATIBILITY_WRITES=constraint_state AND the adapter denies;
+            // in that case legacy must also deny (they should already agree
+            // after Phases 1-2 observation), so this short-circuits cleanly.
+            $shadowWriteOn  = ConstraintStateCompatibilityAdapter::isDualRunWriteEnabled();
+            $writeCutoverOn = ConstraintStateCompatibilityAdapter::isWriteCutover();
+            if ($shadowWriteOn || $writeCutoverOn) {
+                try {
+                    require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
+                    require_once __DIR__ . '/../components/ComponentDataService.php';
+                    $addPrecheckAdapter = new ConstraintStateCompatibilityAdapter(
+                        $this->pdo,
+                        ComponentDataService::getInstance()
+                    );
+                    $adapterVerdict = $addPrecheckAdapter->evaluateCandidate(
+                        $configUuid,
+                        $componentType,
+                        $componentUuid
+                    );
+
+                    if ($shadowWriteOn && $adapterVerdict['ok']) {
+                        $addPrecheckAdapter->logDualRun(
+                            $configUuid,
+                            'add_precheck',
+                            $componentType,
+                            $componentUuid,
+                            $legacyPrecheckPassed,
+                            (bool)$adapterVerdict['allowed'],
+                            $legacyPrecheckPassed ? ['legacy-precheck-pass'] : (array)($compatibilityValidation['message'] ?? ['legacy-precheck-fail']),
+                            $adapterVerdict['reasons']
+                        );
+                    }
+
+                    if ($writeCutoverOn && $adapterVerdict['ok'] && !$adapterVerdict['allowed']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
+                        return [
+                            'success' => false,
+                            'message' => !empty($adapterVerdict['reasons'])
+                                ? $adapterVerdict['reasons'][0]
+                                : 'Blocked by constraint-state precheck',
+                            'constraint_state_issues' => $adapterVerdict['reasons'],
+                        ];
+                    }
+                } catch (Throwable $shadowPrecheckErr) {
+                    error_log('Shadow-write precheck failed: ' . $shadowPrecheckErr->getMessage());
+                }
+            }
+
+            if (!$legacyPrecheckPassed) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
                     $this->pdo->rollback();
                 }
@@ -789,6 +843,32 @@ class ServerBuilder {
                 $this->pdo->commit();
             }
 
+            // Phase 2 shadow-write apply: keep constraint_state blob current
+            // so that flipping COMPATIBILITY_READS/WRITES later is zero-risk.
+            // Only runs post-commit. If the caller owns the transaction, we
+            // invalidate instead — the next read rebuilds from line items.
+            if ($shadowWriteOn || $writeCutoverOn) {
+                try {
+                    $postApplyAdapter = isset($addPrecheckAdapter)
+                        ? $addPrecheckAdapter
+                        : new ConstraintStateCompatibilityAdapter($this->pdo, ComponentDataService::getInstance());
+                    if ($ownTransaction) {
+                        $postApplyAdapter->applyAfterLegacy(
+                            $configUuid,
+                            $componentType,
+                            $componentUuid,
+                            $componentDetails ?? null,
+                            $quantity ?? 1,
+                            $options ?? []
+                        );
+                    } else {
+                        $postApplyAdapter->invalidate($configUuid);
+                    }
+                } catch (Throwable $applyErr) {
+                    error_log('Shadow-write apply failed for ' . $componentUuid . ': ' . $applyErr->getMessage());
+                }
+            }
+
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
@@ -977,6 +1057,23 @@ class ServerBuilder {
 
             $this->pdo->commit();
 
+            // Phase 2 shadow-write mirror for removals. Non-fatal: on any
+            // failure the blob is invalidated so next read rebuilds.
+            if (ConstraintStateCompatibilityAdapter::isDualRunWriteEnabled()
+                || ConstraintStateCompatibilityAdapter::isWriteCutover()) {
+                try {
+                    require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
+                    require_once __DIR__ . '/../components/ComponentDataService.php';
+                    $removeAdapter = new ConstraintStateCompatibilityAdapter(
+                        $this->pdo,
+                        ComponentDataService::getInstance()
+                    );
+                    $removeAdapter->removeAfterLegacy($configUuid, $componentType, $componentUuid);
+                } catch (Throwable $removeErr) {
+                    error_log('Shadow-write remove failed for ' . $componentUuid . ': ' . $removeErr->getMessage());
+                }
+            }
+
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
@@ -1101,10 +1198,28 @@ class ServerBuilder {
             require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
             require_once __DIR__ . '/../components/ComponentDataService.php';
             require_once __DIR__ . '/../compatibility/NICPortTracker.php';
+            require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
 
             if (class_exists('ComponentCompatibility')) {
                 $compatibility = new ComponentCompatibility($this->pdo);
                 $componentDataService = ComponentDataService::getInstance();
+
+                // Phase 1+: shadow adapter. Lazy-instantiated only if any
+                // dual-run or cutover flag is set, so the legacy path pays
+                // zero cost when flags are off.
+                $constraintAdapter = null;
+                $dualRunReadOn  = ConstraintStateCompatibilityAdapter::isDualRunReadEnabled();
+                $readCutoverOn  = ConstraintStateCompatibilityAdapter::isReadCutover();
+                if ($dualRunReadOn || $readCutoverOn) {
+                    try {
+                        $constraintAdapter = new ConstraintStateCompatibilityAdapter($this->pdo, $componentDataService);
+                    } catch (Throwable $adapterInitErr) {
+                        error_log('ConstraintStateCompatibilityAdapter init failed: ' . $adapterInitErr->getMessage());
+                        $constraintAdapter = null;
+                        $dualRunReadOn = false;
+                        $readCutoverOn = false;
+                    }
+                }
 
                 // Pre-filter: Only include components that exist in JSON
                 $componentsWithJSON = [];
@@ -1312,6 +1427,43 @@ class ServerBuilder {
                                     $compatibilityReasons[] = "Compatible with " . $existingComp['type'];
                                 }
                             }
+                        }
+                    }
+
+                    // Phase 1 shadow read + optional Phase 3 read cutover.
+                    // The legacy verdict above is authoritative unless
+                    // COMPATIBILITY_READS=constraint_state is set. Any
+                    // adapter failure is non-fatal — swallow + continue.
+                    if ($constraintAdapter !== null) {
+                        try {
+                            $adapterResult = $constraintAdapter->evaluateCandidate(
+                                $configUuid,
+                                $componentType,
+                                $component['UUID'],
+                                $component
+                            );
+
+                            if ($dualRunReadOn && $adapterResult['ok']) {
+                                $constraintAdapter->logDualRun(
+                                    $configUuid,
+                                    'preview',
+                                    $componentType,
+                                    $component['UUID'],
+                                    (bool)$isCompatible,
+                                    (bool)$adapterResult['allowed'],
+                                    $compatibilityReasons,
+                                    $adapterResult['reasons']
+                                );
+                            }
+
+                            if ($readCutoverOn && $adapterResult['ok']) {
+                                $isCompatible = (bool)$adapterResult['allowed'];
+                                if (!empty($adapterResult['reasons'])) {
+                                    $compatibilityReasons = $adapterResult['reasons'];
+                                }
+                            }
+                        } catch (Throwable $shadowErr) {
+                            error_log('Shadow-read hook failed for ' . $component['UUID'] . ': ' . $shadowErr->getMessage());
                         }
                     }
 
