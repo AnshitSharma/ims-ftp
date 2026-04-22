@@ -407,7 +407,34 @@ class ServerBuilder {
             throw new Exception("Failed to create server configuration: " . $e->getMessage());
         }
     }
-    
+
+    /**
+     * Acquire a SELECT ... FOR UPDATE lock on a server_configurations row and
+     * return its current state. Single entry point for locking a configuration
+     * row before any mutation. The lock is held until the caller's transaction
+     * commits or rolls back, so every subsequent read-modify-write of JSON
+     * columns in the same transaction is protected from lost-update races.
+     *
+     * LOCK ORDER RULE: always lock server_configurations FIRST, then any
+     * {type}inventory rows. Reversing the order risks deadlocks between
+     * concurrent add/remove flows.
+     *
+     * @param string $configUuid Configuration UUID
+     * @return array|null Full row data, or null if the config does not exist
+     * @throws RuntimeException If called outside an active transaction
+     */
+    private function lockAndLoadConfigRow($configUuid) {
+        if (!$this->pdo->inTransaction()) {
+            throw new RuntimeException('lockAndLoadConfigRow() must be called inside an active transaction');
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM server_configurations WHERE config_uuid = ? FOR UPDATE'
+        );
+        $stmt->execute([$configUuid]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
     /**
      * Add component to server configuration with proper database updates
      */
@@ -433,6 +460,24 @@ class ServerBuilder {
             $ownTransaction = !$this->pdo->inTransaction();
             if ($ownTransaction) {
                 $this->pdo->beginTransaction();
+            }
+
+            // RACE CONDITION FIX (Phase 1): Lock the server_configurations row
+            // immediately. Held until commit/rollback so every subsequent
+            // validation read and JSON read-modify-write in this method sees
+            // a consistent, serialized snapshot. Closes the TOCTOU window
+            // that previously existed between compatibility precheck and the
+            // later FOR UPDATE inside isDuplicateComponent(), and also covers
+            // virtual configs which used to bypass the lock entirely.
+            $lockedConfigRow = $this->lockAndLoadConfigRow($configUuid);
+            if ($lockedConfigRow === null) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
+                return [
+                    'success' => false,
+                    'message' => "Server configuration $configUuid not found"
+                ];
             }
 
             // Phase 1.2: Auto-resolve serial_number if not provided
@@ -941,10 +986,11 @@ class ServerBuilder {
         try {
             $this->pdo->beginTransaction();
 
-            // Get configuration with all data
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $config = $stmt->fetch(PDO::FETCH_ASSOC);
+            // RACE CONDITION FIX (Phase 1): Lock the server_configurations row
+            // before reading. Held until commit/rollback; protects the JSON
+            // read-modify-write done by updateServerConfigurationTable() below
+            // against concurrent add/remove flows on the same config.
+            $config = $this->lockAndLoadConfigRow($configUuid);
 
             if (!$config) {
                 $this->pdo->rollback();
@@ -3562,37 +3608,68 @@ class ServerBuilder {
      * Finalize configuration
      */
     public function finalizeConfiguration($configUuid, $notes = '') {
+        $ownTransaction = false;
         try {
-            // Validate configuration first
+            // RACE CONDITION FIX (Phase 1): wrap finalize in a transaction and
+            // lock the configuration row before validation. Prevents a
+            // concurrent add/remove from mutating the config between the
+            // validateConfiguration() check and the status-to-deployed UPDATE.
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+            }
+
+            $lockedRow = $this->lockAndLoadConfigRow($configUuid);
+            if ($lockedRow === null) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
+                return [
+                    'success' => false,
+                    'message' => "Configuration $configUuid not found"
+                ];
+            }
+
+            // Validate configuration first (runs against the locked snapshot)
             $validation = $this->validateConfiguration($configUuid);
             if (!$validation['is_valid']) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
                 return [
                     'success' => false,
                     'message' => "Configuration is not valid for finalization",
                     'validation_errors' => $validation['issues']
                 ];
             }
-            
+
             // Update configuration status
             $stmt = $this->pdo->prepare("
-                UPDATE server_configurations 
+                UPDATE server_configurations
                 SET configuration_status = 3, notes = ?, updated_at = NOW()
                 WHERE config_uuid = ?
             ");
             $stmt->execute([$notes, $configUuid]);
-            
+
             // Log the finalization
             $this->logConfigurationAction($configUuid, 'finalize', 'configuration', null, [
                 'notes' => $notes
             ]);
+
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
 
             return [
                 'success' => true,
                 'message' => "Configuration finalized successfully",
                 'finalization_timestamp' => date('Y-m-d H:i:s')
             ];
-            
+
         } catch (Exception $e) {
+            if ($ownTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollback();
+            }
             error_log("Error finalizing configuration: " . $e->getMessage());
             return [
                 'success' => false,
@@ -3607,11 +3684,13 @@ class ServerBuilder {
     public function deleteConfiguration($configUuid) {
         try {
             $this->pdo->beginTransaction();
-            
-            // Get all components in the configuration from JSON columns
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $configData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // RACE CONDITION FIX (Phase 1): Lock the configuration row before
+            // reading its components list. Prevents a concurrent add/remove
+            // from mutating the JSON between the read below and the final
+            // DELETE, which would otherwise leak an inventory row (component
+            // added mid-delete stays flagged as in_use forever).
+            $configData = $this->lockAndLoadConfigRow($configUuid);
 
             if ($configData) {
                 $components = $this->extractComponentsFromJson($configData);
@@ -3987,6 +4066,36 @@ class ServerBuilder {
     public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null) {
         try {
             $warnings = [];
+
+            // ===== PCIe LANE BUDGET CHECK (Phase 3 — Bug #4) =====
+            // Runs for NIC / HBA / PCIe card / NVMe storage additions against
+            // the total CPU PCIe lane budget. Behaviour is gated by the
+            // PCIE_LANE_CHECK_ENABLED env var:
+            //   enforce -> reject over-subscription with HTTP 4xx
+            //   warn    -> attach warning to response, allow the addition
+            //   off     -> skip entirely (legacy behaviour)
+            if (in_array($componentType, ['nic', 'hbacard', 'pciecard', 'storage'], true)) {
+                require_once __DIR__ . '/../compatibility/PcieLaneBudgetValidator.php';
+                $laneValidator = new PcieLaneBudgetValidator($this->pdo);
+                $laneResult = $laneValidator->validateAddition($configData, $componentType, $componentUuid);
+
+                if ($laneResult['ok'] && !$laneResult['allowed']) {
+                    if ($laneResult['mode'] === 'enforce') {
+                        return [
+                            'success' => false,
+                            'message' => $laneResult['message'],
+                            'details' => [
+                                'pcie_budget'    => $laneResult['budget'],
+                                'pcie_used'      => $laneResult['used'],
+                                'pcie_requested' => $laneResult['requested'],
+                            ]
+                        ];
+                    }
+                    // warn mode — log and surface as warning only
+                    error_log("PCIE_LANE_WARN: configUuid=$configUuid componentType=$componentType componentUuid=$componentUuid — " . $laneResult['message']);
+                    $warnings[] = $laneResult['message'];
+                }
+            }
 
             // ===== SINGLETON CHECKS: Motherboard and Chassis =====
             if ($componentType === 'motherboard') {

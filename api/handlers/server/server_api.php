@@ -375,17 +375,27 @@ function handleAddComponent($serverBuilder, $user) {
         }
         
         // Phase 2 Consolidation: Unified component validation in ServerBuilder
+        //
+        // NOTE (Concurrency hardening, Phase 1): this pre-transaction validation
+        // runs against an UNLOCKED snapshot, so its verdict is advisory only.
+        // The authoritative check is ServerBuilder::validateComponentAddition()
+        // re-invoked inside addComponent() AFTER lockAndLoadConfigRow() acquires
+        // SELECT ... FOR UPDATE on the server_configurations row. Any TOCTOU
+        // gap here is closed there: if the unlocked verdict becomes stale
+        // between this block and addComponent()'s lock acquisition, the
+        // locked revalidation will catch it and roll back. This block is
+        // retained because it surfaces `validationWarnings` to the response.
         try {
             require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
             $compatibility = new ComponentCompatibility($pdo);
 
-            // Load configuration data
+            // Load configuration data (unlocked snapshot - advisory only)
             $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
             if (!$config) {
                 throw new Exception("Configuration not found");
             }
 
-            // Single consolidated validation call (moved to ServerBuilder::validateComponentAddition)
+            // Advisory pre-check; authoritative check runs under FOR UPDATE inside addComponent()
             $validationResult = $serverBuilder->validateComponentAddition(
                 $configUuid,
                 $componentType,

@@ -381,9 +381,53 @@ function handleChassisDelete($pdo, $baseFunctions) {
         ]);
     }
     
+    // INTEGRITY GUARD (Phase 2): block delete if the chassis is referenced by
+    // any active server_configurations.chassis_uuid. Without this, the hard
+    // DELETE below would leave dangling UUIDs in config blobs.
+    require_once __DIR__ . '/../../../core/models/server/ConfigurationReverseLookup.php';
+    $reverseLookup = new ConfigurationReverseLookup($pdo);
+    $referencingConfigs = $reverseLookup->findConfigsUsingComponent('chassis', $uuid, null, true);
+
+    $forceOverride = isset($_POST['force']) && filter_var($_POST['force'], FILTER_VALIDATE_BOOLEAN);
+    if (!empty($referencingConfigs)) {
+        $canForce = $baseFunctions->hasPermission('chassis.force_delete');
+        if (!$forceOverride || !$canForce) {
+            http_response_code(409);
+            return json_encode([
+                'success' => false,
+                'authenticated' => true,
+                'message' => 'Cannot delete chassis — still referenced by ' . count($referencingConfigs) . ' configuration(s). Remove from those configurations first, or retry with force=true (requires chassis.force_delete permission).',
+                'referencing_configurations' => $referencingConfigs,
+                'can_force_delete' => $canForce,
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+        }
+
+        // Force path: cascade-remove the chassis from each referencing config
+        // before the hard DELETE. ServerBuilder::removeComponent() holds a
+        // FOR UPDATE lock on the row (Phase 1 concurrency guard).
+        require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
+        $sbForCascade = new ServerBuilder($pdo);
+        foreach ($referencingConfigs as $ref) {
+            try {
+                $sbForCascade->removeComponent($ref['config_uuid'], 'chassis', $uuid, null);
+            } catch (Exception $cascadeEx) {
+                error_log("Force cascade failed for config {$ref['config_uuid']}: " . $cascadeEx->getMessage());
+                http_response_code(500);
+                return json_encode([
+                    'success' => false,
+                    'authenticated' => true,
+                    'message' => "Force delete aborted: failed to cascade-remove from config {$ref['config_uuid']}. No inventory changes made.",
+                    'error' => $cascadeEx->getMessage(),
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]);
+            }
+        }
+    }
+
     $stmt = $pdo->prepare("DELETE FROM chassisinventory WHERE UUID = ?");
     $stmt->execute([$uuid]);
-    
+
     if ($stmt->rowCount() === 0) {
         http_response_code(404);
         return json_encode([
@@ -393,7 +437,7 @@ function handleChassisDelete($pdo, $baseFunctions) {
             'timestamp' => date('Y-m-d H:i:s')
         ]);
     }
-    
+
     return json_encode([
         'success' => true,
         'authenticated' => true,

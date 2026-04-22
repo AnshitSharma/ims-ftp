@@ -640,7 +640,66 @@ function handleDeleteComponent() {
                 'can_force_delete' => hasPermission($pdo, "$componentType.force_delete", $user['id'])
             ]);
         }
-        
+
+        // INTEGRITY GUARD (Phase 2): before any inventory mutation, verify the
+        // component is not referenced by any active server_configurations JSON.
+        // Without this, a hard delete (or soft delete to Status=0) can orphan
+        // a UUID inside a config blob, producing "ghost" references that break
+        // subsequent joins/reads.
+        $forceOverride = isset($_REQUEST['force']) && filter_var($_REQUEST['force'], FILTER_VALIDATE_BOOLEAN);
+        try {
+            require_once __DIR__ . '/../../../core/models/server/ConfigurationReverseLookup.php';
+            $reverseLookup = new ConfigurationReverseLookup($pdo);
+            $referencingConfigs = $reverseLookup->findConfigsUsingComponent(
+                $componentType,
+                $component['UUID'],
+                $component['SerialNumber'] ?? null,
+                true
+            );
+        } catch (InvalidArgumentException $ilaEx) {
+            // Unknown component type for reverse lookup — skip the guard rather than block.
+            $referencingConfigs = [];
+            error_log("ReverseLookup skipped (unknown type '$componentType'): " . $ilaEx->getMessage());
+        }
+
+        if (!empty($referencingConfigs)) {
+            $canForce = hasPermission($pdo, "$componentType.force_delete", $user['id']);
+
+            if (!$forceOverride || !$canForce) {
+                send_json_response(0, 1, 409,
+                    "Cannot delete component — still referenced by " . count($referencingConfigs) . " configuration(s). Remove from those configurations first, or retry with force=true (requires $componentType.force_delete permission).",
+                    [
+                        'referencing_configurations' => $referencingConfigs,
+                        'can_force_delete' => $canForce
+                    ]
+                );
+            }
+
+            // Force path: cascade-remove from each referencing config before proceeding.
+            // Reuses ServerBuilder::removeComponent() which holds a FOR UPDATE lock
+            // on the relevant server_configurations row (Phase 1 concurrency guard).
+            require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
+            $sbForCascade = new ServerBuilder($pdo);
+            foreach ($referencingConfigs as $ref) {
+                try {
+                    $sbForCascade->removeComponent(
+                        $ref['config_uuid'],
+                        $componentType,
+                        $component['UUID'],
+                        $component['SerialNumber'] ?? null
+                    );
+                    logActivity($pdo, $user['id'], 'Forced cascade removal', $componentType, $id,
+                        "Cascaded removal from config {$ref['config_uuid']} during force delete");
+                } catch (Exception $cascadeEx) {
+                    error_log("Force cascade failed for config {$ref['config_uuid']}: " . $cascadeEx->getMessage());
+                    send_json_response(0, 1, 500,
+                        "Force delete aborted: failed to cascade-remove from config {$ref['config_uuid']}. No inventory changes made.",
+                        ['error' => $cascadeEx->getMessage()]
+                    );
+                }
+            }
+        }
+
         if ($hardDelete) {
             // Hard delete requires special permission
             if (!hasPermission($pdo, "$componentType.force_delete", $user['id'])) {
