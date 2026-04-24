@@ -732,7 +732,7 @@ class ServerBuilder {
                     $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
                     $stmt->execute([$configUuid]);
                     $configDataForValidation = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
-                    $compatibilityValidation = $this->validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configDataForValidation, $parentNicUuid, $portIndex);
+                    $compatibilityValidation = $this->validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configDataForValidation, $parentNicUuid, $portIndex, $quantity);
                     if (!$compatibilityValidation['success']) {
                         if ($ownTransaction && $this->pdo->inTransaction()) {
                             $this->pdo->rollback();
@@ -2448,11 +2448,11 @@ class ServerBuilder {
                     break;
 
                 case 'ram':
-                    $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action);
+                    $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
                     break;
 
                 case 'storage':
-                    $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options);
+                    $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options, $serialNumber);
                     break;
 
                 case 'nic':
@@ -2483,14 +2483,14 @@ class ServerBuilder {
                             }
                         }
 
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $slotPosition);
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $slotPosition, $serialNumber);
                     } elseif ($action === 'remove') {
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null);
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null, $serialNumber);
                     }
                     break;
 
                 case 'caddy':
-                    $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action);
+                    $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
                     break;
 
                 case 'sfp':
@@ -2503,7 +2503,7 @@ class ServerBuilder {
                 case 'pciecard':
                     // Extract slot position from options if provided
                     $slotPosition = $options['slot_position'] ?? null;
-                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition);
+                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition, $serialNumber);
                     break;
 
                 case 'hbacard':
@@ -2546,7 +2546,7 @@ class ServerBuilder {
                         $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'add', $slotPosition, $serialNumber);
 
                     } elseif ($action === 'remove') {
-                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove');
+                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove', null, $serialNumber);
                     }
                     break; // Skip generic UPDATE below — method handles its own SQL
             }
@@ -2694,25 +2694,32 @@ class ServerBuilder {
     /**
      * Update RAM configuration in JSON format
      */
-    private function updateRamConfiguration($configUuid, $componentUuid, $quantity, $action) {
+    private function updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT ram_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $currentConfig = $stmt->fetchColumn();
-            
+
             $ramConfig = $currentConfig ? json_decode($currentConfig, true) : [];
             if (!is_array($ramConfig)) {
                 $ramConfig = [];
             }
-            
+
             if ($action === 'add') {
-                $ramConfig[] = [
+                $entry = [
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if ($serialNumber !== null) {
+                    $entry['serial_number'] = $serialNumber;
+                }
+                $ramConfig[] = $entry;
             } elseif ($action === 'remove') {
-                $ramConfig = array_filter($ramConfig, function($ram) use ($componentUuid) {
+                $ramConfig = array_filter($ramConfig, function($ram) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null && isset($ram['serial_number'])) {
+                        return !($ram['uuid'] === $componentUuid && $ram['serial_number'] === $serialNumber);
+                    }
                     return $ram['uuid'] !== $componentUuid;
                 });
                 $ramConfig = array_values($ramConfig); // Reindex array
@@ -2730,7 +2737,7 @@ class ServerBuilder {
     /**
      * Update storage configuration in JSON format
      */
-    private function updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options = []) {
+    private function updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options = [], $serialNumber = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT storage_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -2747,12 +2754,18 @@ class ServerBuilder {
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if ($serialNumber !== null) {
+                    $entry['serial_number'] = $serialNumber;
+                }
                 if (!empty($options['connection_data'])) {
                     $entry['connection'] = $options['connection_data'];
                 }
                 $storageConfig[] = $entry;
             } elseif ($action === 'remove') {
-                $storageConfig = array_filter($storageConfig, function($storage) use ($componentUuid) {
+                $storageConfig = array_filter($storageConfig, function($storage) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null && isset($storage['serial_number'])) {
+                        return !($storage['uuid'] === $componentUuid && $storage['serial_number'] === $serialNumber);
+                    }
                     return $storage['uuid'] !== $componentUuid;
                 });
                 $storageConfig = array_values($storageConfig);
@@ -2811,7 +2824,7 @@ class ServerBuilder {
     /**
      * Update NIC configuration in JSON format
      */
-    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null) {
+    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -2835,21 +2848,27 @@ class ServerBuilder {
                 if ($slotPosition !== null) {
                     $newNic['slot_position'] = $slotPosition;
                 }
+                if ($serialNumber !== null) {
+                    $newNic['serial_number'] = $serialNumber;
+                }
                 if ($isNestedFormat) {
                     $nicConfig['nics'][] = $newNic;
                 } else {
                     $nicConfig[] = $newNic;
                 }
             } elseif ($action === 'remove') {
+                $predicate = function($nic) use ($componentUuid, $serialNumber) {
+                    if (!is_array($nic)) return true;
+                    if ($serialNumber !== null && isset($nic['serial_number'])) {
+                        return !(($nic['uuid'] ?? null) === $componentUuid &&
+                                 $nic['serial_number'] === $serialNumber);
+                    }
+                    return ($nic['uuid'] ?? null) !== $componentUuid;
+                };
                 if ($isNestedFormat) {
-                    // Filter within the nics array, preserve the rest of the structure
-                    $nicConfig['nics'] = array_values(array_filter($nicConfig['nics'], function($nic) use ($componentUuid) {
-                        return !is_array($nic) || ($nic['uuid'] ?? null) !== $componentUuid;
-                    }));
+                    $nicConfig['nics'] = array_values(array_filter($nicConfig['nics'], $predicate));
                 } else {
-                    $nicConfig = array_values(array_filter($nicConfig, function($nic) use ($componentUuid) {
-                        return !is_array($nic) || ($nic['uuid'] ?? null) !== $componentUuid;
-                    }));
+                    $nicConfig = array_values(array_filter($nicConfig, $predicate));
                 }
             }
 
@@ -2865,25 +2884,32 @@ class ServerBuilder {
     /**
      * Update caddy configuration in JSON format
      */
-    private function updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action) {
+    private function updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT caddy_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $currentConfig = $stmt->fetchColumn();
-            
+
             $caddyConfig = $currentConfig ? json_decode($currentConfig, true) : [];
             if (!is_array($caddyConfig)) {
                 $caddyConfig = [];
             }
-            
+
             if ($action === 'add') {
-                $caddyConfig[] = [
+                $entry = [
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
                 ];
+                if ($serialNumber !== null) {
+                    $entry['serial_number'] = $serialNumber;
+                }
+                $caddyConfig[] = $entry;
             } elseif ($action === 'remove') {
-                $caddyConfig = array_filter($caddyConfig, function($caddy) use ($componentUuid) {
+                $caddyConfig = array_filter($caddyConfig, function($caddy) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null && isset($caddy['serial_number'])) {
+                        return !($caddy['uuid'] === $componentUuid && $caddy['serial_number'] === $serialNumber);
+                    }
                     return $caddy['uuid'] !== $componentUuid;
                 });
                 $caddyConfig = array_values($caddyConfig);
@@ -2965,7 +2991,7 @@ class ServerBuilder {
      * Update PCIe card configuration in JSON format
      * Stores PCIe cards (including riser cards, NVMe adapters, etc.) in pciecard_configurations column
      */
-    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null) {
+    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null) {
         try {
             $stmt = $this->pdo->prepare("SELECT pciecard_configurations FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -2987,11 +3013,17 @@ class ServerBuilder {
                 if ($slotPosition !== null) {
                     $pcieEntry['slot_position'] = $slotPosition;
                 }
+                if ($serialNumber !== null) {
+                    $pcieEntry['serial_number'] = $serialNumber;
+                }
 
                 $pcieConfig[] = $pcieEntry;
 
             } elseif ($action === 'remove') {
-                $pcieConfig = array_filter($pcieConfig, function($pcie) use ($componentUuid) {
+                $pcieConfig = array_filter($pcieConfig, function($pcie) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null && isset($pcie['serial_number'])) {
+                        return !($pcie['uuid'] === $componentUuid && $pcie['serial_number'] === $serialNumber);
+                    }
                     return $pcie['uuid'] !== $componentUuid;
                 });
                 $pcieConfig = array_values($pcieConfig); // Re-index array
@@ -3051,7 +3083,10 @@ class ServerBuilder {
                 $hbaArray[] = $hbaEntry;
 
             } elseif ($action === 'remove') {
-                $hbaArray = array_filter($hbaArray, function($hba) use ($componentUuid) {
+                $hbaArray = array_filter($hbaArray, function($hba) use ($componentUuid, $serialNumber) {
+                    if ($serialNumber !== null && isset($hba['serial_number']) && $hba['serial_number'] !== null) {
+                        return !(($hba['uuid'] ?? null) === $componentUuid && $hba['serial_number'] === $serialNumber);
+                    }
                     return ($hba['uuid'] ?? null) !== $componentUuid;
                 });
                 $hbaArray = array_values($hbaArray); // Re-index
@@ -4063,7 +4098,7 @@ class ServerBuilder {
      * Comprehensive component validation before adding - consolidates all validation logic
      * Phase 2 Consolidation: Moves SFP, riser, singleton, and compatibility validation from handler
      */
-    public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null) {
+    public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1) {
         try {
             $warnings = [];
 
@@ -4077,7 +4112,7 @@ class ServerBuilder {
             if (in_array($componentType, ['nic', 'hbacard', 'pciecard', 'storage'], true)) {
                 require_once __DIR__ . '/../compatibility/PcieLaneBudgetValidator.php';
                 $laneValidator = new PcieLaneBudgetValidator($this->pdo);
-                $laneResult = $laneValidator->validateAddition($configData, $componentType, $componentUuid);
+                $laneResult = $laneValidator->validateAddition($configData, $componentType, $componentUuid, null, (int)$quantity);
 
                 if ($laneResult['ok'] && !$laneResult['allowed']) {
                     if ($laneResult['mode'] === 'enforce') {

@@ -1230,13 +1230,10 @@ function handleComponentOperations($module, $operation, $user) {
             break;
             
         case 'add':
-            // SECURITY: do NOT loop over $_POST and copy every key into the
-            // payload. That's a mass-assignment hole — an attacker can add
-            // fields like Status=2 to mark inventory in_use, or overwrite
-            // ServerUUID, or stuff arbitrary columns in. The downstream
-            // addComponent() now filters against the real table schema, but
-            // strip well-known request metadata here too so it never even
-            // reaches the handler.
+            // SECURITY: mass-assignment defense lives in BaseFunctions.php.
+            // addComponent() rejects any of PROTECTED_INVENTORY_COLUMNS
+            // (Status, ServerUUID, CreatedAt/UpdatedAt/CreatedBy/UpdatedBy, ID)
+            // via assertNoProtectedColumns(). Do not re-implement that here.
             $componentData = $_POST;
             unset($componentData['action']);
 

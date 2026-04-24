@@ -18,6 +18,32 @@ JWTHelper::init($jwtSecret);
 // Initialize permission cache (request-level caching for performance)
 $GLOBALS['_permission_cache'] = [];
 
+// Columns that must never be writable via the generic inventory CRUD
+// (addComponent / updateComponent). Status and ServerUUID are internal
+// state owned exclusively by ServerBuilder's validated workflows;
+// allowing user input to set them bypasses compatibility, PCIe, and
+// slot checks. CreatedAt/UpdatedAt are DB-managed; ID is the primary key.
+if (!defined('PROTECTED_INVENTORY_COLUMNS')) {
+    define('PROTECTED_INVENTORY_COLUMNS', [
+        'Status', 'ServerUUID',
+        'CreatedAt', 'UpdatedAt', 'CreatedBy', 'UpdatedBy',
+        'ID', 'id',
+    ]);
+}
+
+if (!function_exists('assertNoProtectedColumns')) {
+    function assertNoProtectedColumns(array $columns) {
+        $providedLower = array_map('strtolower', $columns);
+        $protectedLower = array_map('strtolower', PROTECTED_INVENTORY_COLUMNS);
+        $hits = array_intersect($providedLower, $protectedLower);
+        if (!empty($hits)) {
+            throw new InvalidArgumentException(
+                'Protected columns cannot be set via inventory API: ' . implode(', ', $hits)
+            );
+        }
+    }
+}
+
 /**
  * Generate UUID v4
  */
@@ -746,6 +772,7 @@ if (!function_exists('addComponent')) {
                     throw new InvalidArgumentException("Invalid column name: $col");
                 }
             }
+            assertNoProtectedColumns($columns);
             $placeholders = array_fill(0, count($columns), '?');
             $values = array_values($data);
 
@@ -784,6 +811,7 @@ if (!function_exists('updateComponent')) {
                     throw new InvalidArgumentException("Invalid column name: $col");
                 }
             }
+            assertNoProtectedColumns($columns);
             $setClause = implode(' = ?, ', $columns) . ' = ?';
             $values = array_values($data);
             $values[] = $id; // Add ID for WHERE clause

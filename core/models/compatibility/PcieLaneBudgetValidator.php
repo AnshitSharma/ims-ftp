@@ -82,7 +82,7 @@ class PcieLaneBudgetValidator
      *   message:   string, // human-readable explanation
      * }
      */
-    public function validateAddition(array $configData, string $componentType, string $componentUuid, ?array $componentSpec = null): array
+    public function validateAddition(array $configData, string $componentType, string $componentUuid, ?array $componentSpec = null, int $quantity = 1): array
     {
         $mode = self::currentMode();
 
@@ -101,14 +101,17 @@ class PcieLaneBudgetValidator
             if ($componentSpec === null) {
                 $componentSpec = $this->componentDataService->getComponentSpecifications($componentType, $componentUuid) ?: [];
             }
-            $requested = $this->extractLaneCount($componentSpec);
+            $qty = max(1, $quantity);
+            $perCard = $this->extractLaneCount($componentSpec);
+            $requested = $perCard * $qty;
 
             $allowed = ($requested === 0) || (($used + $requested) <= $budget);
 
             $message = $allowed
                 ? "PCIe lane budget OK: $used + $requested ≤ $budget"
-                : "PCIe lane budget exceeded: $budget total, $used already allocated, this " .
-                  ($requested > 0 ? "x$requested" : "card") . " needs $requested more lanes";
+                : "PCIe lane budget exceeded: $budget total, $used already allocated, " .
+                  ($qty > 1 ? "$qty x{$perCard} cards" : "this x{$perCard} card") .
+                  " needs $requested more lanes";
 
             return [
                 'ok'        => true,
@@ -147,7 +150,8 @@ class PcieLaneBudgetValidator
                     if (empty($cpu['uuid'])) continue;
                     $specs = $this->dataUtils->getCPUByUUID($cpu['uuid']);
                     if ($specs && isset($specs['pcie_lanes'])) {
-                        $total += (int)$specs['pcie_lanes'];
+                        $qty = max(1, (int)($cpu['quantity'] ?? 1));
+                        $total += (int)$specs['pcie_lanes'] * $qty;
                     }
                 }
             }
@@ -179,7 +183,8 @@ class PcieLaneBudgetValidator
             foreach ($arr as $entry) {
                 if (!is_array($entry) || empty($entry['uuid'])) continue;
                 $specs = $this->componentDataService->getComponentSpecifications($type, $entry['uuid']);
-                $used += $this->extractLaneCount($specs ?? []);
+                $qty = max(1, (int)($entry['quantity'] ?? 1));
+                $used += $this->extractLaneCount($specs ?? []) * $qty;
             }
         };
 
@@ -196,7 +201,8 @@ class PcieLaneBudgetValidator
                     if (!$specs) {
                         $specs = $this->componentDataService->getComponentSpecifications('nic', $nic['uuid']);
                     }
-                    $used += $this->extractLaneCount($specs ?? []);
+                    $qty = max(1, (int)($nic['quantity'] ?? 1));
+                    $used += $this->extractLaneCount($specs ?? []) * $qty;
                 }
             }
         }
@@ -215,7 +221,8 @@ class PcieLaneBudgetValidator
                     if (!$specs) continue;
                     $interface = (string)($specs['interface'] ?? '');
                     if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) continue;
-                    $used += $this->extractLaneCount($specs);
+                    $qty = max(1, (int)($entry['quantity'] ?? 1));
+                    $used += $this->extractLaneCount($specs) * $qty;
                 }
             }
         }

@@ -403,7 +403,8 @@ function handleAddComponent($serverBuilder, $user) {
                 $compatibility,
                 $config->getData(),
                 $parentNicUuid,
-                $portIndex
+                $portIndex,
+                $quantity
             );
 
             if (!$validationResult['success']) {
