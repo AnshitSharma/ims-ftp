@@ -178,7 +178,13 @@ class ACL {
             // System permissions
             ['name' => 'system.settings', 'display_name' => 'System Settings', 'category' => 'system', 'is_basic' => false],
             ['name' => 'system.logs', 'display_name' => 'View System Logs', 'category' => 'system', 'is_basic' => false],
-            ['name' => 'system.backup', 'display_name' => 'System Backup', 'category' => 'system', 'is_basic' => false]
+            ['name' => 'system.backup', 'display_name' => 'System Backup', 'category' => 'system', 'is_basic' => false],
+
+            // Vendor permissions
+            ['name' => 'vendor.view', 'display_name' => 'View Vendors', 'category' => 'vendor', 'is_basic' => true],
+            ['name' => 'vendor.create', 'display_name' => 'Create Vendors', 'category' => 'vendor', 'is_basic' => false],
+            ['name' => 'vendor.edit', 'display_name' => 'Edit Vendors', 'category' => 'vendor', 'is_basic' => false],
+            ['name' => 'vendor.delete', 'display_name' => 'Delete Vendors', 'category' => 'vendor', 'is_basic' => false]
         ];
         
         try {
