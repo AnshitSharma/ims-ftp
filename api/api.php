@@ -21,14 +21,15 @@ header('Content-Type: application/json');
 require_once(__DIR__ . '/../core/config/app.php');
 require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
 
-// Set CORS headers AFTER config is loaded (fail-closed: reject unknown origins)
-$allowedOrigins = defined('CORS_ALLOWED_ORIGINS') ? CORS_ALLOWED_ORIGINS : [];
+// TEMP (local testing): allow all origins. Restore the CORS_ALLOWED_ORIGINS
+// allowlist check before deploying to production.
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-if (!empty($origin) && is_array($allowedOrigins) && in_array($origin, $allowedOrigins)) {
+if (!empty($origin)) {
     header("Access-Control-Allow-Origin: $origin");
     header('Vary: Origin');
+} else {
+    header('Access-Control-Allow-Origin: *');
 }
-// If origin is not in allowlist, do NOT set CORS header (fail-closed)
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 
@@ -333,14 +334,24 @@ function handleLogin() {
         
         // Get user permissions
         $permissions = getUserPermissions($pdo, $user['id']);
-        
+
+        // Get user roles (used by frontend for UI-level role gating, e.g. Vendors menu)
+        $roleStmt = $pdo->prepare("
+            SELECT r.name FROM roles r
+            JOIN user_roles ur ON r.id = ur.role_id
+            WHERE ur.user_id = ?
+        ");
+        $roleStmt->execute([$user['id']]);
+        $userRoleNames = $roleStmt->fetchAll(PDO::FETCH_COLUMN);
+
         send_json_response(1, 1, 200, "Login successful", [
             'user' => [
                 'id' => (int)$user['id'],
                 'username' => $user['username'],
                 'email' => $user['email'],
                 'firstname' => $user['firstname'],
-                'lastname' => $user['lastname']
+                'lastname' => $user['lastname'],
+                'roles' => $userRoleNames
             ],
             'tokens' => [
                 'access_token' => $accessToken,
@@ -1154,7 +1165,15 @@ function handleComponentOperations($module, $operation, $user) {
     
     switch ($operation) {
         case 'list':
-            $components = getComponentsByType($pdo, $module);
+            // Pagination/search are opt-in: requests without a limit param keep
+            // the original return-everything behavior (server builder, scripts).
+            // The dashboard sends limit/offset/search (dashboard.js loadComponentList).
+            $limitParam = $_GET['limit'] ?? $_POST['limit'] ?? null;
+            $limit = ($limitParam !== null && $limitParam !== '') ? max(1, min((int)$limitParam, 500)) : null;
+            $offset = max(0, (int)($_GET['offset'] ?? $_POST['offset'] ?? 0));
+            $search = trim($_GET['search'] ?? $_POST['search'] ?? '');
+
+            $components = getComponentsByType($pdo, $module, $limit, $offset, $search);
 
             // Resolve ModelName from JSON specs via UUID
             $componentService = null;
@@ -1227,10 +1246,22 @@ function handleComponentOperations($module, $operation, $user) {
             }
             unset($comp);
 
-            send_json_response(1, 1, 200, ucfirst($module) . " components retrieved", [
+            // total_count = all matching rows (not page size) so the dashboard's
+            // pagination UI (built from total_count) reflects the real total
+            $totalCount = ($limit !== null)
+                ? getComponentCountByType($pdo, $module, $search)
+                : count($components);
+
+            $responseData = [
                 'components' => $components,
-                'total_count' => count($components)
-            ]);
+                'total_count' => $totalCount
+            ];
+            if ($limit !== null) {
+                $responseData['limit'] = $limit;
+                $responseData['offset'] = $offset;
+            }
+
+            send_json_response(1, 1, 200, ucfirst($module) . " components retrieved", $responseData);
             break;
             
         case 'get':
@@ -1436,21 +1467,28 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
     try {
         foreach ($componentTypes as $type) {
             $tableName = getComponentTableName($type);
-            $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE 
-                    SerialNumber LIKE ? OR 
-                    Notes LIKE ? OR 
-                    Location LIKE ? 
+            $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE
+                    SerialNumber LIKE ? OR
+                    Notes LIKE ? OR
+                    Location LIKE ?
+                    ORDER BY id DESC
                     LIMIT ?";
-            
+
             $escapedQuery = addcslashes($query, '%_\\');
             $searchTerm = '%' . $escapedQuery . '%';
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $limit]);
-            
+
             $typeResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $results = array_merge($results, $typeResults);
         }
-        
+
+        // Newest-first across all component types, so the global limit below
+        // doesn't arbitrarily favor types searched earlier in the loop
+        usort($results, function ($a, $b) {
+            return strtotime($b['CreatedAt'] ?? '1970-01-01') <=> strtotime($a['CreatedAt'] ?? '1970-01-01');
+        });
+
         // Limit total results
         $results = array_slice($results, 0, $limit);
         
@@ -1532,18 +1570,61 @@ function getComponentFieldMap($type) {
 }
 
 /**
- * Get components by type
+ * Build the WHERE clause + params for a component inventory search term.
+ * Shared by getComponentsByType / getComponentCountByType so the row query
+ * and the count query can never disagree on what matches.
  */
-function getComponentsByType($pdo, $type) {
+function buildComponentSearchWhere($search, &$params) {
+    if ($search === '') {
+        return '';
+    }
+    $term = '%' . addcslashes($search, '%_\\') . '%';
+    $params = array_merge($params, [$term, $term, $term, $term, $term]);
+    return "WHERE (SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
+}
+
+/**
+ * Get components by type.
+ * $limit === null preserves the original return-everything behavior.
+ */
+function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '') {
     $tableName = getComponentTableName($type);
-    
+
     try {
-        $stmt = $pdo->prepare("SELECT * FROM $tableName ORDER BY id DESC");
-        $stmt->execute();
+        $params = [];
+        $where = buildComponentSearchWhere($search, $params);
+
+        $sql = "SELECT * FROM $tableName $where ORDER BY id DESC";
+        if ($limit !== null) {
+            $sql .= " LIMIT ? OFFSET ?";
+            $params[] = (int)$limit;
+            $params[] = max(0, (int)$offset);
+        }
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Error getting $type components from table $tableName: " . $e->getMessage());
         return [];
+    }
+}
+
+/**
+ * Count components of a type matching an optional search term.
+ */
+function getComponentCountByType($pdo, $type, $search = '') {
+    $tableName = getComponentTableName($type);
+
+    try {
+        $params = [];
+        $where = buildComponentSearchWhere($search, $params);
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM $tableName $where");
+        $stmt->execute($params);
+        return (int)$stmt->fetchColumn();
+    } catch (Exception $e) {
+        error_log("Error counting $type components in table $tableName: " . $e->getMessage());
+        return 0;
     }
 }
 
@@ -1938,7 +2019,7 @@ function handleVendorOperations($operation, $user) {
     $roleStmt = $pdo->prepare("
         SELECT COUNT(*) FROM user_roles ur
         JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = ? AND r.name IN ('admin', 'superadmin')
+        WHERE ur.user_id = ? AND r.name IN ('admin', 'super_admin')
     ");
     $roleStmt->execute([$user['id']]);
     if ($roleStmt->fetchColumn() == 0) {

@@ -166,6 +166,22 @@ if (!function_exists('authenticateUser')) {
  */
 if (!function_exists('initializeACLSystem')) {
     function initializeACLSystem($pdo) {
+        // Fast path: once the seeding checks below have passed, a flag file marks
+        // the ACL system as initialized and we skip the ~5 metadata queries per
+        // request. Delete logs/.acl_seeded to force a re-check (e.g. after running
+        // ACL migrations/seeds or restoring the database).
+        $seededFlagFile = __DIR__ . '/../../logs/.acl_seeded';
+        if (file_exists($seededFlagFile)) {
+            try {
+                require_once(__DIR__ . '/../auth/ACL.php');
+                $GLOBALS['acl'] = new ACL($pdo);
+                return true;
+            } catch (Exception $e) {
+                error_log("ACL initialization error (fast path): " . $e->getMessage());
+                return false;
+            }
+        }
+
         try {
             // Check if ACL tables exist
             $stmt = $pdo->query("SHOW TABLES LIKE 'permissions'");
@@ -224,6 +240,11 @@ if (!function_exists('initializeACLSystem')) {
                     $stmt->execute([$adminRoleId]);
                 }
             }
+
+            // All seeding checks passed - mark as initialized so subsequent
+            // requests take the fast path. If logs/ isn't writable this fails
+            // silently and we simply keep doing the full check each request.
+            @file_put_contents($seededFlagFile, date('c'));
 
             return true;
         } catch (Exception $e) {
@@ -668,13 +689,14 @@ if (!function_exists('performGlobalSearch')) {
                             SerialNumber LIKE ? OR
                             Notes LIKE ? OR
                             Location LIKE ?
+                            ORDER BY id DESC
                             LIMIT ?";
-                    
+
                     $escapedQuery = addcslashes($query, '%_\\');
                     $searchTerm = '%' . $escapedQuery . '%';
                     $stmt = $pdo->prepare($sql);
                     $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $limit]);
-                    
+
                     $typeResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     $results = array_merge($results, $typeResults);
                 } catch (Exception $e) {
@@ -682,7 +704,13 @@ if (!function_exists('performGlobalSearch')) {
                     continue;
                 }
             }
-            
+
+            // Newest-first across all component types, so the global limit below
+            // doesn't arbitrarily favor types searched earlier in the loop
+            usort($results, function ($a, $b) {
+                return strtotime($b['CreatedAt'] ?? '1970-01-01') <=> strtotime($a['CreatedAt'] ?? '1970-01-01');
+            });
+
             // Limit total results
             $results = array_slice($results, 0, $limit);
             
@@ -708,19 +736,67 @@ function validateComponentType($type) {
 }
 
 /**
- * Get components by type
+ * Build the WHERE clause + params for a component inventory search term.
+ * Kept in sync with the copy in api/api.php (api.php's compiles first).
+ */
+if (!function_exists('buildComponentSearchWhere')) {
+    function buildComponentSearchWhere($search, &$params) {
+        if ($search === '') {
+            return '';
+        }
+        $term = '%' . addcslashes($search, '%_\\') . '%';
+        $params = array_merge($params, [$term, $term, $term, $term, $term]);
+        return "WHERE (SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
+    }
+}
+
+/**
+ * Get components by type.
+ * $limit === null preserves the original return-everything behavior.
  */
 if (!function_exists('getComponentsByType')) {
-    function getComponentsByType($pdo, $type) {
+    function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '') {
         try {
             validateComponentType($type);
             $tableName = $type . 'inventory';
-            $stmt = $pdo->prepare("SELECT * FROM $tableName ORDER BY id DESC");
-            $stmt->execute();
+
+            $params = [];
+            $where = buildComponentSearchWhere($search, $params);
+
+            $sql = "SELECT * FROM $tableName $where ORDER BY id DESC";
+            if ($limit !== null) {
+                $sql .= " LIMIT ? OFFSET ?";
+                $params[] = (int)$limit;
+                $params[] = max(0, (int)$offset);
+            }
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
             error_log("Error getting $type components: " . $e->getMessage());
             return [];
+        }
+    }
+}
+
+/**
+ * Count components of a type matching an optional search term.
+ */
+if (!function_exists('getComponentCountByType')) {
+    function getComponentCountByType($pdo, $type, $search = '') {
+        try {
+            validateComponentType($type);
+            $tableName = $type . 'inventory';
+
+            $params = [];
+            $where = buildComponentSearchWhere($search, $params);
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM $tableName $where");
+            $stmt->execute($params);
+            return (int)$stmt->fetchColumn();
+        } catch (Exception $e) {
+            error_log("Error counting $type components: " . $e->getMessage());
+            return 0;
         }
     }
 }
