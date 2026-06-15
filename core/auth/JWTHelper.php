@@ -161,7 +161,7 @@ class JWTHelper {
                     }
                 } catch (PDOException $e) {
                     if (self::isMissingSchemaError($e)) {
-                        error_log("JWT revocation: revoked_tokens table missing — run migration 2026-04-11_jwt_revocation.sql");
+                        error_log("JWT revocation: revoked_tokens table missing — run seeder 2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql");
                     } else {
                         error_log("JWT revocation check failed: " . $e->getMessage());
                         throw new Exception('Token revocation check unavailable');
@@ -181,7 +181,7 @@ class JWTHelper {
                     }
                 } catch (PDOException $e) {
                     if (self::isMissingSchemaError($e)) {
-                        error_log("JWT revocation: users.password_changed_at missing — run migration 2026-04-11_jwt_revocation.sql");
+                        error_log("JWT revocation: users.password_changed_at missing — run seeder 2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql");
                     } else {
                         error_log("JWT password-cutoff check failed: " . $e->getMessage());
                         throw new Exception('Token revocation check unavailable');
@@ -310,10 +310,10 @@ class JWTHelper {
             $tokenHash = self::hashRefreshToken($refreshToken);
 
             $stmt = $pdo->prepare("
-                SELECT at.user_id, u.username, u.email, u.firstname, u.lastname
+                SELECT u.id, u.username, u.email, u.firstname, u.lastname
                 FROM auth_tokens at
                 JOIN users u ON at.user_id = u.id
-                WHERE at.token = ? AND at.expires_at > NOW()
+                WHERE at.token = ? AND at.expires_at > NOW() AND u.status = 'active'
             ");
             $stmt->execute([$tokenHash]);
 

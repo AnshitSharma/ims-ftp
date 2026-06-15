@@ -17,12 +17,24 @@ if (!$user) {
     send_json_response(0, 0, 401, "Authentication required");
 }
 
-// Check permissions
-if (!hasPermission($pdo, 'compatibility.check', $user['id'])) {
+// Baseline permission for DIRECT access to this file. When routed through
+// api.php, the operation-specific permission has already been enforced via
+// api/permission_map.php (which may grant e.g. get_statistics through
+// compatibility.view_statistics without compatibility.check).
+if (!isset($GLOBALS['operation']) && !hasPermission($pdo, 'compatibility.check', $user['id'])) {
     send_json_response(0, 1, 403, "Insufficient permissions for compatibility checking");
 }
 
-$action = $_POST['action'] ?? $_GET['action'] ?? '';
+// api.php forwards the bare operation (e.g. 'check_pair' from action
+// 'compatibility-check_pair') via $GLOBALS['operation']. When this file is
+// reached directly, derive it by stripping the module prefix — the raw
+// action string would never match the cases below.
+$action = $GLOBALS['operation'] ?? '';
+if ($action === '') {
+    $rawAction = $_POST['action'] ?? $_GET['action'] ?? '';
+    $parts = explode('-', $rawAction, 2);
+    $action = $parts[1] ?? $rawAction;
+}
 
 try {
     switch ($action) {

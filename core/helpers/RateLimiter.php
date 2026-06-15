@@ -41,6 +41,33 @@ class RateLimiter {
     }
 
     /**
+     * Check whether a key has exhausted its attempts WITHOUT recording one.
+     * Use together with hit()/clear() when only failures should count
+     * (e.g. per-username login throttling).
+     */
+    public function tooManyAttempts(string $key, int $maxAttempts, int $windowSeconds): bool {
+        $file = $this->getFilePath($key);
+        return count($this->loadAttempts($file, time(), $windowSeconds)) >= $maxAttempts;
+    }
+
+    /**
+     * Record one attempt for a key (counterpart of tooManyAttempts).
+     */
+    public function hit(string $key, int $windowSeconds): void {
+        $file = $this->getFilePath($key);
+        $attempts = $this->loadAttempts($file, time(), $windowSeconds);
+        $attempts[] = time();
+        $this->saveAttempts($file, $attempts);
+    }
+
+    /**
+     * Reset the counter for a key (e.g. after a successful login).
+     */
+    public function clear(string $key): void {
+        @unlink($this->getFilePath($key));
+    }
+
+    /**
      * Get remaining attempts for a key.
      */
     public function remaining(string $key, int $maxAttempts, int $windowSeconds): int {
