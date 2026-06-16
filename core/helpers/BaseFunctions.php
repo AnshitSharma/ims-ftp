@@ -714,6 +714,7 @@ function getComponentFieldMap($type) {
         'purchase_date' => 'PurchaseDate',
         'installation_date' => 'InstallationDate',
         'warranty_end_date' => 'WarrantyEndDate',
+        'fail_date' => 'FailDate',
         'flag' => 'Flag',
         'notes' => 'Notes',
         'vendor_id' => 'VendorID'

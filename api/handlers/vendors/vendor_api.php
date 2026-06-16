@@ -5,6 +5,27 @@
  * Included by api/api.php for the `vendor` module.
  */
 
+/**
+ * Normalize the `sells` input into a clean CSV of valid component types.
+ * Accepts a CSV string or an array; drops anything not in VALID_COMPONENT_TYPES
+ * and de-duplicates while preserving order. Returns null when empty.
+ */
+function normalizeVendorSells($raw) {
+    if (is_array($raw)) {
+        $items = $raw;
+    } else {
+        $items = explode(',', (string)$raw);
+    }
+    $valid = [];
+    foreach ($items as $item) {
+        $item = strtolower(trim($item));
+        if ($item !== '' && in_array($item, VALID_COMPONENT_TYPES, true) && !in_array($item, $valid, true)) {
+            $valid[] = $item;
+        }
+    }
+    return empty($valid) ? null : implode(',', $valid);
+}
+
 function handleVendorOperations($operation, $user) {
     global $pdo;
 
@@ -64,12 +85,17 @@ function handleVendorOperations($operation, $user) {
             }
             try {
                 $stmt = $pdo->prepare(
-                    "INSERT INTO vendors (name, email, phone, notes) VALUES (?, ?, ?, ?)"
+                    "INSERT INTO vendors (name, email, phone, phone2, address, bank_details, sells, notes)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                 );
                 $stmt->execute([
                     $name,
                     trim($_POST['email'] ?? '') ?: null,
                     trim($_POST['phone'] ?? '') ?: null,
+                    trim($_POST['phone2'] ?? '') ?: null,
+                    trim($_POST['address'] ?? '') ?: null,
+                    trim($_POST['bank_details'] ?? '') ?: null,
+                    normalizeVendorSells($_POST['sells'] ?? ''),
                     trim($_POST['notes'] ?? '') ?: null
                 ]);
                 $vendorId = (int)$pdo->lastInsertId();
@@ -94,12 +120,16 @@ function handleVendorOperations($operation, $user) {
             }
             try {
                 $stmt = $pdo->prepare(
-                    "UPDATE vendors SET name = ?, email = ?, phone = ?, notes = ? WHERE id = ?"
+                    "UPDATE vendors SET name = ?, email = ?, phone = ?, phone2 = ?, address = ?, bank_details = ?, sells = ?, notes = ? WHERE id = ?"
                 );
                 $stmt->execute([
                     $name,
                     trim($_POST['email'] ?? '') ?: null,
                     trim($_POST['phone'] ?? '') ?: null,
+                    trim($_POST['phone2'] ?? '') ?: null,
+                    trim($_POST['address'] ?? '') ?: null,
+                    trim($_POST['bank_details'] ?? '') ?: null,
+                    normalizeVendorSells($_POST['sells'] ?? ''),
                     trim($_POST['notes'] ?? '') ?: null,
                     (int)$vendorId
                 ]);
