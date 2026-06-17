@@ -104,6 +104,20 @@ try {
             require_once(__DIR__ . '/handlers/server/compatibility_api.php');
             break;
 
+        case 'rack':
+            // Rack View is restricted to super_admin ONLY. hasPermission()
+            // grants a blanket bypass to both admin and super_admin, so the
+            // permission map alone cannot keep admins out — enforce the role
+            // explicitly here before the standard permission check.
+            if (!userHasRole($pdo, $user['id'], 'super_admin')) {
+                send_json_response(0, 1, 403, "Insufficient permissions: super_admin role required");
+            }
+            requireModulePermission('rack', $operation, $user);
+            // Pass operation to rack_api.php via global scope
+            $GLOBALS['operation'] = $operation;
+            require_once(__DIR__ . '/handlers/rack/rack_api.php');
+            break;
+
         case 'acl':
             require_once(__DIR__ . '/handlers/acl/acl_api.php');
             handleACLOperations($operation, $user);

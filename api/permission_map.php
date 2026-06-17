@@ -62,6 +62,18 @@ return [
         'import_rules' => 'compatibility.manage_rules',
     ],
 
+    // Rack View — physical racks and server placement.
+    'rack' => [
+        'list' => 'rack.view',
+        'get' => 'rack.view',
+        'unassigned-servers' => 'rack.view',
+        'create' => 'rack.create',
+        'update' => 'rack.edit',
+        'delete' => 'rack.delete',
+        'assign-server' => 'rack.assign',
+        'unassign-server' => 'rack.assign',
+    ],
+
     // Shared template for the 10 component-type modules.
     'component' => [
         'list' => '{module}.view',

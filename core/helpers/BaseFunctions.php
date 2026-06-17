@@ -354,6 +354,31 @@ function getUserRoles($pdo, $userId) {
 }
 
 /**
+ * Check whether a user holds a specific role (by role name).
+ *
+ * Use this for role-gated modules where hasPermission() is unsuitable —
+ * hasPermission() grants admin and super_admin an identical blanket bypass,
+ * so it cannot distinguish the two. Rack View, for example, must be limited
+ * to super_admin only, which requires an actual role check.
+ */
+function userHasRole($pdo, $userId, $roleName) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT 1
+            FROM user_roles ur
+            JOIN roles r ON ur.role_id = r.id
+            WHERE ur.user_id = ? AND r.name = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$userId, $roleName]);
+        return (bool) $stmt->fetchColumn();
+    } catch (Exception $e) {
+        error_log("userHasRole error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Assign permission to user (direct grant, on top of role-based permissions).
  *
  * Resolves the permission name against the `permissions` table — the same
