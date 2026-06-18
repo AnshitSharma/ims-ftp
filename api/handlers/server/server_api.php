@@ -112,6 +112,11 @@ switch ($action) {
         handleSearchBySerial($serverBuilder, $user);
         break;
 
+    case 'get-logs':
+    case 'server-get-logs':
+        handleGetServerLogs($serverBuilder, $user);
+        break;
+
     default:
         send_json_response(0, 1, 400, "Invalid action specified");
 }
@@ -292,8 +297,11 @@ function handleCreateStart($serverBuilder, $user) {
             'is_virtual' => $isVirtual,
         ]);
 
-        // Log server creation start
-        $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server', null,
+        // Log server creation start, linked to the new config's numeric id so
+        // this event shows up in the per-server history (server-get-logs).
+        $newConfig = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server',
+            $newConfig ? $newConfig->get('id') : null,
             "Started server config creation: $serverName");
         send_json_response(1, 1, 200, "Server configuration created successfully", [
             'config_uuid' => $configUuid,
@@ -1224,6 +1232,70 @@ function handleDeleteConfiguration($serverBuilder, $user) {
     } catch (Exception $e) {
         error_log("Error deleting configuration: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to delete configuration");
+    }
+}
+
+/**
+ * Get the activity log (change history) for a single server configuration.
+ *
+ * Reads the shared inventory_log table filtered to this server's entries
+ * (component_type = 'server', component_id = the config's numeric id). Server
+ * actions are already recorded here by logActivity() — add/remove component,
+ * create/finalize, delete — so this is purely a scoped read of that data.
+ * Mirrors the query shape used by dashboard-get-logs.
+ */
+function handleGetServerLogs($serverBuilder, $user) {
+    global $pdo;
+
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "Configuration UUID is required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        $configId = $config->get('id');
+
+        // Clamp pagination the same way dashboard-get-logs does.
+        $limit = max(1, min(200, (int)($_POST['limit'] ?? $_GET['limit'] ?? 50)));
+        $offset = max(0, (int)($_POST['offset'] ?? $_GET['offset'] ?? 0));
+
+        $stmt = $pdo->prepare("
+            SELECT il.id, il.user_id, u.username, il.component_type, il.component_id,
+                   il.action, il.notes, il.ip_address, il.created_at
+            FROM inventory_log il
+            LEFT JOIN users u ON il.user_id = u.id
+            WHERE il.component_type = 'server' AND il.component_id = :config_id
+            ORDER BY il.created_at DESC
+            LIMIT :limit OFFSET :offset
+        ");
+        $stmt->bindValue(':config_id', $configId, PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $countStmt = $pdo->prepare("
+            SELECT COUNT(*) FROM inventory_log
+            WHERE component_type = 'server' AND component_id = :config_id
+        ");
+        $countStmt->bindValue(':config_id', $configId, PDO::PARAM_INT);
+        $countStmt->execute();
+        $total = (int)$countStmt->fetchColumn();
+
+        send_json_response(1, 1, 200, "Server activity logs retrieved", [
+            'logs' => $logs,
+            'pagination' => ['total' => $total, 'limit' => $limit, 'offset' => $offset]
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Error getting server logs: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve server activity logs");
     }
 }
 

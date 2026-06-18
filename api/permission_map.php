@@ -11,10 +11,11 @@
  * The '{module}' placeholder is replaced with the concrete component type
  * (cpu, ram, ...) for the shared 'component' template.
  *
- * Modules NOT listed here (acl, dashboard, search, users, vendor, ticket,
+ * Modules NOT listed here (acl, dashboard, search, users, vendor, pipeline,
  * roles, permissions, auth) perform operation-specific checks inside their
  * handlers because the logic isn't a flat name lookup (admin-role gates,
- * self-delete guards, public auth endpoints).
+ * self-delete guards, public auth endpoints). The legacy 'ticket' module was
+ * retired — its work items now run on the 'pipeline' (Requests) engine.
  */
 return [
     'server' => [
@@ -33,6 +34,7 @@ return [
         'get-components' => 'server.view',
         'export-config' => 'server.view',
         'get-config' => 'server.view',
+        'get-logs' => 'server.view',
         'finalize-config' => 'server.create',
         'get-available-components' => 'server.view',
         'import-virtual' => 'server.create',

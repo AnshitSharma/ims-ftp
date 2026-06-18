@@ -27,7 +27,7 @@ function handleDashboardOperations($operation, $user) {
 
         case 'get-logs':
             // Admin/super admin only
-            if (!hasPermission($pdo, 'acl.manage', $user['id']) && !hasPermission($pdo, 'user.view', $user['id'])) {
+            if (!hasPermission($pdo, 'acl.manage', $user['id']) && !hasPermission($pdo, 'users.view', $user['id'])) {
                 send_json_response(0, 1, 403, "Insufficient permissions to view activity logs");
             }
             $limit = max(1, min(200, (int)(($_GET['limit'] ?? $_POST['limit'] ?? 50))));

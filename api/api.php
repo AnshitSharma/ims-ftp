@@ -164,8 +164,12 @@ try {
             handleComponentOperations($module, $operation, $user);
             break;
 
-        case 'ticket':
-            handleTicketOperations($operation, $user);
+        // NOTE: the legacy linear 'ticket' module was retired in favour of the
+        // unified 'pipeline' (Requests) engine. Tickets now live as pipeline
+        // instances; see handlePipelineOperations() and the Requests UI.
+
+        case 'pipeline':
+            handlePipelineOperations($operation, $user);
             break;
 
         case 'vendor':
@@ -213,60 +217,68 @@ function requireModulePermission($module, $operation, $user) {
 }
 
 /**
- * Handle ticket operations — dispatches to per-operation endpoint files in
- * handlers/tickets/.
+ * Handle pipeline operations — dispatches to per-operation endpoint files in
+ * handlers/pipelines/. Permission checks live inside each endpoint file
+ * ($acl + $user_id are exposed via globals).
  */
-function handleTicketOperations($operation, $user) {
+function handlePipelineOperations($operation, $user) {
     global $pdo;
 
+    // Pipelines are restricted to the super_admin role ONLY (mirrors Rack View).
+    // Belt-and-braces: pipeline.* grants are also revoked from every other role
+    // (seeder 2026_06_18_003), but this explicit gate guarantees it in code.
+    if (!userHasRole($pdo, $user['id'], 'super_admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: super_admin role required");
+        return;
+    }
+
     try {
-        // Make user_id and acl available to the included handler file
         $user_id = $user['id'];
         $GLOBALS['user_id'] = $user_id;
 
-        // Get or create ACL instance
         $acl = $GLOBALS['acl'] ?? null;
-
         if (!$acl) {
             $acl = new ACL($pdo);
         }
-
-        // Make ACL available in global scope for included handler files
         $GLOBALS['acl'] = $acl;
 
-        // Map operations to endpoint files
         $endpointMap = [
-            'create' => 'ticket-create.php',
-            'list' => 'ticket-list.php',
-            'get' => 'ticket-get.php',
-            'update' => 'ticket-update.php',
-            'delete' => 'ticket-delete.php',
-            // 'debug' endpoint removed for security
+            'template-list'   => 'pipeline-template-list.php',
+            'template-get'    => 'pipeline-template-get.php',
+            'template-create' => 'pipeline-template-create.php',
+            'template-update' => 'pipeline-template-update.php',
+            'template-delete' => 'pipeline-template-delete.php',
+            'create'          => 'pipeline-create.php',
+            'list'            => 'pipeline-list.php',
+            'get'             => 'pipeline-get.php',
+            'claim'           => 'pipeline-claim.php',
+            'complete'        => 'pipeline-complete.php',
+            'reassign'        => 'pipeline-reassign.php',
+            'cancel'          => 'pipeline-cancel.php',
         ];
 
         if (!isset($endpointMap[$operation])) {
-            send_json_response(0, 1, 400, "Invalid ticket operation: $operation");
+            send_json_response(0, 1, 400, "Invalid pipeline operation: $operation");
             return;
         }
 
-        $endpointFile = __DIR__ . '/handlers/tickets/' . $endpointMap[$operation];
+        $endpointFile = __DIR__ . '/handlers/pipelines/' . $endpointMap[$operation];
 
         if (!file_exists($endpointFile)) {
-            error_log("Ticket endpoint file not found: $endpointFile");
-            send_json_response(0, 1, 500, "Ticket endpoint not implemented: $operation");
+            error_log("Pipeline endpoint file not found: $endpointFile");
+            send_json_response(0, 1, 500, "Pipeline endpoint not implemented: $operation");
             return;
         }
 
-        // Include and execute the endpoint
         require $endpointFile;
 
     } catch (Exception $e) {
-        error_log("Ticket handler error: " . $e->getMessage());
+        error_log("Pipeline handler error: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Ticket operation failed");
+        send_json_response(0, 1, 500, "Pipeline operation failed");
     } catch (Error $e) {
-        error_log("Ticket handler fatal error: " . $e->getMessage());
+        error_log("Pipeline handler fatal error: " . $e->getMessage());
         error_log("Stack trace: " . $e->getTraceAsString());
-        send_json_response(0, 1, 500, "Ticket operation failed");
+        send_json_response(0, 1, 500, "Pipeline operation failed");
     }
 }

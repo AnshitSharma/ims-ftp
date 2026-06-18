@@ -1,10 +1,11 @@
 <?php
 /**
- * Authentication handler — login, logout, token refresh/verify, registration,
+ * Authentication handler — login, logout, token refresh/verify,
  * forgot/reset password.
  *
  * Included by api/api.php for the `auth` module. Auth operations do not
- * require a JWT (except `register`, which authenticates internally).
+ * require a JWT. User creation is handled by the `users` module
+ * (`users-create`), gated by the `users.create` permission.
  */
 
 /**
@@ -48,18 +49,6 @@ function handleAuthOperations($operation) {
 
         case 'verify_token':
             handleTokenVerification();
-            break;
-
-        case 'register':
-            // Registration requires authentication and user.create permission
-            $regUser = authenticateWithJWT($pdo);
-            if (!$regUser) {
-                send_json_response(0, 0, 401, "Authentication required for registration");
-            }
-            if (!hasPermission($pdo, 'user.create', $regUser['id'])) {
-                send_json_response(0, 1, 403, "Permission denied: user.create required");
-            }
-            handleRegistration();
             break;
 
         case 'forgot_password':
@@ -152,7 +141,10 @@ function handleLogin() {
                 'email' => $user['email'],
                 'firstname' => $user['firstname'],
                 'lastname' => $user['lastname'],
-                'roles' => $userRoleNames
+                'roles' => $userRoleNames,
+                // Permission name list (or ['*'] for admins) so the frontend can
+                // gate UI elements. Real enforcement is always server-side.
+                'permissions' => $permissions
             ],
             'tokens' => [
                 'access_token' => $accessToken,
@@ -249,6 +241,8 @@ function handleTokenRefresh() {
             'username' => $user['username']
         ], $tokenExpiry);
 
+        $permissions = getUserPermissions($pdo, $user['id']);
+
         send_json_response(1, 1, 200, "Token refreshed successfully", [
             'access_token' => $accessToken,
             'expires_in' => $tokenExpiry,
@@ -257,7 +251,8 @@ function handleTokenRefresh() {
                 'username' => $user['username'],
                 'email' => $user['email'],
                 'firstname' => $user['firstname'],
-                'lastname' => $user['lastname']
+                'lastname' => $user['lastname'],
+                'permissions' => $permissions
             ]
         ]);
 
@@ -293,81 +288,6 @@ function handleTokenVerification() {
     } catch (Exception $e) {
         error_log("Token verification error: " . $e->getMessage());
         send_json_response(0, 0, 401, "Token verification failed");
-    }
-}
-
-/**
- * Handle user registration (if enabled)
- */
-function handleRegistration() {
-    global $pdo;
-
-    $username = trim($_POST['username'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $password = $_POST['password'] ?? '';
-    $firstname = trim($_POST['firstname'] ?? '');
-    $lastname = trim($_POST['lastname'] ?? '');
-
-    if (empty($username) || empty($email) || empty($password)) {
-        send_json_response(0, 0, 400, "Username, email, and password are required");
-    }
-
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        send_json_response(0, 0, 400, "Invalid email format");
-    }
-
-    if (strlen($password) < 8) {
-        send_json_response(0, 0, 400, "Password must be at least 8 characters");
-    }
-    if (!preg_match('/[A-Z]/', $password)) {
-        send_json_response(0, 0, 400, "Password must contain at least one uppercase letter");
-    }
-    if (!preg_match('/[0-9]/', $password)) {
-        send_json_response(0, 0, 400, "Password must contain at least one number");
-    }
-    if (!preg_match('/[^A-Za-z0-9]/', $password)) {
-        send_json_response(0, 0, 400, "Password must contain at least one special character");
-    }
-
-    if (strlen($username) < 3 || strlen($username) > 50) {
-        send_json_response(0, 0, 400, "Username must be between 3 and 50 characters");
-    }
-
-    try {
-        // Check if username/email already exists
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
-        $stmt->execute([$username, $email]);
-        if ($stmt->fetch()) {
-            send_json_response(0, 0, 409, "Username or email already exists");
-        }
-
-        // Create user
-        $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-
-        $stmt = $pdo->prepare("
-            INSERT INTO users (username, email, password, firstname, lastname, created_at)
-            VALUES (?, ?, ?, ?, ?, NOW())
-        ");
-        $stmt->execute([$username, $email, $hashedPassword, $firstname, $lastname]);
-
-        $userId = $pdo->lastInsertId();
-
-        // Assign default role (read from DB instead of hardcoding)
-        $roleStmt = $pdo->prepare("SELECT id FROM roles WHERE is_default = 1 LIMIT 1");
-        $roleStmt->execute();
-        $defaultRole = $roleStmt->fetch(PDO::FETCH_ASSOC);
-        $defaultRoleId = $defaultRole ? $defaultRole['id'] : 2; // Fallback to 2 if no default set
-        assignRoleToUser($pdo, $userId, $defaultRoleId);
-
-        send_json_response(1, 1, 201, "Registration successful", [
-            'user_id' => (int)$userId,
-            'username' => $username,
-            'message' => "Please login with your credentials"
-        ]);
-
-    } catch (Exception $e) {
-        error_log("Registration error: " . $e->getMessage());
-        send_json_response(0, 0, 500, "Registration failed");
     }
 }
 
