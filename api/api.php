@@ -105,12 +105,12 @@ try {
             break;
 
         case 'rack':
-            // Rack View is restricted to super_admin ONLY. hasPermission()
-            // grants a blanket bypass to both admin and super_admin, so the
-            // permission map alone cannot keep admins out — enforce the role
-            // explicitly here before the standard permission check.
-            if (!userHasRole($pdo, $user['id'], 'super_admin')) {
-                send_json_response(0, 1, 403, "Insufficient permissions: super_admin role required");
+            // Rack View is accessible to admin and super_admin. hasPermission()
+            // grants a blanket bypass to both of those roles, so the explicit
+            // role gate below just keeps every other role out before the
+            // standard permission check runs.
+            if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+                send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
             }
             requireModulePermission('rack', $operation, $user);
             // Pass operation to rack_api.php via global scope
@@ -224,11 +224,11 @@ function requireModulePermission($module, $operation, $user) {
 function handlePipelineOperations($operation, $user) {
     global $pdo;
 
-    // Pipelines are restricted to the super_admin role ONLY (mirrors Rack View).
-    // Belt-and-braces: pipeline.* grants are also revoked from every other role
-    // (seeder 2026_06_18_003), but this explicit gate guarantees it in code.
-    if (!userHasRole($pdo, $user['id'], 'super_admin')) {
-        send_json_response(0, 1, 403, "Insufficient permissions: super_admin role required");
+    // Pipelines are accessible to admin and super_admin roles.
+    // Belt-and-braces: pipeline.* grants are limited to these roles via seeders,
+    // but this explicit gate guarantees it in code.
+    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
         return;
     }
 
