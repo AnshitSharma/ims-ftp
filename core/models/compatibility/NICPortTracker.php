@@ -244,6 +244,14 @@ class NICPortTracker {
             return true;
         }
 
+        // SFP+ and SFP28 cages are physically backward-compatible with 1G SFP
+        // modules. [Fixes H5: the matrix omitted SFP+ <- SFP, wrongly rejecting a
+        // valid 1G SFP in an SFP+/SFP28 cage.]
+        if (in_array($nicPortType, ['SFP+', 'SFP28'], true) &&
+            in_array($sfpType, ['SFP', 'SFP DAC', '1G SFP'], true)) {
+            return true;
+        }
+
         // QSFP28 ports accept QSFP+ modules (backward compatibility)
         if ($nicPortType === 'QSFP28' && $sfpType === 'QSFP+') {
             return true;
@@ -272,9 +280,10 @@ class NICPortTracker {
     public static function getCompatibleSfpTypes($nicPortType) {
         $nicPortType = strtoupper(trim($nicPortType));
 
+        // Kept in sync with isCompatible(): SFP+/SFP28 cages accept 1G SFP. [H5]
         $compatibilityMap = [
-            'SFP+' => ['SFP+', 'SFP+ DAC'],
-            'SFP28' => ['SFP28', 'SFP+', 'SFP+ DAC'],
+            'SFP+' => ['SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC'],
+            'SFP28' => ['SFP28', 'SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC'],
             'QSFP+' => ['QSFP+'],
             'QSFP28' => ['QSFP28', 'QSFP+'],
             'QSFP56' => ['QSFP56', 'QSFP28', 'QSFP+'],
@@ -304,10 +313,13 @@ class NICPortTracker {
     }
 
     /**
-     * Extract numeric speed value from speed string
+     * Extract numeric speed value from speed string, in Gbps.
      *
-     * @param string $speedStr Speed string (e.g., "10GbE", "25Gbps", "100G")
-     * @return int Speed value in Gbps
+     * Returns a float so sub-Gbps speeds survive: previously the (int) cast mapped
+     * 100Mbps (0.1 Gbps) to 0 and mis-ranked anything below 1 Gbps. [Fixes H5]
+     *
+     * @param string $speedStr Speed string (e.g., "10GbE", "25Gbps", "100Mbps")
+     * @return float Speed value in Gbps
      */
     public static function extractSpeedValue($speedStr) {
         $speedStr = strtoupper(trim($speedStr));
@@ -316,15 +328,16 @@ class NICPortTracker {
         if (preg_match('/(\d+(?:\.\d+)?)/', $speedStr, $matches)) {
             $value = floatval($matches[1]);
 
-            // Handle Mbps (convert to Gbps)
-            if (strpos($speedStr, 'M') !== false) {
+            // Handle Mbps (convert to Gbps). Guard against matching the 'M' in any
+            // other token by only treating it as Mbps when "MB" / "MBPS" appears.
+            if (strpos($speedStr, 'MBPS') !== false || strpos($speedStr, 'MB/S') !== false || strpos($speedStr, 'MB') !== false) {
                 $value = $value / 1000;
             }
 
-            return (int)$value;
+            return $value;
         }
 
-        return 0;
+        return 0.0;
     }
 
     /**

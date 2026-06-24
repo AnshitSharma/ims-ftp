@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'c:\\Users\\anshi\\Documents\\Work\\Github IMS\\ims-ftp\\.codex\\hooks\\gsd-check-update.js'"
+          }
+        ]
+      }
+    ]
+  }
+}

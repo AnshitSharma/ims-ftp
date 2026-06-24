@@ -212,6 +212,35 @@ class StorageConnectionValidator {
     }
 
     /**
+     * Returns true when the configuration contains at least one NVMe-capable
+     * (Tri-Mode) HBA. Tri-Mode HBAs declare a protocol like
+     * "SAS/SATA/NVMe Tri-Mode" in their JSON spec. Used to decide whether an NVMe
+     * drive in a non-NVMe-backplane chassis actually has a data path. [Supports H3]
+     */
+    private function hasNvmeCapableHba($existing) {
+        if (empty($existing['hbacard']) || !is_array($existing['hbacard'])) {
+            return false;
+        }
+        foreach ($existing['hbacard'] as $hba) {
+            $uuid = $hba['component_uuid'] ?? null;
+            if (!$uuid) {
+                continue;
+            }
+            $hbaSpecs = $this->componentDataService->findComponentByUuid('hbacard', $uuid);
+            if (!$hbaSpecs) {
+                continue;
+            }
+            $protocol = strtolower($hbaSpecs['protocol'] ?? '');
+            if (strpos($protocol, 'nvme') !== false ||
+                strpos($protocol, 'tri-mode') !== false ||
+                strpos($protocol, 'tri mode') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * CHECK 1: Chassis Backplane Capability Check
      * Reads: chassis.backplane.supports_* from JSON
      */
@@ -255,23 +284,29 @@ class StorageConnectionValidator {
         if ($protocol === 'sata' && $supportsSata) $compatible = true;
         if ($protocol === 'sas' && $supportsSas) $compatible = true;
 
-        // For NVMe drives in 2.5"/3.5" bays: allow chassis connection even if
-        // backplane doesn't natively support NVMe — HBA card provides NVMe connectivity
+        // For NVMe drives in 2.5"/3.5" bays where the backplane does NOT natively
+        // support NVMe: the drive only has a chassis data path if an NVMe-capable
+        // (Tri-Mode) HBA is ACTUALLY installed to provide it.
+        // BUGFIX (H3): the old code returned available=true unconditionally and merely
+        // *noted* that an HBA was "required", letting NVMe drives pass as connected in
+        // SATA/SAS-only chassis with no NVMe path. We now verify the Tri-Mode HBA
+        // exists; if it doesn't, this path is unavailable and the drive falls through
+        // to the "not yet connected" handling (flexible order — add the HBA later).
         if (!$compatible && $protocol === 'nvme') {
             $hasPhysicalSize = (strpos($normalizedFormFactor, '2.5') !== false || strpos($normalizedFormFactor, '3.5') !== false);
-            if ($hasPhysicalSize) {
+            if ($hasPhysicalSize && $this->hasNvmeCapableHba($existing)) {
                 return [
                     'available' => true,
                     'type' => 'chassis_bay',
                     'priority' => 1,
-                    'description' => "Storage physically fits in chassis bay - requires NVMe-capable HBA card for data connectivity",
+                    'description' => "Storage connects through chassis bay via NVMe-capable Tri-Mode HBA",
                     'details' => [
                         'chassis_uuid' => $existing['chassis']['component_uuid'],
                         'backplane_model' => $backplane['model'] ?? 'Unknown',
                         'backplane_interface' => $backplane['interface'] ?? 'Unknown',
                         'storage_interface' => $storageInterface,
                         'compatibility_type' => 'hba_required',
-                        'note' => 'NVMe protocol requires Tri-Mode HBA card (e.g., LSI 9500/9600 series)'
+                        'note' => 'NVMe data path provided by installed Tri-Mode HBA'
                     ]
                 ];
             }
@@ -731,15 +766,26 @@ class StorageConnectionValidator {
             ];
         }
 
-        // Count used bays (respect form factor lock)
-        $usedBays = (!empty($existing['storage']) && is_array($existing['storage'])) ? count($existing['storage']) : 0;
+        // Count used bays by SUMMED quantity, not entry count. A single storage
+        // entry can represent many physical drives (quantity > 1), so count() under-
+        // counted occupied bays and let multi-drive adds overflow the chassis.
+        // [Fixes H10: bay counting ignored quantity]
+        $usedBays = 0;
+        if (!empty($existing['storage']) && is_array($existing['storage'])) {
+            foreach ($existing['storage'] as $existingDrive) {
+                $usedBays += max(1, (int)($existingDrive['quantity'] ?? 1));
+            }
+        }
 
-        if ($usedBays >= $totalBays) {
+        // Account for the quantity of the drive(s) being added in this call.
+        $quantityBeingAdded = max(1, (int)($storageSpecs['quantity'] ?? 1));
+
+        if (($usedBays + $quantityBeingAdded) > $totalBays) {
             return [
                 'available' => false,
                 'error' => [
                     'type' => 'bay_limit_exceeded',
-                    'message' => "Chassis has $totalBays drive bays, all occupied ($usedBays used)",
+                    'message' => "Chassis has $totalBays drive bay(s): $usedBays in use, cannot add $quantityBeingAdded more",
                     'resolution' => "Remove existing storage OR choose chassis with more bays"
                 ]
             ];
@@ -781,7 +827,7 @@ class StorageConnectionValidator {
         return [
             'available' => true,
             'caddy_required' => $caddyRequired,
-            'available_bays' => $totalBays - $usedBays,
+            'available_bays' => max(0, $totalBays - $usedBays - $quantityBeingAdded),
             'form_factor_lock' => $existingFormFactorLock,
             'form_factor_enforced' => (bool) $existingFormFactorLock
         ];
@@ -894,6 +940,9 @@ class StorageConnectionValidator {
         }
         if ($existing['motherboard'] && isset($existing['motherboard']['component_uuid'])) {
             $mbSpecs = $this->getMotherboardSpecs($existing['motherboard']['component_uuid']);
+            // chipset_pcie_lanes is absent from all motherboard specs (always 0 today);
+            // proper chipset/DMI modeling is deferred to the lane-budget consolidation
+            // (H4 / TP-1B). [TP-1A]
             $totalLanes += $mbSpecs['chipset_pcie_lanes'] ?? 0;
         }
 

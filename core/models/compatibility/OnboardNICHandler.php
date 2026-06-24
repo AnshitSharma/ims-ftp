@@ -440,12 +440,22 @@ class OnboardNICHandler {
 
             // Note: No need to delete from server_configuration_components as it's deprecated
 
-            // Remove onboard NIC from nicinventory
+            // Mark the onboard NIC as DISABLED instead of deleting it.
+            // BUGFIX (TP-4C): onboard NICs are physically part of the motherboard and
+            // cannot be removed from inventory. Deleting the row lost the
+            // disabled/replaced state (and the onboard linkage), so if the motherboard
+            // was later removed and re-added, the synthetic onboard NIC was regenerated
+            // as if it had never been replaced. We keep the row, preserving SourceType /
+            // ParentComponentUUID / OnboardNICIndex, and flag it disabled (Status=0).
             $stmt = $this->pdo->prepare("
-                DELETE FROM nicinventory
+                UPDATE nicinventory
+                SET Status = 0,
+                    Flag = 'replaced',
+                    Notes = CONCAT(COALESCE(Notes, ''), ' | Disabled: replaced by component NIC ', ?),
+                    UpdatedAt = NOW()
                 WHERE UUID = ?
             ");
-            $stmt->execute([$onboardNICUuid]);
+            $stmt->execute([$componentNICUuid, $onboardNICUuid]);
 
             // Note: No need to add to server_configuration_components as it's deprecated
             // The nic_config JSON will be updated to reflect the replacement

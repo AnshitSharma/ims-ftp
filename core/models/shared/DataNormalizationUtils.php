@@ -105,19 +105,30 @@ class DataNormalizationUtils {
         // Extract generation number
         $generation = null;
 
-        // Match patterns like: "4.0", "3.0", "5.0", "III", "3", etc.
-        if (preg_match('/(\d+)\.(\d+)/', $interface, $matches)) {
-            // PCIe generations: 3.0, 4.0, 5.0
-            $generation = (float)($matches[1] . '.' . $matches[2]);
-        } elseif (preg_match('/(\d+)/', $interface, $matches)) {
-            // Simple number: SATA3, SAS3, etc.
-            $generation = (int)$matches[1];
-        } elseif (strpos($interface, 'iii') !== false || strpos($interface, 'sata iii') !== false) {
-            // SATA III = SATA3
-            $generation = 3;
-        } elseif (strpos($interface, 'ii') !== false) {
-            // SATA II = SATA2
-            $generation = 2;
+        if ($protocol === 'sata') {
+            // SATA generation is a Roman numeral / link rate, NOT the raw Gb/s number.
+            // BUGFIX (M5): "SATA 6Gb/s" previously parsed as generation 6 instead of
+            // SATA III (gen 3). Map both the Roman numeral and the link rate.
+            //   SATA III / 6Gb/s   -> 3
+            //   SATA II  / 3Gb/s   -> 2
+            //   SATA I   / 1.5Gb/s -> 1
+            // Check the higher generations first ("iii" contains "ii").
+            if (strpos($interface, 'iii') !== false || strpos($interface, '6g') !== false || strpos($interface, 'sata3') !== false) {
+                $generation = 3;
+            } elseif (strpos($interface, 'ii') !== false || strpos($interface, '3g') !== false || strpos($interface, 'sata2') !== false) {
+                $generation = 2;
+            } elseif (strpos($interface, '1.5g') !== false || strpos($interface, 'sata1') !== false || preg_match('/\bi\b/', $interface)) {
+                $generation = 1;
+            } elseif (preg_match('/sata\s*([123])\b/', $interface, $m)) {
+                $generation = (int)$m[1];
+            }
+        } else {
+            // PCIe / NVMe / SAS generations: "4.0", "3.0", "5.0", or a plain integer.
+            if (preg_match('/(\d+)\.(\d+)/', $interface, $matches)) {
+                $generation = (float)($matches[1] . '.' . $matches[2]);
+            } elseif (preg_match('/(\d+)/', $interface, $matches)) {
+                $generation = (int)$matches[1];
+            }
         }
 
         return [

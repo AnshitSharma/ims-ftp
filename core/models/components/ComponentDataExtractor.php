@@ -233,10 +233,15 @@ class ComponentDataExtractor {
     }
 
     /**
-     * Extract ECC support status
+     * Extract ECC support status.
+     * RAM JSON nests ECC under features.ecc_support; read that first, then fall back
+     * to top-level ecc_support / ecc so ECC RAM is not mis-read as non-ECC. [TP-2E]
      */
     public function extractECCSupport($data) {
-        return $data['ecc_support'] ?? $data['ecc'] ?? false;
+        return $data['features']['ecc_support']
+            ?? $data['ecc_support']
+            ?? $data['ecc']
+            ?? false;
     }
 
     // =================

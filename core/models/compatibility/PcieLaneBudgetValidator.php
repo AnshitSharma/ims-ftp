@@ -157,7 +157,11 @@ class PcieLaneBudgetValidator
             }
         }
 
-        // Motherboard chipset lanes (optional field, not always populated)
+        // Motherboard chipset lanes: the chipset_pcie_lanes key is absent from every
+        // ims-data motherboard spec, so this currently adds nothing. The guard keeps
+        // it forward-compatible if data is added, but a correct model must treat
+        // chipset lanes as sharing a narrow CPU/DMI uplink rather than pooling them
+        // into this single fungible budget (tracked under H4 / TP-1B). [TP-1A]
         $mbUuid = $configData['motherboard_uuid'] ?? null;
         if (!empty($mbUuid)) {
             $mbSpecs = $this->componentDataService->getComponentSpecifications('motherboard', $mbUuid);
@@ -221,6 +225,13 @@ class PcieLaneBudgetValidator
                     if (!$specs) continue;
                     $interface = (string)($specs['interface'] ?? '');
                     if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) continue;
+                    // BUGFIX (TP-1C): M.2 NVMe drives use dedicated motherboard M.2 slots
+                    // (with their own chipset lanes), NOT the shared PCIe expansion-lane
+                    // budget. StorageConnectionValidator excludes them; this validator
+                    // must too, otherwise an M.2 add inflates the system budget here and
+                    // causes a false "lane budget exceeded".
+                    $formFactor = strtolower((string)($specs['form_factor'] ?? ''));
+                    if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) continue;
                     $qty = max(1, (int)($entry['quantity'] ?? 1));
                     $used += $this->extractLaneCount($specs) * $qty;
                 }

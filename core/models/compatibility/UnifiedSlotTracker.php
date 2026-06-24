@@ -543,8 +543,11 @@ class UnifiedSlotTracker {
                 ];
             }
 
-            // Check 3: Count total riser slots vs used slots
-            $totalRiserSlots = count($availability['total_slots']);
+            // Check 3: Count total riser slots vs used slots.
+            // BUGFIX (M2): total_slots is size-grouped (e.g. ['x16'=>[...],'x8'=>[...]]),
+            // so a raw count() returns the number of SIZE GROUPS, not the number of
+            // slots. Use the same countTotalSlots() helper the PCIe path uses.
+            $totalRiserSlots = $this->countTotalSlots($availability['total_slots']);
             $usedRiserSlots = count($availability['used_slots']);
 
             if ($usedRiserSlots > $totalRiserSlots) {
@@ -553,9 +556,13 @@ class UnifiedSlotTracker {
 
             // Check 4: Validate each riser is assigned to riser slot
             foreach ($availability['used_slots'] as $slotId => $componentUuid) {
-                // Verify component is actually a riser
+                // Verify component is actually a riser. BUGFIX (M2): detection must
+                // match how risers are ASSIGNED (subtype 'Riser Card' OR a 'riser-'
+                // UUID prefix); keying on subtype alone falsely flagged risers that
+                // were identified by UUID prefix at assignment time.
                 $subtype = $this->getComponentSubtype($componentUuid);
-                if ($subtype !== 'Riser Card') {
+                $isRiser = ($subtype === 'Riser Card') || (stripos((string)$componentUuid, 'riser-') === 0);
+                if (!$isRiser) {
                     $errors[] = "Component $componentUuid in riser slot $slotId is not a riser card (subtype: $subtype)";
                 }
             }
@@ -1072,6 +1079,22 @@ class UnifiedSlotTracker {
                 }
             }
 
+            // BUGFIX (TP-1E): PCIe add-in-card SSDs persisted under storage_configuration
+            // physically occupy an expansion slot. They were invisible here, so a NIC/HBA
+            // could be assigned the same physical slot. Count any storage entry that
+            // carries a pcie_ slot_position (AIC SSDs), exactly like the other card types.
+            if (!empty($configData['storage_configuration'])) {
+                $storageConfigs = json_decode($configData['storage_configuration'], true);
+                if (is_array($storageConfigs)) {
+                    foreach ($storageConfigs as $storage) {
+                        if (!empty($storage['slot_position']) &&
+                            strpos($storage['slot_position'], 'pcie_') === 0) {
+                            $usedSlots[$storage['slot_position']] = $storage['uuid'] ?? 'storage-aic';
+                        }
+                    }
+                }
+            }
+
             return $usedSlots;
 
         } catch (Exception $e) {
@@ -1474,8 +1497,8 @@ class UnifiedSlotTracker {
             ];
 
             // Get storage components from configuration
-            if (!empty($configData['storage_configurations'])) {
-                $storageConfigs = json_decode($configData['storage_configurations'], true);
+            if (!empty($configData['storage_configuration'])) {
+                $storageConfigs = json_decode($configData['storage_configuration'], true);
                 if (is_array($storageConfigs)) {
                     foreach ($storageConfigs as $storage) {
                         $storageUuid = $storage['uuid'] ?? null;
@@ -1582,8 +1605,8 @@ class UnifiedSlotTracker {
     private function countM2SlotsOnCard($cardUuid, $configData) {
         $count = 0;
 
-        if (!empty($configData['storage_configurations'])) {
-            $storageConfigs = json_decode($configData['storage_configurations'], true);
+        if (!empty($configData['storage_configuration'])) {
+            $storageConfigs = json_decode($configData['storage_configuration'], true);
             if (is_array($storageConfigs)) {
                 foreach ($storageConfigs as $storage) {
                     $storageUuid = $storage['uuid'] ?? null;
@@ -1663,8 +1686,8 @@ class UnifiedSlotTracker {
             $usedU2Slots = [];
             if ($config) {
                 $configData = $config->getData();
-                if (!empty($configData['storage_configurations'])) {
-                    $storageConfigs = json_decode($configData['storage_configurations'], true);
+                if (!empty($configData['storage_configuration'])) {
+                    $storageConfigs = json_decode($configData['storage_configuration'], true);
                     if (is_array($storageConfigs)) {
                         foreach ($storageConfigs as $storage) {
                             $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storage['uuid'] ?? null);

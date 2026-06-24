@@ -455,6 +455,16 @@ class ServerBuilder {
             // CRITICAL: Get serial_number from options to identify specific physical component
             $serialNumber = $options['serial_number'] ?? null;
 
+            // Phase 1.1b: Extract and normalize quantity early.
+            // BUGFIX (C1): $quantity was previously assigned only just before the
+            // write phase (~line 790), yet add-time validation (Phase 6 below)
+            // and the PCIe-lane precheck need it. Reading it before assignment
+            // coerced it to null -> validators silently checked quantity = 1,
+            // allowing multi-unit adds (e.g. 8 DIMMs / 4 PCIe cards) to over-allocate
+            // slots, bays, lanes and DIMMs. Normalize to a positive integer once,
+            // here, so every downstream consumer sees the real value.
+            $quantity = max(1, (int)($options['quantity'] ?? 1));
+
             // RACE CONDITION FIX: Start transaction BEFORE any availability checks
             // This ensures all checks happen atomically with component locking
             $ownTransaction = !$this->pdo->inTransaction();
@@ -786,8 +796,8 @@ class ServerBuilder {
             // Component is already locked with SELECT FOR UPDATE
             // All validations complete - now proceed with updates
 
-            // Extract quantity and slot position from options (component data now stored in JSON columns)
-            $quantity = $options['quantity'] ?? 1;
+            // Extract slot position from options (component data now stored in JSON columns).
+            // $quantity was already extracted and normalized in Phase 1.1b (C1 fix).
 
             // P5.1: Validate quantity for slot-based components (RAM, Storage, PCIe cards, etc.)
             $quantityValidation = $this->validateComponentQuantity($componentType, $componentUuid, $quantity, $configUuid);
@@ -825,27 +835,36 @@ class ServerBuilder {
                     );
 
                     if (!$slotAssignmentResult['success']) {
-                        // Riser card error is blocking - cannot proceed
-                        if (isset($slotAssignmentResult['error_code']) &&
-                            $slotAssignmentResult['error_code'] === 'no_riser_slots_available') {
-                            if ($ownTransaction && $this->pdo->inTransaction()) {
-                                $this->pdo->rollback();
-                            }
-                            return [
-                                'success' => false,
-                                'message' => $slotAssignmentResult['message'],
-                                'details' => [
-                                    'component_type' => $componentType,
-                                    'component_uuid' => $componentUuid,
-                                    'required_slot_type' => $slotAssignmentResult['required_slot_type'] ?? null
-                                ]
-                            ];
+                        // BUGFIX (C4): any slot-assignment failure is blocking now -
+                        // both riser exhaustion AND regular PCIe/NIC/HBA cards with no
+                        // free slot. Skips (no motherboard / specs unavailable) still
+                        // return success=true upstream, so they don't reach here.
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
                         }
+                        return [
+                            'success' => false,
+                            'message' => $slotAssignmentResult['message'],
+                            'details' => [
+                                'component_type' => $componentType,
+                                'component_uuid' => $componentUuid,
+                                'required_slot_type' => $slotAssignmentResult['required_slot_type'] ?? null,
+                                'error_code' => $slotAssignmentResult['error_code'] ?? null
+                            ]
+                        ];
                     }
 
-                    // Update $slotPosition with assigned slot ID if successful
+                    // Update $slotPosition with assigned slot ID if successful, and
+                    // propagate it into $options so it is actually persisted.
+                    // BUGFIX (C4): previously the assigned slot was only written to the
+                    // local $slotPosition, never to $options['slot_position'], so the
+                    // pciecard persistence path (which reads $options) stored slot_position
+                    // = null. Propagating here makes pciecard auto-assign its slot exactly
+                    // like NIC/HBA, and lets the NIC/HBA persistence reuse this assignment
+                    // instead of computing a second, possibly different one.
                     if ($slotAssignmentResult['success'] && $slotAssignmentResult['slot_id']) {
                         $slotPosition = $slotAssignmentResult['slot_id'];
+                        $options['slot_position'] = $slotPosition;
                     }
                 } catch (Exception $slotError) {
                     error_log("Slot assignment exception: " . $slotError->getMessage());
@@ -4213,22 +4232,48 @@ class ServerBuilder {
                     $tableMap[$type] = $table;
                 }
 
-                // For decentralized checks, get full component data
-                $existingComponentsData = [];
-                foreach ($this->extractComponentsFromJson($configData, true) as $existing) {
-                    $table = $tableMap[$existing['component_type']] ?? null;
-                    if ($table) {
-                        $stmt = $this->pdo->prepare("SELECT * FROM `$table` WHERE UUID = ? LIMIT 1");
-                        $stmt->execute([$existing['component_uuid']]);
-                        $componentData = $stmt->fetch(PDO::FETCH_ASSOC);
+                // For decentralized checks, get full component data.
+                // BUGFIX (TP-5A): batch ONE query per component TYPE (WHERE UUID IN (...))
+                // instead of one query per existing component. A 50-80 component build
+                // previously issued 50-80 SELECTs on every single add.
+                $allExisting = $this->extractComponentsFromJson($configData, true);
 
-                        if ($componentData) {
-                            $existingComponentsData[] = [
-                                'type' => $existing['component_type'],
-                                'uuid' => $existing['component_uuid'],
-                                'data' => $componentData
-                            ];
+                // Collect the distinct UUIDs needed per type.
+                $uuidsByType = [];
+                foreach ($allExisting as $existing) {
+                    $type = $existing['component_type'];
+                    $uuid = $existing['component_uuid'] ?? null;
+                    if ($uuid !== null && isset($tableMap[$type])) {
+                        $uuidsByType[$type][$uuid] = true;
+                    }
+                }
+
+                // One IN(...) lookup per type; index rows by type+UUID.
+                $rowsByTypeUuid = [];
+                foreach ($uuidsByType as $type => $uuidSet) {
+                    $table = $tableMap[$type];
+                    $uuids = array_keys($uuidSet);
+                    $placeholders = implode(',', array_fill(0, count($uuids), '?'));
+                    $stmt = $this->pdo->prepare("SELECT * FROM `$table` WHERE UUID IN ($placeholders)");
+                    $stmt->execute($uuids);
+                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                        if (isset($row['UUID'])) {
+                            $rowsByTypeUuid[$type][$row['UUID']] = $row;
                         }
+                    }
+                }
+
+                // Re-assemble in the original component order (one entry per occurrence).
+                $existingComponentsData = [];
+                foreach ($allExisting as $existing) {
+                    $type = $existing['component_type'];
+                    $uuid = $existing['component_uuid'] ?? null;
+                    if ($uuid !== null && isset($rowsByTypeUuid[$type][$uuid])) {
+                        $existingComponentsData[] = [
+                            'type' => $type,
+                            'uuid' => $uuid,
+                            'data' => $rowsByTypeUuid[$type][$uuid]
+                        ];
                     }
                 }
 
@@ -4335,12 +4380,26 @@ class ServerBuilder {
                 return ['success' => false, 'message' => 'Invalid configuration'];
             }
 
-            // 1. Validate parent_nic_uuid and port_index are provided
+            // 1. Unassigned-SFP (staged) workflow: an SFP may be added without a parent
+            //    NIC and auto-mapped later, when a compatible NIC is installed, by
+            //    SFPCompatibilityResolver. The persistence layer already stores a null
+            //    parent_nic_uuid/port_index, so we stage the module here instead of
+            //    hard-rejecting it. [Fixes TP-4A: every SFP add without a NIC was rejected]
             if (empty($parentNicUuid)) {
-                return ['success' => false, 'message' => 'Parent NIC UUID is required for SFP modules'];
+                $stagedSfpSpecs = $componentDataService->getComponentSpecifications('sfp', $componentUuid);
+                if (!$stagedSfpSpecs) {
+                    return ['success' => false, 'message' => "Unable to load SFP specifications for {$componentUuid}"];
+                }
+                return [
+                    'success' => true,
+                    'message' => 'SFP staged as unassigned - it will be mapped to a NIC port when a compatible NIC is added',
+                    'unassigned' => true,
+                    'warnings' => ['SFP is not yet assigned to a NIC port']
+                ];
             }
+            // A parent NIC was supplied -> a specific port must be named.
             if ($portIndex === null || $portIndex === '') {
-                return ['success' => false, 'message' => 'Port index is required for SFP modules'];
+                return ['success' => false, 'message' => 'Port index is required when assigning an SFP to a NIC'];
             }
 
             // 2. Check if parent NIC exists in configuration
@@ -4581,7 +4640,7 @@ class ServerBuilder {
                     }
                 }
             } else {
-                // ===== REGULAR PCIe CARD/NIC - ASSIGN TO PCIe SLOTS =====
+                // ===== REGULAR PCIe CARD / NIC / HBA - ASSIGN TO PCIe SLOTS =====
                 if ($slotSize) {
                     // Assign optimal PCIe slot
                     $assignedSlot = $slotTracker->assignSlot($configUuid, $slotSize);
@@ -4591,20 +4650,30 @@ class ServerBuilder {
                             'slot_id' => $assignedSlot,
                             'message' => "PCIe card assigned to slot $assignedSlot"
                         ];
-                    } else {
-                        return [
-                            'success' => true,
-                            'slot_id' => null,
-                            'message' => 'No suitable PCIe slots available - component added without slot assignment'
-                        ];
                     }
-                } else {
+                    // BUGFIX (C4): no free compatible slot is now BLOCKING. Previously the
+                    // card was added with slot_id=null, silently over-filling the board and
+                    // becoming invisible to the slot tracker (which only counts pcie_*
+                    // positions), so a board whose only x16 slot was occupied still accepted
+                    // another x16 card.
                     return [
-                        'success' => true,
+                        'success' => false,
                         'slot_id' => null,
-                        'message' => 'Could not determine PCIe slot size - component added without slot assignment'
+                        'message' => "Cannot add $componentType: no free {$slotSize}-compatible PCIe slot available on motherboard",
+                        'required_slot_type' => $slotSize,
+                        'error_code' => 'no_pcie_slots_available'
                     ];
                 }
+                // Slot width could not be parsed from the component spec, so we cannot
+                // size-check reliably. We don't hard-block here (that belongs to the
+                // data-shape / fail-open remediation); the card is added without a slot
+                // and flagged for review instead of silently passing unnoticed.
+                error_log("Slot assignment: could not determine PCIe slot size for {$componentType} {$componentUuid}; added without slot assignment");
+                return [
+                    'success' => true,
+                    'slot_id' => null,
+                    'message' => 'Could not determine PCIe slot size - component added without slot assignment'
+                ];
             }
 
         } catch (Exception $slotError) {
@@ -6585,15 +6654,10 @@ class ServerBuilder {
             ];
         }
 
-        // Only one HBA card allowed
-        if (isset($componentsByType['hbacard']) && count($componentsByType['hbacard']) > 1) {
-            $hbaCount = count($componentsByType['hbacard']);
-            $result['valid'] = false;
-            $result['errors'][] = [
-                'type' => 'multiple_hba_cards',
-                'message' => "Configuration has $hbaCount HBA cards. Only one HBA card allowed per server."
-            ];
-        }
+        // BUGFIX (H8): multiple HBA / RAID controllers are allowed. Real servers
+        // routinely carry several, and the persistence layer already stores them as
+        // an array. The real constraint is PCIe slot availability, which is enforced
+        // by the slot tracker at add time (C4), not an artificial "one HBA" rule.
     }
 
     /**
@@ -6648,22 +6712,33 @@ class ServerBuilder {
                 return;
             }
 
-            $maxSlots = $mbSpecs['memory']['slots'] ?? 4;
-            $maxCapacityGB = $mbSpecs['memory']['max_capacity_gb'] ?? 128;
-            $usedSlots = isset($componentsByType['ram']) ? count($componentsByType['ram']) : 0;
-            $availableSlots = max(0, $maxSlots - $usedSlots);
+            $maxSlots = (int)($mbSpecs['memory']['slots'] ?? 4);
+            // BUGFIX (TP-2A): the JSON key is max_capacity_TB / max_capacity_GB,
+            // never lowercase max_capacity_gb. Reading the wrong key silently capped
+            // every board at 128 GB and rejected legitimate large builds. null means
+            // the board declares no maximum, so we skip the ceiling check below.
+            $maxCapacityGB = $this->getMotherboardMaxMemoryGb($mbSpecs);
 
-            // Calculate total RAM capacity
-            $totalCapacityGB = 0;
+            // BUGFIX (#7): count installed DIMMs by summed quantity, not entry count.
+            // A single "8 x 32GB" add is one config entry with quantity=8 but
+            // physically occupies 8 slots and contributes 8x the capacity.
+            $usedSlots = 0;
+            $totalCapacityGB = 0.0;
             if (isset($componentsByType['ram'])) {
                 foreach ($componentsByType['ram'] as $ram) {
+                    $qty = max(1, (int)($ram['quantity'] ?? 1));
+                    $usedSlots += $qty;
                     $ramSpecs = $this->dataUtils->getRAMByUUID($ram['component_uuid']);
                     if ($ramSpecs) {
-                        $capacity = $ramSpecs['capacity_gb'] ?? 0;
-                        $totalCapacityGB += $capacity;
+                        // RAM JSON uses capacity_GB (uppercase); the old lowercase read
+                        // always returned 0, silently zeroing total capacity.
+                        $capacity = (float)($ramSpecs['capacity_GB'] ?? $ramSpecs['capacity_gb'] ?? 0);
+                        $totalCapacityGB += $capacity * $qty;
                     }
                 }
             }
+            $totalCapacityGB = (int)round($totalCapacityGB);
+            $availableSlots = max(0, $maxSlots - $usedSlots);
 
             $result['resource_availability']['ram_slots'] = [
                 'max' => $maxSlots,
@@ -6671,19 +6746,20 @@ class ServerBuilder {
                 'available' => $availableSlots,
                 'max_capacity_gb' => $maxCapacityGB,
                 'used_capacity_gb' => $totalCapacityGB,
-                'available_capacity_gb' => max(0, $maxCapacityGB - $totalCapacityGB)
+                'available_capacity_gb' => $maxCapacityGB !== null ? max(0, $maxCapacityGB - $totalCapacityGB) : null
             ];
 
             if ($usedSlots > $maxSlots) {
                 $result['valid'] = false;
                 $result['errors'][] = [
                     'type' => 'ram_slot_exceeded',
-                    'message' => "Too many RAM modules: $usedSlots modules but only $maxSlots slot(s) available"
+                    'message' => "Too many RAM modules: $usedSlots module(s) but only $maxSlots slot(s) available"
                 ];
                 $result['category_scores']['ram'] = 0;
             }
 
-            if ($totalCapacityGB > $maxCapacityGB) {
+            // Only enforce the capacity ceiling when the board actually declares one.
+            if ($maxCapacityGB !== null && $totalCapacityGB > $maxCapacityGB) {
                 $result['valid'] = false;
                 $result['errors'][] = [
                     'type' => 'ram_capacity_exceeded',
@@ -6695,6 +6771,37 @@ class ServerBuilder {
         } catch (Exception $e) {
             error_log("Error tracking RAM slots: " . $e->getMessage());
         }
+    }
+
+    /**
+     * Resolve a motherboard's maximum memory capacity in GB from its JSON spec.
+     *
+     * Handles the real key names used across ims-data/motherboard:
+     *   - max_capacity_TB (server boards, e.g. 8 -> 8192 GB)
+     *   - max_capacity_GB (desktop boards, e.g. 64)
+     * Uses float math so fractional TB values (1.5 TB) become 1536 GB instead of
+     * truncating to 1 TB. Returns null when the board declares no capacity limit,
+     * so callers skip the ceiling check rather than inventing a 128 GB default.
+     * [Fixes TP-2A: lowercase max_capacity_gb never matched -> universal 128 GB cap]
+     *
+     * @param array $mbSpecs Raw motherboard JSON spec
+     * @return int|null Maximum capacity in GB, or null if undeclared
+     */
+    private function getMotherboardMaxMemoryGb($mbSpecs) {
+        $memory = (is_array($mbSpecs) && isset($mbSpecs['memory']) && is_array($mbSpecs['memory']))
+            ? $mbSpecs['memory'] : [];
+
+        if (isset($memory['max_capacity_TB']) && is_numeric($memory['max_capacity_TB'])) {
+            return (int)round(((float)$memory['max_capacity_TB']) * 1024);
+        }
+        if (isset($memory['max_capacity_GB']) && is_numeric($memory['max_capacity_GB'])) {
+            return (int)$memory['max_capacity_GB'];
+        }
+        // Legacy/lowercase fallback (rare); kept for forward compatibility.
+        if (isset($memory['max_capacity_gb']) && is_numeric($memory['max_capacity_gb'])) {
+            return (int)$memory['max_capacity_gb'];
+        }
+        return null;
     }
 
     /**
@@ -6719,14 +6826,21 @@ class ServerBuilder {
                 }
             }
 
-            // Get chipset PCIe lanes from motherboard
+            // Chipset/DMI PCIe lanes: the chipset_pcie_lanes key is absent from every
+            // ims-data motherboard spec, so this contributes 0 today. We only report a
+            // chipset source line when a real value is present, instead of always
+            // emitting a misleading "Chipset: 0 lanes". Proper chipset/DMI uplink
+            // modeling (lanes do NOT share one fungible pool) is tracked under the
+            // PCIe lane-budget consolidation (H4 / TP-1B). [TP-1A]
             if (isset($componentsByType['motherboard'])) {
                 $motherboard = $componentsByType['motherboard'][0];
                 $mbSpecs = $this->dataUtils->getMotherboardByUUID($motherboard['component_uuid']);
                 if ($mbSpecs) {
-                    $chipsetLanes = $mbSpecs['chipset_pcie_lanes'] ?? 0;
-                    $totalLanes += $chipsetLanes;
-                    $laneSources[] = "Chipset: $chipsetLanes lanes";
+                    $chipsetLanes = (int)($mbSpecs['chipset_pcie_lanes'] ?? 0);
+                    if ($chipsetLanes > 0) {
+                        $totalLanes += $chipsetLanes;
+                        $laneSources[] = "Chipset: $chipsetLanes lanes";
+                    }
                 }
             }
 
@@ -7567,13 +7681,39 @@ class ServerBuilder {
             if ($chassis && $motherboard) {
                 $chassisFormFactor = $chassisSpecs['form_factor'] ?? 'Unknown';
                 $mbFormFactor = $mbSpecs['form_factor'] ?? 'Unknown';
-                $compatible = (stripos($chassisFormFactor, $mbFormFactor) !== false);
 
-                $matrix[] = [
-                    'pair' => 'chassis_motherboard',
-                    'check' => "$chassisFormFactor ↔ $mbFormFactor",
-                    'compatible' => $compatible
-                ];
+                // BUGFIX (H6): a chassis form_factor is its RACK HEIGHT (1U/2U/4U),
+                // not the set of board form factors it accepts, so the old
+                // stripos(rackU, "ATX") was always false and reported every build as
+                // form-factor-incompatible. Use the chassis's explicit supported board
+                // form-factor list when present; otherwise rack height alone cannot
+                // determine board fit, so we don't assert a (bogus) mismatch.
+                $supportedMbFFs = $chassisSpecs['supported_motherboard_form_factors']
+                    ?? $chassisSpecs['motherboard_form_factors']
+                    ?? null;
+
+                if (is_array($supportedMbFFs) && !empty($supportedMbFFs)) {
+                    $mbFFNorm = strtolower(trim($mbFormFactor));
+                    $compatible = false;
+                    foreach ($supportedMbFFs as $supported) {
+                        if (strtolower(trim((string)$supported)) === $mbFFNorm) {
+                            $compatible = true;
+                            break;
+                        }
+                    }
+                    $matrix[] = [
+                        'pair' => 'chassis_motherboard',
+                        'check' => "{$mbFormFactor} board in chassis supporting " . implode(', ', $supportedMbFFs),
+                        'compatible' => $compatible
+                    ];
+                } else {
+                    $matrix[] = [
+                        'pair' => 'chassis_motherboard',
+                        'check' => "Chassis {$chassisFormFactor} / {$mbFormFactor} board - support not declared",
+                        'compatible' => true,
+                        'note' => 'Chassis spec does not declare supported motherboard form factors; physical fit not verified'
+                    ];
+                }
             }
 
             $result['detailed_checks']['compatibility_matrix'] = $matrix;
@@ -7728,8 +7868,8 @@ class ServerBuilder {
                     $dimms = $mbSpecs['memory']['slots'] ?? 0;
                     // Count existing RAM
                     $existingRam = [];
-                    if (!empty($config['ram_configurations'])) {
-                        $ramConfigs = json_decode($config['ram_configurations'], true);
+                    if (!empty($config['ram_configuration'])) {
+                        $ramConfigs = json_decode($config['ram_configuration'], true);
                         if (is_array($ramConfigs)) {
                             $existingRam = $ramConfigs;
                         }
@@ -7767,8 +7907,8 @@ class ServerBuilder {
                     if ($driveBays > 0) {
                         // Count existing storage
                         $existingStorage = [];
-                        if (!empty($config['storage_configurations'])) {
-                            $storageConfigs = json_decode($config['storage_configurations'], true);
+                        if (!empty($config['storage_configuration'])) {
+                            $storageConfigs = json_decode($config['storage_configuration'], true);
                             if (is_array($storageConfigs)) {
                                 $existingStorage = $storageConfigs;
                             }
@@ -8016,8 +8156,8 @@ class ServerBuilder {
 
             // Extract storage components from JSON
             $storageComponents = [];
-            if (!empty($config['storage_configurations'])) {
-                $storageConfigs = json_decode($config['storage_configurations'], true);
+            if (!empty($config['storage_configuration'])) {
+                $storageConfigs = json_decode($config['storage_configuration'], true);
                 if (is_array($storageConfigs)) {
                     $storageComponents = $storageConfigs;
                 }

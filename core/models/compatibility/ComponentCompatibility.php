@@ -711,13 +711,17 @@ class ComponentCompatibility {
     }
 
     /**
-     * Check if CPU memory type is compatible with required memory type
-     * Implements backward compatibility logic (newer CPU can use older RAM with warning)
+     * Check if CPU memory type is compatible with required memory type.
+     *
+     * DDR generations (DDR3/DDR4/DDR5) are mechanically keyed and electrically
+     * distinct, so there is NO cross-generation compatibility in either direction:
+     * a DDR5 platform cannot accept DDR4 modules, and a DDR4 platform cannot accept
+     * DDR5 modules. Only an exact generation match is compatible.
      *
      * Compatibility Rules:
-     * - Same generation (DDR5 + DDR5) = Compatible, no warning
-     * - Newer CPU generation (DDR5 CPU + DDR4 RAM) = Compatible with warning (backward compatible)
-     * - Older CPU generation (DDR4 CPU + DDR5 RAM) = Incompatible (cannot use newer RAM)
+     * - Same generation (DDR5 + DDR5) = Compatible
+     * - Any cross-generation pairing = Incompatible [Fixes H1: the old code treated
+     *   "newer CPU + older RAM" as a compatible-with-warning false PASS]
      *
      * @param string $cpuMemoryType The memory type supported by CPU
      * @param string $requiredMemoryType The memory type required by installed RAM
@@ -730,7 +734,7 @@ class ComponentCompatibility {
         $cpuNormalized = DataNormalizationUtils::normalizeMemoryType($cpuMemoryType);
         $requiredNormalized = DataNormalizationUtils::normalizeMemoryType($requiredMemoryType);
 
-        // Same generation - perfect match
+        // Same generation - the only compatible case.
         if ($cpuGen === $requiredGen) {
             return [
                 'compatible' => true,
@@ -739,20 +743,12 @@ class ComponentCompatibility {
             ];
         }
 
-        // CPU supports newer generation than installed RAM - backward compatible
-        if ($cpuGen > $requiredGen) {
-            return [
-                'compatible' => true,
-                'warning' => "CPU supports {$cpuNormalized} but {$requiredNormalized} RAM installed - RAM will run at {$requiredNormalized} speeds",
-                'reason' => "Backward compatible: CPU ({$cpuNormalized}) supports newer generation than RAM ({$requiredNormalized})"
-            ];
-        }
-
-        // CPU supports older generation than installed RAM - incompatible
+        // Any cross-generation pairing is physically impossible (different DIMM key
+        // and electrical signaling), regardless of which side is newer.
         return [
             'compatible' => false,
             'warning' => null,
-            'reason' => "CPU only supports {$cpuNormalized} but {$requiredNormalized} RAM is installed - incompatible"
+            'reason' => "Incompatible memory generation: CPU supports {$cpuNormalized} but {$requiredNormalized} RAM is installed - DDR generations are not cross-compatible"
         ];
     }
 
@@ -1053,6 +1049,75 @@ class ComponentCompatibility {
     }
     
     /**
+     * Run real pairwise compatibility checks across a component set and derive a
+     * secondary score from the actual results.
+     *
+     * BUGFIX (C2): the previous ComponentValidator::validateComponentConfiguration
+     * hardcoded every pair to compatible=true and the overall score to 1.0, so the
+     * displayed "compatibility score" was always ~excellent regardless of fit. This
+     * uses the genuine checkComponentPairCompatibility() for each pair, treats any
+     * hard incompatibility as a failing score (score is SECONDARY to pass/fail), and
+     * only shaves for warnings otherwise.
+     *
+     * @param array $components Each with at least 'type' and 'uuid'
+     * @return array overall_compatible, overall_score, individual_checks, total_checks
+     */
+    private function computeConfigurationCompatibility($components) {
+        $results = [];
+        $overallCompatible = true;
+        $warningCount = 0;
+        $checks = 0;
+
+        $count = is_array($components) ? count($components) : 0;
+        for ($i = 0; $i < $count; $i++) {
+            for ($j = $i + 1; $j < $count; $j++) {
+                $c1 = $components[$i];
+                $c2 = $components[$j];
+                // Skip malformed entries rather than emitting notices.
+                if (empty($c1['type']) || empty($c1['uuid']) || empty($c2['type']) || empty($c2['uuid'])) {
+                    continue;
+                }
+
+                try {
+                    $compatibility = $this->checkComponentPairCompatibility($c1, $c2);
+                } catch (Exception $e) {
+                    // A checker error is NOT a pass: record it as an issue so it
+                    // surfaces instead of silently scoring as compatible. [C2/C7]
+                    error_log("Pair compatibility check error: " . $e->getMessage());
+                    $compatibility = [
+                        'compatible' => false,
+                        'issues' => ['Compatibility check failed: ' . $e->getMessage()],
+                        'warnings' => []
+                    ];
+                }
+
+                $results[] = [
+                    'component_1' => $c1,
+                    'component_2' => $c2,
+                    'compatibility' => $compatibility
+                ];
+                $checks++;
+
+                if (empty($compatibility['compatible'])) {
+                    $overallCompatible = false;
+                }
+                $warningCount += count($compatibility['warnings'] ?? []);
+            }
+        }
+
+        // Score is secondary to hard pass/fail: any incompatibility fails the score;
+        // otherwise start at 1.0 and shave 0.05 per warning (floored at 0.5).
+        $overallScore = !$overallCompatible ? 0.0 : max(0.5, 1.0 - (0.05 * $warningCount));
+
+        return [
+            'overall_compatible' => $overallCompatible,
+            'overall_score' => $overallScore,
+            'individual_checks' => $results,
+            'total_checks' => $checks
+        ];
+    }
+
+    /**
      * Find potential compatibility issues in a component set
      */
     public function findPotentialIssues($components) {
@@ -1103,7 +1168,7 @@ class ComponentCompatibility {
             }
             
             // Check for compatibility between selected components
-            $compatibilityResult = $this->validator->validateComponentConfiguration($components);
+            $compatibilityResult = $this->computeConfigurationCompatibility($components);
             if (!$compatibilityResult['overall_compatible']) {
                 foreach ($compatibilityResult['individual_checks'] as $check) {
                     if (!$check['compatibility']['compatible']) {
@@ -1137,7 +1202,7 @@ class ComponentCompatibility {
             ];
         }
         
-        $validation = $this->validator->validateComponentConfiguration($components);
+        $validation = $this->computeConfigurationCompatibility($components);
         $score = $validation['overall_score'];
         
         // Determine rating based on score
@@ -1568,8 +1633,13 @@ class ComponentCompatibility {
 
             // Check if normalized interfaces match (protocol and generation)
             if ($normalizedStorageInterface['protocol'] === $normalizedMbInterface['protocol']) {
-                // Same protocol - check generation compatibility
-                if ($normalizedStorageInterface['generation'] === $normalizedMbInterface['generation']) {
+                // Same protocol - check generation compatibility.
+                // BUGFIX (M5): use a type-tolerant comparison so an int generation
+                // (e.g. SATA 3) and a float generation (e.g. 3.0) are recognised as an
+                // exact match instead of falling through to the lower-scored branch.
+                if ($normalizedStorageInterface['generation'] !== null &&
+                    $normalizedMbInterface['generation'] !== null &&
+                    (float)$normalizedStorageInterface['generation'] === (float)$normalizedMbInterface['generation']) {
                     // Perfect match
                     return [
                         'compatible' => true,
@@ -1929,18 +1999,51 @@ class ComponentCompatibility {
     }
     
     private function getServerConfiguration($configUuid) {
-        // This would interface with your server configuration system
-        // Placeholder implementation
-        return [
-            'motherboard_uuid' => null,
-            'storage_components' => []
-        ];
+        // BUGFIX (M8): this was a placeholder that always returned an empty config,
+        // so checkStorageCompatibilityRecursive() (exposed via compatibility_api)
+        // always reported "No motherboard found in server configuration". Load the
+        // real row and extract the motherboard + storage component list.
+        try {
+            $stmt = $this->pdo->prepare("SELECT motherboard_uuid, storage_configuration FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                return ['motherboard_uuid' => null, 'storage_components' => []];
+            }
+
+            $storageComponents = [];
+            if (!empty($row['storage_configuration'])) {
+                $decoded = json_decode($row['storage_configuration'], true);
+                if (is_array($decoded)) {
+                    foreach ($decoded as $storage) {
+                        if (!empty($storage['uuid'])) {
+                            $storageComponents[] = [
+                                'uuid' => $storage['uuid'],
+                                'quantity' => $storage['quantity'] ?? 1
+                            ];
+                        }
+                    }
+                }
+            }
+
+            return [
+                'motherboard_uuid' => $row['motherboard_uuid'] ?? null,
+                'storage_components' => $storageComponents
+            ];
+        } catch (Exception $e) {
+            error_log("getServerConfiguration error: " . $e->getMessage());
+            return ['motherboard_uuid' => null, 'storage_components' => []];
+        }
     }
     
     private function analyzeBayCapacity($storageComponents, $motherboardUuid) {
-        // Analyze if motherboard has sufficient bays for all storage components
-        // This is a simplified implementation - full version would count actual bay usage
-        
+        // NOTE (M8): simplified placeholder. The AUTHORITATIVE, bay-accurate check —
+        // chassis bays, form-factor locks, caddies and quantity-aware counting — lives
+        // in StorageConnectionValidator (CHECK 5 / checkBayAvailability) and runs on the
+        // add path. This recursive endpoint intentionally does not duplicate that logic
+        // to avoid the divergent-engine fragmentation the audit warns about; it returns
+        // a permissive result here so it never *blocks* on an un-implemented bay count.
         return [
             'sufficient_bays' => true,
             'bay_utilization_score' => 0.90,
@@ -1987,9 +2090,14 @@ class ComponentCompatibility {
             $ramModuleType = $ramData['module_type'] ?? null; // UDIMM, RDIMM, LRDIMM
             $ramSpeed = $this->dataExtractor->extractMemorySpeed($ramData);
 
-            // Collect memory requirements from existing components
+            // Collect memory requirements from existing components.
+            // type_sets holds ONE supported-type set per constraining component (each
+            // CPU and the motherboard). The RAM type must be present in EVERY set
+            // (intersection), not in the union. supported_types keeps the union purely
+            // for human-readable messages. [Fixes H2]
             $memoryRequirements = [
                 'supported_types' => [],
+                'type_sets' => [],
                 'max_speeds' => [],
                 'form_factors' => [],
                 'sources' => []
@@ -2037,7 +2145,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['Compatibility check failed - defaulting to compatible'],
+                'warnings' => ['Compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify RAM compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()]
             ];
@@ -2250,7 +2359,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['Compatibility check failed - defaulting to compatible'],
+                'warnings' => ['Compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify PCIe card compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()],
                 'compatibility_summary' => 'Compatibility check failed - assumed compatible'
@@ -2483,7 +2593,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['HBA compatibility check failed - defaulting to compatible'],
+                'warnings' => ['HBA compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify HBA card compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()],
                 'compatibility_summary' => 'Compatibility check failed - assumed compatible'
@@ -2675,7 +2786,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['Compatibility check failed - defaulting to compatible'],
+                'warnings' => ['Compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify CPU compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()]
             ];
@@ -2787,7 +2899,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['Compatibility check failed - defaulting to compatible'],
+                'warnings' => ['Compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify motherboard compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()],
                 'compatibility_summary' => 'Compatibility check failed - assumed compatible'
@@ -2928,7 +3041,8 @@ class ComponentCompatibility {
             return [
                 'compatible' => true,
                 'issues' => [],
-                'warnings' => ['Compatibility check failed - defaulting to compatible'],
+                'warnings' => ['Compatibility check could not be completed (validator error) - NOT verified; treated as non-blocking, please re-validate'],
+                'check_errored' => true,
                 'recommendations' => ['Verify storage compatibility manually'],
                 'details' => ['Error: ' . $e->getMessage()],
                 'compatibility_summary' => 'Compatibility check failed - assumed compatible'
@@ -3232,6 +3346,8 @@ class ComponentCompatibility {
                 $memoryRequirements['supported_types'],
                 $cpuMemoryTypes
             );
+            // Record this CPU's set as its own constraint for intersection. [H2]
+            $memoryRequirements['type_sets'][] = $cpuMemoryTypes;
             $memoryRequirements['sources'][] = 'CPU: ' . implode(', ', $cpuMemoryTypes);
             $result['details'][] = 'CPU supports: ' . implode(', ', $cpuMemoryTypes);
         }
@@ -3266,6 +3382,8 @@ class ComponentCompatibility {
                 $memoryRequirements['supported_types'],
                 $mbMemoryTypes
             );
+            // Record the motherboard's set as its own constraint for intersection. [H2]
+            $memoryRequirements['type_sets'][] = $mbMemoryTypes;
             $memoryRequirements['sources'][] = 'Motherboard: ' . implode(', ', $mbMemoryTypes);
             $result['details'][] = 'Motherboard supports: ' . implode(', ', $mbMemoryTypes);
         }
@@ -3356,18 +3474,39 @@ class ComponentCompatibility {
             }
         }
 
-        // Check memory type compatibility with intersection of requirements
-        if (!empty($memoryRequirements['supported_types'])) {
-            $supportedTypes = array_unique($memoryRequirements['supported_types']);
+        // Check memory type compatibility as the INTERSECTION of every constraining
+        // component's supported set: the RAM type must be supported by the
+        // motherboard AND by every installed CPU. Previously this used the UNION
+        // (array_merge), so e.g. a DDR4-only board + DDR5 CPU wrongly accepted DDR4
+        // RAM. Comparison is generation-normalized (DDR4-3200 == DDR4). [Fixes H2]
+        if (!empty($memoryRequirements['type_sets'])) {
+            $ramTypeNorm = DataNormalizationUtils::normalizeMemoryType($ramMemoryType);
 
-            // For multiple CPUs, find common supported types
-            $typeCompatible = in_array($ramMemoryType, $supportedTypes);
+            $typeCompatible = true;
+            foreach ($memoryRequirements['type_sets'] as $typeSet) {
+                $setNorm = array_map([DataNormalizationUtils::class, 'normalizeMemoryType'], $typeSet);
+                if (!in_array($ramTypeNorm, $setNorm, true)) {
+                    $typeCompatible = false;
+                    break;
+                }
+            }
+
+            // Intersection of all sets, for a clear message of what actually fits.
+            $normalizedSets = array_map(function ($set) {
+                return array_map([DataNormalizationUtils::class, 'normalizeMemoryType'], $set);
+            }, $memoryRequirements['type_sets']);
+            $commonTypes = array_shift($normalizedSets);
+            foreach ($normalizedSets as $set) {
+                $commonTypes = array_intersect($commonTypes, $set);
+            }
+            $commonTypes = array_values(array_unique($commonTypes));
 
             if (!$typeCompatible) {
                 $result['compatible'] = false;
-                $result['issues'][] = "Memory type {$ramMemoryType} not supported by existing components (supported: " . implode(', ', $supportedTypes) . ")";
+                $commonLabel = !empty($commonTypes) ? implode(', ', $commonTypes) : 'none (CPU and motherboard memory types do not overlap)';
+                $result['issues'][] = "Memory type {$ramMemoryType} not supported by all components (common supported: {$commonLabel})";
             } else {
-                $result['recommendations'][] = "Memory type {$ramMemoryType} compatible with existing components";
+                $result['recommendations'][] = "Memory type {$ramMemoryType} compatible with all existing components";
             }
         }
 
@@ -3403,6 +3542,44 @@ class ComponentCompatibility {
     /**
      * Analyze existing motherboard for PCIe card compatibility
      */
+    /**
+     * Consume one physical PCIe slot of an adequate size from available_by_size.
+     *
+     * BUGFIX (C3): existing cards previously incremented only the scalar used_slots
+     * and never decremented available_by_size, so the physical-fit check always saw
+     * the motherboard's TOTAL slot counts. A board whose only x16 slot was occupied
+     * would still accept another x16 card. A card of width N fits any slot >= N, so
+     * we decrement the smallest adequate size still available (mirroring assignment).
+     *
+     * @param array $slotAvailability  passed by reference
+     * @param mixed $cardSlotSize      card width as "x8", "8", or int
+     */
+    private function consumePcieSlotBySize(&$slotAvailability, $cardSlotSize) {
+        if (!isset($slotAvailability['available_by_size']) || !is_array($slotAvailability['available_by_size'])) {
+            return;
+        }
+
+        $req = (int)preg_replace('/\D/', '', (string)$cardSlotSize);
+        if ($req <= 0) {
+            $req = 1;
+        }
+
+        // A card fits any slot at least as wide as itself; take the smallest first.
+        foreach ([1, 4, 8, 16] as $w) {
+            if ($w < $req) {
+                continue;
+            }
+            $key = 'x' . $w;
+            if (!empty($slotAvailability['available_by_size'][$key]) &&
+                $slotAvailability['available_by_size'][$key] > 0) {
+                $slotAvailability['available_by_size'][$key]--;
+                return;
+            }
+        }
+        // No adequately-sized slot remains; leave counts at zero so the physical-fit
+        // check correctly reports the board as full for this width.
+    }
+
     private function analyzeExistingMotherboardForPCIe($motherboardComponent, &$slotAvailability) {
         $mbData = $this->dataLoader->getComponentData('motherboard', $motherboardComponent['uuid']);
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
@@ -3442,8 +3619,9 @@ class ComponentCompatibility {
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
 
         if (!$pcieData) {
-            // Unknown card, assume 1 slot
+            // Unknown card, assume 1 slot of the smallest available size
             $slotAvailability['used_slots'] += 1;
+            $this->consumePcieSlotBySize($slotAvailability, 1); // C3
             $result['details'][] = 'Existing PCIe card (specs unknown) - uses 1 slot';
             return $result;
         }
@@ -3474,6 +3652,8 @@ class ComponentCompatibility {
             // Regular PCIe card
             $cardSlotSize = $this->dataExtractor->extractPCIeSlotSize($pcieData);
             $slotAvailability['used_slots'] += 1;
+            // C3: actually decrement the size bucket this card occupies.
+            $this->consumePcieSlotBySize($slotAvailability, $cardSlotSize);
 
             $cardModel = $pcieData['model'] ?? 'PCIe Card';
             $result['details'][] = "Existing card: {$cardModel} (uses x{$cardSlotSize} slot)";
@@ -3490,8 +3670,9 @@ class ComponentCompatibility {
         $result = ['compatible' => true, 'issues' => [], 'details' => []];
 
         if (!$nicData) {
-            // Unknown NIC, assume 1 slot
+            // Unknown NIC, assume 1 slot of the smallest available size
             $slotAvailability['used_slots'] += 1;
+            $this->consumePcieSlotBySize($slotAvailability, 1); // C3
             $result['details'][] = 'Existing NIC (specs unknown) - uses 1 slot';
             return $result;
         }
@@ -3501,6 +3682,12 @@ class ComponentCompatibility {
 
         if (stripos($interface, 'PCIe') !== false || stripos($interface, 'PCI Express') !== false || stripos($interface, 'PCI-E') !== false) {
             $slotAvailability['used_slots'] += 1;
+            // C3: decrement the size bucket the NIC occupies (default x8 if unparseable).
+            $nicSlotSize = 8;
+            if (preg_match('/x(\d+)/i', (string)$interface, $nicSizeMatch)) {
+                $nicSlotSize = (int)$nicSizeMatch[1];
+            }
+            $this->consumePcieSlotBySize($slotAvailability, $nicSlotSize);
 
             $nicModel = $nicData['model'] ?? 'NIC';
             $result['details'][] = "Existing NIC: {$nicModel} (uses 1 PCIe slot)";
@@ -4386,7 +4573,11 @@ class ComponentCompatibility {
         }
 
         // Calculate HBA port usage - count existing storage devices
-        // Note: M.2 NVMe drives on motherboard don't use HBA ports
+        // Note: M.2 NVMe drives on motherboard don't use HBA ports.
+        // KNOWN-LIMITATION (M3): 'existing_storage_count' is not populated by any caller,
+        // so $usedPorts stays 0 and this "ports exhausted" branch never fires here. The
+        // authoritative, quantity-aware HBA port check lives in
+        // StorageConnectionValidator::checkHBACardRequirement.
         $usedPorts = 0;
         if (isset($storageRequirements['existing_storage_count'])) {
             $usedPorts = $storageRequirements['existing_storage_count'];
@@ -4468,6 +4659,10 @@ class ComponentCompatibility {
         $bayConfiguration = $driveBays['bay_configuration'] ?? [];
 
         // Count used bays (existing storage in configuration)
+        // KNOWN-LIMITATION (M3): 'existing_storage_count' is not populated by any caller,
+        // so $usedBays stays 0 and this "bays exhausted" branch never fires here. The
+        // authoritative, quantity-aware bay check lives in
+        // StorageConnectionValidator::checkBayAvailability (see H10).
         $usedBays = 0;
         if (isset($storageRequirements['existing_storage_count'])) {
             $usedBays = $storageRequirements['existing_storage_count'];
@@ -5143,9 +5338,23 @@ class ComponentCompatibility {
             ];
         }
         
-        // Check speed compatibility
+        // Check speed compatibility.
+        // BUGFIX (M6): pick the NIC's fastest speed by NUMERIC Gbps, not lexically.
+        // A raw max() on strings ranks "40G" above "100G" ('4' > '1'), mis-reporting
+        // the maximum speed of a 100G NIC.
         $nicSpeeds = $nicSpecs['speeds'] ?? [];
-        $nicMaxSpeed = is_array($nicSpeeds) && !empty($nicSpeeds) ? max($nicSpeeds) : '';
+        $nicMaxSpeed = '';
+        if (is_array($nicSpeeds) && !empty($nicSpeeds)) {
+            $nicMaxSpeed = $nicSpeeds[0];
+            $maxVal = NICPortTracker::extractSpeedValue($nicMaxSpeed);
+            foreach ($nicSpeeds as $speedCandidate) {
+                $candidateVal = NICPortTracker::extractSpeedValue($speedCandidate);
+                if ($candidateVal > $maxVal) {
+                    $maxVal = $candidateVal;
+                    $nicMaxSpeed = $speedCandidate;
+                }
+            }
+        }
         $sfpSpeed = $sfpSpecs['speed'] ?? '';
         
         $speedCompatible = NICPortTracker::validateSpeedCompatibility($nicMaxSpeed, $sfpSpeed);

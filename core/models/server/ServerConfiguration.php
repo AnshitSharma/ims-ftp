@@ -268,8 +268,29 @@ class ServerConfiguration {
                 }
             }
 
-            // HBA Card
-            if (!empty($this->data['hbacard_uuid'])) {
+            // HBA Card configuration (JSON array, with legacy scalar fallback).
+            // BUGFIX (TP-4B): previously this read only the legacy scalar hbacard_uuid,
+            // so it saw at most one HBA and missed everything stored in the
+            // hbacard_config array. Read the array first; fall back to the scalar.
+            if (!empty($this->data['hbacard_config'])) {
+                $hbaConfigs = json_decode($this->data['hbacard_config'], true);
+                if (is_array($hbaConfigs)) {
+                    // Migration: single object (top-level uuid) vs array of objects
+                    if (isset($hbaConfigs['uuid'])) {
+                        $hbaConfigs = [$hbaConfigs];
+                    }
+                    foreach ($hbaConfigs as $hba) {
+                        if (!empty($hba['uuid'])) {
+                            $components[] = [
+                                'component_type' => 'hbacard',
+                                'component_uuid' => $hba['uuid'],
+                                'quantity' => 1,
+                                'added_at' => $hba['added_at'] ?? null
+                            ];
+                        }
+                    }
+                }
+            } elseif (!empty($this->data['hbacard_uuid'])) {
                 $components[] = [
                     'component_type' => 'hbacard',
                     'component_uuid' => $this->data['hbacard_uuid'],
@@ -309,6 +330,28 @@ class ServerConfiguration {
                                 'component_uuid' => $pcie['uuid'],
                                 'quantity' => $pcie['quantity'] ?? 1,
                                 'added_at' => $pcie['added_at'] ?? null
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // SFP configuration (modules; may be assigned to a NIC port or staged).
+            // BUGFIX (TP-4B): getComponents() previously had no SFP branch, so any
+            // check built on it was blind to SFP modules entirely.
+            if (!empty($this->data['sfp_configuration'])) {
+                $sfpConfig = json_decode($this->data['sfp_configuration'], true);
+                $sfps = $sfpConfig['sfps'] ?? [];
+                if (is_array($sfps)) {
+                    foreach ($sfps as $sfp) {
+                        if (!empty($sfp['uuid'])) {
+                            $components[] = [
+                                'component_type' => 'sfp',
+                                'component_uuid' => $sfp['uuid'],
+                                'quantity' => 1,
+                                'added_at' => $sfp['added_at'] ?? null,
+                                'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
+                                'port_index' => $sfp['port_index'] ?? null
                             ];
                         }
                     }

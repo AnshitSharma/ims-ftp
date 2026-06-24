@@ -29,7 +29,14 @@ class ComponentValidator {
     }
 
     /**
-     * Validate component configuration in bulk
+     * Validate component configuration in bulk.
+     *
+     * DEPRECATED / SUPERSEDED: this method only ever returned a hardcoded
+     * compatible=true / score=1.0 (it has no access to the real pairwise checks),
+     * which made any displayed compatibility score meaningless. The orchestrator
+     * now uses ComponentCompatibility::computeConfigurationCompatibility(), which runs
+     * the genuine checkComponentPairCompatibility() for each pair. This stub is kept
+     * only for backward binary compatibility and should not be relied upon. [C2]
      */
     public function validateComponentConfiguration($components) {
         $results = [];
@@ -67,6 +74,29 @@ class ComponentValidator {
     }
 
     /**
+     * Resolve a motherboard's maximum memory capacity in GB from its raw JSON
+     * memory spec. Handles max_capacity_TB (float-aware: 1.5 TB -> 1536 GB, not the
+     * old (int)1.5*1024 = 1024 GB) and max_capacity_GB (previously ignored, so such
+     * boards silently defaulted to 128 GB). Falls back to 128 GB only when neither
+     * key is declared. [Fixes TP-2B]
+     *
+     * @param array $memory Raw motherboard memory spec
+     * @return int Maximum capacity in GB
+     */
+    private function resolveMaxCapacityGb($memory) {
+        if (isset($memory['max_capacity_TB']) && is_numeric($memory['max_capacity_TB'])) {
+            return (int)round(((float)$memory['max_capacity_TB']) * 1024);
+        }
+        if (isset($memory['max_capacity_GB']) && is_numeric($memory['max_capacity_GB'])) {
+            return (int)$memory['max_capacity_GB'];
+        }
+        if (isset($memory['max_capacity_gb']) && is_numeric($memory['max_capacity_gb'])) {
+            return (int)$memory['max_capacity_gb'];
+        }
+        return 128;
+    }
+
+    /**
      * Parse motherboard specifications from JSON
      */
     public function parseMotherboardSpecifications($motherboardUuid) {
@@ -98,8 +128,7 @@ class ComponentValidator {
                     'slots' => (int)($data['memory']['slots'] ?? 4),
                     'types' => isset($data['memory']['type']) ? [$data['memory']['type']] : ['DDR4'],
                     'max_frequency_mhz' => (int)($data['memory']['max_frequency_MHz'] ?? 3200),
-                    'max_capacity_gb' => isset($data['memory']['max_capacity_TB']) ?
-                        ((int)$data['memory']['max_capacity_TB'] * 1024) : 128,
+                    'max_capacity_gb' => $this->resolveMaxCapacityGb($data['memory'] ?? []),
                     'ecc_support' => $data['memory']['ecc_support'] ?? false
                 ],
                 'storage' => [
@@ -673,6 +702,29 @@ class ComponentValidator {
     }
 
     /**
+     * Normalize a CPU spec argument that may arrive either as a single spec array
+     * or as a list of spec arrays into a consistent list of specs.
+     *
+     * getCPUSpecsFromConfig() returns a LIST of CPU specs, but several memory
+     * validators were written assuming a single spec and indexed it as
+     * $cpuSpecs['compatibility'][...] — which is undefined for a list, so the CPU
+     * branch silently never ran. Normalizing here lets the validators iterate every
+     * installed CPU regardless of how the caller passes the data. [Fixes TP-2C]
+     *
+     * @param mixed $cpuSpecs Single CPU spec, list of CPU specs, or empty
+     * @return array List of CPU spec arrays
+     */
+    private function normalizeCpuSpecList($cpuSpecs) {
+        if (empty($cpuSpecs) || !is_array($cpuSpecs)) {
+            return [];
+        }
+        // A numerically-indexed array (keys 0..n-1) is already a list of specs;
+        // anything else is a single associative spec array.
+        $isList = array_keys($cpuSpecs) === range(0, count($cpuSpecs) - 1);
+        return $isList ? $cpuSpecs : [$cpuSpecs];
+    }
+
+    /**
      * Validate memory type compatibility with motherboard and CPU
      */
     public function validateMemoryTypeCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs) {
@@ -682,6 +734,8 @@ class ComponentValidator {
             return [
                 'compatible' => false,
                 'error' => "RAM memory type not specified",
+                'message' => "RAM memory type not specified",
+                'supported_types' => [],
                 'details' => null
             ];
         }
@@ -702,9 +756,12 @@ class ComponentValidator {
         }
 
         if (!$motherboardCompatible) {
+            $mbMsg = "Memory type $ramMemoryType incompatible with motherboard supporting " . implode(', ', $motherboardMemoryTypes);
             return [
                 'compatible' => false,
-                'error' => "Memory type $ramMemoryType incompatible with motherboard supporting " . implode(', ', $motherboardMemoryTypes),
+                'error' => $mbMsg,
+                'message' => $mbMsg,
+                'supported_types' => $motherboardMemoryTypes,
                 'details' => [
                     'ram_type' => $ramMemoryType,
                     'motherboard_types' => $motherboardMemoryTypes,
@@ -713,23 +770,32 @@ class ComponentValidator {
             ];
         }
 
-        // Check CPU compatibility if CPU specs provided
-        if ($cpuSpecs && isset($cpuSpecs['compatibility']['memory_types'])) {
-            $cpuMemoryTypes = $cpuSpecs['compatibility']['memory_types'];
-            $cpuCompatible = false;
+        // Check CPU compatibility for EVERY installed CPU. cpuSpecs may be a single
+        // spec or a list (TP-2C); normalizeCpuSpecList handles both. Every CPU's
+        // memory controller must support the RAM type.
+        $allCpuMemoryTypes = [];
+        foreach ($this->normalizeCpuSpecList($cpuSpecs) as $cpu) {
+            $cpuMemoryTypes = $cpu['compatibility']['memory_types'] ?? null;
+            if (!is_array($cpuMemoryTypes) || empty($cpuMemoryTypes)) {
+                continue; // this CPU does not declare memory types -> cannot constrain
+            }
+            $allCpuMemoryTypes = array_merge($allCpuMemoryTypes, $cpuMemoryTypes);
 
+            $cpuCompatible = false;
             foreach ($cpuMemoryTypes as $cpuType) {
-                $normalizedCpuType = DataNormalizationUtils::normalizeMemoryType($cpuType);
-                if ($normalizedCpuType === $ramMemoryType) {
+                if (DataNormalizationUtils::normalizeMemoryType($cpuType) === $ramMemoryType) {
                     $cpuCompatible = true;
                     break;
                 }
             }
 
             if (!$cpuCompatible) {
+                $cpuMsg = "Memory type $ramMemoryType incompatible with CPU supporting " . implode(', ', $cpuMemoryTypes);
                 return [
                     'compatible' => false,
-                    'error' => "Memory type $ramMemoryType incompatible with CPU supporting " . implode(', ', $cpuMemoryTypes),
+                    'error' => $cpuMsg,
+                    'message' => $cpuMsg,
+                    'supported_types' => array_values(array_unique($cpuMemoryTypes)),
                     'details' => [
                         'ram_type' => $ramMemoryType,
                         'motherboard_types' => $motherboardMemoryTypes,
@@ -742,10 +808,12 @@ class ComponentValidator {
         return [
             'compatible' => true,
             'error' => null,
+            'message' => null,
+            'supported_types' => $motherboardMemoryTypes,
             'details' => [
                 'ram_type' => $ramMemoryType,
                 'motherboard_types' => $motherboardMemoryTypes,
-                'cpu_types' => $cpuSpecs['compatibility']['memory_types'] ?? null
+                'cpu_types' => array_values(array_unique($allCpuMemoryTypes)) ?: null
             ]
         ];
     }
@@ -760,6 +828,7 @@ class ComponentValidator {
             return [
                 'compatible' => false,
                 'error' => "RAM form factor not specified",
+                'message' => "RAM form factor not specified",
                 'details' => null
             ];
         }
@@ -773,10 +842,12 @@ class ComponentValidator {
         );
 
         $compatible = ($normalizedRamFormFactor === $motherboardFormFactor);
+        $ffMessage = $compatible ? null : "RAM form factor $normalizedRamFormFactor incompatible with motherboard form factor $motherboardFormFactor";
 
         return [
             'compatible' => $compatible,
-            'error' => $compatible ? null : "RAM form factor $normalizedRamFormFactor incompatible with motherboard form factor $motherboardFormFactor",
+            'error' => $ffMessage,
+            'message' => $ffMessage,
             'details' => [
                 'ram_form_factor' => $normalizedRamFormFactor,
                 'motherboard_form_factor' => $motherboardFormFactor
@@ -788,16 +859,36 @@ class ComponentValidator {
      * Validate ECC compatibility
      */
     public function validateECCCompatibility($ramSpecs, $motherboardSpecs, $cpuSpecs) {
-        $ramECC = $ramSpecs['ecc_support'] ?? false;
+        // RAM JSON nests ECC under features.ecc_support; a few entries also carry a
+        // top-level ecc_support. Read the nested key first, then top level, so ECC
+        // RAM is no longer mis-read as non-ECC. [Fixes TP-2E]
+        $ramECC = $ramSpecs['features']['ecc_support'] ?? $ramSpecs['ecc_support'] ?? false;
         $motherboardECC = $motherboardSpecs['memory']['ecc_support'] ?? false;
-        $cpuECC = $cpuSpecs['compatibility']['ecc_support'] ?? true; // Default to true if not specified
 
-        // If RAM has ECC, both motherboard and CPU must support it
+        // Determine CPU ECC support across ALL installed CPUs. cpuSpecs may be a
+        // single spec or a list (TP-2C) — previously it was indexed as a single
+        // spec, so for a list $cpuECC silently defaulted to true and CPU ECC
+        // mismatches were never caught. A CPU that does not declare the field is
+        // assumed ECC-capable so we don't raise false warnings.
+        $cpuECC = true;
+        foreach ($this->normalizeCpuSpecList($cpuSpecs) as $cpu) {
+            if (isset($cpu['compatibility']) && array_key_exists('ecc_support', $cpu['compatibility'])) {
+                if (!$cpu['compatibility']['ecc_support']) {
+                    $cpuECC = false;
+                    break;
+                }
+            }
+        }
+
+        // If RAM has ECC, both motherboard and CPU must support it. The RAM-addition
+        // flow treats ECC mismatches as warnings (not hard blocks), so we expose a
+        // 'warning' key (which that caller reads) alongside 'error'/'compatible'.
         if ($ramECC) {
             if (!$motherboardECC) {
                 return [
                     'compatible' => false,
                     'error' => "ECC RAM requires ECC-compatible motherboard",
+                    'warning' => "ECC RAM selected but motherboard does not support ECC",
                     'details' => [
                         'ram_ecc' => true,
                         'motherboard_ecc' => false,
@@ -810,6 +901,7 @@ class ComponentValidator {
                 return [
                     'compatible' => false,
                     'error' => "ECC RAM requires ECC-compatible CPU",
+                    'warning' => "ECC RAM selected but an installed CPU does not support ECC",
                     'details' => [
                         'ram_ecc' => true,
                         'motherboard_ecc' => $motherboardECC,
@@ -821,13 +913,16 @@ class ComponentValidator {
 
         // Non-ECC RAM is compatible with ECC systems, but ECC functionality will be disabled
         $warnings = [];
+        $warning = null;
         if (!$ramECC && $motherboardECC && $cpuECC) {
-            $warnings[] = "System supports ECC but non-ECC RAM selected - ECC functionality will be disabled";
+            $warning = "System supports ECC but non-ECC RAM selected - ECC functionality will be disabled";
+            $warnings[] = $warning;
         }
 
         return [
             'compatible' => true,
             'error' => null,
+            'warning' => $warning,
             'warnings' => $warnings,
             'details' => [
                 'ram_ecc' => $ramECC,
@@ -1167,12 +1262,24 @@ class ComponentValidator {
             if ($config) {
                 $components = $config->getComponents();
                 foreach ($components as $comp) {
-                    if ($comp['component_type'] === 'storage') {
-                        $storageResult = $this->validateStorageExists($comp['component_uuid']);
-                        if ($storageResult['exists']) {
-                            // For now, assume SATA interface since storage JSON needs updating
-                            $usedInterfaces['sata']++;
-                        }
+                    if ($comp['component_type'] !== 'storage') {
+                        continue;
+                    }
+                    $storageResult = $this->validateStorageExists($comp['component_uuid']);
+                    if (!$storageResult['exists']) {
+                        continue;
+                    }
+                    // BUGFIX (TP-3A): classify each drive by its real interface +
+                    // form factor instead of counting EVERY drive as SATA, and respect
+                    // quantity. The old code over-subscribed SATA and mis-attributed
+                    // SAS/NVMe drives entirely.
+                    $specs = $storageResult['data'] ?? [];
+                    $bucket = $this->classifyStorageInterfaceBucket(
+                        $specs['interface'] ?? '',
+                        $specs['form_factor'] ?? ''
+                    );
+                    if ($bucket !== null) {
+                        $usedInterfaces[$bucket] += max(1, (int)($comp['quantity'] ?? 1));
                     }
                 }
             }
@@ -1183,6 +1290,43 @@ class ComponentValidator {
             error_log("Error counting used storage interfaces: " . $e->getMessage());
             return ['sata' => 0, 'm2' => 0, 'u2' => 0, 'sas' => 0];
         }
+    }
+
+    /**
+     * Classify a storage drive into one of the motherboard interface buckets
+     * (sata / sas / m2 / u2) from its interface + form-factor strings.
+     * Returns null when it cannot be classified (e.g. a PCIe add-in-card SSD that
+     * occupies an expansion slot rather than a chassis/board storage interface).
+     * [Supports TP-3A]
+     *
+     * @param string $interface  e.g. "SATA III", "SAS", "NVMe PCIe 4.0"
+     * @param string $formFactor e.g. "M.2 2280", "2.5-inch U.2", "3.5-inch"
+     * @return string|null One of 'sata','sas','m2','u2' or null
+     */
+    private function classifyStorageInterfaceBucket($interface, $formFactor) {
+        $iface = strtolower((string)$interface);
+        $ff = strtolower((string)$formFactor);
+
+        if (strpos($iface, 'sas') !== false) {
+            return 'sas';
+        }
+        if (strpos($iface, 'sata') !== false) {
+            return 'sata';
+        }
+        if (strpos($iface, 'nvme') !== false || strpos($iface, 'pcie') !== false) {
+            if (strpos($ff, 'm.2') !== false || strpos($ff, 'm2') !== false) {
+                return 'm2';
+            }
+            if (strpos($ff, 'u.2') !== false || strpos($ff, 'u.3') !== false ||
+                strpos($ff, 'u2') !== false || strpos($ff, 'u3') !== false ||
+                strpos($ff, '2.5') !== false) {
+                return 'u2';
+            }
+            // PCIe add-in-card NVMe (no chassis bay / M.2 / U.2) is not a board
+            // storage interface; it consumes an expansion slot instead.
+            return null;
+        }
+        return null;
     }
 
     /**
@@ -1224,11 +1368,27 @@ class ComponentValidator {
                             }
                         }
                     } elseif (in_array($component['component_type'], ['hbacard', 'pciecard'])) {
-                        // Count other PCIe devices (simplified - assumes x8 for now)
-                        foreach ($motherboardPCIeSlots as $slot) {
-                            if (($slot['lanes'] ?? 1) >= 8) {
-                                $usedSlots[$slot['type']] = ($usedSlots[$slot['type']] ?? 0) + 1;
-                                break;
+                        // BUGFIX (TP-1F): derive the card's actual lane requirement from
+                        // its spec instead of hardcoding x8 (which forced x4 cards onto
+                        // x8+ slots and under-checked x16 cards). Parse the slot width
+                        // from the interface; default to x8 only when unparseable. Also
+                        // respect quantity (each unit needs its own slot).
+                        $cardResult = $this->dataLoader->loadComponentFromJSON($component['component_type'], $component['component_uuid']);
+                        $requiredLanes = 8;
+                        if (!empty($cardResult['found']) && isset($cardResult['data'])) {
+                            $cardData = $cardResult['data'];
+                            $ifaceStr = $cardData['interface'] ?? $cardData['slot_type'] ?? $cardData['pcie_interface'] ?? '';
+                            if (preg_match('/x(\d+)/i', (string)$ifaceStr, $laneMatch)) {
+                                $requiredLanes = (int)$laneMatch[1];
+                            }
+                        }
+                        $qty = max(1, (int)($component['quantity'] ?? 1));
+                        for ($unit = 0; $unit < $qty; $unit++) {
+                            foreach ($motherboardPCIeSlots as $slot) {
+                                if (($slot['lanes'] ?? 1) >= $requiredLanes) {
+                                    $usedSlots[$slot['type']] = ($usedSlots[$slot['type']] ?? 0) + 1;
+                                    break;
+                                }
                             }
                         }
                     }
