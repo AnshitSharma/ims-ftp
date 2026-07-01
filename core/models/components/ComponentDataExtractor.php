@@ -497,8 +497,17 @@ class ComponentDataExtractor {
     }
 
     /**
-     * Extract PCIe slot size from card data
-     * Parses "PCIe 3.0 x8" → returns 8
+     * Extract PCIe slot size (electrical lane width) from card data.
+     * Parses "PCIe 3.0 x8" → returns 8.
+     *
+     * [Fixes M9] When the width cannot be parsed, this used to default to 16 — the
+     * MOST restrictive width — so an unparseable card demanded an x16 slot and was
+     * falsely rejected for fit whenever only smaller slots were free. It now (a) also
+     * reads the real `slot_compatibility.required_slot` field, and (b) returns 0
+     * ("width unknown") rather than guessing a width. The slot-fit checks treat 0 as
+     * "no width constraint" (fits any free slot, no oversized judgement), matching the
+     * engine's data-gated posture (absent spec ⇒ no constraint) without asserting a
+     * fabricated width.
      */
     public function extractPCIeSlotSize($pcieCardData) {
         $interface = $pcieCardData['interface'] ?? '';
@@ -514,7 +523,16 @@ class ComponentDataExtractor {
             return (int)$matches[1];
         }
 
-        return 16; // Default assumption for unknown cards
+        // Fallback: slot_compatibility.required_slot, e.g. "PCIe x8 or x16". A card's
+        // electrical width is the SMALLEST slot it can run in, so take the lowest x-value.
+        $requiredSlot = $pcieCardData['slot_compatibility']['required_slot'] ?? '';
+        if (preg_match_all('/x(\d+)/i', (string)$requiredSlot, $rsMatches) && !empty($rsMatches[1])) {
+            return (int)min(array_map('intval', $rsMatches[1]));
+        }
+
+        // Width undeterminable: return 0 ("unknown"). Fit checks treat this as "no
+        // width constraint" rather than the old most-restrictive x16 (see docblock, M9).
+        return 0;
     }
 
     /**

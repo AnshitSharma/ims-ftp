@@ -766,26 +766,19 @@ class StorageConnectionValidator {
             ];
         }
 
-        // Count used bays by SUMMED quantity, not entry count. A single storage
-        // entry can represent many physical drives (quantity > 1), so count() under-
-        // counted occupied bays and let multi-drive adds overflow the chassis.
-        // [Fixes H10: bay counting ignored quantity]
-        $usedBays = 0;
-        if (!empty($existing['storage']) && is_array($existing['storage'])) {
-            foreach ($existing['storage'] as $existingDrive) {
-                $usedBays += max(1, (int)($existingDrive['quantity'] ?? 1));
-            }
-        }
-
-        // Account for the quantity of the drive(s) being added in this call.
         $quantityBeingAdded = max(1, (int)($storageSpecs['quantity'] ?? 1));
+        $bayModel = $this->evaluateBayUsage(
+            $existing['storage'] ?? [], $storageSpecs, $quantityBeingAdded, (int)$totalBays
+        );
+        $usedBays = $bayModel['used'];
+        $bayRequested = $bayModel['requested'];
 
-        if (($usedBays + $quantityBeingAdded) > $totalBays) {
+        if (($usedBays + $bayRequested) > $totalBays) {
             return [
                 'available' => false,
                 'error' => [
                     'type' => 'bay_limit_exceeded',
-                    'message' => "Chassis has $totalBays drive bay(s): $usedBays in use, cannot add $quantityBeingAdded more",
+                    'message' => "Chassis has $totalBays drive bay(s): $usedBays in use, cannot add $bayRequested more",
                     'resolution' => "Remove existing storage OR choose chassis with more bays"
                 ]
             ];
@@ -827,10 +820,69 @@ class StorageConnectionValidator {
         return [
             'available' => true,
             'caddy_required' => $caddyRequired,
-            'available_bays' => max(0, $totalBays - $usedBays - $quantityBeingAdded),
+            'available_bays' => max(0, $totalBays - $usedBays - $bayRequested),
             'form_factor_lock' => $existingFormFactorLock,
             'form_factor_enforced' => (bool) $existingFormFactorLock
         ];
+    }
+
+    /**
+     * Single chassis-bay usage model (M11 Phase 3 — StorageBayAuthority).
+     *
+     * Combines the two correct behaviours the divergent legacy counters each had
+     * only one of:
+     *   - quantity-aware (a quantity-N entry occupies N bays) — the add-time fix (H10), and
+     *   - bay-form-factor-only (M.2 / PCIe AIC SSDs attach to the board/slot, not a
+     *     chassis bay, so they consume zero bays) — the finalize-time intent.
+     * A drive is "bay-consuming" iff its physical form factor is 2.5"/3.5"; this
+     * INCLUDES U.2/U.3 NVMe, which are 2.5" drives seated in hot-swap bays.
+     * Unknown specs are counted conservatively (cannot prove non-bay → assume a bay)
+     * to avoid silently overflowing the backplane.
+     *
+     * @param array      $existingStorage Existing storage entries (component_uuid + quantity)
+     * @param array|null $candidateSpec   Spec of the drive being added (null/non-array = none)
+     * @param int        $candidateQty    Quantity being added
+     * @param int        $totalBays       Chassis total_bays
+     * @return array{sufficient:bool,total:int,used:int,requested:int,available:int}
+     */
+    public function evaluateBayUsage(array $existingStorage, $candidateSpec, int $candidateQty, int $totalBays): array
+    {
+        $used = 0;
+        foreach ($existingStorage as $drive) {
+            $uuid = $drive['component_uuid'] ?? '';
+            $qty  = max(1, (int)($drive['quantity'] ?? 1));
+            if ($uuid === '') {
+                $used += $qty; // no uuid to resolve → cannot prove non-bay, count it
+                continue;
+            }
+            $specs = $this->getStorageSpecs($uuid);
+            if (!$specs || $this->isBayConsuming($specs)) {
+                $used += $qty; // unknown spec or 2.5"/3.5" form factor → occupies bays
+            }
+        }
+
+        $requested = 0;
+        if (is_array($candidateSpec) && $this->isBayConsuming($candidateSpec)) {
+            $requested = max(1, $candidateQty);
+        }
+
+        return [
+            'sufficient' => ($used + $requested) <= $totalBays,
+            'total'      => $totalBays,
+            'used'       => $used,
+            'requested'  => $requested,
+            'available'  => max(0, $totalBays - $used),
+        ];
+    }
+
+    /**
+     * Is this storage device seated in a chassis drive bay? True for 2.5"/3.5"
+     * physical form factors (incl. U.2/U.3); false for M.2 / PCIe AIC SSDs.
+     */
+    private function isBayConsuming(array $specs): bool
+    {
+        $ff = $this->extractPhysicalFormFactor((string)($specs['form_factor'] ?? ''));
+        return in_array($ff, ['2.5-inch', '3.5-inch'], true);
     }
 
     /**
@@ -918,77 +970,45 @@ class StorageConnectionValidator {
      * This check only applies to storage on PCIe expansion slots.
      */
     private function checkPCIeLaneBudget($storageSpecs, $existing) {
-        // Check if this storage connects via M.2 slot
-        $storageInterface = strtolower($storageSpecs['interface'] ?? '');
         $storageFormFactor = strtolower($storageSpecs['form_factor'] ?? '');
-
-        // M.2 drives on dedicated M.2 slots don't consume expansion slot lanes
-        $isM2Drive = (strpos($storageFormFactor, 'm.2') !== false ||
-                      strpos($storageFormFactor, 'm2') !== false);
-
+        $isM2Drive = (strpos($storageFormFactor, 'm.2') !== false || strpos($storageFormFactor, 'm2') !== false);
         if ($isM2Drive) {
-            // M.2 slots have dedicated chipset lanes - skip expansion lane check
             return ['sufficient' => true, 'uses_dedicated_m2_slot' => true];
         }
 
-        // For non-M.2 storage (U.2, PCIe add-in cards, etc.)
-        // Get CPU and motherboard PCIe expansion lanes
-        $totalLanes = 0;
-        if (!empty($existing['cpu']) && is_array($existing['cpu']) && isset($existing['cpu'][0]['component_uuid'])) {
-            $cpuSpecs = $this->dataUtils->getCPUByUUID($existing['cpu'][0]['component_uuid']);
-            $totalLanes += $cpuSpecs['pcie_lanes'] ?? 0;
+        require_once __DIR__ . '/PcieLaneBudgetValidator.php';
+        $auth = (new PcieLaneBudgetValidator($this->pdo))->evaluateAssembledStorageLaneBudget($existing, $storageSpecs, 1);
+        return $auth['sufficient']
+            ? ['sufficient' => true, 'available_lanes' => $auth['available_lanes']]
+            : ['sufficient' => false, 'warning' => [
+                'type' => 'pcie_lanes_insufficient',
+                'message' => "Insufficient PCIe expansion lanes (need {$auth['requested']}, available {$auth['available_lanes']}/{$auth['budget']})",
+                'recommendation' => "Remove other PCIe devices OR upgrade CPU/motherboard"
+            ]];
+    }
+
+    /**
+     * Parse a card's PCIe lane width from its spec interface string
+     * (e.g. "PCIe 4.0 x8" -> 8), falling back to a dedicated pcie_lanes field,
+     * then to $default. Mirrors PcieLaneBudgetValidator's lane extraction so the
+     * two lane calculators derive a card's width the same way (H4/TP-1B).
+     *
+     * @param array|null $specs Component specifications
+     * @param int $default Lanes to assume when no width is parseable
+     * @return int Lane width
+     */
+    private function extractCardLaneWidth($specs, $default = 8) {
+        if (!is_array($specs)) {
+            return $default;
         }
-        if ($existing['motherboard'] && isset($existing['motherboard']['component_uuid'])) {
-            $mbSpecs = $this->getMotherboardSpecs($existing['motherboard']['component_uuid']);
-            // chipset_pcie_lanes is absent from all motherboard specs (always 0 today);
-            // proper chipset/DMI modeling is deferred to the lane-budget consolidation
-            // (H4 / TP-1B). [TP-1A]
-            $totalLanes += $mbSpecs['chipset_pcie_lanes'] ?? 0;
+        $candidate = $specs['interface'] ?? $specs['pcie_interface'] ?? $specs['bus_interface'] ?? '';
+        if (is_string($candidate) && preg_match('/x(\d+)/i', $candidate, $m)) {
+            return (int)$m[1];
         }
-
-        // Calculate used lanes (PCIe cards + NICs + non-M.2 storage)
-        $usedLanes = 0;
-        if (!empty($existing['pciecard']) && is_array($existing['pciecard'])) {
-            foreach ($existing['pciecard'] as $card) {
-                $cardSpecs = $this->getPCIeCardSpecs($card['component_uuid']);
-                $interface = $cardSpecs['interface'] ?? '';
-                preg_match('/x(\d+)/', $interface, $matches);
-                $usedLanes += (int)($matches[1] ?? 4);
-            }
+        if (isset($specs['pcie_lanes']) && is_numeric($specs['pcie_lanes'])) {
+            return (int)$specs['pcie_lanes'];
         }
-
-        // Only count storage that uses PCIe expansion slots (not M.2)
-        if (!empty($existing['storage']) && is_array($existing['storage'])) {
-            foreach ($existing['storage'] as $storage) {
-                $specs = $this->getStorageSpecs($storage['component_uuid']);
-                if ($specs) {
-                    $existingFormFactor = strtolower($specs['form_factor'] ?? '');
-                    $isExistingM2 = (strpos($existingFormFactor, 'm.2') !== false ||
-                                    strpos($existingFormFactor, 'm2') !== false);
-
-                    // Only count if NOT M.2 and is NVMe
-                    if (!$isExistingM2 && strpos(strtolower($specs['interface'] ?? ''), 'nvme') !== false) {
-                        $usedLanes += 4; // U.2 or PCIe add-in NVMe uses x4
-                    }
-                }
-            }
-        }
-
-        $requiredLanes = 4; // This storage device (U.2 or PCIe add-in)
-        $availableLanes = $totalLanes - $usedLanes;
-
-        if ($availableLanes < $requiredLanes) {
-            return [
-                'sufficient' => false,
-                'warning' => [
-                    'type' => 'pcie_lanes_insufficient',
-                    'message' => "Insufficient PCIe expansion lanes (need $requiredLanes, available $availableLanes/$totalLanes)",
-                    'recommendation' => "Remove other PCIe devices OR upgrade CPU/motherboard"
-                ]
-            ];
-        }
-
-        return ['sufficient' => true, 'available_lanes' => $availableLanes];
+        return $default;
     }
 
     /**

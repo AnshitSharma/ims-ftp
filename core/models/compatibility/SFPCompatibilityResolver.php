@@ -525,19 +525,6 @@ class SFPCompatibilityResolver {
      * @return array List of compatible NIC port types
      */
     private function getCompatiblePortTypesForSFP($sfpType) {
-        $sfpType = strtoupper(trim($sfpType));
-
-        // Reverse mapping: which NIC port types accept this SFP type
-        $compatibilityMap = [
-            'SFP+' => ['SFP+', 'SFP28'],
-            'SFP+ DAC' => ['SFP+', 'SFP28'],
-            'SFP28' => ['SFP28'],
-            'QSFP+' => ['QSFP+', 'QSFP28', 'QSFP56', 'OSFP'],
-            'QSFP28' => ['QSFP28', 'QSFP56', 'OSFP'],
-            'QSFP56' => ['QSFP56', 'OSFP'],
-            'OSFP' => ['OSFP']
-        ];
-
-        return $compatibilityMap[$sfpType] ?? [];
+        return NICPortTracker::getCompatiblePortTypesForSFP($sfpType);
     }
 }

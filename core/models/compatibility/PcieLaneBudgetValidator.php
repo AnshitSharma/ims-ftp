@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
+require_once __DIR__ . '/ServerState.php';
 
 /**
  * PcieLaneBudgetValidator
@@ -134,25 +135,125 @@ class PcieLaneBudgetValidator
     }
 
     /**
+     * Single-authority lane evaluation over an ALREADY-ASSEMBLED component map
+     * (the `$existing` shape used by StorageConnectionValidator: keyed by type,
+     * each entry carrying `component_uuid` / `quantity` / `source_type`).
+     *
+     * This is the Phase-3 (M11) "one lane model" entry point: it lets the storage
+     * connection path delegate its PCIe-lane question to the SAME model used at
+     * add-/finalize-time, instead of its own divergent `checkPCIeLaneBudget`.
+     * It reuses {@see extractLaneCount} and the exact inclusion rules of
+     * computeLaneBudget/computeLanesUsed (all CPUs × qty for budget; non-onboard
+     * NIC + HBA + pciecard + non-M.2 NVMe storage for used), so a card's width is
+     * derived identically everywhere. Absent/unparseable width = 0 lanes (data-gated,
+     * never fabricated) — same posture as the authoritative model.
+     *
+     * @param array $existing            Assembled component map ('cpu','motherboard','nic','hbacard','pciecard','storage')
+     * @param array $candidateStorageSpec Spec of the NVMe/PCIe storage device being added
+     * @param int   $qty                 Quantity of the candidate device
+     * @return array{sufficient:bool,budget:int,used:int,requested:int,available_lanes:int}
+     */
+    public function evaluateAssembledStorageLaneBudget(array $existing, array $candidateStorageSpec, int $qty = 1): array
+    {
+        // Budget: every CPU's pcie_lanes × quantity, plus motherboard chipset lanes
+        // (absent from all specs today → contributes 0; forward-compatible guard).
+        $budget = 0;
+        if (!empty($existing['cpu']) && is_array($existing['cpu'])) {
+            foreach ($existing['cpu'] as $cpu) {
+                $uuid = $cpu['component_uuid'] ?? '';
+                if ($uuid === '') continue;
+                $specs = $this->dataUtils->getCPUByUUID($uuid);
+                if ($specs && isset($specs['pcie_lanes'])) {
+                    $q = max(1, (int)($cpu['quantity'] ?? 1));
+                    $budget += (int)$specs['pcie_lanes'] * $q;
+                }
+            }
+        }
+        if (!empty($existing['motherboard']['component_uuid'])) {
+            $mbSpecs = $this->componentDataService->getComponentSpecifications('motherboard', $existing['motherboard']['component_uuid']);
+            if ($mbSpecs && isset($mbSpecs['chipset_pcie_lanes'])) {
+                $budget += (int)$mbSpecs['chipset_pcie_lanes'];
+            }
+        }
+
+        // Used: non-onboard NIC + HBA + pciecard + non-M.2 NVMe storage, each via the
+        // single extractLaneCount() parser × quantity.
+        $used = 0;
+        if (!empty($existing['nic']) && is_array($existing['nic'])) {
+            foreach ($existing['nic'] as $nic) {
+                $src = strtolower((string)($nic['source_type'] ?? $nic['SourceType'] ?? 'component'));
+                $uuid = $nic['component_uuid'] ?? '';
+                if ($src === 'onboard' || strpos((string)$uuid, 'onboard-') === 0) continue;
+                $specs = $this->componentDataService->getComponentSpecifications('nic', $uuid) ?: [];
+                $q = max(1, (int)($nic['quantity'] ?? 1));
+                $used += $this->extractLaneCount($specs) * $q;
+            }
+        }
+        foreach (['hbacard' => 'hbacard', 'pciecard' => 'pciecard'] as $key => $type) {
+            if (!empty($existing[$key]) && is_array($existing[$key])) {
+                foreach ($existing[$key] as $card) {
+                    $uuid = $card['component_uuid'] ?? '';
+                    if ($uuid === '') continue;
+                    $specs = $this->componentDataService->getComponentSpecifications($type, $uuid) ?: [];
+                    $q = max(1, (int)($card['quantity'] ?? 1));
+                    $used += $this->extractLaneCount($specs) * $q;
+                }
+            }
+        }
+        if (!empty($existing['storage']) && is_array($existing['storage'])) {
+            foreach ($existing['storage'] as $storage) {
+                $uuid = $storage['component_uuid'] ?? '';
+                if ($uuid === '') continue;
+                $specs = $this->componentDataService->getComponentSpecifications('storage', $uuid);
+                if (!$specs) continue;
+                $interface = (string)($specs['interface'] ?? '');
+                if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) continue;
+                // M.2 NVMe uses dedicated chipset lanes, not the expansion budget (TP-1C).
+                $ff = strtolower((string)($specs['form_factor'] ?? ''));
+                if (strpos($ff, 'm.2') !== false || strpos($ff, 'm2') !== false) continue;
+                $q = max(1, (int)($storage['quantity'] ?? 1));
+                $used += $this->extractLaneCount($specs) * $q;
+            }
+        }
+
+        // Candidate demand: the new device's OWN parsed width × qty (not a hardcoded
+        // x4). M.2 candidates ride dedicated chipset lanes → zero expansion cost.
+        $candFf = strtolower((string)($candidateStorageSpec['form_factor'] ?? ''));
+        $isM2 = (strpos($candFf, 'm.2') !== false || strpos($candFf, 'm2') !== false);
+        $requested = $isM2 ? 0 : ($this->extractLaneCount($candidateStorageSpec) * max(1, $qty));
+
+        $available = $budget - $used;
+        $sufficient = ($requested === 0) || ($requested <= $available);
+
+        return [
+            'sufficient'      => $sufficient,
+            'budget'          => $budget,
+            'used'            => $used,
+            'requested'       => $requested,
+            'available_lanes' => $available,
+        ];
+    }
+
+    /**
      * Total PCIe lane budget of the server.
      * Sum of each CPU's pcie_lanes, plus motherboard chipset_pcie_lanes if any.
      */
     public function computeLaneBudget(array $configData): int
     {
         $total = 0;
+        // P2 (M11): decode config columns through the single guarded read-model (TP-5B)
+        // instead of raw json_decode. Behaviour-preserving: empty/malformed → [].
+        $state = ServerState::fromConfigData($configData);
 
         // CPUs
-        $cpuJson = $configData['cpu_configuration'] ?? null;
-        if (!empty($cpuJson)) {
-            $cpus = json_decode($cpuJson, true);
-            if (isset($cpus['cpus']) && is_array($cpus['cpus'])) {
-                foreach ($cpus['cpus'] as $cpu) {
-                    if (empty($cpu['uuid'])) continue;
-                    $specs = $this->dataUtils->getCPUByUUID($cpu['uuid']);
-                    if ($specs && isset($specs['pcie_lanes'])) {
-                        $qty = max(1, (int)($cpu['quantity'] ?? 1));
-                        $total += (int)$specs['pcie_lanes'] * $qty;
-                    }
+        $cpus = $state->getDecodedColumn('cpu_configuration');
+        if (isset($cpus['cpus']) && is_array($cpus['cpus'])) {
+            foreach ($cpus['cpus'] as $cpu) {
+                if (empty($cpu['uuid'])) continue;
+                $specs = $this->dataUtils->getCPUByUUID($cpu['uuid']);
+                if ($specs && isset($specs['pcie_lanes'])) {
+                    $qty = max(1, (int)($cpu['quantity'] ?? 1));
+                    $total += (int)$specs['pcie_lanes'] * $qty;
                 }
             }
         }
@@ -179,12 +280,12 @@ class PcieLaneBudgetValidator
     public function computeLanesUsed(array $configData): int
     {
         $used = 0;
+        // P2 (M11): decode config columns through the single guarded read-model (TP-5B)
+        // instead of raw json_decode. Behaviour-preserving: empty/malformed → [].
+        $state = ServerState::fromConfigData($configData);
 
-        $walkFlatJson = function ($json, $type) use (&$used) {
-            if (empty($json)) return;
-            $arr = json_decode($json, true);
-            if (!is_array($arr)) return;
-            foreach ($arr as $entry) {
+        $walkFlatJson = function ($column, $type) use (&$used, $state) {
+            foreach ($state->getDecodedColumn($column) as $entry) {
                 if (!is_array($entry) || empty($entry['uuid'])) continue;
                 $specs = $this->componentDataService->getComponentSpecifications($type, $entry['uuid']);
                 $qty = max(1, (int)($entry['quantity'] ?? 1));
@@ -193,31 +294,27 @@ class PcieLaneBudgetValidator
         };
 
         // NIC lives under nic_config.nics
-        $nicJson = $configData['nic_config'] ?? null;
-        if (!empty($nicJson)) {
-            $nicData = json_decode($nicJson, true);
-            if (isset($nicData['nics']) && is_array($nicData['nics'])) {
-                foreach ($nicData['nics'] as $nic) {
-                    if (empty($nic['uuid'])) continue;
-                    // Onboard NICs share motherboard lanes; not counted against expansion budget.
-                    if (($nic['source_type'] ?? '') === 'onboard') continue;
-                    $specs = $nic['specifications'] ?? null;
-                    if (!$specs) {
-                        $specs = $this->componentDataService->getComponentSpecifications('nic', $nic['uuid']);
-                    }
-                    $qty = max(1, (int)($nic['quantity'] ?? 1));
-                    $used += $this->extractLaneCount($specs ?? []) * $qty;
+        $nicData = $state->getDecodedColumn('nic_config');
+        if (isset($nicData['nics']) && is_array($nicData['nics'])) {
+            foreach ($nicData['nics'] as $nic) {
+                if (empty($nic['uuid'])) continue;
+                // Onboard NICs share motherboard lanes; not counted against expansion budget.
+                if (($nic['source_type'] ?? '') === 'onboard') continue;
+                $specs = $nic['specifications'] ?? null;
+                if (!$specs) {
+                    $specs = $this->componentDataService->getComponentSpecifications('nic', $nic['uuid']);
                 }
+                $qty = max(1, (int)($nic['quantity'] ?? 1));
+                $used += $this->extractLaneCount($specs ?? []) * $qty;
             }
         }
 
-        $walkFlatJson($configData['hbacard_config']          ?? null, 'hbacard');
-        $walkFlatJson($configData['pciecard_configurations'] ?? null, 'pciecard');
+        $walkFlatJson('hbacard_config', 'hbacard');
+        $walkFlatJson('pciecard_configurations', 'pciecard');
 
         // Storage: only count NVMe (PCIe) storage. SAS/SATA don't consume PCIe lanes directly.
-        $storageJson = $configData['storage_configuration'] ?? null;
-        if (!empty($storageJson)) {
-            $arr = json_decode($storageJson, true);
+        {
+            $arr = $state->getDecodedColumn('storage_configuration');
             if (is_array($arr)) {
                 foreach ($arr as $entry) {
                     if (!is_array($entry) || empty($entry['uuid'])) continue;

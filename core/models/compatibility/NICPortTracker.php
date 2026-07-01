@@ -10,6 +10,7 @@
  */
 
 require_once(__DIR__ . '/../components/ComponentDataService.php');
+require_once(__DIR__ . '/ServerState.php');
 
 class NICPortTracker {
     private $pdo;
@@ -100,20 +101,12 @@ class NICPortTracker {
      * @return array Port tracking data for all NICs
      */
     public function getPortUtilizationForConfig($configUuid) {
-        // Get NIC configuration from server_configurations
-        $stmt = $this->pdo->prepare("
-            SELECT nic_config
-            FROM server_configurations
-            WHERE config_uuid = ?
-        ");
-        $stmt->execute([$configUuid]);
-        $config = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$config || empty($config['nic_config'])) {
-            return ['nics' => []];
-        }
-
-        $nicConfig = json_decode($config['nic_config'], true);
+        // P2 (M11): read nic_config through the single guarded read-model instead of a
+        // local SELECT + raw json_decode (TP-5B). Behaviour is unchanged — empty / null /
+        // malformed nic_config yields [], which the guard below treats as "no NICs",
+        // exactly as the previous null check did.
+        $state = ServerState::fromConfigUuid($this->pdo, $configUuid);
+        $nicConfig = $state ? $state->getDecodedColumn('nic_config') : [];
         if (!$nicConfig || !isset($nicConfig['nics'])) {
             return ['nics' => []];
         }
@@ -175,19 +168,10 @@ class NICPortTracker {
      * @return array List of SFP assignments
      */
     private function getSfpAssignments($configUuid) {
-        $stmt = $this->pdo->prepare("
-            SELECT sfp_configuration
-            FROM server_configurations
-            WHERE config_uuid = ?
-        ");
-        $stmt->execute([$configUuid]);
-        $config = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$config || empty($config['sfp_configuration'])) {
-            return [];
-        }
-
-        $sfpConfig = json_decode($config['sfp_configuration'], true);
+        // P2 (M11): read sfp_configuration through the single guarded read-model instead
+        // of a local SELECT + raw json_decode (TP-5B). Behaviour unchanged.
+        $state = ServerState::fromConfigUuid($this->pdo, $configUuid);
+        $sfpConfig = $state ? $state->getDecodedColumn('sfp_configuration') : [];
 
         if (!$sfpConfig || !isset($sfpConfig['sfps'])) {
             return [];
@@ -293,6 +277,40 @@ class NICPortTracker {
         ];
 
         return $compatibilityMap[$nicPortType] ?? [];
+    }
+
+    /**
+     * Reverse of getCompatibleSfpTypes(): for a given SFP module type, the NIC
+     * port (cage) types that physically accept it.
+     *
+     * Derived by INVERTING the one canonical forward matrix above, so the two
+     * directions can never drift. This is the single SFP-matrix authority for
+     * the reverse direction; SFPCompatibilityResolver delegates here instead of
+     * keeping its own literal copy. Folding the reverse map into this one source
+     * automatically carries the H5 fix (SFP+/SFP28 cages accept 1G SFP), which a
+     * standalone reverse copy had silently omitted.
+     *
+     * @param string $sfpType SFP module type (e.g. "SFP+", "SFP28", "SFP")
+     * @return array List of NIC port types that accept this SFP, in cage order
+     */
+    public static function getCompatiblePortTypesForSFP($sfpType) {
+        $sfpType = strtoupper(trim($sfpType));
+
+        // Real cage types only (RJ45 accepts no SFP, so it can never appear).
+        $portTypes = ['SFP+', 'SFP28', 'QSFP+', 'QSFP28', 'QSFP56', 'OSFP'];
+
+        $accepting = [];
+        foreach ($portTypes as $port) {
+            $accepted = array_map(
+                static function ($t) { return strtoupper(trim($t)); },
+                self::getCompatibleSfpTypes($port)
+            );
+            if (in_array($sfpType, $accepted, true)) {
+                $accepting[] = $port;
+            }
+        }
+
+        return $accepting;
     }
 
     /**

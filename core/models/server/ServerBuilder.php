@@ -5,7 +5,6 @@ require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
 require_once __DIR__ . '/../chassis/ChassisManager.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/ServerConfiguration.php';
-require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
 
 class ServerBuilder {
 
@@ -515,57 +514,6 @@ class ServerBuilder {
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
             $legacyPrecheckPassed = (bool)($compatibilityValidation['success'] ?? false);
 
-            // Phase 2 shadow-write precheck + Phase 4 write cutover gate.
-            // Runs in addition to the legacy check. Only blocks when
-            // COMPATIBILITY_WRITES=constraint_state AND the adapter denies;
-            // in that case legacy must also deny (they should already agree
-            // after Phases 1-2 observation), so this short-circuits cleanly.
-            $shadowWriteOn  = ConstraintStateCompatibilityAdapter::isDualRunWriteEnabled();
-            $writeCutoverOn = ConstraintStateCompatibilityAdapter::isWriteCutover();
-            if ($shadowWriteOn || $writeCutoverOn) {
-                try {
-                    require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
-                    require_once __DIR__ . '/../components/ComponentDataService.php';
-                    $addPrecheckAdapter = new ConstraintStateCompatibilityAdapter(
-                        $this->pdo,
-                        ComponentDataService::getInstance()
-                    );
-                    $adapterVerdict = $addPrecheckAdapter->evaluateCandidate(
-                        $configUuid,
-                        $componentType,
-                        $componentUuid
-                    );
-
-                    if ($shadowWriteOn && $adapterVerdict['ok']) {
-                        $addPrecheckAdapter->logDualRun(
-                            $configUuid,
-                            'add_precheck',
-                            $componentType,
-                            $componentUuid,
-                            $legacyPrecheckPassed,
-                            (bool)$adapterVerdict['allowed'],
-                            $legacyPrecheckPassed ? ['legacy-precheck-pass'] : (array)($compatibilityValidation['message'] ?? ['legacy-precheck-fail']),
-                            $adapterVerdict['reasons']
-                        );
-                    }
-
-                    if ($writeCutoverOn && $adapterVerdict['ok'] && !$adapterVerdict['allowed']) {
-                        if ($ownTransaction && $this->pdo->inTransaction()) {
-                            $this->pdo->rollback();
-                        }
-                        return [
-                            'success' => false,
-                            'message' => !empty($adapterVerdict['reasons'])
-                                ? $adapterVerdict['reasons'][0]
-                                : 'Blocked by constraint-state precheck',
-                            'constraint_state_issues' => $adapterVerdict['reasons'],
-                        ];
-                    }
-                } catch (Throwable $shadowPrecheckErr) {
-                    error_log('Shadow-write precheck failed: ' . $shadowPrecheckErr->getMessage());
-                }
-            }
-
             if (!$legacyPrecheckPassed) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
                     $this->pdo->rollback();
@@ -628,11 +576,17 @@ class ServerBuilder {
                     // Skip JSON validation for virtual configs (they don't need real inventory)
                     $isVirtual = $this->isVirtualConfig($configUuid);
 
-                    // Skip JSON validation for storage, nic, caddy, chassis - database UUIDs don't match JSON UUIDs
-                    // Only validate: cpu, motherboard, ram, pciecard, hbacard
-                    // BUT: Skip validation entirely for virtual configs
-                    $componentsToValidate = ['cpu', 'motherboard', 'ram', 'pciecard', 'hbacard'];
-                    if (!$isVirtual && in_array($componentType, $componentsToValidate)) {
+                    // C6: Validate every real component UUID against its JSON spec, per the project
+                    // rule "all component UUIDs must exist in ims-data". storage/nic/caddy/sfp were
+                    // historically skipped on the assumption that DB UUIDs diverged from JSON UUIDs;
+                    // that assumption is stale - every real inventory UUID in production now resolves
+                    // in the JSON specs - so the gate covers all types reaching this branch (chassis
+                    // is already gated above via ChassisManager). Two carve-outs remain:
+                    //   * virtual configs hold no real inventory, and
+                    //   * synthetic onboard NICs (UUID prefix "onboard-") are generated from the
+                    //     motherboard spec and intentionally have no standalone JSON entry.
+                    $isOnboardNic = ($componentType === 'nic' && strpos((string)$componentUuid, 'onboard-') === 0);
+                    if (!$isVirtual && !$isOnboardNic) {
                         $existsResult = $compatibility->validateComponentExistsInJSON($componentType, $componentUuid);
                         if (!$existsResult) {
                             if ($ownTransaction && $this->pdo->inTransaction()) {
@@ -907,32 +861,6 @@ class ServerBuilder {
                 $this->pdo->commit();
             }
 
-            // Phase 2 shadow-write apply: keep constraint_state blob current
-            // so that flipping COMPATIBILITY_READS/WRITES later is zero-risk.
-            // Only runs post-commit. If the caller owns the transaction, we
-            // invalidate instead — the next read rebuilds from line items.
-            if ($shadowWriteOn || $writeCutoverOn) {
-                try {
-                    $postApplyAdapter = isset($addPrecheckAdapter)
-                        ? $addPrecheckAdapter
-                        : new ConstraintStateCompatibilityAdapter($this->pdo, ComponentDataService::getInstance());
-                    if ($ownTransaction) {
-                        $postApplyAdapter->applyAfterLegacy(
-                            $configUuid,
-                            $componentType,
-                            $componentUuid,
-                            $componentDetails ?? null,
-                            $quantity ?? 1,
-                            $options ?? []
-                        );
-                    } else {
-                        $postApplyAdapter->invalidate($configUuid);
-                    }
-                } catch (Throwable $applyErr) {
-                    error_log('Shadow-write apply failed for ' . $componentUuid . ': ' . $applyErr->getMessage());
-                }
-            }
-
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
@@ -1122,23 +1050,6 @@ class ServerBuilder {
 
             $this->pdo->commit();
 
-            // Phase 2 shadow-write mirror for removals. Non-fatal: on any
-            // failure the blob is invalidated so next read rebuilds.
-            if (ConstraintStateCompatibilityAdapter::isDualRunWriteEnabled()
-                || ConstraintStateCompatibilityAdapter::isWriteCutover()) {
-                try {
-                    require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
-                    require_once __DIR__ . '/../components/ComponentDataService.php';
-                    $removeAdapter = new ConstraintStateCompatibilityAdapter(
-                        $this->pdo,
-                        ComponentDataService::getInstance()
-                    );
-                    $removeAdapter->removeAfterLegacy($configUuid, $componentType, $componentUuid);
-                } catch (Throwable $removeErr) {
-                    error_log('Shadow-write remove failed for ' . $componentUuid . ': ' . $removeErr->getMessage());
-                }
-            }
-
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
@@ -1263,28 +1174,10 @@ class ServerBuilder {
             require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
             require_once __DIR__ . '/../components/ComponentDataService.php';
             require_once __DIR__ . '/../compatibility/NICPortTracker.php';
-            require_once __DIR__ . '/../compatibility/ConstraintStateCompatibilityAdapter.php';
 
             if (class_exists('ComponentCompatibility')) {
                 $compatibility = new ComponentCompatibility($this->pdo);
                 $componentDataService = ComponentDataService::getInstance();
-
-                // Phase 1+: shadow adapter. Lazy-instantiated only if any
-                // dual-run or cutover flag is set, so the legacy path pays
-                // zero cost when flags are off.
-                $constraintAdapter = null;
-                $dualRunReadOn  = ConstraintStateCompatibilityAdapter::isDualRunReadEnabled();
-                $readCutoverOn  = ConstraintStateCompatibilityAdapter::isReadCutover();
-                if ($dualRunReadOn || $readCutoverOn) {
-                    try {
-                        $constraintAdapter = new ConstraintStateCompatibilityAdapter($this->pdo, $componentDataService);
-                    } catch (Throwable $adapterInitErr) {
-                        error_log('ConstraintStateCompatibilityAdapter init failed: ' . $adapterInitErr->getMessage());
-                        $constraintAdapter = null;
-                        $dualRunReadOn = false;
-                        $readCutoverOn = false;
-                    }
-                }
 
                 // Pre-filter: Only include components that exist in JSON
                 $componentsWithJSON = [];
@@ -1492,43 +1385,6 @@ class ServerBuilder {
                                     $compatibilityReasons[] = "Compatible with " . $existingComp['type'];
                                 }
                             }
-                        }
-                    }
-
-                    // Phase 1 shadow read + optional Phase 3 read cutover.
-                    // The legacy verdict above is authoritative unless
-                    // COMPATIBILITY_READS=constraint_state is set. Any
-                    // adapter failure is non-fatal — swallow + continue.
-                    if ($constraintAdapter !== null) {
-                        try {
-                            $adapterResult = $constraintAdapter->evaluateCandidate(
-                                $configUuid,
-                                $componentType,
-                                $component['UUID'],
-                                $component
-                            );
-
-                            if ($dualRunReadOn && $adapterResult['ok']) {
-                                $constraintAdapter->logDualRun(
-                                    $configUuid,
-                                    'preview',
-                                    $componentType,
-                                    $component['UUID'],
-                                    (bool)$isCompatible,
-                                    (bool)$adapterResult['allowed'],
-                                    $compatibilityReasons,
-                                    $adapterResult['reasons']
-                                );
-                            }
-
-                            if ($readCutoverOn && $adapterResult['ok']) {
-                                $isCompatible = (bool)$adapterResult['allowed'];
-                                if (!empty($adapterResult['reasons'])) {
-                                    $compatibilityReasons = $adapterResult['reasons'];
-                                }
-                            }
-                        } catch (Throwable $shadowErr) {
-                            error_log('Shadow-read hook failed for ' . $component['UUID'] . ': ' . $shadowErr->getMessage());
                         }
                     }
 
@@ -3512,16 +3368,23 @@ class ServerBuilder {
                     }
                 }
                 
+                // Build component list once for ValidationPipeline::runFinalize() (MemoryAuthority)
+                require_once __DIR__ . '/../compatibility/ValidationPipeline.php';
+                $allComponentsForMemory = [];
+                foreach ($components as $comp) {
+                    $allComponentsForMemory[] = ['type' => $comp['component_type'], 'uuid' => $comp['component_uuid']];
+                }
+
                 // Check RAM compatibility
                 foreach ($components as $component) {
                     if ($component['component_type'] === 'ram') {
-                        $typeResult = $compatibility->validateRAMTypeCompatibility(
-                            $component['component_uuid'], 
-                            $limits
-                        );
-                        
                         $slotResult = $compatibility->validateRAMSlotAvailability($configUuid, $limits);
-                        
+
+                        $typeResult = (new ValidationPipeline($this->pdo))->runFinalize(
+                            $component['component_uuid'], $allComponentsForMemory, $compatibility,
+                            ['compatible' => true, 'error' => null], $enhancedValidation['warnings']
+                        ) ?? $compatibility->validateRAMTypeCompatibility($component['component_uuid'], $limits);
+
                         $matrixEntry = [
                             'component1_type' => 'motherboard',
                             'component2_type' => 'ram',
@@ -3534,17 +3397,17 @@ class ServerBuilder {
                                 'slot_error' => $slotResult['error']
                             ]
                         ];
-                        
+
                         if (!$typeResult['compatible']) {
                             $enhancedValidation['is_valid'] = false;
                             $enhancedValidation['issues'][] = $typeResult['error'];
                         }
-                        
+
                         if (!$slotResult['available']) {
                             $enhancedValidation['is_valid'] = false;
                             $enhancedValidation['issues'][] = $slotResult['error'];
                         }
-                        
+
                         $enhancedValidation['json_validation']['compatibility_matrix'][] = $matrixEntry;
                     }
                 }
@@ -3876,6 +3739,14 @@ class ServerBuilder {
     
     /**
      * Validate CPU addition with socket and count limits
+     *
+     * ORDERING CONTRACT (L4): CPU addition REQUIRES a motherboard to already be in
+     * the configuration (it returns "add motherboard first" when none is found),
+     * because socket type and CPU-count limits are read from the motherboard spec.
+     * This is asymmetric with RAM/storage, which validateRAMAddition/storage allow
+     * in any order and re-validate later against whatever board is present. Keep this
+     * asymmetry in mind: CPU is the one component family that is order-dependent at
+     * add time.
      */
     private function validateCPUAddition($configUuid, $cpuUuid, $compatibility) {
         try {
@@ -4297,9 +4168,6 @@ class ServerBuilder {
                     case 'ram':
                         $compatibilityResult = $compatibility->checkRAMDecentralizedCompatibility($newComponent, $existingComponentsData);
                         break;
-                    case 'storage':
-                        $compatibilityResult = $compatibility->checkStorageDecentralizedCompatibility($newComponent, $existingComponentsData);
-                        break;
                     case 'chassis':
                         $compatibilityResult = $compatibility->checkChassisDecentralizedCompatibility($newComponent, $existingComponentsData);
                         break;
@@ -4316,8 +4184,26 @@ class ServerBuilder {
                     case 'caddy':
                         $compatibilityResult = $compatibility->checkCaddyDecentralizedCompatibility($newComponent, $existingComponentsData);
                         break;
+                    case 'storage':
+                        // Add-time storage compatibility (interface-vs-HBA protocol, MB/chassis/
+                        // caddy form-factor). This legacy check is the fallback authority: when
+                        // VALIDATION_PIPELINE_ENABLED reaches enforce, the ValidationPipeline::run()
+                        // override below replaces it with StorageConnectionAuthority's verdict.
+                        // It MUST stay in the switch so storage is not left unvalidated at add-time
+                        // while the pipeline flag is off/shadow (mirrors the RAM finalize
+                        // "runFinalize() ?? validateRAMTypeCompatibility()" fallback pattern).
+                        $compatibilityResult = $compatibility->checkStorageDecentralizedCompatibility($newComponent, $existingComponentsData);
+                        break;
                     default:
                         $compatibilityResult = ['compatible' => true, 'warnings' => [], 'recommendations' => []];
+                }
+
+                require_once __DIR__ . '/../compatibility/ValidationPipeline.php';
+                $pipelineOverride = (new ValidationPipeline($this->pdo))->run(
+                    $configUuid, $componentType, $componentUuid, $allExisting, []
+                );
+                if ($pipelineOverride !== null) {
+                    $compatibilityResult = $pipelineOverride;
                 }
 
                 // Check if component is incompatible
@@ -5839,18 +5725,40 @@ class ServerBuilder {
                 }
             }
             
-            // Check if total power is reasonable (not too high for typical motherboard)
-            if ($totalPower > 1000) { // Very high power consumption
-                $score = 30.0;
-                $issues[] = "Critical: Very high power consumption ({$totalPower}W) - may exceed typical PSU capacity and cause system instability";
-                $issues[] = "Power breakdown: " . $this->formatPowerBreakdown($componentPowerBreakdown);
-            } elseif ($totalPower > 750) {
-                $score = 60.0;
-                $issues[] = "Warning: High power consumption ({$totalPower}W) - ensure adequate PSU capacity (recommended 850W+ PSU)";
-                $issues[] = "Power breakdown: " . $this->formatPowerBreakdown($componentPowerBreakdown);
-            } elseif ($totalPower > 500) {
-                $score = 85.0;
-                $issues[] = "Note: Moderate power consumption ({$totalPower}W) - ensure PSU capacity is at least 650W";
+            // H7: Budget the estimated draw against the chassis PSU's ACTUAL nameplate
+            // wattage (from the chassis JSON spec) instead of fixed 500/750/1000 W
+            // thresholds that ignored the installed PSU entirely.
+            $psuWattage = $this->getChassisPsuWattage($components);
+
+            if ($psuWattage !== null && $psuWattage > 0) {
+                // A PSU should not run continuously at 100% of its nameplate rating;
+                // 85% is the conventional safe continuous ceiling (leaves headroom for
+                // drive spin-up, CPU boost and transient peaks).
+                $usableWattage = (int) round($psuWattage * 0.85);
+                $breakdown = $this->formatPowerBreakdown($componentPowerBreakdown);
+
+                if ($totalPower > $usableWattage) {
+                    $score = 20.0;
+                    $issues[] = "Critical: Estimated power draw ({$totalPower}W) exceeds the chassis PSU usable capacity ({$usableWattage}W of {$psuWattage}W rated, 85% continuous ceiling) - this build is not power-safe.";
+                    $issues[] = "Power breakdown: " . $breakdown;
+                } elseif ($totalPower > (int) round($usableWattage * 0.9)) {
+                    $score = 70.0;
+                    $issues[] = "Warning: Estimated power draw ({$totalPower}W) is within ~10% of the chassis PSU usable capacity ({$usableWattage}W of {$psuWattage}W rated) - little headroom for spin-up/boost.";
+                    $issues[] = "Power breakdown: " . $breakdown;
+                }
+            } else {
+                // No PSU spec available - cannot budget precisely. Fall back to coarse
+                // absolute thresholds and say so explicitly (do not imply a real PSU
+                // check ran).
+                if ($totalPower > 1000) {
+                    $score = 30.0;
+                    $issues[] = "Critical: Very high estimated power draw ({$totalPower}W) and chassis PSU wattage is unknown - verify PSU capacity before deployment.";
+                    $issues[] = "Power breakdown: " . $this->formatPowerBreakdown($componentPowerBreakdown);
+                } elseif ($totalPower > 750) {
+                    $score = 70.0;
+                    $issues[] = "Warning: High estimated power draw ({$totalPower}W) and chassis PSU wattage is unknown - ensure adequate PSU capacity.";
+                    $issues[] = "Power breakdown: " . $this->formatPowerBreakdown($componentPowerBreakdown);
+                }
             }
             
         } catch (Exception $e) {
@@ -5938,6 +5846,40 @@ class ServerBuilder {
             $formatted[] = ucfirst($type) . ": {$power}W";
         }
         return implode(', ', $formatted);
+    }
+
+    /**
+     * H7: Resolve the installed chassis PSU nameplate wattage from its JSON spec.
+     *
+     * The chassis spec stores power_supply.wattage (the per-PSU nameplate rating)
+     * and power_supply.redundant. Returns the integer wattage, or null when no
+     * chassis is present or no PSU wattage can be determined (caller then falls
+     * back to coarse thresholds and flags the uncertainty explicitly).
+     *
+     * @param array $components Summary components keyed by type; chassis entries
+     *                          carry the spec UUID under 'uuid' (or 'component_uuid').
+     * @return int|null
+     */
+    private function getChassisPsuWattage($components) {
+        try {
+            if (empty($components['chassis'][0])) {
+                return null;
+            }
+            $chassisEntry = $components['chassis'][0];
+            $chassisUuid  = $chassisEntry['uuid'] ?? $chassisEntry['component_uuid'] ?? null;
+            if (!$chassisUuid) {
+                return null;
+            }
+            $chassisSpecs = $this->dataUtils->getChassisSpecifications($chassisUuid);
+            if (!is_array($chassisSpecs)) {
+                return null;
+            }
+            $wattage = $chassisSpecs['power_supply']['wattage'] ?? null;
+            return is_numeric($wattage) ? (int) $wattage : null;
+        } catch (Exception $e) {
+            error_log("getChassisPsuWattage failed: " . $e->getMessage());
+            return null;
+        }
     }
     
     /**
@@ -6960,8 +6902,6 @@ class ServerBuilder {
             $totalBays = $driveBays['total_bays'] ?? 0;
             $bayConfiguration = $driveBays['bay_configuration'] ?? [];
 
-            // CRITICAL: Only count storage devices that connect via chassis backplane
-            // Storage connecting via motherboard M.2/SATA does NOT use chassis bays
             $usedBays = 0;
             $backplaneStorageList = [];
 
@@ -6970,21 +6910,20 @@ class ServerBuilder {
                 $storageValidator = new StorageConnectionValidator($this->pdo);
                 $existingComponents = $this->getExistingComponentsForValidation($configUuid);
 
+                $bayModel = $storageValidator->evaluateBayUsage(
+                    $componentsByType['storage'], null, 0, (int)$totalBays
+                );
+                $usedBays = (int)$bayModel['used'];
+
                 foreach ($componentsByType['storage'] as $storage) {
                     $validation = $storageValidator->validate($configUuid, $storage['component_uuid'], $existingComponents);
-
-                    // Check if primary connection path is chassis bay
-                    if ($validation['valid'] && isset($validation['primary_path'])) {
-                        if ($validation['primary_path']['type'] === 'chassis_bay') {
-                            $usedBays++;
-
-                            $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
-                            $backplaneStorageList[] = [
-                                'uuid' => $storage['component_uuid'],
-                                'model' => $storageSpecs['model'] ?? 'Unknown',
-                                'form_factor' => $storageSpecs['form_factor'] ?? 'Unknown'
-                            ];
-                        }
+                    if ($validation['valid'] && isset($validation['primary_path']) && $validation['primary_path']['type'] === 'chassis_bay') {
+                        $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
+                        $backplaneStorageList[] = [
+                            'uuid' => $storage['component_uuid'],
+                            'model' => $storageSpecs['model'] ?? 'Unknown',
+                            'form_factor' => $storageSpecs['form_factor'] ?? 'Unknown'
+                        ];
                     }
                 }
             }

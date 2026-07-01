@@ -1505,8 +1505,16 @@ class ComponentCompatibility {
         $cpuMaxFrequency = null;
         $limitingCPU = null;
 
-        if (!empty($cpuSpecs)) {
-            foreach ($cpuSpecs as $cpuSpec) {
+        if (!empty($cpuSpecs) && is_array($cpuSpecs)) {
+            // TP-2D: accept either a single CPU spec or a list of specs - the same
+            // tolerant contract ComponentValidator::normalizeCpuSpecList enforces for
+            // the type/ECC validators - so all three memory validators behave
+            // identically regardless of how the caller shapes cpuSpecs. A single
+            // associative spec would otherwise be iterated by its top-level keys.
+            $cpuSpecList = (array_keys($cpuSpecs) === range(0, count($cpuSpecs) - 1))
+                ? $cpuSpecs
+                : [$cpuSpecs];
+            foreach ($cpuSpecList as $cpuSpec) {
                 // Extract max memory frequency from CPU memory types (e.g., DDR5-4800)
                 $cpuMemoryTypes = $cpuSpec['compatibility']['memory_types'] ?? [];
                 foreach ($cpuMemoryTypes as $memType) {
@@ -2004,31 +2012,30 @@ class ComponentCompatibility {
         // always reported "No motherboard found in server configuration". Load the
         // real row and extract the motherboard + storage component list.
         try {
-            $stmt = $this->pdo->prepare("SELECT motherboard_uuid, storage_configuration FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            // P2 (M11): read through the single guarded read-model (TP-5A/TP-5B) instead
+            // of a local SELECT + raw json_decode. Byte-identical: the raw motherboard_uuid
+            // value is preserved (not normalized here), and getStorage() enumerates the
+            // same storage_configuration entries in the same order.
+            require_once __DIR__ . '/ServerState.php';
+            $state = ServerState::fromConfigUuid($this->pdo, $configUuid);
 
-            if (!$row) {
+            if (!$state) {
                 return ['motherboard_uuid' => null, 'storage_components' => []];
             }
 
             $storageComponents = [];
-            if (!empty($row['storage_configuration'])) {
-                $decoded = json_decode($row['storage_configuration'], true);
-                if (is_array($decoded)) {
-                    foreach ($decoded as $storage) {
-                        if (!empty($storage['uuid'])) {
-                            $storageComponents[] = [
-                                'uuid' => $storage['uuid'],
-                                'quantity' => $storage['quantity'] ?? 1
-                            ];
-                        }
-                    }
+            foreach ($state->getStorage() as $storage) {
+                if (!empty($storage['component_uuid'])) {
+                    $storageComponents[] = [
+                        'uuid' => $storage['component_uuid'],
+                        'quantity' => $storage['quantity'] ?? 1
+                    ];
                 }
             }
 
+            $raw = $state->getRawConfigData();
             return [
-                'motherboard_uuid' => $row['motherboard_uuid'] ?? null,
+                'motherboard_uuid' => $raw['motherboard_uuid'] ?? null,
                 'storage_components' => $storageComponents
             ];
         } catch (Exception $e) {
@@ -2264,9 +2271,15 @@ class ComponentCompatibility {
                         return $result;
                     }
 
-                    // Check if riser fits by size
-                    $riserSlotType = 'x' . $cardSlotSize;
-                    $canFitRiser = $slotTracker->canFitRiserBySize($configUuid, $riserSlotType);
+                    // Check if riser fits by size. [M9] Unknown width (<=0): a riser slot
+                    // is available (verified above), so don't size-reject on missing data.
+                    if ($cardSlotSize > 0) {
+                        $riserSlotType = 'x' . $cardSlotSize;
+                        $canFitRiser = $slotTracker->canFitRiserBySize($configUuid, $riserSlotType);
+                    } else {
+                        $riserSlotType = 'unknown';
+                        $canFitRiser = true;
+                    }
 
                     if (!$canFitRiser) {
                         // Build available slot type list
@@ -2663,6 +2676,13 @@ class ComponentCompatibility {
         // If no slots available at all, return false
         if ($netAvailable <= 0) {
             return false;
+        }
+
+        // [M9] Unknown card width (0 -> "x0"): we cannot size-check, but a slot IS free
+        // (netAvailable > 0, verified above). Treat as fitting rather than falling
+        // through to a false negative on missing spec data.
+        if ($requiredSlotSize === 'x0' || $requiredSlotSize === 'x') {
+            return true;
         }
 
         // Check if there are any slots of the required size or larger
@@ -3641,6 +3661,11 @@ class ComponentCompatibility {
 
             // Also update available_by_size to track which slot sizes the riser provides
             $riserSlotType = $this->dataExtractor->extractPCIeSlotSize($pcieData);
+            // [M9] 0 = unknown width; a riser PROVIDES slots, so keep the prior generous
+            // default (x16, accepts any card) rather than an unusable x0 bucket.
+            if ($riserSlotType <= 0) {
+                $riserSlotType = 16;
+            }
             $riserSlotTypeKey = 'x' . $riserSlotType;
             if (!isset($slotAvailability['available_by_size'][$riserSlotTypeKey])) {
                 $slotAvailability['available_by_size'][$riserSlotTypeKey] = 0;
@@ -3656,7 +3681,8 @@ class ComponentCompatibility {
             $this->consumePcieSlotBySize($slotAvailability, $cardSlotSize);
 
             $cardModel = $pcieData['model'] ?? 'PCIe Card';
-            $result['details'][] = "Existing card: {$cardModel} (uses x{$cardSlotSize} slot)";
+            $sizeLabel = $cardSlotSize > 0 ? "x{$cardSlotSize}" : 'unknown-width';
+            $result['details'][] = "Existing card: {$cardModel} (uses {$sizeLabel} slot)";
         }
 
         return $result;
@@ -3677,10 +3703,25 @@ class ComponentCompatibility {
             return $result;
         }
 
-        // Check if NIC is PCIe-based (vs onboard)
-        $interface = $nicData['interface'] ?? $nicData['connection_type'] ?? $nicData['Notes'] ?? '';
+        // L6: "Onboard vs add-in" is an explicit property of the NIC, not something
+        // to infer from whether the string "PCIe" happens to appear in a free-text
+        // field. The old test (stripos interface/connection_type/Notes for "PCIe")
+        // misclassified any discrete NIC listed only as e.g. "SFP28" or "x8" as
+        // onboard, so it consumed no slot and the count was wrong. Trust the
+        // source_type/SourceType flag; only fall back to the interface string (now
+        // for explicit onboard/LOM markers) when that flag is absent. Default
+        // assumption for a NIC that is not flagged onboard is a discrete add-in card.
+        $interface  = $nicData['interface'] ?? $nicData['connection_type'] ?? $nicData['Notes'] ?? '';
+        $sourceType = strtolower((string)($nicComponent['source_type']
+            ?? $nicData['source_type'] ?? $nicData['SourceType'] ?? ''));
 
-        if (stripos($interface, 'PCIe') !== false || stripos($interface, 'PCI Express') !== false || stripos($interface, 'PCI-E') !== false) {
+        $isOnboard = ($sourceType === 'onboard')
+            || ($sourceType === ''
+                && (stripos($interface, 'onboard') !== false
+                    || stripos($interface, 'lom') !== false
+                    || stripos($interface, 'integrated') !== false));
+
+        if (!$isOnboard) {
             $slotAvailability['used_slots'] += 1;
             // C3: decrement the size bucket the NIC occupies (default x8 if unparseable).
             $nicSlotSize = 8;
@@ -3692,7 +3733,7 @@ class ComponentCompatibility {
             $nicModel = $nicData['model'] ?? 'NIC';
             $result['details'][] = "Existing NIC: {$nicModel} (uses 1 PCIe slot)";
         } else {
-            // Onboard NIC, doesn't use PCIe slot
+            // Onboard/LOM NIC, doesn't use a PCIe slot
             $result['details'][] = "Existing NIC is onboard - no slot used";
         }
 
@@ -3777,28 +3818,23 @@ class ComponentCompatibility {
         $availableSlots = $slotAvailability['available_by_size'];
         $usedSlots = $slotAvailability['used_slots'];
 
-        // Determine which slot sizes can accommodate this card
-        $compatibleSizes = [];
-
-        switch ($cardSlotSize) {
-            case 1:
-                $compatibleSizes = [1, 4, 8, 16];
-                break;
-            case 2:
-                $compatibleSizes = [2, 4, 8, 16];
-                break;
-            case 4:
-                $compatibleSizes = [4, 8, 16];
-                break;
-            case 8:
-                $compatibleSizes = [8, 16];
-                break;
-            case 16:
-                $compatibleSizes = [16];
-                break;
-            default:
-                // Unknown size, assume needs x16
-                $compatibleSizes = [16];
+        // Determine which slot sizes can accommodate this card. A card of width N
+        // physically fits any slot >= N.
+        // [M9] $cardSlotSize <= 0 means the width is UNKNOWN (unparseable spec). We must
+        // NOT assume the most-restrictive x16 (which falsely rejected unknown cards for
+        // fit); treat unknown width as "fits any available slot", with no oversized
+        // judgement and no fabricated "requires xN" claim.
+        $widthUnknown = ($cardSlotSize <= 0);
+        $standardSizes = [1, 2, 4, 8, 16];
+        if ($widthUnknown) {
+            $compatibleSizes = $standardSizes;
+        } else {
+            $compatibleSizes = array_values(array_filter($standardSizes, function ($s) use ($cardSlotSize) {
+                return $s >= $cardSlotSize;
+            }));
+            if (empty($compatibleSizes)) {
+                $compatibleSizes = [16]; // width wider than any standard slot
+            }
         }
 
         // Check if any compatible slot is available
@@ -3812,8 +3848,8 @@ class ComponentCompatibility {
                 $hasAvailableSlot = true;
                 $slotUsed = $size;
 
-                // Check if using oversized slot
-                if ($size > $cardSlotSize) {
+                // Using an oversized slot is only meaningful when the card's width is known.
+                if (!$widthUnknown && $size > $cardSlotSize) {
                     $usedOversizedSlot = true;
                 }
                 break; // Use smallest available slot
@@ -3829,7 +3865,9 @@ class ComponentCompatibility {
             return [
                 'fits' => false,
                 'oversized' => false,
-                'reason' => "Card requires x{$cardSlotSize} slot, but no compatible slots available",
+                'reason' => $widthUnknown
+                    ? "No PCIe expansion slot available for this card"
+                    : "Card requires x{$cardSlotSize} slot, but no compatible slots available",
                 'max_available' => $maxAvailable
             ];
         }
@@ -4761,155 +4799,14 @@ class ComponentCompatibility {
     }
 
 
-    // ==========================================
-    // RISER CARD VALIDATION METHODS
-    // ==========================================
-
-
-    /**
-     * Calculate available riser slots on motherboard (tracks like PCIe slots)
-     *
-     * @param array $motherboardData Motherboard specifications
-     * @param array $existingComponents Existing components in config
-     * @return array ['total_slots' => int, 'used_slots' => int, 'available_slots' => int]
-     */
-    private function getRiserSlotAvailability($motherboardData, $existingComponents) {
-        $totalRiserSlots = $motherboardData['expansion_slots']['riser_compatibility']['max_risers'] ?? 0;
-
-        // Count risers already in config
-        $usedRiserSlots = 0;
-        foreach ($existingComponents as $component) {
-            if ($component['component_type'] === 'pciecard') {
-                $pcieData = $this->dataLoader->getPCIeCardData($component['component_uuid']);
-                if ($this->isPCIeRiserCard($pcieData)) {
-                    $usedRiserSlots++;
-                }
-            }
-        }
-
-        return [
-            'total_slots' => $totalRiserSlots,
-            'used_slots' => $usedRiserSlots,
-            'available_slots' => max(0, $totalRiserSlots - $usedRiserSlots)
-        ];
-    }
-
-    /**
-     * Extract all riser cards from existing components
-     *
-     * @param array $existingComponents Array of components
-     * @return array Array of riser card data
-     */
-    private function getExistingRisers($existingComponents) {
-        $risers = [];
-
-        foreach ($existingComponents as $component) {
-            if ($component['component_type'] === 'pciecard') {
-                $pcieData = $this->dataLoader->getPCIeCardData($component['component_uuid']);
-                if ($this->isPCIeRiserCard($pcieData)) {
-                    $risers[] = $pcieData;
-                }
-            }
-        }
-
-        return $risers;
-    }
-
-    /**
-     * Find component by type in existing components
-     *
-     * @param array $existingComponents Array of components
-     * @param string $type Component type to find
-     * @return array|null Component data or null
-     */
-    private function findComponentByType($existingComponents, $type) {
-        foreach ($existingComponents as $component) {
-            if ($component['component_type'] === $type) {
-                return [
-                    'uuid' => $component['component_uuid'],
-                    'type' => $component['component_type']
-                ];
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Check if riser height fits within chassis clearance
-     *
-     * @param array $riserData Riser card specifications
-     * @param array $chassisData Chassis specifications
-     * @return bool True if fits
-     */
-    private function checkRiserHeightClearance($riserData, $chassisData) {
-        $chassisHeightMm = $chassisData['height'] * 10; // Convert cm to mm
-        $riserClearance = $riserData['clearance_height_mm'] ?? 0;
-
-        return $riserClearance < $chassisHeightMm;
-    }
-
-    /**
-     * Check if riser length fits on motherboard
-     *
-     * @param array $riserData Riser card specifications
-     * @param array $existingRisers Array of existing riser cards
-     * @param array $motherboardData Motherboard specifications
-     * @return bool True if fits
-     */
-    private function checkRiserLengthFit($riserData, $existingRisers, $motherboardData) {
-        $riserLength = $riserData['dimensions_mm']['length'] ?? 0;
-        $availableLength = $motherboardData['expansion_slots']['riser_compatibility']['available_mounting_length_mm'] ?? 0;
-
-        $totalUsedLength = $this->calculateTotalRiserLength($existingRisers);
-
-        return ($totalUsedLength + $riserLength) <= $availableLength;
-    }
-
-    /**
-     * Check if riser width fits within motherboard slot spacing
-     *
-     * @param array $riserData Riser card specifications
-     * @param array $motherboardData Motherboard specifications
-     * @return bool True if fits
-     */
-    private function checkRiserSpacingFit($riserData, $motherboardData) {
-        $riserWidth = $riserData['dimensions_mm']['width'] ?? 0;
-        $slotSpacing = $motherboardData['expansion_slots']['riser_compatibility']['slot_spacing_mm'] ?? 20.32;
-
-        // Riser width must fit within slot spacing
-        return $riserWidth <= $slotSpacing;
-    }
-
-    /**
-     * Calculate total length occupied by risers
-     *
-     * @param array $risers Array of riser card data
-     * @return int Total length in mm
-     */
-    private function calculateTotalRiserLength($risers) {
-        $totalLength = 0;
-        foreach ($risers as $riser) {
-            $totalLength += $riser['dimensions_mm']['length'] ?? 0;
-        }
-        return $totalLength;
-    }
-
-    /**
-     * Get maximum riser height from array of risers
-     *
-     * @param array $risers Array of riser card data
-     * @return float Maximum height in mm
-     */
-    private function getMaxRiserHeight($risers) {
-        $maxHeight = 0;
-        foreach ($risers as $riser) {
-            $clearance = $riser['clearance_height_mm'] ?? 0;
-            if ($clearance > $maxHeight) {
-                $maxHeight = $clearance;
-            }
-        }
-        return $maxHeight;
-    }
+    // NOTE (M7): The riser physical-fit helpers that previously lived here
+    // (getRiserSlotAvailability/getExistingRisers/findComponentByType/
+    // checkRiserHeightClearance/checkRiserLengthFit/checkRiserSpacingFit/
+    // calculateTotalRiserLength/getMaxRiserHeight) were dead code. They keyed off
+    // component_type/component_uuid (callers pass type/uuid), read dimension fields
+    // that no ims-data spec defines, and had no callers. Riser slot accounting is
+    // handled by UnifiedSlotTracker::getRiserSlotAvailability($configUuid). Removed
+    // to eliminate a misleading "we validate riser physical fit" surface.
 
     /**
      * Check SFP compatibility with NIC cards

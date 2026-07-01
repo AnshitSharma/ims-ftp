@@ -18,6 +18,12 @@ class UnifiedSlotTracker {
     private $dataExtractor;
     private $componentDataService;
 
+    // L1: slots found mapped to >1 component during the most recent
+    // getUsedPCIeSlots() call. Populated there, consumed by validateAllSlots()
+    // so genuine "two cards in one slot" data corruption is actually reported
+    // (the old array_count_values over a unique-key map could never detect it).
+    private $lastSlotCollisions = [];
+
     // PCIe backward compatibility matrix
     private $slotCompatibility = [
         'x1' => ['x1', 'x4', 'x8', 'x16'],
@@ -83,6 +89,30 @@ class UnifiedSlotTracker {
                 }
             }
 
+            // Step 3.5 (TP-1D): remove PCIe slots wired to an unpopulated CPU socket.
+            // On a dual-socket board, the slots routed to CPU 2 are electrically dead
+            // until CPU 2 is installed, so they must not be offered for assignment.
+            // socket_map is empty for every board that lacks the optional per-slot
+            // "cpu_socket" field (all current specs), making this a no-op until the
+            // data is added — zero behaviour change for existing configurations.
+            $socketMap = $totalSlots['socket_map'] ?? [];
+            $socketGatedSlots = [];
+            if (!empty($socketMap)) {
+                $installedCpuCount = $this->getInstalledCpuCount($configUuid);
+                foreach ($mergedSlots as $slotSize => $slotIds) {
+                    $kept = [];
+                    foreach ($slotIds as $slotId) {
+                        $requiredSocket = $socketMap[$slotId] ?? null;
+                        if ($requiredSocket !== null && $requiredSocket > $installedCpuCount) {
+                            $socketGatedSlots[] = $slotId;
+                            continue;
+                        }
+                        $kept[] = $slotId;
+                    }
+                    $mergedSlots[$slotSize] = $kept;
+                }
+            }
+
             // Step 4: Get used PCIe slots from database
             $usedSlots = $this->getUsedPCIeSlots($configUuid);
 
@@ -94,6 +124,7 @@ class UnifiedSlotTracker {
                 'total_slots' => $mergedSlots,
                 'used_slots' => $usedSlots,
                 'available_slots' => $availableSlots,
+                'socket_gated_slots' => $socketGatedSlots,
                 'motherboard_uuid' => $motherboard['component_uuid']
             ];
 
@@ -440,12 +471,13 @@ class UnifiedSlotTracker {
                 }
             }
 
-            // Check 5: Duplicate slot assignments (data integrity check)
-            $slotCounts = array_count_values(array_keys($availability['used_slots']));
-            foreach ($slotCounts as $slotId => $count) {
-                if ($count > 1) {
-                    $errors[] = "Data corruption: Slot $slotId has multiple components assigned";
-                }
+            // Check 5: Duplicate slot assignments (data integrity check).
+            // getSlotAvailability() above ran getUsedPCIeSlots(), which records any
+            // slot occupied by more than one component in lastSlotCollisions. The old
+            // array_count_values() over a unique-key map could never detect this.
+            foreach ($this->lastSlotCollisions as $slotId => $collidingUuids) {
+                $errors[] = "Data corruption: Slot $slotId has " . count($collidingUuids)
+                    . " components assigned (" . implode(', ', $collidingUuids) . ")";
             }
 
             return [
@@ -491,7 +523,7 @@ class UnifiedSlotTracker {
             if ($config) {
                 $configData = $config->getData();
                 if (!empty($configData['pciecard_configurations'])) {
-                    $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                    $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                     if (is_array($pcieConfigs)) {
                         foreach ($pcieConfigs as $pcie) {
                             // Count risers (slot_position starts with 'riser_')
@@ -573,7 +605,7 @@ class UnifiedSlotTracker {
             if ($config) {
                 $configData = $config->getData();
                 if (!empty($configData['pciecard_configurations'])) {
-                    $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                    $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                     if (is_array($pcieConfigs)) {
                         foreach ($pcieConfigs as $pcie) {
                             if (!empty($pcie['slot_position']) &&
@@ -852,6 +884,65 @@ class UnifiedSlotTracker {
     }
 
     /**
+     * TP-1D: Count installed CPUs (populated sockets) in a configuration.
+     * Sums the quantity of every CPU entry in cpu_configuration.cpus[]; a missing
+     * quantity counts as 1. Used to decide which socket-gated PCIe slots are live.
+     *
+     * @param string $configUuid Server configuration UUID
+     * @return int Number of populated CPU sockets (0 if none / on error)
+     */
+    private function getInstalledCpuCount($configUuid) {
+        try {
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+            if (!$config) {
+                return 0;
+            }
+            $configData = $config->getData();
+            $cpuJson = $configData['cpu_configuration'] ?? null;
+            if (empty($cpuJson)) {
+                return 0;
+            }
+            $cpuData = $this->safeJsonDecode($cpuJson, 'cpu_configuration');
+            if (!isset($cpuData['cpus']) || !is_array($cpuData['cpus'])) {
+                return 0;
+            }
+            $count = 0;
+            foreach ($cpuData['cpus'] as $cpu) {
+                $count += max(1, (int)($cpu['quantity'] ?? 1));
+            }
+            return $count;
+        } catch (Exception $e) {
+            error_log("UnifiedSlotTracker::getInstalledCpuCount error: " . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * TP-5B: Safe JSON decode for server_configurations columns.
+     *
+     * The slot tracker reads the config's JSON columns directly (the domain model
+     * exposes only a flat UUID list), so it must guard decoding itself instead of
+     * silently turning malformed JSON into null. Mirrors
+     * ServerBuilder::safeJsonDecode; logs parse errors and always returns an array.
+     *
+     * @param string|null $jsonString Raw column value
+     * @param string $fieldName Column name, for error logging
+     * @return array Decoded array, or [] on empty/invalid input
+     */
+    private function safeJsonDecode($jsonString, $fieldName = 'unknown') {
+        if (empty($jsonString)) {
+            return [];
+        }
+        $decoded = json_decode($jsonString, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("UnifiedSlotTracker JSON ERROR in $fieldName: " . json_last_error_msg()
+                . " | Raw: " . substr((string)$jsonString, 0, 100));
+            return [];
+        }
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
      * Load PCIe slots from motherboard JSON specifications
      *
      * @param string $motherboardUuid Motherboard UUID
@@ -882,10 +973,19 @@ class UnifiedSlotTracker {
 
             // Convert JSON structure to slot ID array
             $slots = [];
+            // TP-1D: optional per-slot CPU-socket affinity. When a pcie_slots entry
+            // declares "cpu_socket": N, every slot ID generated from it is recorded as
+            // wired to socket N. socket_map stays EMPTY for every board that does not
+            // carry the field (all current specs), so callers see no behaviour change
+            // until the data is populated. See ims-data/CLAUDE.md for the field contract.
+            $socketMap = [];
 
             foreach ($pcieSlots as $slotConfig) {
                 $slotType = $slotConfig['type'] ?? '';
                 $count = $slotConfig['count'] ?? 0;
+                $cpuSocket = isset($slotConfig['cpu_socket']) && is_numeric($slotConfig['cpu_socket'])
+                    ? (int)$slotConfig['cpu_socket']
+                    : null;
 
                 // Extract slot size from type (e.g., "PCIe 5.0 x16" → "x16")
                 if (preg_match('/x(\d+)/i', $slotType, $matches)) {
@@ -898,14 +998,19 @@ class UnifiedSlotTracker {
 
                     $startIndex = count($slots[$slotSize]) + 1;
                     for ($i = 0; $i < $count; $i++) {
-                        $slots[$slotSize][] = "pcie_{$slotSize}_slot_" . ($startIndex + $i);
+                        $slotId = "pcie_{$slotSize}_slot_" . ($startIndex + $i);
+                        $slots[$slotSize][] = $slotId;
+                        if ($cpuSocket !== null) {
+                            $socketMap[$slotId] = $cpuSocket;
+                        }
                     }
                 }
             }
 
             return [
                 'success' => true,
-                'slots' => $slots
+                'slots' => $slots,
+                'socket_map' => $socketMap
             ];
 
         } catch (Exception $e) {
@@ -1028,16 +1133,20 @@ class UnifiedSlotTracker {
             }
 
             $configData = $config->getData();
-            $usedSlots = [];
+            // L1: accumulate ALL occupants per slot first, so two cards persisted to
+            // the same slot_position are detected instead of silently overwriting each
+            // other. The flattened slot=>uuid map (first occupant) is rebuilt at the
+            // end to preserve the return contract for existing callers.
+            $occupants = [];
 
             // Check PCIe cards configuration
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         if (!empty($pcie['slot_position']) &&
                             strpos($pcie['slot_position'], 'pcie_') === 0) {
-                            $usedSlots[$pcie['slot_position']] = $pcie['uuid'];
+                            $occupants[$pcie['slot_position']][] = $pcie['uuid'];
                         }
                     }
                 }
@@ -1045,7 +1154,7 @@ class UnifiedSlotTracker {
 
             // HBA-TRACK FIX: Check HBA cards with JSON array format (includes slot_position)
             if (!empty($configData['hbacard_config'])) {
-                $hbaConfigs = json_decode($configData['hbacard_config'], true);
+                $hbaConfigs = $this->safeJsonDecode($configData['hbacard_config'], 'hbacard_config');
                 if (is_array($hbaConfigs)) {
                     // Handle migration: single object vs array
                     if (isset($hbaConfigs['uuid'])) {
@@ -1053,7 +1162,7 @@ class UnifiedSlotTracker {
                     }
                     foreach ($hbaConfigs as $hba) {
                         if (!empty($hba['slot_position']) && strpos($hba['slot_position'], 'pcie_') === 0) {
-                            $usedSlots[$hba['slot_position']] = $hba['uuid'];
+                            $occupants[$hba['slot_position']][] = $hba['uuid'];
                             error_log("HBA-TRACK: HBA card occupies slot: {$hba['slot_position']}");
                         }
                     }
@@ -1066,14 +1175,14 @@ class UnifiedSlotTracker {
 
             // Check NIC config
             if (!empty($configData['nic_config'])) {
-                $nicConfig = json_decode($configData['nic_config'], true);
+                $nicConfig = $this->safeJsonDecode($configData['nic_config'], 'nic_config');
                 if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
                     foreach ($nicConfig['nics'] as $nic) {
                         // Only component NICs use PCIe slots, not onboard NICs
                         if (($nic['source_type'] ?? 'component') === 'component' &&
                             !empty($nic['slot_position']) &&
                             strpos($nic['slot_position'], 'pcie_') === 0) {
-                            $usedSlots[$nic['slot_position']] = $nic['uuid'];
+                            $occupants[$nic['slot_position']][] = $nic['uuid'];
                         }
                     }
                 }
@@ -1084,16 +1193,29 @@ class UnifiedSlotTracker {
             // could be assigned the same physical slot. Count any storage entry that
             // carries a pcie_ slot_position (AIC SSDs), exactly like the other card types.
             if (!empty($configData['storage_configuration'])) {
-                $storageConfigs = json_decode($configData['storage_configuration'], true);
+                $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
                 if (is_array($storageConfigs)) {
                     foreach ($storageConfigs as $storage) {
                         if (!empty($storage['slot_position']) &&
                             strpos($storage['slot_position'], 'pcie_') === 0) {
-                            $usedSlots[$storage['slot_position']] = $storage['uuid'] ?? 'storage-aic';
+                            $occupants[$storage['slot_position']][] = $storage['uuid'] ?? 'storage-aic';
                         }
                     }
                 }
             }
+
+            // L1: flatten to the slot=>uuid map callers expect (first occupant per
+            // slot) and record any slot with >1 occupant as a real collision.
+            $usedSlots = [];
+            $collisions = [];
+            foreach ($occupants as $slot => $uuids) {
+                $usedSlots[$slot] = $uuids[0];
+                if (count($uuids) > 1) {
+                    $collisions[$slot] = $uuids;
+                    error_log("UnifiedSlotTracker: slot collision at $slot -> " . implode(', ', $uuids));
+                }
+            }
+            $this->lastSlotCollisions = $collisions;
 
             return $usedSlots;
 
@@ -1124,7 +1246,7 @@ class UnifiedSlotTracker {
 
             // Check PCIe cards configuration for risers (riser cards have slot_position like 'riser_%')
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         if (!empty($pcie['slot_position']) &&
@@ -1345,7 +1467,7 @@ class UnifiedSlotTracker {
 
             // Get riser cards from PCIe cards configuration
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         // Check if it's in a riser slot
@@ -1498,7 +1620,7 @@ class UnifiedSlotTracker {
 
             // Get storage components from configuration
             if (!empty($configData['storage_configuration'])) {
-                $storageConfigs = json_decode($configData['storage_configuration'], true);
+                $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
                 if (is_array($storageConfigs)) {
                     foreach ($storageConfigs as $storage) {
                         $storageUuid = $storage['uuid'] ?? null;
@@ -1564,7 +1686,7 @@ class UnifiedSlotTracker {
 
             // Check PCIe cards for M.2 provision capability
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         $pcieUuid = $pcie['uuid'] ?? null;
@@ -1606,7 +1728,7 @@ class UnifiedSlotTracker {
         $count = 0;
 
         if (!empty($configData['storage_configuration'])) {
-            $storageConfigs = json_decode($configData['storage_configuration'], true);
+            $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
             if (is_array($storageConfigs)) {
                 foreach ($storageConfigs as $storage) {
                     $storageUuid = $storage['uuid'] ?? null;
@@ -1687,7 +1809,7 @@ class UnifiedSlotTracker {
             if ($config) {
                 $configData = $config->getData();
                 if (!empty($configData['storage_configuration'])) {
-                    $storageConfigs = json_decode($configData['storage_configuration'], true);
+                    $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
                     if (is_array($storageConfigs)) {
                         foreach ($storageConfigs as $storage) {
                             $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storage['uuid'] ?? null);
@@ -1744,7 +1866,7 @@ class UnifiedSlotTracker {
 
             // Get all PCIe cards in configuration
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         $slotPosition = $pcie['slot_position'] ?? '';
@@ -1897,7 +2019,7 @@ class UnifiedSlotTracker {
 
             // Check all PCIe cards
             if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($configData['pciecard_configurations'], true);
+                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         $slotPosition = $pcie['slot_position'] ?? '';
