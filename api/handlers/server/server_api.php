@@ -442,9 +442,7 @@ function handleAddComponent($serverBuilder, $user) {
         } catch (Exception $validationError) {
             error_log("Validation error: " . $validationError->getMessage());
             error_log("Stack trace: " . $validationError->getTraceAsString());
-            // Continue with addition - don't block on validation errors
-            $validationWarnings = [];
-            $validationInfo = ["Validation service unavailable - component added without full compatibility checks"];
+            send_json_response(0, 1, 500, "Validation unavailable - request rejected (fail-closed)");
         }
 
         // Use original component addition method
@@ -552,10 +550,6 @@ function handleAddComponent($serverBuilder, $user) {
                 $responseData['validation_warnings'] = $validationWarnings;
             }
 
-            if (isset($validationInfo) && !empty($validationInfo)) {
-                $responseData['validation_info'] = $validationInfo;
-            }
-            
             // Enhanced RAM compatibility response structure as specified in Important-fix
             if ($componentType === 'ram' && isset($result['warnings']) && isset($result['compatibility_details'])) {
                 $compatibilityDetails = $result['compatibility_details'];

@@ -666,6 +666,10 @@ class ServerBuilder {
                     }
                 } catch (Exception $cpuError) {
                     error_log("Error in CPU validation: " . $cpuError->getMessage());
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return ['success' => false, 'message' => 'Validation failed (system error): ' . $cpuError->getMessage(), 'error_type' => 'validation_exception'];
                 }
             }
             
@@ -684,7 +688,10 @@ class ServerBuilder {
                     $ramValidationResults = $ramValidation;
                 } catch (Exception $ramError) {
                     error_log("Error in RAM validation: " . $ramError->getMessage());
-                    // Continue without RAM validation
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return ['success' => false, 'message' => 'Validation failed (system error): ' . $ramError->getMessage(), 'error_type' => 'validation_exception'];
                 }
             }
 
@@ -706,7 +713,10 @@ class ServerBuilder {
                 } catch (Exception $compatError) {
                     error_log("Error in compatibility validation: " . $compatError->getMessage());
                     error_log("Stack trace: " . $compatError->getTraceAsString());
-                    // Continue without compatibility validation
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return ['success' => false, 'message' => 'Validation failed (system error): ' . $compatError->getMessage(), 'error_type' => 'validation_exception'];
                 }
             }
 
@@ -822,7 +832,10 @@ class ServerBuilder {
                     }
                 } catch (Exception $slotError) {
                     error_log("Slot assignment exception: " . $slotError->getMessage());
-                    // Continue without slot assignment - not fatal for non-riser cards
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return ['success' => false, 'message' => 'Slot assignment failed (system error): ' . $slotError->getMessage(), 'error_type' => 'validation_exception'];
                 }
             }
 
