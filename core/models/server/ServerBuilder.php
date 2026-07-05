@@ -489,6 +489,13 @@ class ServerBuilder {
                 ];
             }
 
+            // TEMP-GUARD(U-0.2): removed by U-SM.4
+            if ((int)($lockedConfigRow['configuration_status'] ?? 0) === 3) {
+                if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                return ['success'=>false,'error_type'=>'config_finalized',
+                        'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+            }
+
             // Phase 1.2: Auto-resolve serial_number if not provided
             // When multiple inventory items share the same UUID (same model), we need a serial
             // to identify which specific physical component is being added.
@@ -960,7 +967,12 @@ class ServerBuilder {
                 ];
             }
 
-
+            // TEMP-GUARD(U-0.2): removed by U-SM.4
+            if ((int)($config['configuration_status'] ?? 0) === 3) {
+                if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                return ['success'=>false,'error_type'=>'config_finalized',
+                        'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+            }
 
             // Check if component exists in configuration by extracting from JSON
             $components = $this->extractComponentsFromJson($config);
