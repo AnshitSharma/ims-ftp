@@ -9,7 +9,7 @@
     {"id": "P0", "folder": "01-foundation", "gate": "open", "gate_reports": ["baseline", "orphan", "regression"], "units": {
       "U-0.1": "verified", "U-0.2": "verified", "U-0.3": "verified", "U-0.4": "verified"}},
     {"id": "P1", "folder": "02-schema", "gate": "closed", "gate_reports": ["schema", "regression"], "units": {
-      "U-1.1": "implemented", "U-1.2": "implemented", "U-1.3": "implemented", "U-1.4": "implemented", "U-1.5": "blocked", "U-1.6": "not_started"}},
+      "U-1.1": "verified", "U-1.2": "verified", "U-1.3": "verified", "U-1.4": "verified", "U-1.5": "blocked", "U-1.6": "not_started"}},
     {"id": "PL", "folder": "06-resource-ledger", "gate": "closed", "gate_reports": ["schema", "ledger", "regression"], "units": {
       "U-L.1": "not_started", "U-L.2": "not_started", "U-L.3": "not_started"}},
     {"id": "P2", "folder": "07-component-migration", "gate": "closed", "gate_reports": ["equivalence", "orphan", "ledger", "inventory"], "units": {
@@ -32,5 +32,5 @@
     {"id": "P10", "folder": "12-post-cutover", "gate": "closed", "gate_reports": ["all"], "units": {
       "U-P.1": "not_started", "U-P.2": "not_started"}}
   ],
-  "last_session": {"date": "2026-07-06", "unit": "U-1.5", "handoff_file": "migration/handoffs/U-1.5-20260706.md"}
+  "last_session": {"date": "2026-07-06", "unit": "P1-VERIFY-PARTIAL", "handoff_file": "migration/handoffs/P1-VERIFY-20260706.md"}
 }
