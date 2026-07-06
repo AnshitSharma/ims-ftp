@@ -1,0 +1,17 @@
+{
+    "captured_at": "2026-07-06T19:16:54+00:00",
+    "note": "p95\/p50 wall-time per operation, replaying the R1-R10 real-component scenarios from tests\/fixture_scenarios_real.php",
+    "errors": 0,
+    "operations": {
+        "add": {
+            "samples": 8,
+            "p50_ms": 0.207,
+            "p95_ms": 0.521
+        },
+        "finalize": {
+            "samples": 2,
+            "p50_ms": 0.582,
+            "p95_ms": 1.174
+        }
+    }
+}
