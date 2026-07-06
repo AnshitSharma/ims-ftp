@@ -1,0 +1,67 @@
+{
+  "tables": {
+    "config_components": {
+      "columns": {
+        "id":              {"data_type": "bigint",  "nullable": false},
+        "config_uuid":     {"data_type": "char",     "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "component_type":  {"data_type": "enum",     "nullable": false},
+        "inventory_table": {"data_type": "varchar",  "nullable": false},
+        "inventory_id":    {"data_type": "bigint",   "nullable": false},
+        "spec_uuid":       {"data_type": "char",     "nullable": false},
+        "serial_number":   {"data_type": "varchar",  "nullable": true},
+        "parent_id":       {"data_type": "bigint",   "nullable": true},
+        "slot_ref":        {"data_type": "varchar",  "nullable": true},
+        "added_at":        {"data_type": "datetime", "nullable": false},
+        "added_by":        {"data_type": "int",      "nullable": false},
+        "removed_at":      {"data_type": "datetime", "nullable": true}
+      },
+      "indexes": {
+        "PRIMARY":           {"columns": ["id"],                          "unique": true},
+        "uq_inventory_once": {"columns": ["inventory_table", "inventory_id"], "unique": true},
+        "uq_slot_occupancy": {"columns": ["config_uuid", "slot_ref", "removed_at"], "unique": true},
+        "k_config":          {"columns": ["config_uuid"],  "unique": false},
+        "k_parent":          {"columns": ["parent_id"],    "unique": false}
+      }
+    },
+    "config_resources": {
+      "columns": {
+        "id":          {"data_type": "bigint",  "nullable": false},
+        "config_uuid": {"data_type": "char",    "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "resource":    {"data_type": "enum",    "nullable": false},
+        "provider_id": {"data_type": "bigint",  "nullable": false},
+        "slot_ref":    {"data_type": "varchar", "nullable": true},
+        "capacity":    {"data_type": "int",     "nullable": false},
+        "consumer_id": {"data_type": "bigint",  "nullable": true}
+      },
+      "indexes": {
+        "PRIMARY":     {"columns": ["id"],                              "unique": true},
+        "uq_discrete": {"columns": ["config_uuid", "resource", "slot_ref"], "unique": true},
+        "k_provider":  {"columns": ["provider_id"], "unique": false},
+        "k_consumer":  {"columns": ["consumer_id"], "unique": false}
+      }
+    },
+    "server_configurations": {
+      "columns": {
+        "revision": {"data_type": "int", "nullable": false}
+      },
+      "indexes": {}
+    },
+    "config_events": {
+      "columns": {
+        "id":             {"data_type": "bigint",   "nullable": false},
+        "config_uuid":    {"data_type": "char",     "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "revision":       {"data_type": "int",      "nullable": false},
+        "event":          {"data_type": "enum",     "nullable": false},
+        "component_type": {"data_type": "varchar",  "nullable": true},
+        "component_id":   {"data_type": "bigint",   "nullable": true},
+        "actor":          {"data_type": "int",      "nullable": false},
+        "payload":        {"data_type": "json",     "nullable": true},
+        "created_at":     {"data_type": "datetime", "nullable": false}
+      },
+      "indexes": {
+        "PRIMARY":       {"columns": ["id"], "unique": true},
+        "uq_config_rev": {"columns": ["config_uuid", "revision"], "unique": true}
+      }
+    }
+  }
+}

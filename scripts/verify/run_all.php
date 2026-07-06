@@ -26,7 +26,7 @@ const REGISTRY = [
     'inventory'   => ['script' => __DIR__ . '/inventory_report.php',   'available' => true,  'lands_in' => null],
     'orphan'      => ['script' => __DIR__ . '/orphan_report.php',      'available' => true,  'lands_in' => null],
     'performance' => ['script' => __DIR__ . '/performance_report.php', 'available' => true,  'lands_in' => null],
-    'schema'      => ['script' => __DIR__ . '/schema_report.php',      'available' => false, 'lands_in' => 'U-1.1'],
+    'schema'      => ['script' => __DIR__ . '/schema_report.php',      'available' => true,  'lands_in' => null],
     'ledger'      => ['script' => __DIR__ . '/ledger_report.php',      'available' => false, 'lands_in' => 'U-L.3'],
     'slot'        => ['script' => __DIR__ . '/slot_report.php',        'available' => false, 'lands_in' => 'U-L.3'],
     'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => false, 'lands_in' => 'U-1.6'],
