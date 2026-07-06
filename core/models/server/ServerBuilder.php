@@ -862,6 +862,28 @@ class ServerBuilder {
             // CRITICAL: Pass serial_number to store in configuration JSON
             $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber, $options);
 
+            // U-1.5: dual-write hook (flag off by default per FLAGS.md; no-op unless
+            // the flag is 'on'). Same transaction as the legacy write above; any
+            // failure here propagates and rolls back both stores (fail-closed, INV-5).
+            // Virtual configs never lock a real inventory row (componentDetails is a
+            // synthetic array with no ID), so there is nothing to dual-write.
+            if (!$isVirtual) {
+                require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+                ConfigComponentWriter::afterLegacyAdd(
+                    $this->pdo,
+                    $configUuid,
+                    $componentType,
+                    $componentUuid,
+                    $resolvedSerialNumber,
+                    $options['slot_position'] ?? null,
+                    $this->getComponentInventoryTable($componentType),
+                    $componentDetails['ID'] ?? null,
+                    0, // actor: ServerBuilder has no authenticated-user context today;
+                       // config_events.actor defaults to 0 for exactly this case.
+                    $options['parent_nic_uuid'] ?? null
+                );
+            }
+
             // Update component status to "In Use" ONLY for real builds (not virtual/test builds) (SECOND)
             // Virtual configs don't lock components - they're for testing only
             if (!$this->isVirtualConfig($configUuid)) {
@@ -1063,6 +1085,23 @@ class ServerBuilder {
             // Update the main server_configurations table (FIRST)
             // CRITICAL: Pass serial number to remove correct component from JSON
             $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber);
+
+            // U-1.5: dual-write hook (flag off by default per FLAGS.md; no-op unless
+            // the flag is 'on'). Same transaction as the legacy write above; any
+            // failure here propagates and rolls back both stores (fail-closed, INV-5).
+            // Virtual configs are never dual-written on add, so there is nothing to
+            // tombstone here either.
+            if (!$this->isVirtualConfig($configUuid)) {
+                require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+                ConfigComponentWriter::afterLegacyRemove(
+                    $this->pdo,
+                    $configUuid,
+                    $componentType,
+                    $componentUuid,
+                    $componentSerialNumber,
+                    0 // actor: see matching note in addComponent()'s hook call
+                );
+            }
 
             // Update component status back to "Available" and clear ServerUUID, installation date, and rack position (SECOND)
             // CRITICAL: Pass serial number to update only the specific physical component
@@ -5302,7 +5341,7 @@ class ServerBuilder {
             if ($serialNumber !== null) {
                 // Lock specific physical component by UUID + SerialNumber
                 $stmt = $this->pdo->prepare("
-                    SELECT UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                    SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                     FROM `$table`
                     WHERE UUID = ? AND SerialNumber = ?
                     FOR UPDATE
@@ -5313,7 +5352,7 @@ class ServerBuilder {
                 // This ensures a second available unit is picked for multi-socket configurations
                 // rather than re-fetching the already-in-use unit.
                 $stmt = $this->pdo->prepare("
-                    SELECT UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                    SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                     FROM `$table`
                     WHERE UUID = ?
                     ORDER BY Status ASC
