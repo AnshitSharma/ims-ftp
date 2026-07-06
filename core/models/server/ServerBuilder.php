@@ -950,8 +950,14 @@ class ServerBuilder {
      * UPDATED: Now reads from JSON columns and updates JSON instead of relational table
      */
     public function removeComponent($configUuid, $componentType, $componentUuid, $serialNumber = null) {
+        // RACE CONDITION FIX: Initialize transaction control early
+        $ownTransaction = false;
+
         try {
-            $this->pdo->beginTransaction();
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+            }
 
             // RACE CONDITION FIX (Phase 1): Lock the server_configurations row
             // before reading. Held until commit/rollback; protects the JSON
@@ -960,7 +966,7 @@ class ServerBuilder {
             $config = $this->lockAndLoadConfigRow($configUuid);
 
             if (!$config) {
-                $this->pdo->rollback();
+                if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                 return [
                     'success' => false,
                     'message' => "Configuration not found"
@@ -969,7 +975,7 @@ class ServerBuilder {
 
             // TEMP-GUARD(U-0.2): removed by U-SM.4
             if ((int)($config['configuration_status'] ?? 0) === 3) {
-                if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                 return ['success'=>false,'error_type'=>'config_finalized',
                         'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
             }
@@ -1000,7 +1006,7 @@ class ServerBuilder {
             }
 
             if (!$componentFound) {
-                $this->pdo->rollback();
+                if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                 $serialInfo = $serialNumber ? " with SerialNumber '$serialNumber'" : "";
                 return [
                     'success' => false,
@@ -1027,7 +1033,7 @@ class ServerBuilder {
                     }
 
                     if (!empty($occupiedPorts)) {
-                        $this->pdo->rollback();
+                        if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                         return [
                             'success' => false,
                             'message' => "Cannot remove NIC - " . count($occupiedPorts) . " SFP module(s) installed on ports",
@@ -1073,7 +1079,9 @@ class ServerBuilder {
             // Log the action
             $this->logConfigurationAction($configUuid, 'remove_component', $componentType, $componentUuid);
 
-            $this->pdo->commit();
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
 
             // Invalidate configuration cache if available
             if ($this->configCache !== null) {
@@ -1102,7 +1110,9 @@ class ServerBuilder {
             return $response;
 
         } catch (\Throwable $e) {
-            $this->pdo->rollback();
+            if ($ownTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollback();
+            }
             error_log("Error removing component from configuration: " . $e->getMessage());
             return [
                 'success' => false,
@@ -3624,8 +3634,15 @@ class ServerBuilder {
      * Delete configuration
      */
     public function deleteConfiguration($configUuid) {
+        // RACE CONDITION FIX: Initialize transaction control early
+        $ownTransaction = false;
+        $components = [];
+
         try {
-            $this->pdo->beginTransaction();
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+            }
 
             // RACE CONDITION FIX (Phase 1): Lock the configuration row before
             // reading its components list. Prevents a concurrent add/remove
@@ -3662,17 +3679,21 @@ class ServerBuilder {
             // Delete configuration
             $stmt = $this->pdo->prepare("DELETE FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
-            
-            $this->pdo->commit();
-            
+
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
+
             return [
                 'success' => true,
                 'message' => "Configuration deleted successfully",
                 'components_released' => count($components)
             ];
-            
+
         } catch (Exception $e) {
-            $this->pdo->rollback();
+            if ($ownTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollback();
+            }
             error_log("Error deleting configuration: " . $e->getMessage());
             return [
                 'success' => false,
