@@ -29,7 +29,7 @@ const REGISTRY = [
     'schema'      => ['script' => __DIR__ . '/schema_report.php',      'available' => true,  'lands_in' => null],
     'ledger'      => ['script' => __DIR__ . '/ledger_report.php',      'available' => false, 'lands_in' => 'U-L.3'],
     'slot'        => ['script' => __DIR__ . '/slot_report.php',        'available' => false, 'lands_in' => 'U-L.3'],
-    'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => false, 'lands_in' => 'U-1.6'],
+    'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => true,  'lands_in' => null],
     'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => false, 'lands_in' => 'U-V.4'],
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => false, 'lands_in' => 'U-D.1'],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
