@@ -22,6 +22,23 @@
         "k_config":          {"columns": ["config_uuid"],  "unique": false},
         "k_parent":          {"columns": ["parent_id"],    "unique": false}
       }
+    },
+    "config_resources": {
+      "columns": {
+        "id":          {"data_type": "bigint",  "nullable": false},
+        "config_uuid": {"data_type": "char",    "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "resource":    {"data_type": "enum",    "nullable": false},
+        "provider_id": {"data_type": "bigint",  "nullable": false},
+        "slot_ref":    {"data_type": "varchar", "nullable": true},
+        "capacity":    {"data_type": "int",     "nullable": false},
+        "consumer_id": {"data_type": "bigint",  "nullable": true}
+      },
+      "indexes": {
+        "PRIMARY":     {"columns": ["id"],                              "unique": true},
+        "uq_discrete": {"columns": ["config_uuid", "resource", "slot_ref"], "unique": true},
+        "k_provider":  {"columns": ["provider_id"], "unique": false},
+        "k_consumer":  {"columns": ["consumer_id"], "unique": false}
+      }
     }
   }
 }
