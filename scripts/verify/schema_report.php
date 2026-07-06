@@ -61,6 +61,26 @@ function getColumns(PDO $pdo, string $table): array {
     return $out;
 }
 
+/**
+ * MariaDB stores JSON columns as `longtext` + a `json_valid(col)` CHECK constraint (JSON is an
+ * alias there, not a native type); MySQL 5.7+ reports DATA_TYPE = 'json' directly. Treat both as
+ * satisfying an expected data_type of "json".
+ */
+function isJsonValidColumn(PDO $pdo, string $table, string $column): bool {
+    $stmt = $pdo->prepare("SELECT cc.CHECK_CLAUSE
+                            FROM information_schema.CHECK_CONSTRAINTS cc
+                            JOIN information_schema.TABLE_CONSTRAINTS tc
+                              ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+                            WHERE cc.CONSTRAINT_SCHEMA = DATABASE() AND tc.TABLE_NAME = ?");
+    $stmt->execute([$table]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        if (stripos($row['CHECK_CLAUSE'], 'json_valid') !== false && stripos($row['CHECK_CLAUSE'], "`$column`") !== false) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** @return array<string, array{columns: string[], unique: bool}> keyed by index name */
 function getIndexes(PDO $pdo, string $table): array {
     $stmt = $pdo->prepare('SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX
@@ -100,10 +120,15 @@ function runChecks(PDO $pdo, array $expected): array {
             $live = $liveColumns[$colName];
 
             if (isset($colSpec['data_type']) && strtolower($live['DATA_TYPE']) !== strtolower($colSpec['data_type'])) {
-                $violations[] = [
-                    'table' => $tableName, 'column' => $colName, 'issue' => 'data_type_mismatch',
-                    'expected' => $colSpec['data_type'], 'actual' => $live['DATA_TYPE'],
-                ];
+                $isMariaDbJsonAlias = strtolower($colSpec['data_type']) === 'json'
+                    && strtolower($live['DATA_TYPE']) === 'longtext'
+                    && isJsonValidColumn($pdo, $tableName, $colName);
+                if (!$isMariaDbJsonAlias) {
+                    $violations[] = [
+                        'table' => $tableName, 'column' => $colName, 'issue' => 'data_type_mismatch',
+                        'expected' => $colSpec['data_type'], 'actual' => $live['DATA_TYPE'],
+                    ];
+                }
             }
 
             if (isset($colSpec['nullable'])) {

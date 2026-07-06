@@ -39,6 +39,29 @@
         "k_provider":  {"columns": ["provider_id"], "unique": false},
         "k_consumer":  {"columns": ["consumer_id"], "unique": false}
       }
+    },
+    "server_configurations": {
+      "columns": {
+        "revision": {"data_type": "int", "nullable": false}
+      },
+      "indexes": {}
+    },
+    "config_events": {
+      "columns": {
+        "id":             {"data_type": "bigint",   "nullable": false},
+        "config_uuid":    {"data_type": "char",     "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "revision":       {"data_type": "int",      "nullable": false},
+        "event":          {"data_type": "enum",     "nullable": false},
+        "component_type": {"data_type": "varchar",  "nullable": true},
+        "component_id":   {"data_type": "bigint",   "nullable": true},
+        "actor":          {"data_type": "int",      "nullable": false},
+        "payload":        {"data_type": "json",     "nullable": true},
+        "created_at":     {"data_type": "datetime", "nullable": false}
+      },
+      "indexes": {
+        "PRIMARY":       {"columns": ["id"], "unique": true},
+        "uq_config_rev": {"columns": ["config_uuid", "revision"], "unique": true}
+      }
     }
   }
 }
