@@ -1,0 +1,27 @@
+{
+  "tables": {
+    "config_components": {
+      "columns": {
+        "id":              {"data_type": "bigint",  "nullable": false},
+        "config_uuid":     {"data_type": "char",     "nullable": false, "collation_matches": "server_configurations.config_uuid"},
+        "component_type":  {"data_type": "enum",     "nullable": false},
+        "inventory_table": {"data_type": "varchar",  "nullable": false},
+        "inventory_id":    {"data_type": "bigint",   "nullable": false},
+        "spec_uuid":       {"data_type": "char",     "nullable": false},
+        "serial_number":   {"data_type": "varchar",  "nullable": true},
+        "parent_id":       {"data_type": "bigint",   "nullable": true},
+        "slot_ref":        {"data_type": "varchar",  "nullable": true},
+        "added_at":        {"data_type": "datetime", "nullable": false},
+        "added_by":        {"data_type": "int",      "nullable": false},
+        "removed_at":      {"data_type": "datetime", "nullable": true}
+      },
+      "indexes": {
+        "PRIMARY":           {"columns": ["id"],                          "unique": true},
+        "uq_inventory_once": {"columns": ["inventory_table", "inventory_id"], "unique": true},
+        "uq_slot_occupancy": {"columns": ["config_uuid", "slot_ref", "removed_at"], "unique": true},
+        "k_config":          {"columns": ["config_uuid"],  "unique": false},
+        "k_parent":          {"columns": ["parent_id"],    "unique": false}
+      }
+    }
+  }
+}
