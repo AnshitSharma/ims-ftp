@@ -44,7 +44,18 @@ if (!file_exists($bootstrap)) {
 }
 require_once $bootstrap;
 require_once $ROOT . '/core/models/config/ConfigComponentRepository.php';
+require_once $ROOT . '/core/models/config/ResourceCatalog.php';
 require_once __DIR__ . '/Extractor.php';
+
+// ResourceCatalog::provides()/consumes() throw CatalogException for types it
+// has no confirmed field for (cpu/nic providing; nic/hbacard/pciecard/riser
+// consuming — see ResourceCatalog.php's own class docblock). That's routine,
+// not a per-config data problem, so these types are skipped entirely rather
+// than called-and-caught (calling provides('cpu',...) would otherwise throw
+// on every single config that has a cpu, which is not what "CatalogException
+// ⇒ config state 'error' (spec fixable)" is meant to catch per the pack).
+const LEDGER_SKIP_PROVIDES = ['cpu', 'nic'];
+const LEDGER_SKIP_CONSUMES = ['nic', 'hbacard', 'pciecard', 'riser'];
 
 global $pdo;
 if (!isset($pdo) || !($pdo instanceof PDO)) {
@@ -66,11 +77,16 @@ function argAfter(array $argv, string $flag): ?string
  * (e.g. the extractor decided against linking an ambiguous riser) silently
  * yields parent_id = NULL — parent_id has always been best-effort here (RV-1/RV-2).
  */
-function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extractor, string $configUuid, array $plans, string $runId, $actor): void
+/**
+ * @return array[] one row per inserted plan: {id, component_type, spec_uuid, slot_ref}
+ *         (input for backfillLedgerForConfig()'s second pass).
+ */
+function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extractor, string $configUuid, array $plans, string $runId, $actor): array
 {
     $motherboardId = null;
     $riserId = null;
     $nicIdsBySpec = [];
+    $insertedRows = [];
 
     foreach ($plans as $plan) {
         $ref = $plan['parent_ref'];
@@ -85,6 +101,10 @@ function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extr
         }
 
         $id = $extractor->persistPlan($pdo, $repo, $configUuid, $plan, $parentId, $runId, $actor);
+        $insertedRows[] = [
+            'id' => $id, 'component_type' => $plan['component_type'],
+            'spec_uuid' => $plan['spec_uuid'], 'slot_ref' => $plan['slot_ref'],
+        ];
 
         if ($plan['component_type'] === 'motherboard') {
             $motherboardId = $id;
@@ -92,6 +112,75 @@ function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extr
             $riserId = $id;
         } elseif ($plan['component_type'] === 'nic') {
             $nicIdsBySpec[$plan['spec_uuid']] = $id;
+        }
+    }
+
+    return $insertedRows;
+}
+
+/**
+ * Second pass, same transaction as persistPlans(): ledger rows for the
+ * config's now-inserted components. Providers via ResourceCatalog::provides()
+ * for every non-skipped type ('riser' rows are queried as 'pciecard' —
+ * ResourceCatalog doesn't know the config_components-level relabeling,
+ * providesPciecard() itself detects Riser Card via component_subtype).
+ * Discrete slot consumer-linking is a plain slot_ref string match — per RV-2
+ * (ConfigComponentWriter.php docblock), ResourceCatalog's slot_ref naming
+ * rarely if ever matches the legacy slot-assignment system's, so this mostly
+ * links nothing today; the mechanism exists for whenever a future unit
+ * reconciles the two naming schemes. Scalar lane consumption via
+ * ResourceCatalog::consumes() (storage only, today).
+ *
+ * A CatalogException here (malformed spec, or -- until ResourceCatalog's cpu
+ * provides() gap closes -- "no pcie_lane provider found" for any NVMe
+ * storage) propagates to the caller's existing per-config try/catch, which
+ * marks the config 'error' (resumable) rather than quarantined: per the pack,
+ * this class of failure is spec/catalog-fixable, not a shape problem.
+ */
+function backfillLedgerForConfig(PDO $pdo, string $configUuid, array $insertedRows): void
+{
+    $catalog = new ResourceCatalog();
+
+    foreach ($insertedRows as $row) {
+        $physicalType = $row['component_type'] === 'riser' ? 'pciecard' : $row['component_type'];
+
+        if (!in_array($physicalType, LEDGER_SKIP_PROVIDES, true)) {
+            $providerStmt = $pdo->prepare(
+                'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
+                 VALUES (?, ?, ?, ?, ?, NULL)'
+            );
+            foreach ($catalog->provides($physicalType, $row['spec_uuid']) as $p) {
+                $providerStmt->execute([$configUuid, $p['resource'], $row['id'], $p['slot_ref'], $p['capacity']]);
+            }
+        }
+
+        if ($row['slot_ref'] !== null) {
+            $pdo->prepare(
+                'UPDATE config_resources SET consumer_id = ?
+                 WHERE config_uuid = ? AND slot_ref = ? AND consumer_id IS NULL
+                 ORDER BY id LIMIT 1'
+            )->execute([$row['id'], $configUuid, $row['slot_ref']]);
+        }
+
+        if (!in_array($physicalType, LEDGER_SKIP_CONSUMES, true)) {
+            foreach ($catalog->consumes($physicalType, $row['spec_uuid']) as $consumed) {
+                $findProvider = $pdo->prepare(
+                    'SELECT provider_id FROM config_resources
+                     WHERE config_uuid = ? AND resource = ? AND consumer_id IS NULL LIMIT 1'
+                );
+                $findProvider->execute([$configUuid, $consumed['resource']]);
+                $providerId = $findProvider->fetchColumn();
+                if ($providerId === false) {
+                    throw new CatalogException(
+                        "No provider found for resource '{$consumed['resource']}' in config $configUuid " .
+                        "to attach component id {$row['id']}'s consumption to"
+                    );
+                }
+                $pdo->prepare(
+                    'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
+                     VALUES (?, ?, ?, NULL, ?, ?)'
+                )->execute([$configUuid, $consumed['resource'], $providerId, $consumed['amount'], $row['id']]);
+            }
         }
     }
 }
@@ -333,7 +422,8 @@ foreach ($configUuids as $configUuid) {
         $repo = new ConfigComponentRepository($pdo);
 
         if (!empty($result['plans'])) {
-            persistPlans($pdo, $repo, $extractor, $configUuid, $result['plans'], $runId, 0);
+            $insertedRows = persistPlans($pdo, $repo, $extractor, $configUuid, $result['plans'], $runId, 0);
+            backfillLedgerForConfig($pdo, $configUuid, $insertedRows);
         }
 
         if (!empty($result['quarantine'])) {
