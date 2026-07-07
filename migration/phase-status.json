@@ -13,7 +13,7 @@
     {"id": "PL", "folder": "06-resource-ledger", "gate": "open", "gate_reports": ["schema", "ledger", "regression"], "units": {
       "U-L.1": "verified", "U-L.2": "verified", "U-L.3": "verified"}},
     {"id": "P2", "folder": "07-component-migration", "gate": "closed", "gate_reports": ["equivalence", "orphan", "ledger", "inventory"], "units": {
-      "U-B.1": "implemented", "U-B.2": "implemented", "U-B.3": "implemented", "U-B.4": "not_started"}},
+      "U-B.1": "verified", "U-B.2": "implemented", "U-B.3": "implemented", "U-B.4": "not_started"}},
     {"id": "P3", "folder": "03-state-machines", "gate": "closed", "gate_reports": ["schema", "inventory", "regression"], "units": {
       "U-SM.1": "not_started", "U-SM.2": "not_started", "U-SM.3": "not_started", "U-SM.4": "not_started"}},
     {"id": "P4", "folder": "04-validation-engine", "gate": "closed", "gate_reports": ["parity", "regression"], "units": {
