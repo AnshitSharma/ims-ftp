@@ -1,41 +1,33 @@
 <?php
 /**
- * backfill.php — U-B.1 skeleton (07-component-migration/execution-packs/U-B.1.md).
+ * backfill.php — 07-component-migration/execution-packs/U-B.1.md + U-B.2.md.
  *
- * Safe bulk-migration machinery: state tracking, dry-run, resume, quarantine.
- * The Extractor itself (turning a legacy JSON entry into real
- * config_components/config_resources rows) is NOT implemented yet — U-B.2
- * ships it. This unit's Extractor stub quarantines EVERY legacy component
- * entry it finds, reason 'extractor-not-implemented', so the machinery
- * below can be proven correct without depending on unwritten extraction logic.
- *
- * extractLegacyEntries() mirrors scripts/audit-orphans.php::extractRefs()
- * exactly (the only file this unit's pack authorized reading for this
- * pattern) — it does NOT include equivalence_report.php's hbacard_uuid /
- * hbacard_config dedup refinement (that file was out of this unit's read
- * scope), so a config with BOTH populated could theoretically quarantine
- * hbacard twice. Low-stakes here (everything is quarantined either way,
- * once each duplicate) — U-B.2's real Extractor must get this right.
+ * Safe bulk-migration machinery (state tracking, dry-run, resume, quarantine)
+ * plus the real Extractor (Extractor.php, U-B.2): turns each legacy JSON
+ * component entry into a config_components row, resolved to its one physical
+ * inventory row. Anything the Extractor cannot confidently resolve is
+ * quarantined with a distinct reason instead of guessed.
  *
  * Usage:
  *   php scripts/backfill/backfill.php [--config <uuid>]
  *       Dry-run (default): writes reports/backfill-plan-<ts>.json only.
  *       Zero DB writes — no transaction is even opened.
  *   php scripts/backfill/backfill.php --execute [--run-id <id>] [--config <uuid>]
- *       Real run: per config, locks the config row, quarantines every legacy
- *       component entry found (or marks 'done' if none), commits. Prints the
- *       run-id (auto-generated if not given) so it can be resumed later.
+ *       Real run: per config, locks the config row, migrates every resolvable
+ *       legacy component entry (config_components + config_events event=
+ *       'backfill', carrying run_id) and quarantines the rest, commits.
+ *       Prints the run-id (auto-generated if not given) so it can be resumed.
  *   php scripts/backfill/backfill.php --resume --run-id <id> [--config <uuid>]
  *       Continues configs still 'pending'/'error' for that run. Configs
  *       already 'done' are re-verified via equivalence_report.php --config
  *       instead of being reprocessed (idempotence); 'quarantined' configs
- *       are left untouched (terminal for this stub).
+ *       are left untouched (a config with any quarantined entry needs human
+ *       review before this run revisits it).
  *   php scripts/backfill/backfill.php --rollback-run <id>
- *       Deletes every row this run produced: config_resources/config_components
- *       rows referenced by its config_events(event='backfill') entries (none
- *       exist yet under this unit's stub — forward-compatible for U-B.2),
- *       those config_events rows themselves, its backfill_quarantine rows,
- *       and its migration_backfill_state rows.
+ *       Deletes every row this run produced: config_components/config_resources
+ *       rows referenced by its config_events(event='backfill') entries, those
+ *       config_events rows themselves, its backfill_quarantine rows, and its
+ *       migration_backfill_state rows.
  *
  * Exit: 0 = clean run (or clean dry-run/rollback), 1 = one or more configs
  * ended in 'error', 2 = usage/setup error.
@@ -51,6 +43,8 @@ if (!file_exists($bootstrap)) {
     exit(2);
 }
 require_once $bootstrap;
+require_once $ROOT . '/core/models/config/ConfigComponentRepository.php';
+require_once __DIR__ . '/Extractor.php';
 
 global $pdo;
 if (!isset($pdo) || !($pdo instanceof PDO)) {
@@ -65,57 +59,41 @@ function argAfter(array $argv, string $flag): ?string
 }
 
 /**
- * Mirrors scripts/audit-orphans.php::extractRefs() exactly, but keeps the
- * FULL raw entry (not just uuid/serial) so a quarantine row has enough
- * information for an operator to inspect or hand-migrate. See file docblock
- * for the one known deviation (no hbacard dedup).
- *
- * @return array<int, array{type:string, entry:array}>
+ * Insert every plan in order, resolving each plan's 'parent_ref' marker
+ * ('motherboard' / 'riser' / ['nic_spec_uuid' => uuid]) against ids assigned
+ * to earlier plans in this same config (Extractor::extract() guarantees
+ * parent-before-child ordering). A ref with nothing to resolve against
+ * (e.g. the extractor decided against linking an ambiguous riser) silently
+ * yields parent_id = NULL — parent_id has always been best-effort here (RV-1/RV-2).
  */
-function extractLegacyEntries(array $configRow): array
+function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extractor, string $configUuid, array $plans, string $runId, $actor): void
 {
-    $entries = [];
+    $motherboardId = null;
+    $riserId = null;
+    $nicIdsBySpec = [];
 
-    $pushJson = function ($type, $json, $key = null) use (&$entries) {
-        if (empty($json)) {
-            return;
+    foreach ($plans as $plan) {
+        $ref = $plan['parent_ref'];
+        if ($ref === 'motherboard') {
+            $parentId = $motherboardId;
+        } elseif ($ref === 'riser') {
+            $parentId = $riserId;
+        } elseif (is_array($ref) && isset($ref['nic_spec_uuid'])) {
+            $parentId = $nicIdsBySpec[$ref['nic_spec_uuid']] ?? null;
+        } else {
+            $parentId = null;
         }
-        $decoded = json_decode($json, true);
-        if (!is_array($decoded)) {
-            return;
-        }
-        $list = $key ? ($decoded[$key] ?? []) : $decoded;
-        if (!is_array($list)) {
-            return;
-        }
-        foreach ($list as $entry) {
-            if (!is_array($entry) || empty($entry['uuid'])) {
-                continue;
-            }
-            $entries[] = ['type' => $type, 'entry' => $entry];
-        }
-    };
 
-    $pushJson('cpu',      $configRow['cpu_configuration']       ?? null, 'cpus');
-    $pushJson('ram',      $configRow['ram_configuration']       ?? null);
-    $pushJson('storage',  $configRow['storage_configuration']   ?? null);
-    $pushJson('caddy',    $configRow['caddy_configuration']     ?? null);
-    $pushJson('pciecard', $configRow['pciecard_configurations'] ?? null);
-    $pushJson('hbacard',  $configRow['hbacard_config']          ?? null);
-    $pushJson('sfp',      $configRow['sfp_configuration']       ?? null);
-    $pushJson('nic',      $configRow['nic_config']              ?? null, 'nics');
+        $id = $extractor->persistPlan($pdo, $repo, $configUuid, $plan, $parentId, $runId, $actor);
 
-    if (!empty($configRow['motherboard_uuid'])) {
-        $entries[] = ['type' => 'motherboard', 'entry' => ['uuid' => $configRow['motherboard_uuid']]];
+        if ($plan['component_type'] === 'motherboard') {
+            $motherboardId = $id;
+        } elseif ($plan['component_type'] === 'riser') {
+            $riserId = $id;
+        } elseif ($plan['component_type'] === 'nic') {
+            $nicIdsBySpec[$plan['spec_uuid']] = $id;
+        }
     }
-    if (!empty($configRow['chassis_uuid'])) {
-        $entries[] = ['type' => 'chassis', 'entry' => ['uuid' => $configRow['chassis_uuid']]];
-    }
-    if (!empty($configRow['hbacard_uuid'])) {
-        $entries[] = ['type' => 'hbacard', 'entry' => ['uuid' => $configRow['hbacard_uuid']]];
-    }
-
-    return $entries;
 }
 
 function upsertState(PDO $pdo, string $runId, string $configUuid, string $status, ?string $lastError): void
@@ -178,14 +156,21 @@ function rollbackRun(PDO $pdo, string $rootDir, string $runId): int
     try {
         $pdo->beginTransaction();
 
-        // Forward-compatible with U-B.2: under THIS unit's stub extractor no
-        // config_components row is ever inserted (everything is quarantined),
-        // so this always finds zero ids today — kept correct for when a real
-        // Extractor starts writing rows via ConfigComponentRepository::insert().
+        // component_id ordered by revision DESC: persistPlans() always inserts
+        // a parent (motherboard/riser/nic) before anything that references it
+        // via parent_id, bumping revision each time — so the highest-revision
+        // rows in this run are always children (if any) of a lower-revision
+        // row also in this run. Deleting in that order (children first) keeps
+        // fk_cc_parent (RESTRICT, no ON DELETE clause) satisfied; a single
+        // unordered `DELETE ... WHERE id IN (...)` can hit "parent row" FK
+        // violations depending on MySQL's internal row order (hit this exact
+        // error deleting a real Extractor's output — U-B.1's rollback path was
+        // only exercised against zero rows, since its stub never inserted any).
         $stmt = $pdo->prepare(
             "SELECT component_id FROM config_events
              WHERE event = 'backfill' AND component_id IS NOT NULL
-               AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.run_id')) = ?"
+               AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.run_id')) = ?
+             ORDER BY revision DESC"
         );
         $stmt->execute([$runId]);
         $componentIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
@@ -194,8 +179,11 @@ function rollbackRun(PDO $pdo, string $rootDir, string $runId): int
             $placeholders = implode(',', array_fill(0, count($componentIds), '?'));
             $pdo->prepare("DELETE FROM config_resources WHERE provider_id IN ($placeholders) OR consumer_id IN ($placeholders)")
                 ->execute(array_merge($componentIds, $componentIds));
-            $pdo->prepare("DELETE FROM config_components WHERE id IN ($placeholders)")
-                ->execute($componentIds);
+
+            $deleteOne = $pdo->prepare('DELETE FROM config_components WHERE id = ?');
+            foreach ($componentIds as $id) {
+                $deleteOne->execute([$id]);
+            }
         }
 
         $pdo->prepare(
@@ -320,11 +308,12 @@ foreach ($configUuids as $configUuid) {
         $stmt = $pdo->prepare('SELECT * FROM server_configurations WHERE config_uuid = ?');
         $stmt->execute([$configUuid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        $entries = $row ? extractLegacyEntries($row) : [];
+        $result = $row ? (new Extractor())->extract($pdo, $row) : ['plans' => [], 'quarantine' => []];
         $planEntries[] = [
             'config_uuid'      => $configUuid,
-            'would_quarantine' => count($entries),
-            'reason'           => empty($entries) ? null : 'extractor-not-implemented',
+            'would_migrate'    => count($result['plans']),
+            'would_quarantine' => count($result['quarantine']),
+            'reasons'          => array_values(array_unique(array_column($result['quarantine'], 'reason'))),
         ];
         continue;
     }
@@ -339,19 +328,26 @@ foreach ($configUuids as $configUuid) {
             throw new RuntimeException('config row disappeared mid-run');
         }
 
-        $entries = extractLegacyEntries($row);
-        if (empty($entries)) {
-            upsertState($pdo, $runId, $configUuid, 'done', null);
-            $doneCount++;
-        } else {
+        $extractor = new Extractor();
+        $result = $extractor->extract($pdo, $row);
+        $repo = new ConfigComponentRepository($pdo);
+
+        if (!empty($result['plans'])) {
+            persistPlans($pdo, $repo, $extractor, $configUuid, $result['plans'], $runId, 0);
+        }
+
+        if (!empty($result['quarantine'])) {
             $quarantineStmt = $pdo->prepare(
                 'INSERT INTO backfill_quarantine (run_id, config_uuid, component_json, reason) VALUES (?, ?, ?, ?)'
             );
-            foreach ($entries as $entry) {
-                $quarantineStmt->execute([$runId, $configUuid, json_encode($entry), 'extractor-not-implemented']);
+            foreach ($result['quarantine'] as $q) {
+                $quarantineStmt->execute([$runId, $configUuid, json_encode(['type' => $q['type'], 'entry' => $q['entry']]), $q['reason']]);
             }
             upsertState($pdo, $runId, $configUuid, 'quarantined', null);
             $quarantinedCount++;
+        } else {
+            upsertState($pdo, $runId, $configUuid, 'done', null);
+            $doneCount++;
         }
 
         $pdo->commit();

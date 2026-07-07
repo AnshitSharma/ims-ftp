@@ -51,17 +51,25 @@ if (!isset($pdo) || !($pdo instanceof PDO)) {
 // Normalization consts — each encodes one legacy quirk, per the pack.
 // -----------------------------------------------------------------------
 
-// Onboard NICs (uuid prefix "onboard-") are excluded from BOTH sides until the
-// U-B.2 backfill gives them real config_components rows with real parent_ids.
-// Flip to true in U-B.2.
-const TODO_UB2 = false;
+// Onboard NICs (uuid prefix "onboard-") are now included on both sides:
+// U-B.2's Extractor gives them real config_components rows (inventory-
+// resolved via nicinventory's UUID+ServerUUID, same as every other type)
+// with a real parent_id (the config's motherboard row).
+const TODO_UB2 = true;
 
-// BEST-EFFORT: the exact legacy JSON key that marks a pciecard entry as a riser
-// card (vs. a plain PCIe card) was not confirmed in this unit's allowed read
-// range (ServerBuilder.php lines 61-120 only cover extractComponentsFromJson's
-// cpu/ram/storage/caddy blocks). Checked defensively against a short list of
-// plausible key names; a human/verify session should confirm the real key
-// against ims-data/pciecard specs and this list updated if wrong.
+// BEST-EFFORT, PARTIAL: U-B.2's pack confirms the real rule is "pciecard
+// subtype Riser Card (ims-data component_subtype, per
+// ResourceCatalog::providesPciecard()) OR uuid prefix 'riser-'" -- Extractor.php
+// implements both. The component_subtype half is NOT implemented here: it
+// would require loading DataExtractionUtilities/ims-data specs into a report
+// that scans the whole fleet, which is a bigger, perf-sensitive change this
+// unit's file box doesn't cover. Only the uuid-prefix half is checked below;
+// a config whose only riser signal is component_subtype (no 'riser-' prefix)
+// will show as a false diff here even though Extractor.php resolves it
+// correctly -- tracked as a known gap for a follow-up unit (also folds in the
+// pre-existing RISER_SUBTYPE_KEYS observation: the decoded entry shape from
+// extractComponentsFromJson never actually carries 'subtype'/'card_type'/
+// 'type', so that list never matched anything either).
 const RISER_SUBTYPE_KEYS = ['subtype', 'card_type', 'type'];
 
 function isOnboardNic(string $type, ?string $specUuid): bool
@@ -73,6 +81,10 @@ function isRiserPciecard(string $type, array $entry): bool
 {
     if ($type !== 'pciecard') {
         return false;
+    }
+    $uuid = $entry['component_uuid'] ?? $entry['uuid'] ?? null;
+    if ($uuid !== null && strpos((string)$uuid, 'riser-') === 0) {
+        return true;
     }
     foreach (RISER_SUBTYPE_KEYS as $key) {
         if (isset($entry[$key]) && stripos((string)$entry[$key], 'riser') !== false) {
@@ -88,8 +100,33 @@ function canonicalTuple(string $type, array $entry): array
         $type = 'riser';
     }
     $specUuid = $entry['component_uuid'] ?? $entry['spec_uuid'] ?? null;
-    $serial = $entry['serial_number'] ?? null;
-    $slotRef = $entry['slot_position'] ?? $entry['slot_ref'] ?? $entry['slot_id'] ?? null;
+    // ServerBuilder::extractComponentsFromJson() -- the authoritative legacy
+    // decoder this report is scoped to -- only ever populates serial_number
+    // for cpu entries; every other type's legacy JSON is decoded without it
+    // (true even for hbacard, whose JSON DOES carry a serial_number key --
+    // the decoder just never reads it back out). Meanwhile both live
+    // dual-write and backfill rows always carry the real inventory-resolved
+    // serial for every type. Comparing serial for non-cpu types would
+    // therefore diverge on every config that has one, regardless of whether
+    // the two stores actually agree on which physical unit is present --
+    // found via U-B.2's first full-fixture (all 10 types) equivalence run,
+    // not introduced by it. Excluded from the comparison for every type but cpu.
+    $serial = $type === 'cpu' ? ($entry['serial_number'] ?? null) : null;
+
+    // Same principle as serial: extractComponentsFromJson() drops
+    // slot_position entirely for pciecard/riser/hbacard (even though their
+    // raw JSON carries it) and for storage (nested under 'connection', never
+    // flattened to a top-level key), and exposes sfp's slot under a
+    // differently-named field ('port_index', not 'slot_position'/'slot_ref'/
+    // 'slot_id'). A generic slot_position/slot_ref/slot_id lookup would
+    // silently read null from the JSON side for exactly the types that DO
+    // carry real slot_ref row-side (found via U-B.2's full-fixture run,
+    // same root cause as the serial gap above). Only sfp's slot is
+    // comparable today; other types' slot placement is a known equivalence
+    // gap (see U-B.2 handoff), not verified by this report.
+    $slotRef = $type === 'sfp' && isset($entry['port_index']) && $entry['port_index'] !== null
+        ? 'port_' . $entry['port_index'] : null;
+
     return [$type, $specUuid, $serial, $slotRef];
 }
 
@@ -147,7 +184,12 @@ function canonicalizeRowSide(ConfigComponentRepository $repo, string $configUuid
         if (!TODO_UB2 && isOnboardNic($type, $specUuid)) {
             continue;
         }
-        $tuples[] = json_encode([$type, $specUuid, $row['serial_number'], $row['slot_ref']]);
+        // See canonicalTuple()'s docblock: serial/slot_ref are only
+        // meaningful in the comparison for the types the legacy JSON side
+        // actually captures them for (cpu; sfp, respectively).
+        $serial = $type === 'cpu' ? $row['serial_number'] : null;
+        $slotRef = $type === 'sfp' ? $row['slot_ref'] : null;
+        $tuples[] = json_encode([$type, $specUuid, $serial, $slotRef]);
     }
     sort($tuples);
     return $tuples;
