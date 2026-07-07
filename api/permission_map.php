@@ -85,5 +85,7 @@ return [
         'delete' => '{module}.delete',
         'bulk_update' => '{module}.edit',
         'bulk_delete' => '{module}.delete',
+        'bulk-add' => '{module}.create',
+        'bulk-delete' => '{module}.delete',
     ],
 ];
