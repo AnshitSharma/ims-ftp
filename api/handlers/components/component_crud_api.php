@@ -212,6 +212,114 @@ function handleComponentOperations($module, $operation, $user) {
             }
             break;
 
+        case 'bulk-add':
+            // Same mass-assignment defenses as single 'add': each item goes
+            // through addComponent() (column whitelist, blocked columns,
+            // UUID-vs-JSON-spec validation). Partial-success semantics: items
+            // are processed independently; nothing is rolled back.
+            $componentsJson = $_POST['components'] ?? '';
+            $items = json_decode($componentsJson, true);
+
+            if (!is_array($items) || empty($items)) {
+                send_json_response(0, 1, 400, "A non-empty JSON array of components is required in 'components'");
+            }
+            if (count($items) > 100) {
+                send_json_response(0, 1, 400, "Bulk add is limited to 100 components per request");
+            }
+
+            $results = [];
+            $succeeded = 0;
+            foreach (array_values($items) as $i => $itemData) {
+                $entry = ['index' => $i, 'success' => false];
+                if (!is_array($itemData) || empty($itemData)) {
+                    $entry['error'] = "Item must be a non-empty object";
+                    $results[] = $entry;
+                    continue;
+                }
+                unset($itemData['action']);
+                try {
+                    $result = addComponent($pdo, $module, $itemData, $user['id']);
+                    if ($result) {
+                        $entry['success'] = true;
+                        $entry['component_id'] = $result['id'];
+                        $entry['uuid'] = $result['uuid'];
+                        $succeeded++;
+                    } else {
+                        $entry['error'] = "Failed to add component";
+                    }
+                } catch (InvalidArgumentException $e) {
+                    $entry['error'] = $e->getMessage();
+                } catch (Exception $e) {
+                    error_log("Error bulk-adding $module component (index $i): " . $e->getMessage());
+                    $entry['error'] = "Failed to add component";
+                }
+                $results[] = $entry;
+            }
+
+            $total = count($results);
+            $failed = $total - $succeeded;
+            $code = $failed === 0 ? 201 : ($succeeded > 0 ? 200 : 400);
+            send_json_response($succeeded > 0 ? 1 : 0, 1, $code,
+                ucfirst($module) . " bulk add: $succeeded of $total added", [
+                    'total' => $total,
+                    'succeeded' => $succeeded,
+                    'failed' => $failed,
+                    'results' => $results
+                ]);
+            break;
+
+        case 'bulk-delete':
+            // Partial-success semantics, mirroring bulk-add. Accepts 'ids' as
+            // a JSON array or a comma-separated string.
+            $idsParam = $_POST['ids'] ?? '';
+            $ids = json_decode($idsParam, true);
+            if (!is_array($ids)) {
+                $ids = array_filter(array_map('trim', explode(',', $idsParam)), 'strlen');
+            }
+
+            if (empty($ids)) {
+                send_json_response(0, 1, 400, "A non-empty list of component IDs is required in 'ids'");
+            }
+            if (count($ids) > 100) {
+                send_json_response(0, 1, 400, "Bulk delete is limited to 100 components per request");
+            }
+
+            $results = [];
+            $succeeded = 0;
+            foreach (array_values($ids) as $id) {
+                $componentId = (int)$id;
+                $entry = ['id' => $componentId, 'success' => false];
+                if ($componentId <= 0) {
+                    $entry['error'] = "Invalid component ID";
+                    $results[] = $entry;
+                    continue;
+                }
+                try {
+                    if (deleteComponent($pdo, $module, $componentId, $user['id'])) {
+                        $entry['success'] = true;
+                        $succeeded++;
+                    } else {
+                        $entry['error'] = "Failed to delete component";
+                    }
+                } catch (Exception $e) {
+                    error_log("Error bulk-deleting $module component ID $componentId: " . $e->getMessage());
+                    $entry['error'] = "Failed to delete component";
+                }
+                $results[] = $entry;
+            }
+
+            $total = count($results);
+            $failed = $total - $succeeded;
+            $code = $failed === 0 ? 200 : ($succeeded > 0 ? 200 : 400);
+            send_json_response($succeeded > 0 ? 1 : 0, 1, $code,
+                ucfirst($module) . " bulk delete: $succeeded of $total deleted", [
+                    'total' => $total,
+                    'succeeded' => $succeeded,
+                    'failed' => $failed,
+                    'results' => $results
+                ]);
+            break;
+
         default:
             send_json_response(0, 1, 400, "Invalid $module operation: $operation");
     }
