@@ -19,8 +19,31 @@
  * cases are resolved here (sfp -> its parent NIC's row, onboard nic -> the
  * config's motherboard row). Every other component_type gets parent_id =
  * NULL; the real backfill (U-B.2) owns filling in the rest from historical
- * data. This class does no ims-data spec loading (CLAUDE.md: specs come
- * from ComponentDataService only, and this hook has no need for specs).
+ * data. This class does no ims-data spec loading of its own (CLAUDE.md:
+ * specs come from ComponentDataService only) — ResourceCatalog (U-L.1) is
+ * the one exception, since it exists specifically to own that parsing.
+ *
+ * U-L.2 (ledger dual-writer): afterLegacyAdd() also inserts config_resources
+ * provider rows for whatever ResourceCatalog::provides() returns, and one
+ * consumption row per ResourceCatalog::consumes() entry (scalar resources
+ * only, e.g. pcie_lane — see RV-1/RV-2 below for what's deliberately NOT
+ * covered). A CatalogException from either call propagates exactly like a
+ * repository failure: this whole method never catches, so it rolls back the
+ * legacy write it followed too (fail-closed, INV-5) — this only happens
+ * when the flag is already 'on' (mode() returns early above otherwise).
+ *
+ * RV-1 (carried from U-1.2's pack): DIMM slot consumer-linking is not
+ * possible because RAM's legacy slot_ref is unknown at this layer.
+ * RV-2 (new, this unit): discrete PCIe/riser slot consumer-linking (e.g. a
+ * pciecard occupying a motherboard-provided pcie_slot) is NOT implemented.
+ * ResourceCatalog's slot_ref naming (pcie_{n}_{width}, assigned in JSON-array
+ * encounter order) has no relationship to the legacy slot-assignment
+ * system's slot IDs (e.g. UnifiedSlotTracker::loadMotherboardPCIeSlots()'s
+ * "pcie_{width}_slot_{n}"), so a direct slot_ref string match would either
+ * never link anything or link the wrong slot. Every discrete-resource
+ * provider row's consumer_id stays NULL from this unit. A follow-up unit
+ * should either reconcile the two naming schemes or add a translation layer
+ * before slot-level consumer linking can be implemented correctly.
  */
 class ConfigComponentWriter
 {
@@ -80,7 +103,7 @@ class ConfigComponentWriter
 
         $parentId = self::resolveParentId($pdo, $repo, $configUuid, $type, $specUuid, $parentSpecUuid);
 
-        $repo->insert($configUuid, [
+        $componentId = $repo->insert($configUuid, [
             'component_type'  => $type,
             'inventory_table' => $inventoryTable,
             'inventory_id'    => $inventoryId,
@@ -89,6 +112,8 @@ class ConfigComponentWriter
             'parent_id'       => $parentId,
             'slot_ref'        => $slotRef,
         ], $actor);
+
+        self::writeLedgerForAdd($pdo, $configUuid, $type, $specUuid, $componentId);
     }
 
     /**
@@ -111,6 +136,63 @@ class ConfigComponentWriter
             return;
         }
         $repo->tombstone($live['id'], $actor);
+        self::cleanupLedgerForRemove($pdo, $live['id']);
+    }
+
+    /**
+     * Insert config_resources provider rows (from ResourceCatalog::provides())
+     * and scalar consumption rows (from ResourceCatalog::consumes()) for a
+     * newly-inserted config_components row. See class docblock for RV-1/RV-2.
+     */
+    private static function writeLedgerForAdd(PDO $pdo, $configUuid, $type, $specUuid, $componentId)
+    {
+        require_once __DIR__ . '/ResourceCatalog.php';
+        $catalog = new ResourceCatalog();
+
+        $providerStmt = $pdo->prepare(
+            'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
+             VALUES (?, ?, ?, ?, ?, NULL)'
+        );
+        foreach ($catalog->provides($type, $specUuid) as $row) {
+            $providerStmt->execute([$configUuid, $row['resource'], $componentId, $row['slot_ref'], $row['capacity']]);
+        }
+
+        foreach ($catalog->consumes($type, $specUuid) as $consumed) {
+            $findProvider = $pdo->prepare(
+                'SELECT provider_id FROM config_resources
+                 WHERE config_uuid = ? AND resource = ? AND consumer_id IS NULL
+                 LIMIT 1'
+            );
+            $findProvider->execute([$configUuid, $consumed['resource']]);
+            $providerId = $findProvider->fetchColumn();
+            if ($providerId === false) {
+                throw new CatalogException(
+                    "No provider found for resource '{$consumed['resource']}' in config $configUuid " .
+                    "to attach this component's consumption to"
+                );
+            }
+
+            $consumeStmt = $pdo->prepare(
+                'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
+                 VALUES (?, ?, ?, NULL, ?, ?)'
+            );
+            $consumeStmt->execute([$configUuid, $consumed['resource'], $providerId, $consumed['amount'], $componentId]);
+        }
+    }
+
+    /**
+     * Remove all ledger rows tied to a tombstoned component: rows where it
+     * was the CONSUMER (its own resource consumption), and rows where it was
+     * the PROVIDER (its own advertised capacity, and any consumption rows
+     * attached to it as provider) — ON DELETE CASCADE only fires on a hard
+     * delete of config_components, never on the soft tombstone (removed_at
+     * UPDATE) ConfigComponentRepository::tombstone() performs, so this must
+     * be done explicitly during the tombstone window.
+     */
+    private static function cleanupLedgerForRemove(PDO $pdo, $componentId)
+    {
+        $pdo->prepare('DELETE FROM config_resources WHERE consumer_id = ?')->execute([$componentId]);
+        $pdo->prepare('DELETE FROM config_resources WHERE provider_id = ?')->execute([$componentId]);
     }
 
     private static function resolveParentId(PDO $pdo, ConfigComponentRepository $repo, $configUuid, $type, $specUuid, $parentSpecUuid)
