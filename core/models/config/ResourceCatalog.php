@@ -85,6 +85,55 @@ class ResourceCatalog
         }
     }
 
+    /**
+     * What resources a component CONSUMES from a scalar/pooled provider (e.g.
+     * a CPU's total pcie_lane budget). Discrete resources (pcie_slot,
+     * riser_slot) are NOT covered here — see U-L.2's handoff for why slot-level
+     * consumer linking is deferred (RV-2: ResourceCatalog's slot_ref naming
+     * does not match the legacy slot-assignment system's slot IDs).
+     *
+     * @return array<int, array{resource:string, amount:int}>
+     */
+    public function consumes(string $type, string $specUuid): array
+    {
+        switch ($type) {
+            case 'storage':
+                return $this->consumesStorage($specUuid);
+            case 'nic':
+            case 'hbacard':
+            case 'pciecard':
+                throw new CatalogException(
+                    "ResourceCatalog::consumes('$type', ...) has no confirmed pcie_lane " .
+                    "consumption field within this unit's permitted read scope; not implemented, not guessed."
+                );
+            case 'cpu':
+            case 'ram':
+            case 'motherboard':
+            case 'chassis':
+            case 'caddy':
+            case 'sfp':
+                return []; // confirmed: these types consume no scalar resources today
+            default:
+                throw new CatalogException("ResourceCatalog::consumes(): unknown component_type '$type'");
+        }
+    }
+
+    /**
+     * Mirrors DataExtractionUtilities::extractStoragePCIeLanes(): NVMe/PCIe
+     * storage consumes lanes from the CPU's budget; SATA/SAS do not.
+     */
+    private function consumesStorage(string $specUuid): array
+    {
+        $lanes = $this->dataUtils->extractStoragePCIeLanes($specUuid);
+        if ($lanes === null) {
+            return [];
+        }
+        if (!is_numeric($lanes)) {
+            throw new CatalogException("Storage $specUuid pcie lane count is not numeric");
+        }
+        return [['resource' => 'pcie_lane', 'amount' => (int)$lanes]];
+    }
+
     private function providesChassis(string $specUuid): array
     {
         $spec = $this->dataUtils->getChassisSpecifications($specUuid);
