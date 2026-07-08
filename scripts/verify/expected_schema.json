@@ -42,10 +42,21 @@
     },
     "server_configurations": {
       "columns": {
-        "revision": {"data_type": "int", "nullable": false}
+        "revision":  {"data_type": "int",  "nullable": false},
+        "status_v2": {"data_type": "enum", "nullable": true}
       },
       "indexes": {}
     },
+    "cpuinventory":         {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "raminventory":         {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "storageinventory":     {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "motherboardinventory": {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "chassisinventory":     {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "nicinventory":         {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "caddyinventory":       {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "pciecardinventory":    {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "hbacardinventory":     {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "sfpinventory":         {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
     "config_events": {
       "columns": {
         "id":             {"data_type": "bigint",   "nullable": false},
