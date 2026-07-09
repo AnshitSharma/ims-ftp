@@ -5,7 +5,11 @@
  * Green iff, per {type}inventory table:
  *   - no row with Status=2 (installed) and NULL ServerUUID
  *   - no row referenced by any server_configurations JSON while Status=1 (available)
- * (The status_v2 legacy-agreement + illegal-value checks land in U-SM.3, once status_v2 exists.)
+ *   - no row where status_v2 IS NOT NULL disagrees with Status under
+ *     StatusMap::INVENTORY_V2_TO_LEGACY (U-SM.3, once status_v2 exists — a
+ *     row with status_v2 not present in that map at all is also a violation:
+ *     it means something wrote a value the reverse map doesn't know, which
+ *     can only happen via a bug since the ENUM itself constrains the column)
  *
  * Usage:
  *   php scripts/verify/inventory_report.php              # writes reports/inventory-<ts>.json
@@ -25,11 +29,19 @@ if (!file_exists($bootstrap)) {
     exit(2);
 }
 require_once $bootstrap;
+require_once __DIR__ . '/../../core/models/state/StatusMap.php';
 
 global $pdo;
 if (!isset($pdo) || !($pdo instanceof PDO)) {
     fwrite(STDERR, "PDO connection not available after bootstrap.\n");
     exit(2);
+}
+
+function columnExists(PDO $pdo, string $table, string $column): bool {
+    $stmt = $pdo->prepare('SELECT 1 FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
+    $stmt->execute([$table, $column]);
+    return (bool)$stmt->fetchColumn();
 }
 
 const COMPONENT_TABLES = [
@@ -128,6 +140,33 @@ function runChecks(PDO $pdo): array {
                         'detail' => 'Status=1 (available) but referenced by config ' . $config['config_uuid'],
                     ];
                 }
+            }
+        }
+    }
+
+    // Check 3: status_v2 / Status mapping agreement (U-SM.3), only on tables
+    // that already have the column (pre-U-SM.1-apply DBs just skip this).
+    foreach (COMPONENT_TABLES as $type => $table) {
+        if (!tableExists($pdo, $table) || !columnExists($pdo, $table, 'status_v2')) continue;
+        $stmt = $pdo->query("SELECT UUID, SerialNumber, Status, status_v2 FROM `$table` WHERE status_v2 IS NOT NULL");
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            if (!array_key_exists($row['status_v2'], StatusMap::INVENTORY_V2_TO_LEGACY)) {
+                $violations[] = [
+                    'check' => 'status_v2_illegal_value',
+                    'type' => $type, 'table' => $table,
+                    'uuid' => $row['UUID'], 'serial' => $row['SerialNumber'],
+                    'detail' => "status_v2='{$row['status_v2']}' has no entry in StatusMap::INVENTORY_V2_TO_LEGACY",
+                ];
+                continue;
+            }
+            $expectedLegacy = StatusMap::INVENTORY_V2_TO_LEGACY[$row['status_v2']];
+            if ((int)$row['Status'] !== $expectedLegacy) {
+                $violations[] = [
+                    'check' => 'status_v2_legacy_mismatch',
+                    'type' => $type, 'table' => $table,
+                    'uuid' => $row['UUID'], 'serial' => $row['SerialNumber'],
+                    'detail' => "status_v2='{$row['status_v2']}' expects Status=$expectedLegacy but found Status={$row['Status']}",
+                ];
             }
         }
     }

@@ -73,6 +73,26 @@
         "PRIMARY":       {"columns": ["id"], "unique": true},
         "uq_config_rev": {"columns": ["config_uuid", "revision"], "unique": true}
       }
+    },
+    "config_status_transitions": {
+      "columns": {
+        "from_status":         {"data_type": "enum",    "nullable": false},
+        "to_status":           {"data_type": "enum",    "nullable": false},
+        "required_permission": {"data_type": "varchar", "nullable": false},
+        "requires_validation": {"data_type": "enum",    "nullable": false}
+      },
+      "indexes": {
+        "PRIMARY": {"columns": ["from_status", "to_status"], "unique": true}
+      }
+    },
+    "inventory_status_transitions": {
+      "columns": {
+        "from_status": {"data_type": "enum", "nullable": false},
+        "to_status":   {"data_type": "enum", "nullable": false}
+      },
+      "indexes": {
+        "PRIMARY": {"columns": ["from_status", "to_status"], "unique": true}
+      }
     }
   }
 }

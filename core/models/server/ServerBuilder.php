@@ -3634,12 +3634,15 @@ class ServerBuilder {
                 ];
             }
 
-            // Update configuration status
-            $stmt = $this->pdo->prepare("
-                UPDATE server_configurations
-                SET configuration_status = 3, notes = ?, updated_at = NOW()
-                WHERE config_uuid = ?
-            ");
+            // Update configuration status (U-SM.3: status_v2 + the mapped legacy
+            // int, atomically, plus a config_events('transition') row — see
+            // StateMachine::applyConfigTransition). Notes is a separate column
+            // StateMachine doesn't know about, so it stays a second statement
+            // in the same transaction.
+            require_once __DIR__ . '/../state/StateMachine.php';
+            StateMachine::applyConfigTransition($this->pdo, $configUuid, 'finalized');
+
+            $stmt = $this->pdo->prepare("UPDATE server_configurations SET notes = ? WHERE config_uuid = ?");
             $stmt->execute([$notes, $configUuid]);
 
             // Log the finalization
@@ -5244,6 +5247,16 @@ class ServerBuilder {
             // Prepare update fields and values
             $updateFields = ["Status = ?", "ServerUUID = ?", "UpdatedAt = NOW()"];
             $updateValues = [$newStatus, $serverUuid];
+
+            // U-SM.3: sync status_v2 in the SAME statement as the legacy Status
+            // write below (StatusMap::INVENTORY_LEGACY_TO_V2 is the forward
+            // direction of the lossy map StateMachine uses in reverse
+            // elsewhere). No assertion/enforcement here yet (U-SM.4) — sync-only.
+            require_once __DIR__ . '/../state/StatusMap.php';
+            if (array_key_exists($newStatus, StatusMap::INVENTORY_LEGACY_TO_V2)) {
+                $updateFields[] = "status_v2 = ?";
+                $updateValues[] = StatusMap::INVENTORY_LEGACY_TO_V2[$newStatus];
+            }
 
             // Handle installation date
             if ($newStatus == 2 && $serverUuid !== null) {
