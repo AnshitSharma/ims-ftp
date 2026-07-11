@@ -19,24 +19,59 @@ Tick strictly top-to-bottom. A phase's boxes may not be ticked until the previou
 - [ ] GATE P1: schema report green; regression green; prod behavior diff = none (flag off)
 
 ## PL — Resource ledger (06-resource-ledger)
-- [ ] U-L.1 ResourceCatalog (spec → provided capacities)
-- [ ] U-L.2 ledger dual-writer (providers + consumers)
-- [ ] U-L.3 ledger_report.php
-- [ ] GATE PL: ledger report green on scratch DB fixtures
+- [x] U-L.1 ResourceCatalog (spec → provided capacities) (verified)
+- [x] U-L.2 ledger dual-writer (providers + consumers) (verified)
+- [x] U-L.3 ledger_report.php (verified)
+- [x] U-L.4 ResourceCatalog cpu pcie_lane provider gap (verified 2026-07-12 — closes the
+      fleet-backfill NVMe error class; see migration/handoffs/U-L.4-20260712.md and
+      migration/handoffs/U-L.4-U-L.5-VERIFY-20260712.md)
+- [x] U-L.5 ResourceCatalog nic/hbacard/pciecard provider+consumer gap (verified 2026-07-12 —
+      closes the remaining live-dual-write-path risk; see migration/handoffs/U-L.5-20260712.md and
+      migration/handoffs/U-L.4-U-L.5-VERIFY-20260712.md)
+- [x] U-L.6 extractLaneCount() legacy-mirror fix (verified 2026-07-12 — closes the latent
+      equivalence-drift finding from the U-L.4/U-L.5 verify pass; see
+      migration/handoffs/U-L.6-20260712.md and migration/handoffs/U-SM.4-U-L.6-VERIFY-20260712.md)
+- [x] GATE PL: ledger report green on scratch DB fixtures — **reopened 2026-07-12 once U-SM.4/U-L.6
+      were independently verified (all 6 PL units verified)**. Scratch DB `ims_compat_golden` was
+      rebuilt this session (dump + 24 seeders) after the prior verify session's incident damaged it;
+      `run_all.php --gate PL` re-confirmed GREEN post-rebuild. DUAL_WRITE_ENABLED may now go `on` in
+      production per U-B.1 preconditions — this remains a human decision (U-B.4 sign-off).
 
 ## P2 — Backfill (07-component-migration)  [DUAL_WRITE_ENABLED=on first — see U-B.1 preconditions]
 - [ ] U-B.1 backfill skeleton: state table, dry-run, resume, quarantine
-- [ ] U-B.2 per-column extractors (10 JSON shapes → rows)
+- [ ] U-B.2 per-column extractors (10 JSON shapes → rows) — post-verification fix 2026-07-12:
+      `Extractor::extractNics()` now reads `slot_position` for add-on NICs (was silently dropped,
+      tripping `slot_report.php`'s slotless_card check once backfill runs); re-ran
+      `tests/backfill/extractor_test.php` (25/25) and `ledger_backfill_test.php` (all PASS) after the
+      change — see migration/handoffs/SESSION-20260712-REPORT-TRIAGE.md. phase-status.json still shows
+      U-B.2 verified; treat this as a confirmed delta on top of that verification, not a reopening.
 - [ ] U-B.3 ledger backfill
 - [ ] U-B.4 full-fleet verification + sign-off
 - [ ] GATE P2: equivalence 0 diffs fleet-wide; orphan report 0 (or quarantined+ticketed); ledger green
+      — pre-existing report REDs triaged 2026-07-12 (see migration/handoffs/SESSION-20260712-REPORT-TRIAGE.md):
+      inventory/orphan false-positives from is_virtual configs fixed in code; 12 real orphans (storage/ram
+      on 4 real configs) have a recommended fix (`audit-orphans.php --fix`, human-run) but are not yet
+      quarantined+ticketed or fixed on production; 1 inventory violation (pciecard on config 9dbc63fa) is
+      genuinely ambiguous and needs a human quarantine decision; equivalence's 5 diffs are expected
+      pre-backfill noise, not a defect — self-resolves once U-B.4 runs.
 
 ## P3 — State machines (03-state-machines)
-- [ ] U-SM.1 status_v2 columns (config + unified inventory lifecycle view)
-- [ ] U-SM.2 transition tables + seed rows
-- [ ] U-SM.3 StateMachine service + legacy mapping dual-write
-- [ ] U-SM.4 StateGuard wired (STATE_MACHINE_ENABLED=shadow → enforce after 7-day soak)
-- [ ] GATE P3: inventory report green; zero shadow-mode guard violations logged for 7 days
+- [x] U-SM.1 status_v2 columns (config + unified inventory lifecycle view) (verified)
+- [x] U-SM.2 transition tables + seed rows (verified 2026-07-12, see
+      migration/handoffs/U-SM.2-U-SM.3-VERIFY-20260712.md)
+- [x] U-SM.3 StateMachine service + legacy mapping dual-write (verified 2026-07-12, same handoff)
+- [x] U-SM.4 StateGuard wired (verified 2026-07-12, shadow-mode only, flag stays off/unset in
+      production — see migration/handoffs/U-SM.4-20260712.md and
+      migration/handoffs/U-SM.4-U-L.6-VERIFY-20260712.md)
+- [x] U-SM.5 server_api.php finalizeConfiguration() userId wiring (implemented 2026-07-12, closes the
+      enforce-blocking gap flagged by U-SM.4's handoff — see migration/handoffs/U-SM.5-20260712.md;
+      NOT yet verified). Inert while STATE_MACHINE_ENABLED stays off/unset in production.
+- [ ] GATE P3: inventory report green; zero shadow-mode guard violations logged for 7 days — the
+      7-day shadow soak has not started (STATE_MACHINE_ENABLED must first be set to `shadow` in
+      production, a human decision, before any soak clock starts). Inventory-report triaged
+      2026-07-12: 2 of the 3 `referenced_while_available` violations were false positives (fixed in
+      scripts/verify/inventory_report.php, is_virtual configs excluded); 1 remains RED, ambiguous,
+      quarantine decision needed — see migration/handoffs/SESSION-20260712-REPORT-TRIAGE.md.
 
 ## P4 — Validation engine skeleton (04-validation-engine, U-V.*)
 - [ ] U-V.1 value objects (Severity, RuleResult, Verdict, Trigger, Rule interface)

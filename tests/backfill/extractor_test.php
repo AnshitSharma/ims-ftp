@@ -124,7 +124,7 @@ try {
         'hbacard_config' => json_encode([['uuid' => $hbaUuid, 'slot_position' => null, 'serial_number' => null]]),
         'hbacard_uuid' => $hbaUuid, // both populated -> dedup must NOT double-extract
         'nic_config' => json_encode(['nics' => [
-            ['uuid' => $nicUuid],
+            ['uuid' => $nicUuid, 'slot_position' => 'pcie_x8_slot_1'],
             ['uuid' => $onboardNicUuid],
         ]]),
         'sfp_configuration' => json_encode([
@@ -169,7 +169,9 @@ try {
     $regularNic = array_values(array_filter($byType['nic'], fn($p) => $p['spec_uuid'] === $nicUuid))[0] ?? null;
     $onboardNic = array_values(array_filter($byType['nic'], fn($p) => $p['spec_uuid'] === $onboardNicUuid))[0] ?? null;
     check('regular nic has no parent', $regularNic && $regularNic['parent_ref'] === null);
+    check('regular nic gets slot_ref from slot_position (fixes slot_report slotless_card gap)', $regularNic && $regularNic['slot_ref'] === 'pcie_x8_slot_1');
     check('onboard nic parents to motherboard', $onboardNic && $onboardNic['parent_ref'] === 'motherboard');
+    check('onboard nic has null slot_ref (no discrete slot)', $onboardNic && $onboardNic['slot_ref'] === null);
 
     check('assigned sfp gets port_ slot_ref + nic parent ref', ($byType['sfp'][0]['slot_ref'] ?? null) === 'port_1'
         && ($byType['sfp'][0]['parent_ref'] ?? null) === ['nic_spec_uuid' => $nicUuid]);

@@ -489,11 +489,23 @@ class ServerBuilder {
                 ];
             }
 
-            // TEMP-GUARD(U-0.2): removed by U-SM.4
-            if ((int)($lockedConfigRow['configuration_status'] ?? 0) === 3) {
-                if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
-                return ['success'=>false,'error_type'=>'config_finalized',
-                        'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+            // U-SM.4: StateGuard evaluated first. shadow logs divergence and
+            // never blocks (TEMP-GUARD below stays the sole enforcement);
+            // enforce is authoritative and TEMP-GUARD is skipped, not deleted.
+            require_once __DIR__ . '/../state/StateGuard.php';
+            $stateGuardVerdict = StateGuard::checkMutation($this->pdo, $lockedConfigRow);
+            if (StateGuard::mode() === 'enforce') {
+                if ($stateGuardVerdict !== null) {
+                    if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    return $stateGuardVerdict;
+                }
+            } else {
+                // TEMP-GUARD(U-0.2): removed by U-SM.4
+                if ((int)($lockedConfigRow['configuration_status'] ?? 0) === 3) {
+                    if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    return ['success'=>false,'error_type'=>'config_finalized',
+                            'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+                }
             }
 
             // Phase 1.2: Auto-resolve serial_number if not provided
@@ -995,11 +1007,23 @@ class ServerBuilder {
                 ];
             }
 
-            // TEMP-GUARD(U-0.2): removed by U-SM.4
-            if ((int)($config['configuration_status'] ?? 0) === 3) {
-                if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
-                return ['success'=>false,'error_type'=>'config_finalized',
-                        'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+            // U-SM.4: StateGuard evaluated first. shadow logs divergence and
+            // never blocks (TEMP-GUARD below stays the sole enforcement);
+            // enforce is authoritative and TEMP-GUARD is skipped, not deleted.
+            require_once __DIR__ . '/../state/StateGuard.php';
+            $stateGuardVerdict = StateGuard::checkMutation($this->pdo, $config);
+            if (StateGuard::mode() === 'enforce') {
+                if ($stateGuardVerdict !== null) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    return $stateGuardVerdict;
+                }
+            } else {
+                // TEMP-GUARD(U-0.2): removed by U-SM.4
+                if ((int)($config['configuration_status'] ?? 0) === 3) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    return ['success'=>false,'error_type'=>'config_finalized',
+                            'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
+                }
             }
 
             // Check if component exists in configuration by extracting from JSON
@@ -3598,7 +3622,7 @@ class ServerBuilder {
     /**
      * Finalize configuration
      */
-    public function finalizeConfiguration($configUuid, $notes = '') {
+    public function finalizeConfiguration($configUuid, $notes = '', $userId = 0) {
         $ownTransaction = false;
         try {
             // RACE CONDITION FIX (Phase 1): wrap finalize in a transaction and
@@ -3621,7 +3645,47 @@ class ServerBuilder {
                 ];
             }
 
-            // Validate configuration first (runs against the locked snapshot)
+            // U-SM.4 (audit V-1): under the same lock as the write below, gate
+            // the transition through StateGuard/StateMachine BEFORE running the
+            // legacy validateConfiguration() call further down — fail fast on
+            // transition-legality/permission ahead of the more expensive
+            // validation walk. Only takes effect once STATE_MACHINE_ENABLED=
+            // enforce; off/shadow are a no-op here and rely solely on the
+            // legacy validateConfiguration() check below (which stays — this
+            // ADDS the comprehensive gate, it does not replace the weak legacy
+            // call; that removal is U-C.5's job).
+            require_once __DIR__ . '/../state/StateGuard.php';
+            require_once __DIR__ . '/../state/StateMachine.php';
+            if (StateGuard::mode() === 'enforce') {
+                $transitionCheck = StateMachine::assertConfigTransition($this->pdo, $configUuid, 'finalized', $userId);
+                if (!$transitionCheck['allowed']) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return [
+                        'success' => false,
+                        'error_type' => 'transition_denied',
+                        'message' => $transitionCheck['reason']
+                    ];
+                }
+                if ($transitionCheck['requires_validation']) {
+                    $comprehensive = $this->validateConfigurationComprehensive($configUuid);
+                    if (!$comprehensive['valid']) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
+                        return [
+                            'success' => false,
+                            'error_type' => 'config_invalid',
+                            'message' => 'Configuration failed comprehensive validation under lock',
+                            'validation_errors' => $comprehensive['errors']
+                        ];
+                    }
+                }
+            }
+
+            // Validate configuration (legacy weak check — runs against the
+            // locked snapshot; stays in place per pack until U-C.5 removes it)
             $validation = $this->validateConfiguration($configUuid);
             if (!$validation['is_valid']) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
@@ -3639,7 +3703,6 @@ class ServerBuilder {
             // StateMachine::applyConfigTransition). Notes is a separate column
             // StateMachine doesn't know about, so it stays a second statement
             // in the same transaction.
-            require_once __DIR__ . '/../state/StateMachine.php';
             StateMachine::applyConfigTransition($this->pdo, $configUuid, 'finalized');
 
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET notes = ? WHERE config_uuid = ?");

@@ -11,18 +11,21 @@
  *     storage's row); removing that storage deletes the consumption row.
  *   - removing a PROVIDER (motherboard) explicitly deletes its own provider rows, since
  *     ON DELETE CASCADE never fires on a soft tombstone.
- *   - an induced catalog failure (nic: both provides() and consumes() throw, per U-L.1/this
- *     unit) rolls back the legacy write, the config_components row, AND any ledger rows
- *     together — nothing partial survives.
+ *   - an induced catalog failure (nic with an UNRESOLVABLE spec UUID: provides() throws
+ *     "spec not found", fail-closed per INV-5) rolls back the legacy write, the
+ *     config_components row, AND any ledger rows together — nothing partial survives. This
+ *     scenario's failure mode changed after U-L.5 (previously nic always threw regardless of
+ *     UUID, since provides('nic', ...) had no confirmed fields at all; now it only throws when
+ *     the spec genuinely can't be resolved — still correctly fail-closed, just for a different,
+ *     narrower reason). See Scenarios F-I below for the U-L.4/U-L.5 positive-path proof: real,
+ *     resolvable cpu/nic/hbacard/pciecard specs now add cleanly through this exact live path.
  *
  * NOTE on scope: the pack's example scenario is "add nic with slot->consumer link + lane
  * consumption". This unit does NOT implement discrete slot->consumer linking (RV-2, see
  * ConfigComponentWriter's class docblock: ResourceCatalog's slot_ref naming has no
- * relationship to the legacy slot-assignment system's slot IDs) and 'nic' itself always
- * throws in both provides() and consumes() (unconfirmed fields, per U-L.1). The positive-path
+ * relationship to the legacy slot-assignment system's slot IDs). The positive-path
  * scalar-consumption scenario below therefore uses 'storage' (NVMe) instead, which IS fully
- * implemented; 'nic' is used for the induced-failure scenario instead, which is exactly what
- * it currently, correctly, does.
+ * implemented via a pre-seeded provider row.
  *
  * Exit 0 = all pass; exit 1 = a failure.
  */
@@ -87,10 +90,18 @@ rrmdir($tmpImsData);
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/motherboard", 0777, true);
 mkdir("$tmpImsData/storage", 0777, true);
+mkdir("$tmpImsData/cpu", 0777, true);
+mkdir("$tmpImsData/nic", 0777, true);
+mkdir("$tmpImsData/hbacard", 0777, true);
+mkdir("$tmpImsData/pciecard", 0777, true);
 
 $chassisUuid = 'c1a2b3c4-1111-4000-8000-000000000001';
 $mbUuid = 'm1a2b3c4-1111-4000-8000-000000000001';
 $nvmeStorageUuid = 's1a2b3c4-1111-4000-8000-000000000001';
+$cpuUuid = 'a1a2b3c4-1111-4000-8000-000000000001';
+$nicUuid = 'n1a2b3c4-1111-4000-8000-000000000001';
+$hbaUuid = 'h1a2b3c4-1111-4000-8000-000000000001';
+$pciecardUuid = 'p1a2b3c4-1111-4000-8000-000000000001';
 
 file_put_contents("$tmpImsData/chassis/chasis-level-3.json", json_encode([
     'chassis_specifications' => ['manufacturers' => [[
@@ -115,6 +126,19 @@ file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
     ['brand' => 'Samsung', 'models' => [
         ['uuid' => $nvmeStorageUuid, 'interface' => 'PCIe Gen4 x4 NVMe', 'form_factor' => 'M.2 2280'],
     ]],
+]));
+
+file_put_contents("$tmpImsData/cpu/Cpu-details-level-3.json", json_encode([
+    ['brand' => 'Intel', 'models' => [['uuid' => $cpuUuid, 'pcie_lanes' => 64]]],
+]));
+file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([
+    ['brand' => 'Intel', 'series' => [['name' => 'X710', 'models' => [['uuid' => $nicUuid, 'ports' => 4]]]]],
+]));
+file_put_contents("$tmpImsData/hbacard/hbacard-level-3.json", json_encode([
+    ['brand' => 'Broadcom', 'models' => [['UUID' => $hbaUuid, 'interface' => 'PCIe 4.0 x8']]],
+]));
+file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
+    ['component_subtype' => 'Standard PCIe Card', 'brand' => 'Intel', 'models' => [['UUID' => $pciecardUuid, 'interface' => 'PCIe 4.0 x4']]],
 ]));
 
 putenv("IMS_DATA_PATH=$tmpImsData");
@@ -273,6 +297,128 @@ try {
 } finally {
     if ($pdo->inTransaction()) { $pdo->rollback(); }
     cleanupConfig($pdo, $configE);
+}
+
+// -----------------------------------------------------------------------
+// F. U-L.4/U-L.5 proof: real, resolvable cpu/nic/hbacard/pciecard specs now
+// add cleanly through ConfigComponentWriter::afterLegacyAdd() — the exact
+// live dual-write path that would have broken every such add under
+// DUAL_WRITE_ENABLED=on before these units (no skip list on this path,
+// unlike backfill.php). This is the direct answer to "does add-component
+// still error for cpu/nic/hbacard/pciecard" that Scenario E (fake UUID)
+// cannot provide.
+// -----------------------------------------------------------------------
+$configF = 'TEST-LDW-CPU-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configF);
+
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        ConfigComponentWriter::afterLegacyAdd($pdo, $configF, 'cpu', $cpuUuid, 'CPU-1', null, 'cpuinventory', 6001, 1);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    if ($pdo->inTransaction()) { $pdo->commit(); }
+    check('cpu add (real spec): does NOT throw (U-L.4)', !$threw);
+
+    $rows = $pdo->query("SELECT * FROM config_resources WHERE config_uuid = " . $pdo->quote($configF))->fetchAll();
+    check('cpu add: exactly 1 provider row (pcie_lane, capacity 64)', count($rows) === 1 && ($rows[0]['resource'] ?? null) === 'pcie_lane' && (int)($rows[0]['capacity'] ?? 0) === 64);
+} finally {
+    if ($pdo->inTransaction()) { $pdo->rollback(); }
+    cleanupConfig($pdo, $configF);
+}
+
+$configG = 'TEST-LDW-NIC-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configG);
+
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        ConfigComponentWriter::afterLegacyAdd($pdo, $configG, 'nic', $nicUuid, 'NIC-1', null, 'nicinventory', 7001, 1);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    if ($pdo->inTransaction()) { $pdo->commit(); }
+    check('nic add (real spec): does NOT throw (U-L.5)', !$threw);
+
+    $rows = $pdo->query("SELECT * FROM config_resources WHERE config_uuid = " . $pdo->quote($configG))->fetchAll();
+    check('nic add: exactly 1 provider row (sfp_port, capacity 4)', count($rows) === 1 && ($rows[0]['resource'] ?? null) === 'sfp_port' && (int)($rows[0]['capacity'] ?? 0) === 4);
+} finally {
+    if ($pdo->inTransaction()) { $pdo->rollback(); }
+    cleanupConfig($pdo, $configG);
+}
+
+// hbacard/pciecard CONSUME pcie_lane — pre-seed a CPU-provided lane budget
+// (same pattern as Scenario D) so the consumption side has a provider to
+// attach to; adding the CPU itself is proven separately in Scenario F.
+$configH = 'TEST-LDW-HBA-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configH);
+
+    $repo = new ConfigComponentRepository($pdo);
+    $pdo->beginTransaction();
+    $cpuComponentId = $repo->insert($configH, [
+        'component_type' => 'cpu', 'inventory_table' => 'cpuinventory', 'inventory_id' => 8001,
+        'spec_uuid' => 'fake-cpu-uuid-for-ledger-seed',
+    ], 1);
+    $pdo->commit();
+    $pdo->prepare('INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id) VALUES (?, ?, ?, NULL, ?, NULL)')
+        ->execute([$configH, 'pcie_lane', $cpuComponentId, 64]);
+
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        ConfigComponentWriter::afterLegacyAdd($pdo, $configH, 'hbacard', $hbaUuid, 'HBA-1', null, 'hbacardinventory', 8002, 1);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    if ($pdo->inTransaction()) { $pdo->commit(); }
+    check('hbacard add (real spec, interface="PCIe 4.0 x8"): does NOT throw (U-L.5)', !$threw);
+
+    $hbaComponentId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configH) . " AND component_type = 'hbacard'")->fetchColumn();
+    $consumeRow = $pdo->query("SELECT capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configH) . " AND resource = 'pcie_lane' AND consumer_id = $hbaComponentId")->fetch();
+    check('hbacard add: pcie_lane consumption row present (capacity 8)', $consumeRow && (int)$consumeRow['capacity'] === 8);
+} finally {
+    if ($pdo->inTransaction()) { $pdo->rollback(); }
+    cleanupConfig($pdo, $configH);
+}
+
+$configI = 'TEST-LDW-PCIE-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configI);
+
+    $repo = new ConfigComponentRepository($pdo);
+    $pdo->beginTransaction();
+    $cpuComponentId = $repo->insert($configI, [
+        'component_type' => 'cpu', 'inventory_table' => 'cpuinventory', 'inventory_id' => 9001,
+        'spec_uuid' => 'fake-cpu-uuid-for-ledger-seed',
+    ], 1);
+    $pdo->commit();
+    $pdo->prepare('INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id) VALUES (?, ?, ?, NULL, ?, NULL)')
+        ->execute([$configI, 'pcie_lane', $cpuComponentId, 64]);
+
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        ConfigComponentWriter::afterLegacyAdd($pdo, $configI, 'pciecard', $pciecardUuid, 'PCIE-1', null, 'pciecardinventory', 9002, 1);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    if ($pdo->inTransaction()) { $pdo->commit(); }
+    check('pciecard add (real spec, interface="PCIe 4.0 x4"): does NOT throw (U-L.5)', !$threw);
+
+    $cardComponentId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configI) . " AND component_type = 'pciecard'")->fetchColumn();
+    $consumeRow = $pdo->query("SELECT capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configI) . " AND resource = 'pcie_lane' AND consumer_id = $cardComponentId")->fetch();
+    check('pciecard add: pcie_lane consumption row present (capacity 4)', $consumeRow && (int)$consumeRow['capacity'] === 4);
+} finally {
+    if ($pdo->inTransaction()) { $pdo->rollback(); }
+    cleanupConfig($pdo, $configI);
 }
 
 rrmdir($tmpImsData);

@@ -30,15 +30,23 @@ class CatalogException extends \RuntimeException
  *      storage.nvme.m2_slots, summed across ALL entries per the P3.1 lesson)
  *   - pciecard (component_subtype === 'Riser Card') -> pcie_slot rows the riser itself provides
  *     (pcie_slots count + slot_type, mirroring UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots())
+ *   - cpu -> pcie_lane (spec's `pcie_lanes` field, one row per physical CPU; mirrors
+ *     PcieLaneBudgetValidator::evaluateAssembledStorageLaneBudget()'s field read — see U-L.4)
+ *   - nic -> sfp_port (spec's `ports` field, mirrors NICPortTracker::getPortAssignmentInfo() — U-L.5)
+ *   - nic/hbacard/pciecard CONSUME pcie_lane (mirrors PcieLaneBudgetValidator::extractLaneCount()'s
+ *     `interface`/`pcie_interface`/`bus_interface` regex, falling back to a numeric `pcie_lanes`
+ *     field — U-L.5). NOTE: this is the ONE deliberate exception to this file's fail-closed posture:
+ *     an absent/unparseable width returns 0 lanes (empty row set), NOT a CatalogException, because
+ *     that is legacy's own fail-open behavior for this exact field and mirroring anything stricter
+ *     would invent behavior the codebase has never had. Do not "fix" this to throw.
  * NOT implemented (throws CatalogException, does not guess):
  *   - motherboard cpu_socket count, dimm_slot count/refs — no confirmed structured field found;
  *     the existing legacy code (ServerBuilder::estimateMemorySlots()) resorts to a free-text
  *     regex over the inventory row's Notes field for DIMM count, which is itself evidence there
  *     may be no reliable structured spec field for this today.
- *   - cpu pcie_lane capacity, chassis drive_bay_2_5/drive_bay_3_5/u2 bays, nic sfp_port count —
- *     not found anywhere in this unit's permitted read scope (likely live in
- *     PcieLaneBudgetValidator.php / StorageConnectionValidator.php / NICPortTracker.php,
- *     none of which this unit was authorized to read).
+ *   - chassis drive_bay_2_5/drive_bay_3_5/u2 bays — not found anywhere in this unit's permitted
+ *     read scope (likely lives in StorageConnectionValidator.php, which this unit was not
+ *     authorized to read).
  * A follow-up unit/session with real ims-data (or authorization to read those files) should fill
  * these in — see migration/handoffs/U-L.1-<date>.md.
  */
@@ -65,15 +73,9 @@ class ResourceCatalog
             case 'pciecard':
                 return $this->providesPciecard($specUuid);
             case 'cpu':
-                throw new CatalogException(
-                    "ResourceCatalog::provides('cpu', ...) has no confirmed pcie_lane capacity " .
-                    "field within this unit's permitted read scope; not implemented, not guessed."
-                );
+                return $this->providesCpu($specUuid);
             case 'nic':
-                throw new CatalogException(
-                    "ResourceCatalog::provides('nic', ...) has no confirmed sfp_port capacity " .
-                    "field within this unit's permitted read scope; not implemented, not guessed."
-                );
+                return $this->providesNic($specUuid);
             case 'ram':
             case 'storage':
             case 'caddy':
@@ -102,10 +104,7 @@ class ResourceCatalog
             case 'nic':
             case 'hbacard':
             case 'pciecard':
-                throw new CatalogException(
-                    "ResourceCatalog::consumes('$type', ...) has no confirmed pcie_lane " .
-                    "consumption field within this unit's permitted read scope; not implemented, not guessed."
-                );
+                return $this->consumesPcieLanes($type, $specUuid);
             case 'cpu':
             case 'ram':
             case 'motherboard':
@@ -132,6 +131,105 @@ class ResourceCatalog
             throw new CatalogException("Storage $specUuid pcie lane count is not numeric");
         }
         return [['resource' => 'pcie_lane', 'amount' => (int)$lanes]];
+    }
+
+    /**
+     * Mirrors PcieLaneBudgetValidator::evaluateAssembledStorageLaneBudget()'s
+     * `pcie_lanes` field read. One physical CPU = one provider row (no
+     * quantity summing here, unlike the legacy budget check — INV-1).
+     */
+    private function providesCpu(string $specUuid): array
+    {
+        $spec = $this->dataUtils->getCPUByUUID($specUuid);
+        if (!is_array($spec)) {
+            throw new CatalogException("CPU spec not found for UUID $specUuid");
+        }
+
+        if (!isset($spec['pcie_lanes'])) {
+            return []; // no lane field on this spec — not an error, matches legacy's isset() guard
+        }
+        if (!is_numeric($spec['pcie_lanes'])) {
+            throw new CatalogException("CPU $specUuid pcie_lanes is not numeric");
+        }
+
+        return [['resource' => 'pcie_lane', 'slot_ref' => null, 'capacity' => (int)$spec['pcie_lanes']]];
+    }
+
+    /**
+     * Mirrors NICPortTracker::getPortAssignmentInfo()'s `ports` field read.
+     */
+    private function providesNic(string $specUuid): array
+    {
+        $spec = $this->dataUtils->getNICByUUID($specUuid);
+        if (!is_array($spec)) {
+            throw new CatalogException("NIC spec not found for UUID $specUuid");
+        }
+
+        if (!isset($spec['ports'])) {
+            return []; // no port field on this spec — not an error, matches providesCpu()'s posture
+        }
+        if (!is_numeric($spec['ports'])) {
+            throw new CatalogException("NIC $specUuid ports is not numeric");
+        }
+
+        return [['resource' => 'sfp_port', 'slot_ref' => null, 'capacity' => (int)$spec['ports']]];
+    }
+
+    /**
+     * Mirrors PcieLaneBudgetValidator::extractLaneCount(): interface string
+     * regex (`interface`/`pcie_interface`/`bus_interface`, /x(\d+)/i), falling
+     * back to a numeric `pcie_lanes` field, else 0 lanes. Deliberate exception
+     * to this file's fail-closed posture — see class docblock.
+     */
+    private function consumesPcieLanes(string $type, string $specUuid): array
+    {
+        switch ($type) {
+            case 'nic':
+                $spec = $this->dataUtils->getNICByUUID($specUuid);
+                break;
+            case 'hbacard':
+                $spec = $this->dataUtils->getHBACardByUUID($specUuid);
+                break;
+            case 'pciecard':
+                $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+                break;
+            default:
+                throw new CatalogException("consumesPcieLanes(): unsupported type '$type'");
+        }
+        if (!is_array($spec)) {
+            throw new CatalogException(ucfirst($type) . " spec not found for UUID $specUuid");
+        }
+
+        $lanes = $this->extractLaneCount($spec);
+        if ($lanes <= 0) {
+            return [];
+        }
+        return [['resource' => 'pcie_lane', 'amount' => $lanes]];
+    }
+
+    /**
+     * Mirrors PcieLaneBudgetValidator::extractLaneCount() exactly
+     * (core/models/compatibility/PcieLaneBudgetValidator.php:346-358): an
+     * absent/empty interface candidate returns 0 immediately — the
+     * pcie_lanes fallback is reachable only via a NON-empty candidate string
+     * that fails the /x(\d+)/i regex. Do not "improve" this to fall back on
+     * an absent candidate; that would count lanes the legacy budget check
+     * doesn't, which is exactly the equivalence drift this mirror exists to
+     * prevent (fail-open, matches legacy, not a CatalogException).
+     */
+    private function extractLaneCount(array $spec): int
+    {
+        $candidate = $spec['interface'] ?? $spec['pcie_interface'] ?? $spec['bus_interface'] ?? '';
+        if (!is_string($candidate) || $candidate === '') {
+            return 0;
+        }
+        if (preg_match('/x(\d+)/i', $candidate, $m)) {
+            return (int)$m[1];
+        }
+        if (isset($spec['pcie_lanes']) && is_numeric($spec['pcie_lanes'])) {
+            return (int)$spec['pcie_lanes'];
+        }
+        return 0;
     }
 
     private function providesChassis(string $specUuid): array

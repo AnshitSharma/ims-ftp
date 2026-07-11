@@ -78,6 +78,9 @@ mkdir("$tmpImsData/motherboard", 0777, true);
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/pciecard", 0777, true);
 mkdir("$tmpImsData/storage", 0777, true);
+mkdir("$tmpImsData/cpu", 0777, true);
+mkdir("$tmpImsData/nic", 0777, true);
+mkdir("$tmpImsData/hbacard", 0777, true);
 
 $mbUuid = 'mblg0000-0000-4000-8000-0000000000f1';
 $chassisUuid = 'chlg0000-0000-4000-8000-0000000000f1';
@@ -85,6 +88,9 @@ $riserUuid = 'riser-lg0-4000-8000-0000000000f1';
 $cardUuid = 'cardlg00-0000-4000-8000-0000000000f1';
 $sataUuid = 'satalg00-0000-4000-8000-0000000000f1';
 $nvmeUuid = 'nvmelg00-0000-4000-8000-0000000000f1';
+$cpuUuid = 'cpulg000-0000-4000-8000-0000000000f1';
+$nicUuid = 'niclg000-0000-4000-8000-0000000000f1';
+$hbaUuid = 'hbalg000-0000-4000-8000-0000000000f1';
 
 file_put_contents("$tmpImsData/motherboard/motherboard-level-3.json", json_encode([
     ['brand' => 'Supermicro', 'models' => [[
@@ -104,11 +110,28 @@ file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
     ['brand' => 'Seagate', 'models' => [['uuid' => $sataUuid, 'interface' => 'SATA', 'form_factor' => '2.5"']]],
     ['brand' => 'Samsung', 'models' => [['uuid' => $nvmeUuid, 'interface' => 'PCIe 4.0 x4', 'form_factor' => 'U.2']]],
 ]));
+file_put_contents("$tmpImsData/cpu/Cpu-details-level-3.json", json_encode([
+    ['brand' => 'Intel', 'models' => [['uuid' => $cpuUuid, 'pcie_lanes' => 64]]],
+]));
+file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([
+    ['brand' => 'Intel', 'series' => [['name' => 'X710', 'models' => [['uuid' => $nicUuid, 'ports' => 4]]]]],
+]));
+file_put_contents("$tmpImsData/hbacard/hbacard-level-3.json", json_encode([
+    ['brand' => 'Broadcom', 'models' => [['UUID' => $hbaUuid, 'interface' => 'PCIe 4.0 x8']]],
+]));
 putenv("IMS_DATA_PATH=$tmpImsData");
 
 // -----------------------------------------------------------------------
 // Fixture A (happy path): motherboard + chassis + riser + card-in-riser-slot
 // (slot_ref deliberately aligned so the discrete link succeeds) + SATA storage.
+// (U-L.5: the plain riser-slot card -- no interface/pcie_lanes field -- now
+// runs through consumesPcieLanes() without throwing, contributing 0 lanes.
+// NIC is deliberately NOT added here: a non-onboard NIC always gets
+// config_components.slot_ref = NULL via Extractor::extractNics() -- there is
+// no slot-tracking path for add-on NICs today -- which trips slot_report.php's
+// pre-existing `slotless_card` check for nic/pciecard/hbacard. That gap
+// predates U-L.5 and is unrelated to ResourceCatalog; the nic sfp_port
+// provider proof lives in Fixture D instead, which does not run slot_report.)
 // -----------------------------------------------------------------------
 $configA = 'TEST-LGBF-A-' . substr(md5(uniqid('', true)), 0, 8);
 try {
@@ -148,7 +171,7 @@ try {
     check('fixture A: plain card discretely linked to the aligned riser-provided slot', (int)$linked === 1);
 
     $satConsumeRows = $pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configA) . " AND resource = 'pcie_lane'")->fetchColumn();
-    check('fixture A: SATA storage produces no pcie_lane rows (not a lane consumer)', (int)$satConsumeRows === 0);
+    check('fixture A (U-L.5): SATA storage + fieldless plain card produce no pcie_lane rows (0-lane fallback, not a throw)', (int)$satConsumeRows === 0);
 
     // Neither report supports --config (only --self-test / full-fleet scan) —
     // run the full scan; at this point in the suite Fixture A is the only
@@ -216,6 +239,92 @@ try {
     $pdo->exec("DELETE FROM migration_backfill_state WHERE config_uuid = " . $pdo->quote($configB));
     foreach (['chassisinventory', 'storageinventory'] as $t) {
         $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID = ?")->execute([$configB]);
+    }
+}
+
+// -----------------------------------------------------------------------
+// Fixture C (U-L.4 acceptance proof): CPU (pcie_lanes=64) + NVMe storage
+// (4 lanes) in the same config -> ResourceCatalog::provides('cpu') now
+// supplies the pcie_lane provider that Fixture B's config lacked -> clean
+// backfill, no CatalogException, provider row + linked consumption row.
+// -----------------------------------------------------------------------
+$configC = 'TEST-LGBF-C-' . substr(md5(uniqid('', true)), 0, 8);
+try {
+    insertInv($pdo, 'cpuinventory', $cpuUuid, 'CPU-LG-1', $configC);
+    insertInv($pdo, 'storageinventory', $nvmeUuid, 'NVME-LG-2', $configC);
+    $cols = [
+        'config_uuid' => $configC, 'server_name' => 'LEDGER BACKFILL C', 'is_virtual' => 0, 'configuration_status' => 1,
+        'cpu_configuration' => json_encode(['cpus' => [['uuid' => $cpuUuid]]]),
+        'storage_configuration' => json_encode([['uuid' => $nvmeUuid]]),
+    ];
+    $fields = array_keys($cols);
+    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $fields) . ') VALUES (' . implode(',', array_map(fn($f) => ":$f", $fields)) . ')')->execute($cols);
+
+    $result = runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--execute', '--run-id', 'test-lgbf-c-run', '--config', $configC]);
+    check('fixture C: backfill --execute exits 0', $result['exit'] === 0);
+    check('fixture C: state is done, errors=0', str_contains($result['stdout'], 'done=1') && str_contains($result['stdout'], 'errors=0'));
+
+    $providerRow = $pdo->query("SELECT resource, slot_ref, capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configC) . " AND consumer_id IS NULL AND resource = 'pcie_lane'")->fetch(PDO::FETCH_ASSOC);
+    check('fixture C: cpu pcie_lane provider row present (capacity 64)', $providerRow && (int)$providerRow['capacity'] === 64 && $providerRow['slot_ref'] === null);
+
+    $storageId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configC) . " AND spec_uuid = " . $pdo->quote($nvmeUuid))->fetchColumn();
+    $consumeRow = $pdo->query("SELECT capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configC) . " AND resource = 'pcie_lane' AND consumer_id = $storageId")->fetch(PDO::FETCH_ASSOC);
+    check('fixture C: nvme storage pcie_lane consumption row present (amount 4)', $consumeRow && (int)$consumeRow['capacity'] === 4);
+} finally {
+    runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--rollback-run', 'test-lgbf-c-run']);
+    $pdo->exec("DELETE FROM config_resources WHERE config_uuid = " . $pdo->quote($configC));
+    $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configC));
+    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configC));
+    $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configC));
+    $pdo->exec("DELETE FROM migration_backfill_state WHERE config_uuid = " . $pdo->quote($configC));
+    foreach (['cpuinventory', 'storageinventory'] as $t) {
+        $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID = ?")->execute([$configC]);
+    }
+}
+
+// -----------------------------------------------------------------------
+// Fixture D (U-L.5 acceptance proof): CPU (pcie_lanes=64) + HBA card with a
+// lane-bearing `interface` field ("PCIe 4.0 x8") -> consumes('hbacard', ...)
+// now supplies a real pcie_lane consumption row instead of throwing
+// CatalogException (the pre-U-L.5 behavior for any nic/hbacard/pciecard). Also
+// carries a NIC (ports=4) to prove the sfp_port provider row appears
+// end-to-end — deliberately NOT in Fixture A, since this fixture never calls
+// slot_report.php (see Fixture A's comment on the pre-existing, unrelated
+// non-onboard-NIC `slotless_card` gap in Extractor.php/slot_report.php).
+// -----------------------------------------------------------------------
+$configD = 'TEST-LGBF-D-' . substr(md5(uniqid('', true)), 0, 8);
+try {
+    insertInv($pdo, 'cpuinventory', $cpuUuid, 'CPU-LG-2', $configD);
+    insertInv($pdo, 'hbacardinventory', $hbaUuid, 'HBA-LG-1', $configD);
+    insertInv($pdo, 'nicinventory', $nicUuid, 'NIC-LG-1', $configD);
+    $cols = [
+        'config_uuid' => $configD, 'server_name' => 'LEDGER BACKFILL D', 'is_virtual' => 0, 'configuration_status' => 1,
+        'cpu_configuration' => json_encode(['cpus' => [['uuid' => $cpuUuid]]]),
+        'hbacard_config' => json_encode([['uuid' => $hbaUuid]]),
+        'nic_config' => json_encode(['nics' => [['uuid' => $nicUuid]]]),
+    ];
+    $fields = array_keys($cols);
+    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $fields) . ') VALUES (' . implode(',', array_map(fn($f) => ":$f", $fields)) . ')')->execute($cols);
+
+    $result = runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--execute', '--run-id', 'test-lgbf-d-run', '--config', $configD]);
+    check('fixture D: backfill --execute exits 0', $result['exit'] === 0);
+    check('fixture D: state is done, errors=0', str_contains($result['stdout'], 'done=1') && str_contains($result['stdout'], 'errors=0'));
+
+    $hbaId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configD) . " AND spec_uuid = " . $pdo->quote($hbaUuid))->fetchColumn();
+    $consumeRow = $pdo->query("SELECT capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configD) . " AND resource = 'pcie_lane' AND consumer_id = $hbaId")->fetch(PDO::FETCH_ASSOC);
+    check('fixture D (U-L.5): hbacard pcie_lane consumption row present (amount 8, from interface="PCIe 4.0 x8")', $consumeRow && (int)$consumeRow['capacity'] === 8);
+
+    $providerRows = $pdo->query("SELECT resource, slot_ref, capacity FROM config_resources WHERE config_uuid = " . $pdo->quote($configD) . " AND consumer_id IS NULL")->fetchAll(PDO::FETCH_ASSOC);
+    check('fixture D (U-L.5): nic sfp_port provider row present (capacity 4)', in_array(['resource' => 'sfp_port', 'slot_ref' => null, 'capacity' => 4], $providerRows));
+} finally {
+    runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--rollback-run', 'test-lgbf-d-run']);
+    $pdo->exec("DELETE FROM config_resources WHERE config_uuid = " . $pdo->quote($configD));
+    $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configD));
+    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configD));
+    $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configD));
+    $pdo->exec("DELETE FROM migration_backfill_state WHERE config_uuid = " . $pdo->quote($configD));
+    foreach (['cpuinventory', 'hbacardinventory', 'nicinventory'] as $t) {
+        $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID = ?")->execute([$configD]);
     }
     rrmdir($tmpImsData);
 }

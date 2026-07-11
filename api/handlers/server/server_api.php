@@ -1158,7 +1158,7 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
             ]);
         }
         
-        $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes);
+        $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes, $user['id']);
 
         if ($result['success']) {
             $configId = $config->get('id');

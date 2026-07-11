@@ -171,7 +171,13 @@ class Extractor
         foreach ((array)($nicConfig['nics'] ?? []) as $nic) {
             $uuid = $nic['uuid'] ?? null;
             $isOnboard = $uuid !== null && strpos((string)$uuid, 'onboard-') === 0;
-            $this->resolveEntry($pdo, $configUuid, 'nic', 'nic', $nic, $isOnboard ? 'motherboard' : null, $plans, $quarantine);
+            // Add-on NICs carry slot_position in real data, same as pciecard/hbacard
+            // (contrary to the U-L.5 handoff's assumption that this field doesn't
+            // exist for nic_config — confirmed via a real production fixture during
+            // this session's slot_report triage). Onboard NICs legitimately have no
+            // discrete slot; slot_report.php already excludes them.
+            $slotRef = $isOnboard ? null : ($nic['slot_position'] ?? null);
+            $this->resolveEntry($pdo, $configUuid, 'nic', 'nic', $nic, $isOnboard ? 'motherboard' : null, $plans, $quarantine, $slotRef);
         }
     }
 

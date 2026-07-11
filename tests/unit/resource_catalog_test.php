@@ -48,10 +48,23 @@ $mbUuidMalformed = 'm1a2b3c4-0000-4000-8000-000000000003';
 $mbUuidNoExpansion = 'm1a2b3c4-0000-4000-8000-000000000004';
 $riserUuid = 'p1a2b3c4-0000-4000-8000-000000000001';
 $plainPciecardUuid = 'p1a2b3c4-0000-4000-8000-000000000002';
+$cpuUuidWithLanes = 'a1a2b3c4-0000-4000-8000-000000000001';
+$cpuUuidNoLanes = 'a1a2b3c4-0000-4000-8000-000000000002';
+$cpuUuidBadLanes = 'a1a2b3c4-0000-4000-8000-000000000003';
+$nicUuidWithPorts = 'n1a2b3c4-0000-4000-8000-000000000001';
+$nicUuidNoPorts = 'n1a2b3c4-0000-4000-8000-000000000002';
+$nicUuidBadPorts = 'n1a2b3c4-0000-4000-8000-000000000003';
+$hbaUuidWithInterface = 'h1a2b3c4-0000-4000-8000-000000000001';
+$hbaUuidNoLaneFields = 'h1a2b3c4-0000-4000-8000-000000000002';
+$pciecardUuidLaneFallback = 'p1a2b3c4-0000-4000-8000-000000000003';
+$pciecardUuidUnparseableInterfaceFallback = 'p1a2b3c4-0000-4000-8000-000000000004';
 
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/motherboard", 0777, true);
 mkdir("$tmpImsData/pciecard", 0777, true);
+mkdir("$tmpImsData/cpu", 0777, true);
+mkdir("$tmpImsData/nic", 0777, true);
+mkdir("$tmpImsData/hbacard", 0777, true);
 
 file_put_contents("$tmpImsData/chassis/chasis-level-3.json", json_encode([
     'chassis_specifications' => [
@@ -117,6 +130,17 @@ file_put_contents("$tmpImsData/motherboard/motherboard-level-3.json", json_encod
     ],
 ]));
 
+file_put_contents("$tmpImsData/cpu/Cpu-details-level-3.json", json_encode([
+    [
+        'brand' => 'Intel',
+        'models' => [
+            ['uuid' => $cpuUuidWithLanes, 'pcie_lanes' => 64],
+            ['uuid' => $cpuUuidNoLanes],
+            ['uuid' => $cpuUuidBadLanes, 'pcie_lanes' => 'not-a-number'],
+        ],
+    ],
+]));
+
 file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
     [
         'component_subtype' => 'Riser Card',
@@ -130,6 +154,34 @@ file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
         'brand' => 'Intel',
         'models' => [
             ['UUID' => $plainPciecardUuid],
+            ['UUID' => $pciecardUuidLaneFallback, 'pcie_lanes' => 8],
+            ['UUID' => $pciecardUuidUnparseableInterfaceFallback, 'interface' => 'PCIe Gen4', 'pcie_lanes' => 8],
+        ],
+    ],
+]));
+
+file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([
+    [
+        'brand' => 'Intel',
+        'series' => [
+            [
+                'name' => 'X710',
+                'models' => [
+                    ['uuid' => $nicUuidWithPorts, 'ports' => 4],
+                    ['uuid' => $nicUuidNoPorts],
+                    ['uuid' => $nicUuidBadPorts, 'ports' => 'not-a-number'],
+                ],
+            ],
+        ],
+    ],
+]));
+
+file_put_contents("$tmpImsData/hbacard/hbacard-level-3.json", json_encode([
+    [
+        'brand' => 'Broadcom',
+        'models' => [
+            ['UUID' => $hbaUuidWithInterface, 'interface' => 'PCIe 4.0 x8'],
+            ['UUID' => $hbaUuidNoLaneFields],
         ],
     ],
 ]));
@@ -191,16 +243,70 @@ try {
     $rows = $catalog->provides('pciecard', $plainPciecardUuid);
     check('plain pciecard: provides no resources', $rows === []);
 
-    // ---- types with no confirmed resource fields: throw, not guess ------
-    foreach (['cpu', 'nic'] as $type) {
-        $threw = false;
-        try {
-            $catalog->provides($type, 'any-uuid');
-        } catch (CatalogException $e) {
-            $threw = true;
-        }
-        check("$type: throws CatalogException (no confirmed resource fields)", $threw);
+    // ---- cpu: pcie_lane provider (U-L.4) ---------------------------------
+    $rows = $catalog->provides('cpu', $cpuUuidWithLanes);
+    check('cpu (pcie_lanes=64): exactly 1 row', count($rows) === 1);
+    check('cpu: resource=pcie_lane', ($rows[0]['resource'] ?? null) === 'pcie_lane');
+    check('cpu: slot_ref is null (pooled capacity)', array_key_exists('slot_ref', $rows[0]) && $rows[0]['slot_ref'] === null);
+    check('cpu: capacity=64', ($rows[0]['capacity'] ?? null) === 64);
+
+    check('cpu (no pcie_lanes field): returns [] without throwing', $catalog->provides('cpu', $cpuUuidNoLanes) === []);
+
+    $threw = false;
+    try {
+        $catalog->provides('cpu', $cpuUuidBadLanes);
+    } catch (CatalogException $e) {
+        $threw = true;
     }
+    check('cpu (non-numeric pcie_lanes): throws CatalogException', $threw);
+
+    // ---- nic: sfp_port provider (U-L.5) ----------------------------------
+    $rows = $catalog->provides('nic', $nicUuidWithPorts);
+    check('nic (ports=4): exactly 1 row', count($rows) === 1);
+    check('nic: resource=sfp_port', ($rows[0]['resource'] ?? null) === 'sfp_port');
+    check('nic: slot_ref is null (pooled capacity)', array_key_exists('slot_ref', $rows[0]) && $rows[0]['slot_ref'] === null);
+    check('nic: capacity=4', ($rows[0]['capacity'] ?? null) === 4);
+
+    check('nic (no ports field): returns [] without throwing', $catalog->provides('nic', $nicUuidNoPorts) === []);
+
+    $threw = false;
+    try {
+        $catalog->provides('nic', $nicUuidBadPorts);
+    } catch (CatalogException $e) {
+        $threw = true;
+    }
+    check('nic (non-numeric ports): throws CatalogException', $threw);
+
+    // ---- nic/hbacard/pciecard: pcie_lane consumption (U-L.5) -------------
+    $rows = $catalog->consumes('hbacard', $hbaUuidWithInterface);
+    check('hbacard (interface="PCIe 4.0 x8"): exactly 1 pcie_lane row', count($rows) === 1);
+    check('hbacard: resource=pcie_lane', ($rows[0]['resource'] ?? null) === 'pcie_lane');
+    check('hbacard: amount=8', ($rows[0]['amount'] ?? null) === 8);
+
+    check('hbacard (no interface/pcie_lanes field): returns [] (0 lanes, not a throw)', $catalog->consumes('hbacard', $hbaUuidNoLaneFields) === []);
+
+    // U-L.6 fix: an ABSENT interface candidate returns 0 immediately and never
+    // reaches the pcie_lanes fallback -- this now mirrors
+    // PcieLaneBudgetValidator::extractLaneCount() exactly (was a documented
+    // latent divergence from the U-L.4/U-L.5 verify pass; see
+    // migration/handoffs/U-L.6-20260712.md).
+    check('pciecard (no interface field, numeric pcie_lanes=8): returns [] (absent candidate short-circuits before the fallback, matches legacy)', $catalog->consumes('pciecard', $pciecardUuidLaneFallback) === []);
+
+    // The pcie_lanes fallback IS reachable, but only via a NON-empty interface
+    // string that fails the /x(\d+)/i regex -- this is the real legacy path.
+    $rows = $catalog->consumes('pciecard', $pciecardUuidUnparseableInterfaceFallback);
+    check('pciecard (interface="PCIe Gen4" unparseable, numeric pcie_lanes=8 fallback): exactly 1 pcie_lane row', count($rows) === 1);
+    check('pciecard: amount=8 (from pcie_lanes fallback via unparseable interface string)', ($rows[0]['amount'] ?? null) === 8);
+
+    check('pciecard (no interface, no pcie_lanes): returns [] (0 lanes, not a throw)', $catalog->consumes('pciecard', $plainPciecardUuid) === []);
+
+    $threw = false;
+    try {
+        $catalog->consumes('nic', 'no-such-nic-uuid');
+    } catch (CatalogException $e) {
+        $threw = true;
+    }
+    check('nic consumption: unknown UUID still throws CatalogException (spec not found, not 0-lane)', $threw);
 
     // ---- types confirmed to provide nothing ------------------------------
     foreach (['ram', 'storage', 'caddy', 'hbacard', 'sfp'] as $type) {
