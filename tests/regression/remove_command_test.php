@@ -5,10 +5,12 @@
  * FULL acceptance criteria per the execution pack (six §6 scenarios: blocked
  * without cascade, full-subtree cascade with JSON/rows/ledger/inventory all
  * consistent, NIC->SFP parity with legacy) require a real MySQL scratch DB.
- * This session's environment has no reachable local MySQL instance (see the
- * session handoff) -- the DB-backed criteria could NOT be executed here and
- * are marked accordingly, not silently skipped. The underlying mechanisms
- * (DependencyBlockedRemovalRule's six scenarios, TargetStateBuilder::
+ * The DEPENDS_ON blocked/cascade scenario builds its own rows-path
+ * motherboard+cpu fixture in-transaction when the fleet has no live rows-path
+ * motherboard yet (pre-U-B.4 backfill) -- see the "no live rows-path
+ * motherboard" branch below. When mysql itself is unreachable, everything
+ * DB-backed self-skips with honest SKIPPED lines instead. The underlying
+ * mechanisms (DependencyBlockedRemovalRule's six scenarios, TargetStateBuilder::
  * dependentsOf()'s cascade closure) ARE independently unit-tested, DB-free,
  * in tests/unit/rules/dependency_rule_test.php (U-R.8) -- this file only
  * covers what's specific to the command wiring itself.
@@ -78,23 +80,57 @@ if ($pdo === null) {
             LIMIT 1
         ")->fetch(PDO::FETCH_ASSOC);
 
-        if ($row === false) {
-            echo "  SKIPPED  no live rows-path motherboard found in this scratch DB (pre-backfill / json-fallback-only fleet) -- this scenario needs a rows-path fixture\n";
-        } else {
+        if ($row !== false) {
             $mbSpec = $pdo->query("SELECT spec_uuid FROM config_components WHERE id = " . (int)$row['mb_row_id'])->fetchColumn();
+            $fixtureConfigUuid = $row['config_uuid'];
+            $mbRowId = (int)$row['mb_row_id'];
+            $builtFixture = false;
+        } else {
+            // No live rows-path motherboard exists pre-U-B.4-backfill (fleet is
+            // json-fallback-only). Build one in-transaction: TargetStateBuilder::
+            // fromCurrent() takes the rows-path exclusively the moment a config
+            // has ANY live config_components row (see its own docblock), so an
+            // arbitrary real config + one synthetic motherboard row + one
+            // synthetic cpu row (parent_id-linked, so cascade's childrenOf()
+            // walk actually cascades it) is enough to exercise both
+            // DependencyBlockedRemovalRule mechanisms without touching real data
+            // (everything below is rolled back with the enclosing transaction).
+            $fixtureConfigUuid = $pdo->query("SELECT config_uuid FROM server_configurations LIMIT 1")->fetchColumn();
+            $mbInv = $pdo->query("SELECT id, UUID FROM motherboardinventory LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            $cpuInv = $pdo->query("SELECT id, UUID FROM cpuinventory LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 
-            $cmdNoCascade = new RemoveComponentCommand($pdo, $row['config_uuid'], 'motherboard', $mbSpec, null, false, 0);
+            if ($fixtureConfigUuid === false || $mbInv === false || $cpuInv === false) {
+                echo "  SKIPPED  no config/motherboard-inventory/cpu-inventory rows available to build a fixture\n";
+                $mbSpec = null;
+                $builtFixture = false;
+            } else {
+                $mbSpec = $mbInv['UUID'];
+                $insMb = $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, parent_id, added_by) VALUES (?, 'motherboard', 'motherboardinventory', ?, ?, NULL, 0)");
+                $insMb->execute([$fixtureConfigUuid, $mbInv['id'], $mbInv['UUID']]);
+                $mbRowId = (int)$pdo->lastInsertId();
+
+                $insCpu = $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, parent_id, added_by) VALUES (?, 'cpu', 'cpuinventory', ?, ?, ?, 0)");
+                $insCpu->execute([$fixtureConfigUuid, $cpuInv['id'], $cpuInv['UUID'], $mbRowId]);
+
+                $builtFixture = true;
+            }
+        }
+
+        if ($mbSpec === null) {
+            // already SKIPPED above
+        } else {
+            $cmdNoCascade = new RemoveComponentCommand($pdo, $fixtureConfigUuid, 'motherboard', $mbSpec, null, false, 0);
             $blockedAsExpected = false;
             try {
                 $cmdNoCascade->execute();
             } catch (CommandFailed $e) {
                 $blockedAsExpected = ($e->errorType === 'validation_blocked');
             }
-            check('removing a motherboard with live children blocks WITHOUT cascade (dependency.blocked_removal)', $blockedAsExpected);
+            check('removing a motherboard with live children blocks WITHOUT cascade (dependency.blocked_removal)' . ($builtFixture ? ' [in-transaction fixture]' : ''), $blockedAsExpected);
 
-            $cmdCascade = new RemoveComponentCommand($pdo, $row['config_uuid'], 'motherboard', $mbSpec, null, true, 0);
+            $cmdCascade = new RemoveComponentCommand($pdo, $fixtureConfigUuid, 'motherboard', $mbSpec, null, true, 0);
             $cascadeVerdict = $cmdCascade->dryRun(); // dryRun only -- never applies, always rolls back internally too
-            check('the SAME removal with cascade=true does not block on dependency.blocked_removal', !in_array('dependency.blocked_removal', array_map(function ($r) { return $r->ruleId(); }, $cascadeVerdict->failures()), true));
+            check('the SAME removal with cascade=true does not block on dependency.blocked_removal' . ($builtFixture ? ' [in-transaction fixture]' : ''), !in_array('dependency.blocked_removal', array_map(function ($r) { return $r->ruleId(); }, $cascadeVerdict->failures()), true));
         }
     } finally {
         if ($pdo->inTransaction()) {

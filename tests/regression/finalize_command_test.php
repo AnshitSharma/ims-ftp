@@ -5,10 +5,13 @@
  * FULL acceptance criteria per the execution pack (defective-inventory
  * fixture blocks via SystemInventoryStateRule, V-2; concurrent-mutation-
  * then-finalize race fixture blocks under lock) require a real MySQL scratch
- * DB. This session's environment has no reachable local MySQL instance (see
- * the session handoff) -- the DB-backed criteria could NOT be executed here
- * and are marked accordingly, not silently skipped. SystemInventoryStateRule
- * itself (the V-2 mechanism) IS independently unit-tested, DB-free, in
+ * DB. The two-connection section below builds its own throwaway configs
+ * (real commits, fully torn down afterward) since these scenarios need two
+ * genuinely separate connections racing -- something the single
+ * owned-transaction-then-rollback pattern the rest of this file uses cannot
+ * express. When mysql itself is unreachable, everything DB-backed self-skips
+ * with honest SKIPPED lines instead. SystemInventoryStateRule itself (the
+ * V-2 mechanism) IS independently unit-tested, DB-free, in
  * tests/unit/rules/system_rules_test.php (U-R.7).
  *
  * Exit 0 = every DB-free assertion passes.
@@ -20,6 +23,7 @@ ini_set('display_errors', '1');
 $ROOT = dirname(__DIR__, 2);
 require_once $ROOT . '/core/models/commands/BaseCommand.php';
 require_once $ROOT . '/core/models/commands/TransitionStatusCommand.php';
+require_once $ROOT . '/core/models/commands/RemoveComponentCommand.php';
 
 $fails = 0;
 function check($label, $cond) {
@@ -131,7 +135,6 @@ if ($pdo === null) {
                 } else {
                     echo "  SKIPPED  defective-inventory scenario needs a config already past the chain gap (Finding 2) or not already finalized\n";
                 }
-                echo "  SKIPPED  concurrent-mutation-then-finalize race fixture blocks under lock\n";
             }
         }
     } finally {
@@ -140,7 +143,128 @@ if ($pdo === null) {
         }
     }
     echo "  (DB-backed scenario ran against " . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden') . ", rolled back -- no data persisted)\n";
-    echo "  NOTE  concurrent-mutation-then-finalize race requires two overlapping connections -- not attempted this session (single-connection scenario only)\n";
+}
+
+// =========================================================================
+// Two-connection concurrency scenarios (real commits against the scratch DB,
+// on throwaway configs this section creates and tears down itself -- these
+// genuinely need two separate connections racing, which the single owned
+// transaction + rollback pattern every other scenario in this file uses
+// cannot express: a second connection can't observe a mutation the first
+// hasn't committed, and can't be blocked by a lock the first hasn't taken).
+echo "-- two-connection concurrency scenarios (real scratch DB, SKIPPED otherwise) --\n";
+$conn1 = scratch_db_connect();
+$conn2 = scratch_db_connect();
+if ($conn1 === null || $conn2 === null) {
+    echo "  SKIPPED  409 real-revision after concurrent mutation\n";
+    echo "  SKIPPED  finalize race: blocks under lock while another connection holds it\n";
+} else {
+    function uuidv4(): string {
+        $d = random_bytes(16);
+        $d[6] = chr((ord($d[6]) & 0x0f) | 0x40);
+        $d[8] = chr((ord($d[8]) & 0x3f) | 0x80);
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($d), 4));
+    }
+
+    // --- Scenario 1: 409 real-revision after concurrent mutation ---------
+    $cuA = uuidv4();
+    $ramUnit = $conn1->query("SELECT id, UUID FROM raminventory WHERE Status = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if ($ramUnit === false) {
+        echo "  SKIPPED  409 real-revision after concurrent mutation: no available RAM unit in this scratch DB\n";
+    } else {
+        try {
+            $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (409-revision)', 1, 'building', 0, 1, 5)")
+                ->execute([$cuA]);
+            $conn1->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, added_by) VALUES (?, 'ram', 'raminventory', ?, ?, 0)")
+                ->execute([$cuA, $ramUnit['id'], $ramUnit['UUID']]);
+
+            // conn2 captures the revision BEFORE conn1's concurrent mutation --
+            // this is the stale value a real client would have read before a
+            // second actor mutated the config out from under it.
+            $revSeenByConn2 = (int)$conn2->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $conn2->quote($cuA))->fetchColumn();
+            check('conn2 observes the fresh config at revision 0', $revSeenByConn2 === 0);
+
+            // conn1: a REAL committed mutation (its own owned transaction,
+            // commits inside execute()) -- bumps revision 0 -> 1.
+            (new RemoveComponentCommand($conn1, $cuA, 'ram', $ramUnit['UUID'], null, false, 0))->execute();
+            $revAfterConn1 = (int)$conn1->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $conn1->quote($cuA))->fetchColumn();
+            check('conn1\'s remove really committed and bumped revision to 1', $revAfterConn1 === 1);
+
+            // conn2: still holding the STALE revision it read above, tries to
+            // transition the config -- must be rejected with revision_mismatch
+            // (409) rather than silently overwriting conn1's concurrent change.
+            $caught = null;
+            try {
+                (new TransitionStatusCommand($conn2, $cuA, 'validated', 'concurrency test (should not apply)', 0, $revSeenByConn2))->execute();
+            } catch (CommandFailed $e) {
+                $caught = $e;
+            }
+            check('conn2 with a stale expectedRevision gets CommandFailed', $caught !== null);
+            check('conn2\'s failure is revision_mismatch with HTTP 409', $caught !== null && $caught->errorType === 'revision_mismatch' && $caught->httpStatus === 409);
+        } finally {
+            // Real commits above -> real, explicit teardown (not a rollback).
+            $conn1->prepare("DELETE FROM config_events WHERE config_uuid = ?")->execute([$cuA]);
+            $conn1->prepare("DELETE FROM config_components WHERE config_uuid = ?")->execute([$cuA]);
+            $conn1->prepare("DELETE FROM server_configurations WHERE config_uuid = ?")->execute([$cuA]);
+            $conn1->prepare("UPDATE raminventory SET Status = 1, ServerUUID = NULL WHERE UUID = ?")->execute([$ramUnit['UUID']]);
+        }
+    }
+
+    // --- Scenario 2: finalize race -- blocks under lock -------------------
+    $cuB = uuidv4();
+    try {
+        $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (lock-race)', 1, 'building', 0, 1, 5)")
+            ->execute([$cuB]);
+
+        // conn1 simulates a command mid-flight: holds the SAME row-level lock
+        // BaseCommand::lockAndLoadConfigRow() takes (FOR UPDATE), inside an
+        // uncommitted transaction -- exactly the state a real concurrent
+        // command would be in between its own beginTransaction() and commit().
+        $conn1->beginTransaction();
+        $conn1->prepare('SELECT * FROM server_configurations WHERE config_uuid = ? FOR UPDATE')->execute([$cuB]);
+
+        // conn2 attempts a second command against the SAME config while
+        // conn1 still holds the lock uncommitted. A short lock-wait timeout
+        // turns the resulting MySQL wait into a fast, deterministic failure
+        // instead of a real multi-second block, without changing what's being
+        // proven: the second command cannot proceed until the first releases.
+        $conn2->exec('SET SESSION innodb_lock_wait_timeout = 1');
+        $caught = null;
+        try {
+            (new TransitionStatusCommand($conn2, $cuB, 'validated', 'concurrency test (should be blocked)', 0))->execute();
+        } catch (CommandFailed $e) {
+            $caught = $e;
+        }
+        check('a second command against the SAME config is blocked while conn1 still holds the row lock uncommitted', $caught !== null);
+        if ($caught !== null && $caught->errorType !== 'command_exception') {
+            echo "        (actual errorType={$caught->errorType}: " . substr($caught->getMessage(), 0, 160) . ")\n";
+        }
+        check('the block surfaces as a lock-wait failure (command_exception), not a silent pass-through', $caught !== null && $caught->errorType === 'command_exception');
+
+        $conn1->rollBack(); // release the lock
+
+        // Now that conn1 released it, the SAME command on conn2 should be
+        // able to acquire the lock and proceed past it (still fails later,
+        // on transition legality -- building has no direct edge to validated
+        // per Finding 2 -- but that is a DIFFERENT errorType, proving the lock
+        // itself is no longer what's blocking).
+        $caught2 = null;
+        try {
+            (new TransitionStatusCommand($conn2, $cuB, 'validated', 'concurrency test (post-release)', 0))->execute();
+        } catch (CommandFailed $e) {
+            $caught2 = $e;
+        }
+        check('once conn1 releases the lock, conn2 acquires it and proceeds past the lock wait (fails on transition legality instead, or succeeds)', $caught2 === null || $caught2->errorType !== 'command_exception');
+    } finally {
+        if ($conn1->inTransaction()) {
+            $conn1->rollBack();
+        }
+        $conn1->prepare("DELETE FROM config_events WHERE config_uuid = ?")->execute([$cuB]);
+        $conn1->prepare("DELETE FROM config_components WHERE config_uuid = ?")->execute([$cuB]);
+        $conn1->prepare("DELETE FROM server_configurations WHERE config_uuid = ?")->execute([$cuB]);
+    }
+
+    echo "  (concurrency scenarios ran with two live connections against " . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden') . "; throwaway configs created + fully cleaned up, no real fleet data touched)\n";
 }
 
 echo $fails === 0 ? "\nALL CHECKS PASS\n" : "\n$fails FAILURE(S)\n";

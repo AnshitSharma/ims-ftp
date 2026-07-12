@@ -172,6 +172,59 @@ abstract class BaseCommand
         return $row ?: null;
     }
 
+    /**
+     * Post-lock availability gate over a just-locked inventory row — the port
+     * of legacy ServerBuilder::checkComponentAvailability() (was ~5301-5352)
+     * plus its call-site override protocol (ServerBuilder.php:745), closing
+     * the 2026-07-12 verify record's Finding A: without this, enforce-mode
+     * add/replace could claim a failed or in-use physical unit (the
+     * `ORDER BY Status ASC` pick sorts failed=0 FIRST and nothing else tests
+     * Status — system.inventory_state only triggers on VALIDATE/FINALIZE).
+     *
+     * Mirrors legacy EXACTLY, including its two lenient edges:
+     *   - options['override_used'] bypasses the whole gate (legacy's 745 gate
+     *     tests only override_used, never can_override — so an override even
+     *     claims a failed unit, as legacy always allowed);
+     *   - a virtual config bypasses availability checks entirely
+     *     (checkComponentAvailability()'s own is_virtual early-return,
+     *     resolved here from the already-locked config row instead of a
+     *     second query).
+     * Status semantics: 0=failed blocks; 1=available passes; 2=in_use passes
+     * only when already assigned to THIS config, else blocks (overridable);
+     * unknown statuses block.
+     */
+    protected function assertInventoryAvailability(array $inventoryData, array $lockedRow, array $options): void
+    {
+        if (!empty($options['override_used'])) {
+            return;
+        }
+        if (!empty($lockedRow['is_virtual'])) {
+            return;
+        }
+
+        $status = (int)($inventoryData['Status'] ?? -1);
+        $serverUuid = $inventoryData['ServerUUID'] ?? null;
+
+        if ($status === 1) {
+            return;
+        }
+        if ($status === 2 && $serverUuid === $this->configUuid) {
+            return;
+        }
+
+        if ($status === 0) {
+            $message = 'Component is marked as Failed/Defective';
+        } elseif ($status === 2) {
+            $message = $serverUuid
+                ? "Component is currently in use in configuration: $serverUuid"
+                : 'Component is currently In Use';
+        } else {
+            $message = "Component has unknown status: $status";
+        }
+
+        throw new CommandFailed('component_unavailable', $message, 409);
+    }
+
     /** @return int server_configurations.revision for this command's config, read fresh after apply(). */
     protected function currentRevision(): int
     {

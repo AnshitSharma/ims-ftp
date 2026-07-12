@@ -94,6 +94,10 @@ final class ReplaceComponentCommand extends BaseCommand
         if ($this->newInventoryRow === null) {
             throw new CommandFailed('component_not_found', "Replacement component {$this->newComponentUuid} not found in inventory", 404);
         }
+        // Finding A (verify record 2026-07-12): legacy's post-lock availability
+        // gate + override protocol, ported into BaseCommand. The U-A.2
+        // quantity>1 add loop inherits this via AddComponentCommand.
+        $this->assertInventoryAvailability($this->newInventoryRow['data'], $lockedRow, $this->options);
 
         $withoutOld = TargetStateBuilder::withRemove($current, $this->oldRow['id'], false);
 
@@ -130,7 +134,8 @@ final class ReplaceComponentCommand extends BaseCommand
         ];
         $replaced = TargetStateBuilder::withAdd($withoutOld, $newRow);
 
-        $addedRow = end($replaced->components());
+        $replacedComponents = $replaced->components();
+        $addedRow = end($replacedComponents);
         $this->newRowId = $addedRow['id'];
 
         // Re-anchor: any live row whose parent_id pointed at the OLD row now

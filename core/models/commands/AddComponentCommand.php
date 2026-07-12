@@ -64,6 +64,9 @@ final class AddComponentCommand extends BaseCommand
         if ($this->resolvedInventoryRow === null) {
             throw new CommandFailed('component_not_found', "Component {$this->componentUuid} not found in inventory", 404);
         }
+        // Finding A (verify record 2026-07-12): legacy's post-lock availability
+        // gate + override protocol, ported into BaseCommand.
+        $this->assertInventoryAvailability($this->resolvedInventoryRow['data'], $lockedRow, $this->options);
 
         $parentId = null;
         if ($this->componentType === 'sfp' && !empty($this->options['parent_nic_uuid'])) {

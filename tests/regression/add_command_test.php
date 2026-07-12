@@ -6,10 +6,13 @@
  * ZERO diffs + shadow log rows; enforce on scratch: regression PASS,
  * equivalence --config green post-op, performance_report within budget)
  * require a real MySQL scratch DB (GOLDEN_DB_* / ims_compat_golden) with
- * config_components + server_configurations + {type}inventory rows. This
- * session's environment has no reachable local MySQL instance (see the
- * session handoff for detail) -- these DB-backed assertions could NOT be
- * executed here and are marked accordingly below, not silently skipped.
+ * config_components + server_configurations + {type}inventory rows. The
+ * DB-backed section below self-skips with honest SKIPPED lines when no
+ * scratch DB is reachable. Finding B (2026-07-12 verify record) fix: the
+ * scenario now dryRun()-pre-checks fixture pairs and treats a blocking
+ * verdict (validation_blocked) as a legitimate, asserted-on outcome instead
+ * of crashing uncaught. Also carries the Finding A availability-gate
+ * scenarios (failed/in-use unit rejected, override_used bypass).
  *
  * What CAN be verified without a DB (structural/contract-level) runs now.
  * Exit 0 = every DB-free assertion passes. Re-run with GOLDEN_DB_* set
@@ -69,40 +72,116 @@ echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) 
 require_once __DIR__ . '/_scratch_db.php';
 $pdo = scratch_db_connect();
 if ($pdo === null) {
-    echo "  SKIPPED  enforce: add an available component, verify one revision bump + a config_components row\n";
-    echo "  SKIPPED  enforce: verdict parity with legacy on a fixture (blocked add stays blocked)\n";
+    echo "  SKIPPED  enforce: add a compatibility-pre-checked component, verify one revision bump + a config_components row\n";
+    echo "  SKIPPED  enforce: blocked add raises CommandFailed(validation_blocked) pre-apply (no row, no revision bump)\n";
+    echo "  SKIPPED  Finding A: failed unit rejected (component_unavailable), in-use-elsewhere rejected, override_used bypasses\n";
     echo "  SKIPPED  characterization ZERO diffs / equivalence / performance_report -- these need the full harness, not this file\n";
 } else {
     // Everything below runs inside ONE transaction this test owns and always
-    // rolls back at the end -- execute() sees $pdo->inTransaction() === true
-    // and therefore joins rather than commits (BaseCommand's own
+    // rolls back at the end -- execute()/dryRun() see $pdo->inTransaction()
+    // === true and therefore join rather than commit (BaseCommand's own
     // ownTransaction rule), so nothing this scenario does is ever persisted.
     $pdo->beginTransaction();
     try {
-        // Pick any config not yet finalized/immutable and any available RAM
-        // module not already attached anywhere -- RAM has no parent_id/slot_ref
-        // dependencies, so this is the simplest real add path to exercise.
-        $config = $pdo->query("SELECT config_uuid FROM server_configurations WHERE configuration_status < 3 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-        $ram = $pdo->query("SELECT UUID FROM raminventory WHERE Status = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        // Finding B fix: an arbitrary (config, RAM) pair regularly BLOCKS on
+        // real fleet data (e.g. a config whose existing CPU/RAM already
+        // mismatch its board) -- that is a legitimate enforce-path outcome,
+        // not a fixture. So: dryRun() candidate pairs first, keep one that
+        // pre-checks GREEN for the happy path and one that pre-checks BLOCKED
+        // for the failure-path assertions.
+        $configs = $pdo->query("SELECT config_uuid FROM server_configurations WHERE configuration_status < 3 ORDER BY config_uuid LIMIT 8")->fetchAll(PDO::FETCH_COLUMN);
+        $rams = $pdo->query("SELECT DISTINCT UUID FROM raminventory WHERE Status = 1 ORDER BY UUID LIMIT 12")->fetchAll(PDO::FETCH_COLUMN);
 
-        if ($config === false || $ram === false) {
-            echo "  SKIPPED  no usable (open config, available RAM) fixture pair found in this scratch DB\n";
+        $greenPair = null;
+        $blockedPair = null;
+        foreach ($configs as $cu) {
+            foreach ($rams as $ru) {
+                try {
+                    $v = (new AddComponentCommand($pdo, $cu, 'ram', $ru, [], 0))->dryRun();
+                } catch (CommandFailed $e) {
+                    continue; // immutable config / guard block etc. -- not a usable fixture
+                }
+                if (!$v->blocking() && $greenPair === null) {
+                    $greenPair = [$cu, $ru];
+                } elseif ($v->blocking() && $blockedPair === null) {
+                    $blockedPair = [$cu, $ru];
+                }
+                if ($greenPair !== null && $blockedPair !== null) {
+                    break 2;
+                }
+            }
+        }
+
+        // --- blocked path FIRST: validation_blocked is a LEGITIMATE outcome.
+        //     (Runs before the happy path on purpose: the green execute()
+        //     claims its inventory unit inside this same transaction, and if
+        //     the blocked pair shares that unit the availability gate --
+        //     Finding A, tested separately below -- would fire before the
+        //     validation verdict this section is asserting on.) ---
+        if ($blockedPair === null) {
+            echo "  SKIPPED  no (open config, available RAM) pair pre-checks blocked in this scratch DB\n";
         } else {
-            $revBefore = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($config['config_uuid']))->fetchColumn();
+            list($cu, $ru) = $blockedPair;
+            $revBefore = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($cu))->fetchColumn();
+            $caught = null;
+            try {
+                (new AddComponentCommand($pdo, $cu, 'ram', $ru, [], 0))->execute();
+            } catch (CommandFailed $e) {
+                $caught = $e;
+            }
+            check('blocked add raises CommandFailed', $caught !== null);
+            if ($caught !== null && $caught->errorType !== 'validation_blocked') {
+                echo "        (actual errorType={$caught->errorType}: " . substr($caught->getMessage(), 0, 160) . ")\n";
+            }
+            check('blocked add errorType is validation_blocked with a verdict attached', $caught !== null && $caught->errorType === 'validation_blocked' && $caught->verdict !== null);
+            $revAfter = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($cu))->fetchColumn();
+            check('blocked add never reached apply(): revision unchanged', $revAfter === $revBefore);
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM config_components WHERE config_uuid = ? AND spec_uuid = ? AND removed_at IS NULL AND added_at > NOW() - INTERVAL 1 MINUTE");
+            $stmt->execute([$cu, $ru]);
+            check('blocked add inserted no config_components row', (int)$stmt->fetchColumn() === 0);
+        }
 
-            $cmd = new AddComponentCommand($pdo, $config['config_uuid'], 'ram', $ram['UUID'], [], 0);
-            $result = $cmd->execute();
-
+        // --- happy path: compatibility-pre-checked fixture ---
+        if ($greenPair === null) {
+            echo "  SKIPPED  no (open config, available RAM) pair pre-checks green in this scratch DB\n";
+        } else {
+            list($cu, $ru) = $greenPair;
+            $revBefore = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($cu))->fetchColumn();
+            $result = (new AddComponentCommand($pdo, $cu, 'ram', $ru, [], 0))->execute();
             check('execute() returns a CommandResult with revision > previous', $result->revision > $revBefore);
             check('execute() verdict is non-blocking (add succeeded)', !$result->verdict->blocking());
-
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM config_components WHERE config_uuid = ? AND spec_uuid = ? AND removed_at IS NULL");
-            $stmt->execute([$config['config_uuid'], $ram['UUID']]);
-            $rowCount = (int)$stmt->fetchColumn();
+            $stmt->execute([$cu, $ru]);
             // A pre-U-B.4-backfill config has no rows-path row at all -- both
             // 0 (json-fallback-only) and 1 (rows-path present) are legitimate,
             // 2+ would mean a duplicate insert bug.
-            check('config_components has at most one live row for this add (no duplicate insert)', $rowCount <= 1);
+            check('config_components has at most one live row for this add (no duplicate insert)', (int)$stmt->fetchColumn() <= 1);
+        }
+
+        // --- Finding A: post-lock availability gate (runs LAST -- it mutates
+        //     inventory status inside this rolled-back transaction) ---
+        $cuA = $configs ? $configs[0] : null;
+        $ruA = $rams ? $rams[count($rams) - 1] : null;
+        if ($cuA === null || $ruA === null) {
+            echo "  SKIPPED  Finding A scenarios: no config/RAM fixture available\n";
+        } else {
+            $forceStatus = $pdo->prepare("UPDATE raminventory SET Status = ?, ServerUUID = ? WHERE UUID = ?");
+
+            $forceStatus->execute([0, null, $ruA]); // all units of this spec: failed
+            $caught = null;
+            try { (new AddComponentCommand($pdo, $cuA, 'ram', $ruA, [], 0))->execute(); } catch (CommandFailed $e) { $caught = $e; }
+            check('failed unit (Status=0) is rejected with component_unavailable', $caught !== null && $caught->errorType === 'component_unavailable');
+            check('failed-unit message mirrors legacy', $caught !== null && strpos($caught->getMessage(), 'Failed/Defective') !== false);
+
+            $forceStatus->execute([2, 'some-other-config-uuid', $ruA]); // in use elsewhere
+            $caught = null;
+            try { (new AddComponentCommand($pdo, $cuA, 'ram', $ruA, [], 0))->execute(); } catch (CommandFailed $e) { $caught = $e; }
+            check('in-use-in-another-config unit is rejected with component_unavailable', $caught !== null && $caught->errorType === 'component_unavailable');
+            check('in-use message names the holding configuration', $caught !== null && strpos($caught->getMessage(), 'some-other-config-uuid') !== false);
+
+            $caught = null;
+            try { (new AddComponentCommand($pdo, $cuA, 'ram', $ruA, ['override_used' => true], 0))->execute(); } catch (CommandFailed $e) { $caught = $e; }
+            check('override_used bypasses the availability gate (legacy ServerBuilder.php:745 protocol)', $caught === null || $caught->errorType !== 'component_unavailable');
         }
     } finally {
         // Never commit -- this is a read/verify scenario, not a real mutation.
