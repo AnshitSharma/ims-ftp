@@ -64,8 +64,10 @@ Tick strictly top-to-bottom. A phase's boxes may not be ticked until the previou
       production — see migration/handoffs/U-SM.4-20260712.md and
       migration/handoffs/U-SM.4-U-L.6-VERIFY-20260712.md)
 - [x] U-SM.5 server_api.php finalizeConfiguration() userId wiring (implemented 2026-07-12, closes the
-      enforce-blocking gap flagged by U-SM.4's handoff — see migration/handoffs/U-SM.5-20260712.md;
-      NOT yet verified). Inert while STATE_MACHINE_ENABLED stays off/unset in production.
+      enforce-blocking gap flagged by U-SM.4's handoff — see migration/handoffs/U-SM.5-20260712.md,
+      verified 2026-07-12 per the in-file verify record; re-confirmed by the full-migration audit
+      2026-07-12, see migration/handoffs/VERIFY-ALL-20260712.md). Inert while STATE_MACHINE_ENABLED
+      stays off/unset in production.
 - [ ] GATE P3: inventory report green; zero shadow-mode guard violations logged for 7 days — the
       7-day shadow soak has not started (STATE_MACHINE_ENABLED must first be set to `shadow` in
       production, a human decision, before any soak clock starts). Inventory-report triaged
