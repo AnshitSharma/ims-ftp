@@ -60,7 +60,17 @@ switch ($action) {
     case 'server-remove-component':
         handleRemoveComponent($serverBuilder, $user);
         break;
-    
+
+    case 'replace-component':
+    case 'server-replace-component':
+        handleReplaceComponent($serverBuilder, $user);
+        break;
+
+    case 'transition-status':
+    case 'server-transition-status':
+        handleTransitionStatus($serverBuilder, $user);
+        break;
+
     case 'get-config':
     case 'server-get-config':
         handleGetConfiguration($serverBuilder, $user);
@@ -325,6 +335,9 @@ function handleCreateStart($serverBuilder, $user) {
 function handleAddComponent($serverBuilder, $user) {
     global $pdo;
 
+    // U-A.1: informational only, safe unconditionally -- see migration/08-api-adapters/DEPRECATION.md.
+    header('X-IMS-Deprecation: action superseded by v2 commands, see migration/08-api-adapters/DEPRECATION.md');
+
     try {
         $configUuid = $_POST['config_uuid'] ?? '';
         $componentType = $_POST['component_type'] ?? '';
@@ -334,9 +347,18 @@ function handleAddComponent($serverBuilder, $user) {
         $slotPosition = $_POST['slot_position'] ?? null;
         $notes = $_POST['notes'] ?? '';
         $override = filter_var($_POST['override'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        // U-A.2: reject quantity < 1 outright (closes E-3's zero/negative case
+        // for every mode); quantity > 1 is still accepted during this window
+        // (see the enforce-mode command-dispatch loop below) -- U-D.3 is what
+        // removes multi-unit quantity support entirely.
+        $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
 
     if (empty($configUuid) || empty($componentType) || empty($componentUuid)) {
         send_json_response(0, 1, 400, "Configuration UUID, component type, and component UUID are required");
+    }
+
+    if ($quantity < 1) {
+        send_json_response(0, 1, 400, "quantity must be at least 1");
     }
 
     // Basic component type validation
@@ -393,56 +415,75 @@ function handleAddComponent($serverBuilder, $user) {
         // between this block and addComponent()'s lock acquisition, the
         // locked revalidation will catch it and roll back. This block is
         // retained because it surfaces `validationWarnings` to the response.
-        try {
-            require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
-            $compatibility = new ComponentCompatibility($pdo);
+        //
+        // U-A.1 (redesigned flag-gated per owner decision -- see
+        // migration/08-api-adapters/DEPRECATION.md): the pack's literal text
+        // deletes this block unconditionally ("commands validate
+        // authoritatively now"). That is only actually true once
+        // COMMAND_LAYER_ENABLED=enforce is what runs the add (AddComponentCommand
+        // ::execute() evaluates the SAME ValidationEngine registry, under lock,
+        // before ever writing) -- at off/shadow the legacy addComponent() path
+        // below is still the one enforcing/persisting, so skipping this block
+        // there would silently drop the only pre-transaction feedback
+        // (validationWarnings) users see today, for zero benefit. Skipped ONLY
+        // at enforce, mirroring U-C.5's identical precedent in
+        // handleFinalizeConfiguration.
+        require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
+        if (CommandLayer::mode() !== 'enforce') {
+            try {
+                require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
+                $compatibility = new ComponentCompatibility($pdo);
 
-            // Load configuration data (unlocked snapshot - advisory only)
-            $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
-            if (!$config) {
-                throw new Exception("Configuration not found");
-            }
-
-            // Advisory pre-check; authoritative check runs under FOR UPDATE inside addComponent()
-            $validationResult = $serverBuilder->validateComponentAddition(
-                $configUuid,
-                $componentType,
-                $componentUuid,
-                $compatibility,
-                $config->getData(),
-                $parentNicUuid,
-                $portIndex,
-                $quantity
-            );
-
-            if (!$validationResult['success']) {
-                // Format error response based on validation result
-                $errorResponse = [
-                    'component_type' => $componentType,
-                    'component_uuid' => $componentUuid,
-                    'validation_status' => 'blocked',
-                    'error' => $validationResult['message']
-                ];
-
-                // Include additional details if available
-                if (!empty($validationResult['details'])) {
-                    $errorResponse['details'] = $validationResult['details'];
-                }
-                if (!empty($validationResult['recommendations'])) {
-                    $errorResponse['recommendations'] = $validationResult['recommendations'];
+                // Load configuration data (unlocked snapshot - advisory only)
+                $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+                if (!$config) {
+                    throw new Exception("Configuration not found");
                 }
 
-                send_json_response(0, 1, 400, $validationResult['message'], $errorResponse);
-            }
+                // Advisory pre-check; authoritative check runs under FOR UPDATE inside addComponent()
+                $validationResult = $serverBuilder->validateComponentAddition(
+                    $configUuid,
+                    $componentType,
+                    $componentUuid,
+                    $compatibility,
+                    $config->getData(),
+                    $parentNicUuid,
+                    $portIndex,
+                    $quantity
+                );
 
-            // Store warnings for response (will be added if successful)
-            $validationWarnings = $validationResult['warnings'] ?? [];
+                if (!$validationResult['success']) {
+                    // Format error response based on validation result
+                    $errorResponse = [
+                        'component_type' => $componentType,
+                        'component_uuid' => $componentUuid,
+                        'validation_status' => 'blocked',
+                        'error' => $validationResult['message']
+                    ];
+
+                    // Include additional details if available
+                    if (!empty($validationResult['details'])) {
+                        $errorResponse['details'] = $validationResult['details'];
+                    }
+                    if (!empty($validationResult['recommendations'])) {
+                        $errorResponse['recommendations'] = $validationResult['recommendations'];
+                    }
+
+                    send_json_response(0, 1, 400, $validationResult['message'], $errorResponse);
+                }
+
+                // Store warnings for response (will be added if successful)
+                $validationWarnings = $validationResult['warnings'] ?? [];
+                $validationInfo = [];
+
+            } catch (Exception $validationError) {
+                error_log("Validation error: " . $validationError->getMessage());
+                error_log("Stack trace: " . $validationError->getTraceAsString());
+                send_json_response(0, 1, 500, "Validation unavailable - request rejected (fail-closed)");
+            }
+        } else {
+            $validationWarnings = [];
             $validationInfo = [];
-
-        } catch (Exception $validationError) {
-            error_log("Validation error: " . $validationError->getMessage());
-            error_log("Stack trace: " . $validationError->getTraceAsString());
-            send_json_response(0, 1, 500, "Validation unavailable - request rejected (fail-closed)");
         }
 
         // Use original component addition method
@@ -460,7 +501,89 @@ function handleAddComponent($serverBuilder, $user) {
             $componentOptions['port_index'] = $portIndex;
         }
 
-        $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
+        // U-C.2: COMMAND_LAYER_ENABLED dispatch (off by default -- zero behavior
+        // change). shadow builds+evaluates AddComponentCommand as a dry run
+        // (never applies, always rolls back -- INV-8) and logs any legacy/command
+        // blocking divergence; the legacy call below still runs as today either
+        // way. enforce replaces the legacy call with the real command.
+        require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
+        $commandLayerMode = CommandLayer::mode();
+        if ($commandLayerMode !== 'off') {
+            $addCommand = new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id'], $expectedRevision);
+        }
+        if ($commandLayerMode === 'shadow') {
+            $commandVerdict = null;
+            $shadowDryRunFailed = false;
+            try {
+                $commandVerdict = $addCommand->dryRun();
+            } catch (CommandFailed $shadowFailure) {
+                $shadowDryRunFailed = true;
+                error_log('AddComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
+            }
+            // The legacy call is the ONLY mutation path in shadow mode (INV-8: shadow
+            // must never fork behavior) -- its real outcome is what the command verdict
+            // is compared against, not a hardcoded precheck-passed assumption.
+            $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
+            $legacyBlocked = !$result['success'];
+            if (!$shadowDryRunFailed && $commandVerdict->blocking() !== $legacyBlocked) {
+                $shadowDir = __DIR__ . '/../../../reports/shadow';
+                if (!is_dir($shadowDir)) { @mkdir($shadowDir, 0777, true); }
+                @file_put_contents($shadowDir . '/command-' . date('Ymd') . '.jsonl', json_encode([
+                    'ts' => date('c'), 'config_uuid' => $configUuid, 'op' => 'add',
+                    'component_type' => $componentType, 'legacy_blocked' => $legacyBlocked,
+                    'command_blocked' => $commandVerdict->blocking(),
+                    'command_failures' => array_map(function ($r) { return $r->ruleId(); }, $commandVerdict->failures()),
+                ]) . "\n", FILE_APPEND | LOCK_EX);
+            }
+        } elseif ($commandLayerMode === 'enforce') {
+            try {
+                // U-A.2: quantity > 1 maps to N sequential command dispatches
+                // inside ONE outer transaction, all-or-nothing (a later unit,
+                // U-D.3, removes multi-unit quantity support entirely). Each
+                // dispatch re-locks the same UUID's inventory rows
+                // (AddComponentCommand::lockAndCheckComponent, ORDER BY Status
+                // ASC) -- the row the previous iteration just claimed is no
+                // longer Status=1, so each iteration naturally claims the
+                // NEXT available physical unit of this component model.
+                if ($quantity > 1) {
+                    $ownTx = !$pdo->inTransaction();
+                    if ($ownTx) { $pdo->beginTransaction(); }
+                    try {
+                        $commandResult = $addCommand->execute();
+                        for ($i = 1; $i < $quantity; $i++) {
+                            $commandResult = (new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id']))->execute();
+                        }
+                        if ($ownTx) { $pdo->commit(); }
+                    } catch (\Throwable $inner) {
+                        if ($ownTx && $pdo->inTransaction()) { $pdo->rollBack(); }
+                        throw $inner;
+                    }
+                } else {
+                    $commandResult = $addCommand->execute();
+                }
+                $result = ['success' => true, 'slot_position' => null, 'revision' => $commandResult->revision];
+            } catch (CommandFailed $commandFailure) {
+                if ($commandFailure->errorType === 'revision_mismatch') {
+                    $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+                    $stmt->execute([$configUuid]);
+                    send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
+                }
+                // U-A.3: a blocking Verdict gets the legacy-shaped envelope
+                // (error_type/warnings/details/recommendations) callers of the
+                // OLD validateComponentAddition() result already expect.
+                if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
+                    require_once __DIR__ . '/VerdictShim.php';
+                    $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
+                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], [
+                        'component_type' => $componentType, 'component_uuid' => $componentUuid,
+                        'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+                    ]);
+                }
+                send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
+            }
+        } else {
+            $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
+        }
 
         if ($result['success']) {
             // Build base response data first
@@ -691,7 +814,10 @@ function handleAddComponent($serverBuilder, $user) {
  */
 function handleRemoveComponent($serverBuilder, $user) {
     global $pdo;
-    
+
+    // U-A.1: informational only, safe unconditionally -- see migration/08-api-adapters/DEPRECATION.md.
+    header('X-IMS-Deprecation: action superseded by v2 commands, see migration/08-api-adapters/DEPRECATION.md');
+
     $configUuid = $_POST['config_uuid'] ?? '';
     $componentType = $_POST['component_type'] ?? '';
     $componentUuid = $_POST['component_uuid'] ?? '';
@@ -714,7 +840,58 @@ function handleRemoveComponent($serverBuilder, $user) {
 
         // Phase 3: NIC removal validation and NIC config update now handled in ServerBuilder::removeComponent()
 
-        $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
+        // U-C.3: COMMAND_LAYER_ENABLED dispatch (off by default -- zero behavior
+        // change), identical shadow/enforce pattern to handleAddComponent (U-C.2).
+        // cascade is opt-in via $_POST['cascade'] -- default false matches legacy's
+        // own behavior (single-component removal only).
+        require_once __DIR__ . '/../../../core/models/commands/RemoveComponentCommand.php';
+        $commandLayerMode = CommandLayer::mode();
+        $cascade = filter_var($_POST['cascade'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        // U-A.2: optional If-Match-style revision check, same as add-component.
+        $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
+        if ($commandLayerMode !== 'off') {
+            $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision);
+        }
+        if ($commandLayerMode === 'shadow') {
+            try {
+                $commandVerdict = $removeCommand->dryRun();
+                if ($commandVerdict->blocking()) {
+                    $shadowDir = __DIR__ . '/../../../reports/shadow';
+                    if (!is_dir($shadowDir)) { @mkdir($shadowDir, 0777, true); }
+                    @file_put_contents($shadowDir . '/command-' . date('Ymd') . '.jsonl', json_encode([
+                        'ts' => date('c'), 'config_uuid' => $configUuid, 'op' => 'remove',
+                        'component_type' => $componentType, 'cascade' => $cascade,
+                        'command_blocked' => true,
+                        'command_failures' => array_map(function ($r) { return $r->ruleId(); }, $commandVerdict->failures()),
+                    ]) . "\n", FILE_APPEND | LOCK_EX);
+                }
+            } catch (CommandFailed $shadowFailure) {
+                error_log('RemoveComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
+            }
+            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
+        } elseif ($commandLayerMode === 'enforce') {
+            try {
+                $commandResult = $removeCommand->execute();
+                $result = ['success' => true, 'revision' => $commandResult->revision];
+            } catch (CommandFailed $commandFailure) {
+                if ($commandFailure->errorType === 'revision_mismatch') {
+                    $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+                    $stmt->execute([$configUuid]);
+                    send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
+                }
+                if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
+                    require_once __DIR__ . '/VerdictShim.php';
+                    $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
+                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], [
+                        'component_type' => $componentType, 'component_uuid' => $componentUuid,
+                        'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+                    ]);
+                }
+                send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
+            }
+        } else {
+            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
+        }
 
         if ($result['success']) {
             // Log the component removal
@@ -750,10 +927,168 @@ function handleRemoveComponent($serverBuilder, $user) {
 
             send_json_response(0, 1, 400, $result['message'] ?? "Failed to remove component", $errorData);
         }
-        
+
     } catch (\Throwable $e) {
         error_log("Error removing component: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to remove component");
+    }
+}
+
+/**
+ * U-A.2 — replace one physical component with another via the command
+ * layer's ReplaceComponentCommand (a NEW capability, no legacy counterpart:
+ * RULE_MAP.md documents this as zero-diffs-by-construction). Additive action
+ * -- does not touch add-component/remove-component's own dispatch.
+ *
+ * Gated behind CommandLayer::mode() !== 'off' (a deliberate deviation from
+ * the pack's literal text, documented in
+ * migration/08-api-adapters/DEPRECATION.md): ReplaceComponentCommand has
+ * never run against production data, so exposing it while the flag is off
+ * (production's default) would mean this action either silently no-ops or
+ * errors confusingly with no way to have ever been shadow-verified first.
+ * Requiring shadow/enforce keeps it inert in production today, same as
+ * every other command-layer surface this migration has shipped.
+ */
+function handleReplaceComponent($serverBuilder, $user) {
+    global $pdo;
+
+    header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
+
+    require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
+    if (CommandLayer::mode() === 'off') {
+        send_json_response(0, 1, 403, "server-replace-component is not yet enabled (COMMAND_LAYER_ENABLED is off)");
+    }
+    require_once __DIR__ . '/../../../core/models/commands/ReplaceComponentCommand.php';
+
+    $configUuid = $_POST['config_uuid'] ?? '';
+    $componentType = $_POST['component_type'] ?? '';
+    $oldComponentUuid = $_POST['old_component_uuid'] ?? '';
+    $oldSerial = $_POST['old_serial'] ?? null;
+    $newComponentUuid = $_POST['new_component_uuid'] ?? '';
+    $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
+
+    // ReplaceComponentCommand's only $options key is parent_nic_uuid (sfp
+    // re-parenting) -- it does not accept a new_serial or cascade option
+    // (see its own buildTarget()/apply(): new_serial is read off the locked
+    // inventory row, not the caller; a replace re-anchors children, it does
+    // not cascade-remove them), so nothing else is forwarded here.
+    $options = [];
+    if ($componentType === 'sfp' && !empty($_POST['parent_nic_uuid'])) {
+        $options['parent_nic_uuid'] = $_POST['parent_nic_uuid'];
+    }
+
+    if (empty($configUuid) || empty($componentType) || empty($oldComponentUuid) || empty($newComponentUuid)) {
+        send_json_response(0, 1, 400, "config_uuid, component_type, old_component_uuid, and new_component_uuid are required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+        }
+
+        $cmd = new ReplaceComponentCommand(
+            $pdo, $configUuid, $componentType, $oldComponentUuid, $oldSerial, $newComponentUuid,
+            $options, (int)$user['id'], $expectedRevision
+        );
+        $result = $cmd->execute();
+
+        send_json_response(1, 1, 200, "Component replaced successfully", [
+            'config_uuid' => $configUuid,
+            'revision' => $result->revision,
+            'component_type' => $componentType,
+            'old_component_uuid' => $oldComponentUuid,
+            'new_component_uuid' => $newComponentUuid,
+        ]);
+    } catch (CommandFailed $e) {
+        if ($e->errorType === 'revision_mismatch') {
+            $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+            $stmt->execute([$configUuid]);
+            send_json_response(0, 1, 409, $e->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
+        }
+        if ($e->errorType === 'validation_blocked' && $e->verdict !== null) {
+            require_once __DIR__ . '/VerdictShim.php';
+            $shimmed = VerdictShim::fromVerdict($e->verdict);
+            send_json_response(0, 1, $e->httpStatus, $shimmed['message'], [
+                'component_type' => $componentType, 'error_type' => $shimmed['error_type'],
+                'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+            ]);
+        }
+        send_json_response(0, 1, $e->httpStatus, $e->getMessage());
+    } catch (\Throwable $e) {
+        error_log("Error replacing component: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to replace component");
+    }
+}
+
+/**
+ * U-A.2 — move a server configuration's status_v2 forward via the command
+ * layer's TransitionStatusCommand. Additive action; the existing
+ * finalize-config action is UNCHANGED by this unit (it still calls
+ * ServerBuilder::finalizeConfiguration(), which itself only delegates to
+ * TransitionStatusCommand at CommandLayer::mode()==='enforce', per U-C.5).
+ * This new action exposes the SAME command directly for any status_v2
+ * target (not just 'finalized'), gated off/shadow/enforce identically to
+ * handleReplaceComponent above, for the same reason.
+ */
+function handleTransitionStatus($serverBuilder, $user) {
+    global $pdo;
+
+    header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
+
+    require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
+    if (CommandLayer::mode() === 'off') {
+        send_json_response(0, 1, 403, "server-transition-status is not yet enabled (COMMAND_LAYER_ENABLED is off)");
+    }
+    require_once __DIR__ . '/../../../core/models/commands/TransitionStatusCommand.php';
+
+    $configUuid = $_POST['config_uuid'] ?? '';
+    $toStatus = $_POST['to_status'] ?? '';
+    $notes = $_POST['notes'] ?? '';
+    $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
+
+    if (empty($configUuid) || empty($toStatus)) {
+        send_json_response(0, 1, 400, "config_uuid and to_status are required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+        }
+
+        $cmd = new TransitionStatusCommand($pdo, $configUuid, $toStatus, $notes, (int)$user['id'], $expectedRevision);
+        $result = $cmd->execute();
+
+        send_json_response(1, 1, 200, "Status transitioned successfully", [
+            'config_uuid' => $configUuid,
+            'revision' => $result->revision,
+            'to_status' => $toStatus,
+        ]);
+    } catch (CommandFailed $e) {
+        if ($e->errorType === 'revision_mismatch') {
+            $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+            $stmt->execute([$configUuid]);
+            send_json_response(0, 1, 409, $e->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
+        }
+        if ($e->errorType === 'validation_blocked' && $e->verdict !== null) {
+            require_once __DIR__ . '/VerdictShim.php';
+            $shimmed = VerdictShim::fromVerdict($e->verdict);
+            send_json_response(0, 1, $e->httpStatus, $shimmed['message'], [
+                'to_status' => $toStatus, 'error_type' => $shimmed['error_type'],
+                'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+            ]);
+        }
+        send_json_response(0, 1, $e->httpStatus, $e->getMessage());
+    } catch (\Throwable $e) {
+        error_log("Error transitioning status: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to transition status");
     }
 }
 
@@ -1150,14 +1485,25 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to finalize this configuration");
         }
         
-        // Validate configuration before finalizing (comprehensive check)
-        $validation = $serverBuilder->validateConfigurationComprehensive($configUuid);
-        if (!$validation['valid']) {
-            send_json_response(0, 1, 400, "Configuration is not valid for finalization", [
-                'validation_errors' => $validation['errors']
-            ]);
+        // U-C.5: at COMMAND_LAYER_ENABLED=enforce, TransitionStatusCommand runs
+        // full validation (Trigger::FINALIZE) INSIDE the row lock (closes V-1
+        // structurally) -- this unlocked API-layer pre-check becomes redundant
+        // and is dropped so finalize has exactly one comprehensive validation
+        // site, not two that can disagree under a race. off/shadow keep it
+        // (shadow's own divergence logging lives in TransitionStatusCommand's
+        // dry-run path, wired at U-A.2 once an API action reaches it directly;
+        // this handler still calls finalizeConfiguration() either way, and
+        // that method's own enforce branch, U-C.5, delegates to the command).
+        require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
+        if (CommandLayer::mode() !== 'enforce') {
+            $validation = $serverBuilder->validateConfigurationComprehensive($configUuid);
+            if (!$validation['valid']) {
+                send_json_response(0, 1, 400, "Configuration is not valid for finalization", [
+                    'validation_errors' => $validation['errors']
+                ]);
+            }
         }
-        
+
         $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes, $user['id']);
 
         if ($result['success']) {

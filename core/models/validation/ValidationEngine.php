@@ -25,6 +25,7 @@ require_once __DIR__ . '/rules/SystemRequiredSetRule.php';
 require_once __DIR__ . '/rules/SystemSingletonRule.php';
 require_once __DIR__ . '/rules/SystemPsuCapacityRule.php';
 require_once __DIR__ . '/rules/SystemInventoryStateRule.php';
+require_once __DIR__ . '/rules/DependencyBlockedRemovalRule.php';
 
 /**
  * Single evaluate() path over the new Rule vocabulary. Registry starts
@@ -71,6 +72,8 @@ class ValidationEngine
         SystemSingletonRule::class,
         SystemPsuCapacityRule::class,
         SystemInventoryStateRule::class,
+        // U-R.8 dependency.blocked_removal (migration/04-validation-engine/RULE_MAP.md)
+        DependencyBlockedRemovalRule::class,
     ];
 
     /**

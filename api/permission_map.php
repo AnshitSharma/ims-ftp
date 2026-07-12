@@ -22,6 +22,8 @@ return [
         'create-start' => 'server.create',
         'add-component' => 'server.create',
         'remove-component' => 'server.edit',
+        'replace-component' => 'server.replace', // U-A.2 -- mirrors add/remove's own edit-family gating
+        'transition-status' => 'server.transition', // U-A.2 -- mirrors finalize-config's create-family gating
         'get-compatible' => 'server.view',
         'validate-config' => 'server.view',
         'save-config' => 'server.create',

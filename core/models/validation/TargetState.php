@@ -91,7 +91,17 @@ final class TargetState
 
         $rows = [];
         foreach ($this->components as $c) {
-            $provided = $this->catalog->provides($c['component_type'], $c['spec_uuid']);
+            if ($c['component_type'] === 'nic' && ResourceCatalog::isOnboardNicUuid((string)$c['spec_uuid'])) {
+                // Synthetic onboard rows never resolve in the nic JSON — their
+                // port provision comes from the parent board's spec instead
+                // (mirrors NICPortTracker::resolveOnboardNicSpecs()).
+                $provided = $this->catalog->providesOnboardNic(
+                    (string)$c['spec_uuid'],
+                    $this->onboardParentBoardSpecUuid($c)
+                );
+            } else {
+                $provided = $this->catalog->provides($c['component_type'], $c['spec_uuid']);
+            }
             foreach ($provided as $p) {
                 if ($p['resource'] === 'sfp_port' && $p['slot_ref'] === null) {
                     for ($i = 1; $i <= (int)$p['capacity']; $i++) {
@@ -114,6 +124,34 @@ final class TargetState
         }
         $this->resourceRows = $rows;
         return $rows;
+    }
+
+    /**
+     * The spec_uuid of the motherboard an onboard NIC row belongs to:
+     * rows-path rows carry parent_id -> the board row (ConfigComponentWriter::
+     * resolveParentId()); json-fallback rows don't, so fall back to matching
+     * the board-uuid prefix encoded in the synthetic uuid itself against the
+     * motherboards present in this state. Null (fail-open, like legacy's
+     * resolveOnboardNicSpecs()) when neither resolves.
+     */
+    private function onboardParentBoardSpecUuid(array $onboardNic): ?string
+    {
+        if ($onboardNic['parent_id'] !== null) {
+            $parent = $this->find($onboardNic['parent_id']);
+            if ($parent !== null && $parent['component_type'] === 'motherboard') {
+                return $parent['spec_uuid'];
+            }
+        }
+        $parsed = ResourceCatalog::parseOnboardNicUuid((string)$onboardNic['spec_uuid']);
+        if ($parsed === null) {
+            return null;
+        }
+        foreach ($this->byType('motherboard') as $mb) {
+            if (strpos((string)$mb['spec_uuid'], $parsed['board_prefix']) === 0) {
+                return $mb['spec_uuid'];
+            }
+        }
+        return null;
     }
 
     /** @return array[] provider rows for one resource type */

@@ -108,6 +108,76 @@ final class TargetStateBuilder
         return self::withAdd($without, $newRow);
     }
 
+    /**
+     * U-R.8: the full set of live rows that depend on $rowId — a recursive
+     * closure over BOTH parent_id children (like withRemove(cascade=true)'s
+     * own frontier walk) AND resource-consumer links (any other live row
+     * whose slot_ref matches a slot_ref $rowId's component itself PROVIDES,
+     * e.g. a pciecard occupying a riser-provided pcie_slot). Pure PHP loop
+     * over the in-memory state (no SQL) — a general-purpose primitive for
+     * "what would removing this row take with it", reusable beyond this
+     * unit's own rule (e.g. a future command layer's pre-removal UX, U-C.3).
+     *
+     * DependencyBlockedRemovalRule (this unit) does NOT call this method
+     * directly — RuleInterface::evaluate() only ever sees ONE TargetState
+     * (the already-post-removal one for a REMOVE/REPLACE trigger), so it
+     * cannot ask "what did removing $rowId affect" after the fact. Instead
+     * it detects the EQUIVALENT condition directly in the post-removal
+     * state: any live row whose parent_id no longer resolves (dangling —
+     * its parent was $rowId) or whose component_type structurally requires
+     * a provider type that is now completely absent. For a single
+     * cascade=false removal (the only case withRemove ever produces without
+     * already having removed the whole subtree itself) the two mechanisms
+     * flag the same rows; see the rule's own docblock for the full
+     * reasoning.
+     *
+     * @return array[] live component rows that depend on $rowId, one level
+     *         of parent_id/slot linkage at a time, transitively closed
+     */
+    public static function dependentsOf(TargetState $state, $rowId): array
+    {
+        $root = $state->find($rowId);
+        if ($root === null) {
+            return [];
+        }
+
+        $catalog = new ResourceCatalog();
+        $found = [];
+        $visited = [$rowId => true];
+        $frontier = [$rowId];
+
+        while (!empty($frontier)) {
+            $next = [];
+            $providedSlotRefs = [];
+            foreach ($frontier as $id) {
+                $node = $state->find($id);
+                if ($node === null) {
+                    continue;
+                }
+                foreach ($catalog->provides($node['component_type'], $node['spec_uuid']) as $p) {
+                    if ($p['slot_ref'] !== null) {
+                        $providedSlotRefs[$p['slot_ref']] = true;
+                    }
+                }
+            }
+            foreach ($state->components() as $c) {
+                if (isset($visited[$c['id']])) {
+                    continue;
+                }
+                $isParentLinked = in_array($c['parent_id'], $frontier, true);
+                $isSlotLinked = $c['slot_ref'] !== null && isset($providedSlotRefs[$c['slot_ref']]);
+                if ($isParentLinked || $isSlotLinked) {
+                    $found[] = $c;
+                    $visited[$c['id']] = true;
+                    $next[] = $c['id'];
+                }
+            }
+            $frontier = $next;
+        }
+
+        return $found;
+    }
+
     private static function syntheticId(TargetState $state)
     {
         $min = 0;

@@ -74,10 +74,69 @@ class ResourceCatalog
     }
 
     /**
+     * Synthetic onboard-NIC rows (spec_uuid "onboard-{mb8}-{n}" from
+     * OnboardNICHandler::autoAddOnboardNICs(), or "onboard-nic-{mb24}-{n}"
+     * from ServerBuilder's own generator) are runtime-materialized from the
+     * parent motherboard's networking.onboard_nics and never exist in the
+     * nic ims-data JSON — every spec lookup on them is guaranteed to fail.
+     * provides()/consumes() therefore return [] for them instead of throwing
+     * (they consume no PCIe lanes — legacy skips them in the lane budget,
+     * PcieLaneBudgetValidator.php:186 — and have no structured power field).
+     * Their real sfp_port provision is resolved via the parent board by
+     * providesOnboardNic(), called from TargetState::resources(), which is
+     * the only caller that can see the board in the same state.
+     */
+    public static function isOnboardNicUuid(string $specUuid): bool
+    {
+        return strpos($specUuid, 'onboard-') === 0;
+    }
+
+    /**
+     * @return array{board_prefix:string, index:int}|null board-uuid prefix
+     *         (8 or 24 chars of the parent motherboard uuid) and 1-based
+     *         onboard_nics index encoded in the synthetic uuid
+     */
+    public static function parseOnboardNicUuid(string $specUuid): ?array
+    {
+        if (preg_match('/^onboard-(?:nic-)?(.+)-(\d+)$/', $specUuid, $m)) {
+            return ['board_prefix' => $m[1], 'index' => (int)$m[2]];
+        }
+        return null;
+    }
+
+    /**
+     * sfp_port provision for a synthetic onboard NIC, resolved via its parent
+     * motherboard's networking.onboard_nics[index-1].ports — mirrors
+     * NICPortTracker::resolveOnboardNicSpecs()'s resolution (and its
+     * fail-open null-on-failure posture: any unresolvable step returns [],
+     * never throws, matching legacy's error_log-and-continue behavior).
+     *
+     * @return array<int, array{resource:string, slot_ref:?string, capacity:int}>
+     */
+    public function providesOnboardNic(string $onboardUuid, ?string $boardSpecUuid): array
+    {
+        $parsed = self::parseOnboardNicUuid($onboardUuid);
+        if ($parsed === null || $boardSpecUuid === null) {
+            return [];
+        }
+        $spec = $this->dataUtils->getMotherboardByUUID($boardSpecUuid);
+        $nics = is_array($spec) ? ($spec['networking']['onboard_nics'] ?? null) : null;
+        $entry = is_array($nics) ? ($nics[$parsed['index'] - 1] ?? null) : null;
+        $ports = is_array($entry) ? ($entry['ports'] ?? null) : null;
+        if (!is_numeric($ports) || (int)$ports <= 0) {
+            return [];
+        }
+        return [['resource' => 'sfp_port', 'slot_ref' => null, 'capacity' => (int)$ports]];
+    }
+
+    /**
      * @return array<int, array{resource:string, slot_ref:?string, capacity:int}>
      */
     public function provides(string $type, string $specUuid): array
     {
+        if ($type === 'nic' && self::isOnboardNicUuid($specUuid)) {
+            return []; // see isOnboardNicUuid() docblock — resolved via providesOnboardNic() instead
+        }
         switch ($type) {
             case 'chassis':
                 return $this->providesChassis($specUuid);
@@ -111,6 +170,9 @@ class ResourceCatalog
      */
     public function consumes(string $type, string $specUuid): array
     {
+        if ($type === 'nic' && self::isOnboardNicUuid($specUuid)) {
+            return []; // legacy skips onboard NICs in the lane budget (PcieLaneBudgetValidator.php:186); no structured power field either
+        }
         switch ($type) {
             case 'storage':
                 return array_merge($this->consumesStorage($specUuid), $this->consumesPsuWatt($type, $specUuid));

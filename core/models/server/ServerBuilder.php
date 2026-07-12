@@ -46,7 +46,8 @@ class ServerBuilder {
     /**
      * Get the inventory table name for a given component type
      */
-    private function getComponentInventoryTable($componentType) {
+    /** U-C.2/U-C.3: exposed as a library call for the command layer (INV-2's persistence reuse, zero behavior change). */
+    public function getComponentInventoryTable($componentType) {
         return $this->componentTables[$componentType] ?? null;
     }
 
@@ -2388,7 +2389,8 @@ class ServerBuilder {
     /**
      * Update server_configurations table with component information
      */
-    private function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null, $options = []) {
+    /** U-C.2/U-C.3: exposed as a library call for the command layer (reuse legacy persistence, don't reimplement). */
+    public function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null, $options = []) {
         try {
             $updateFields = [];
             $updateValues = [];
@@ -3623,6 +3625,27 @@ class ServerBuilder {
      * Finalize configuration
      */
     public function finalizeConfiguration($configUuid, $notes = '', $userId = 0) {
+        // U-C.5: COMMAND_LAYER_ENABLED=enforce delegates entirely to
+        // TransitionStatusCommand (full validation under the SAME lock as the
+        // status write, closing V-1 structurally). off/shadow fall through to
+        // the legacy body below unchanged -- zero behavior change while the
+        // flag stays off (production default).
+        require_once __DIR__ . '/../commands/BaseCommand.php';
+        if (CommandLayer::mode() === 'enforce') {
+            require_once __DIR__ . '/../commands/TransitionStatusCommand.php';
+            try {
+                $command = new TransitionStatusCommand($this->pdo, $configUuid, 'finalized', $notes, $userId);
+                $command->execute();
+                return [
+                    'success' => true,
+                    'message' => 'Configuration finalized successfully',
+                    'finalization_timestamp' => date('Y-m-d H:i:s'),
+                ];
+            } catch (CommandFailed $e) {
+                return ['success' => false, 'error_type' => $e->errorType, 'message' => $e->getMessage()];
+            }
+        }
+
         $ownTransaction = false;
         try {
             // RACE CONDITION FIX (Phase 1): wrap finalize in a transaction and
@@ -4166,10 +4189,33 @@ class ServerBuilder {
 
         try {
             $current = TargetStateBuilder::fromCurrent($this->pdo, $configUuid);
+
+            // U-C.2 FIX (closes the shadow-fidelity gap flagged in the P4 verify
+            // record): this hook previously always passed parent_id => null, so
+            // an SFP added WITH a parent_nic_uuid was evaluated by the engine as
+            // "staged" (TP-4A pass) while legacy checked the real parent — a
+            // divergence that could only ever hide a real diff, never fabricate
+            // one, but is now closed. Resolve the SAME parent_id/slot_ref shape
+            // TargetStateBuilder's own json-fallback sfp rows use (parent_id =
+            // the live nic row whose spec_uuid matches $parentNicUuid; slot_ref
+            // = "port_{N}" from $portIndex) so the shadow evaluation sees
+            // exactly what legacy's real parent-nic check sees.
+            $resolvedParentId = null;
+            if ($componentType === 'sfp' && !empty($parentNicUuid)) {
+                foreach ($current->byType('nic') as $nic) {
+                    if ($nic['spec_uuid'] === $parentNicUuid) {
+                        $resolvedParentId = $nic['id'];
+                        break;
+                    }
+                }
+            }
+            $resolvedSlotRef = ($componentType === 'sfp' && $portIndex !== null) ? ('port_' . $portIndex) : null;
+
             $proposed = TargetStateBuilder::withAdd($current, [
                 'component_type' => $componentType,
                 'spec_uuid' => $componentUuid,
-                'parent_id' => null,
+                'parent_id' => $resolvedParentId,
+                'slot_ref' => $resolvedSlotRef,
             ]);
             $verdict = (new ValidationEngine())->evaluate($proposed, Trigger::ADD);
         } catch (\Throwable $e) {
@@ -4822,8 +4868,9 @@ class ServerBuilder {
     
     /**
      * Check if component type is valid
+     * U-C.2: exposed as a library call for the command layer.
      */
-    private function isValidComponentType($componentType) {
+    public function isValidComponentType($componentType) {
         return isset($this->componentTables[$componentType]);
     }
     
@@ -5335,8 +5382,9 @@ class ServerBuilder {
     /**
      * Update component status, ServerUUID, location, rack position, and installation date
      * CRITICAL: Now requires $serialNumber to update only the specific physical component
+     * U-C.2/U-C.3/U-C.5: exposed as a library call for the command layer.
      */
-    private function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null, $serialNumber = null) {
+    public function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null, $serialNumber = null) {
         if (!isset($this->componentTables[$componentType])) {
             error_log("Cannot update status - invalid component type: $componentType");
             return false;
@@ -8297,8 +8345,9 @@ class ServerBuilder {
      *
      * @param string $configUuid Server configuration UUID
      * @return void
+     * U-C.3: exposed as a library call for the command layer.
      */
-    private function recalculateFormFactorLock($configUuid) {
+    public function recalculateFormFactorLock($configUuid) {
         try {
             require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
             $dataUtils = new DataExtractionUtilities();
