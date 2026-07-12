@@ -74,17 +74,44 @@ Tick strictly top-to-bottom. A phase's boxes may not be ticked until the previou
       quarantine decision needed — see migration/handoffs/SESSION-20260712-REPORT-TRIAGE.md.
 
 ## P4 — Validation engine skeleton (04-validation-engine, U-V.*)
-- [ ] U-V.1 value objects (Severity, RuleResult, Verdict, Trigger, Rule interface)
-- [ ] U-V.2 TargetStateBuilder (rows primary, JSON fallback)
-- [ ] U-V.3 Engine + registry + shadow runner (ENGINE_MODE=shadow)
-- [ ] U-V.4 parity diff report generator
-- [ ] GATE P4: engine runs in shadow on every add/remove with zero exceptions for 3 days
+- [x] U-V.1 value objects (Severity, RuleResult, Verdict, Trigger, Rule interface) — implemented
+      2026-07-12, NOT yet verified. PD-2: constants classes instead of PHP 8 enums (PHP 7.4+
+      compat) — see migration/handoffs/SESSION-20260712-P4-VALIDATION-ENGINE.md
+- [x] U-V.2 TargetStateBuilder (rows primary, JSON fallback) — implemented 2026-07-12, NOT yet
+      verified. resources() always recomputed via ResourceCatalog, never read from config_resources.
+- [x] U-V.3 Engine + registry + shadow runner (ENGINE_MODE=shadow) — implemented 2026-07-12, NOT
+      yet verified. Hook site: ServerBuilder::validateComponentAddition's legacy body was renamed
+      to legacyValidateComponentAddition() and wrapped, rather than instrumented at "first lines"
+      literally — see handoff for why. ENGINE_MODE stays off/unset in production.
+- [x] U-V.4 parity diff report generator — implemented 2026-07-12, NOT yet verified. Registered in
+      run_all.php (was available:false stub). expected_diffs.json seeded empty; U-R.* units append.
+- [ ] GATE P4: engine runs in shadow on every add/remove with zero exceptions for 3 days —
+      unopened; ENGINE_MODE has not been set to shadow in production (human decision), and P4's
+      gate cannot open before P2/P3 open regardless (owner-acknowledged this session).
 
 ## P5 — Rule migration (04-validation-engine, U-R.*)  [one family per unit; parity after each]
-- [ ] U-R.1 CPU rules   - [ ] U-R.2 memory rules   - [ ] U-R.3 slot placement rules
-- [ ] U-R.4 lane budget (single model)   - [ ] U-R.5 storage rules
-- [ ] U-R.6 network rules   - [ ] U-R.7 system/config rules   - [ ] U-R.8 dependency resolver rule
+- [x] U-R.1 CPU rules — implemented 2026-07-12, NOT yet verified (cpu.socket_match, cpu.socket_count,
+      cpu.mixed_models, cpu.requires_board; A-2/A-12 in expected_diffs.json)
+- [x] U-R.2 memory rules — implemented 2026-07-12, NOT yet verified (memory.type, .form_factor,
+      .slot_count, .ecc, .downclock; D4 in expected_diffs.json). Extended ResourceCatalog with
+      motherboard cpu_socket/dimm_slot providers (see migration/handoffs/SESSION-20260712-P5-RULE-MIGRATION.md)
+- [x] U-R.3 slot placement rules — implemented 2026-07-12, NOT yet verified (pcie.slot_placement +
+      new SlotPlanner.php; A-7/A-8 -- manual slot honored, unknown width blocks)
+- [x] U-R.4 lane budget (single model) — implemented 2026-07-12, NOT yet verified (pcie.lane_budget,
+      ledger-based via TargetState::poolBalance; A-9 -- legacy's warn-default never blocked)
+- [x] U-R.5 storage rules — implemented 2026-07-12, NOT yet verified (storage.interface_path
+      [deliberately simplified -- SAS-without-HBA only, no chassis-SAS-backplane detection, flagged
+      as a known gap], .bay_capacity, .m2_capacity [A-10], .caddy_pairing). Extended ResourceCatalog
+      with chassis drive_bay_2_5/drive_bay_3_5 providers.
+- [x] U-R.6 network rules — implemented 2026-07-12, NOT yet verified (net.sfp_port, reuses
+      NICPortTracker::isCompatible() directly rather than re-porting its table; net.nic_requirements
+      is an honestly-scoped placeholder -- the pack's "SR-IOV lane note" has no corresponding logic
+      anywhere in this codebase, confirmed by grep, so nothing was fabricated to fill it)
+- [ ] U-R.7 system/config rules   - [ ] U-R.8 dependency resolver rule
 - [ ] GATE P5: parity report: explained-diff-only (each diff maps to an audit finding ID); 7-day soak
+      — unopened; same P2/P3 precondition as GATE P4 (owner-acknowledged this session). See
+      migration/handoffs/SESSION-20260712-P5-RULE-MIGRATION.md for full detail, all 10 unit test
+      files (all passing against real ims-data fixtures), and known gaps needing human review.
 
 ## P6 — Command layer (05-command-layer)
 - [ ] U-C.1 BaseCommand   - [ ] U-C.2 AddComponentCommand (shadow→enforce)

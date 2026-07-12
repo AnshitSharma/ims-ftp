@@ -221,9 +221,17 @@ try {
     check('motherboard (legacy riser fallback): 2 riser_slot rows from max_risers=2', count($riserRows) === 2);
     check('motherboard (legacy riser fallback): slot_refs are riser_1_x16, riser_2_x16', array_column($riserRows, 'slot_ref') === ['riser_1_x16', 'riser_2_x16']);
 
-    // ---- motherboard: no expansion data -> no rows, no throw -----------
+    // ---- motherboard: no expansion data -> only default cpu_socket/dimm_slot rows, no throw ----
     $rows = $catalog->provides('motherboard', $mbUuidNoExpansion);
-    check('motherboard (empty expansion_slots): returns no rows without throwing', $rows === []);
+    $pcieRows = array_values(array_filter($rows, fn($r) => $r['resource'] === 'pcie_slot'));
+    $m2Rows = array_values(array_filter($rows, fn($r) => $r['resource'] === 'm2_slot'));
+    $riserRows = array_values(array_filter($rows, fn($r) => $r['resource'] === 'riser_slot'));
+    $cpuSocketRows = array_values(array_filter($rows, fn($r) => $r['resource'] === 'cpu_socket'));
+    $dimmSlotRows = array_values(array_filter($rows, fn($r) => $r['resource'] === 'dimm_slot'));
+    check('motherboard (empty expansion_slots): no pcie/m2/riser rows', $pcieRows === [] && $m2Rows === [] && $riserRows === []);
+    check('motherboard (empty expansion_slots): exactly 1 cpu_socket row, default capacity 1', count($cpuSocketRows) === 1 && $cpuSocketRows[0]['capacity'] === 1);
+    check('motherboard (empty expansion_slots): exactly 1 dimm_slot row, default capacity 4', count($dimmSlotRows) === 1 && $dimmSlotRows[0]['capacity'] === 4);
+    check('motherboard (empty expansion_slots): exactly 2 rows total (cpu_socket + dimm_slot only)', count($rows) === 2);
 
     // ---- motherboard: malformed count throws (fail-closed) --------------
     $threw = false;

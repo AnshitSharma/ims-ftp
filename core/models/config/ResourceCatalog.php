@@ -39,16 +39,29 @@ class CatalogException extends \RuntimeException
  *     an absent/unparseable width returns 0 lanes (empty row set), NOT a CatalogException, because
  *     that is legacy's own fail-open behavior for this exact field and mirroring anything stricter
  *     would invent behavior the codebase has never had. Do not "fix" this to throw.
- * NOT implemented (throws CatalogException, does not guess):
- *   - motherboard cpu_socket count, dimm_slot count/refs — no confirmed structured field found;
- *     the existing legacy code (ServerBuilder::estimateMemorySlots()) resorts to a free-text
- *     regex over the inventory row's Notes field for DIMM count, which is itself evidence there
- *     may be no reliable structured spec field for this today.
- *   - chassis drive_bay_2_5/drive_bay_3_5/u2 bays — not found anywhere in this unit's permitted
- *     read scope (likely lives in StorageConnectionValidator.php, which this unit was not
- *     authorized to read).
- * A follow-up unit/session with real ims-data (or authorization to read those files) should fill
- * these in — see migration/handoffs/U-L.1-<date>.md.
+ *   - motherboard -> cpu_socket, dimm_slot (added U-R.1/U-R.2, migration/04-validation-engine):
+ *     `socket.count` / `memory.slots` — confirmed field paths via
+ *     ComponentValidator::parseMotherboardSpecifications() (core/models/components/ComponentValidator.php:123-128),
+ *     which U-L.1 was not authorized to read. Defaults (1 / 4) mirror that method's own `?? 1`/`?? 4`
+ *     fallbacks exactly. This closes the gap the U-L.1 docblock originally left open below.
+ *   - chassis -> drive_bay_2_5, drive_bay_3_5 (added U-R.5, migration/04-validation-engine):
+ *     `drive_bays.bay_configuration` (confirmed via
+ *     ComponentCompatibility::checkChassisDecentralizedCompatibility(), which U-L.1 was not
+ *     authorized to read). u2 bays remain unimplemented — see chassisDriveBayRows() docblock
+ *   - cpu/storage/nic/hbacard/pciecard CONSUME psu_watt (added U-R.7, migration/04-validation-engine):
+ *     each type's OWN structured ims-data power field (cpu.tdp_W, storage.power_consumption_W.active,
+ *     nic.power (a "<N>W" string, numeric part parsed), hbacard/pciecard.power_consumption.typical_W).
+ *     DOCUMENTED DEVIATION from legacy: ServerBuilder::checkPowerCompatibilityDetailed()'s own power
+ *     estimate (was ~5698-5730) reads free-text per-PHYSICAL-UNIT `Notes` via regex (2.5W/core for
+ *     cpu, 1W/4GB for ram, flat 8W/12W SSD/HDD for storage) — instance-level data ResourceCatalog
+ *     cannot see (it resolves by spec_uuid only, per INV-1's row-per-physical-unit design; Notes is
+ *     never part of the TargetState component tuple). ims-data has NO structured power field for ram
+ *     at all (confirmed by reading ram_detail.json in full) — ram consumes 0 psu_watt here, same
+ *     "no confirmed structured field" posture as U-L.1's original cpu_socket/dimm_slot gap. This
+ *     rule's power math is therefore NOT expected to numerically equal legacy's Notes-regex estimate
+ *     on the same fixture; it is a real, catalog-native, arguably more accurate substitute using the
+ *     SAME 85%-continuous-ceiling threshold formula. Flagged for human review (see U-R.7 handoff).
+ *     for why there is no legacy u2-bay-capacity behavior to mirror.
  */
 class ResourceCatalog
 {
@@ -100,21 +113,69 @@ class ResourceCatalog
     {
         switch ($type) {
             case 'storage':
-                return $this->consumesStorage($specUuid);
+                return array_merge($this->consumesStorage($specUuid), $this->consumesPsuWatt($type, $specUuid));
             case 'nic':
             case 'hbacard':
             case 'pciecard':
-                return $this->consumesPcieLanes($type, $specUuid);
+                return array_merge($this->consumesPcieLanes($type, $specUuid), $this->consumesPsuWatt($type, $specUuid));
             case 'cpu':
+                return $this->consumesPsuWatt($type, $specUuid);
             case 'ram':
             case 'motherboard':
             case 'chassis':
             case 'caddy':
             case 'sfp':
-                return []; // confirmed: these types consume no scalar resources today
+                return $this->consumesPsuWatt($type, $specUuid); // ram/motherboard/chassis/caddy/sfp: no structured power field today -> []
             default:
                 throw new CatalogException("ResourceCatalog::consumes(): unknown component_type '$type'");
         }
+    }
+
+    /**
+     * See class docblock "cpu/storage/nic/hbacard/pciecard CONSUME psu_watt" note
+     * for the documented deviation from legacy's Notes-regex power estimate.
+     * Returns [] (never throws) when the type has no structured power field —
+     * matches this file's established "absent field -> no row" posture, not
+     * this file's default fail-closed posture, because an absent field here
+     * is a genuine, confirmed data gap (ram), not an unparseable value.
+     */
+    private function consumesPsuWatt(string $type, string $specUuid): array
+    {
+        switch ($type) {
+            case 'cpu':
+                $spec = $this->dataUtils->getCPUByUUID($specUuid);
+                $watts = is_array($spec) ? ($spec['tdp_W'] ?? null) : null;
+                break;
+            case 'storage':
+                $spec = $this->dataUtils->getStorageByUUID($specUuid);
+                $watts = is_array($spec) ? ($spec['power_consumption_W']['active'] ?? null) : null;
+                break;
+            case 'nic':
+                $spec = $this->dataUtils->getNICByUUID($specUuid);
+                $raw = is_array($spec) ? ($spec['power'] ?? null) : null;
+                $watts = null;
+                if (is_string($raw) && preg_match('/(\d+(\.\d+)?)/', $raw, $m)) {
+                    $watts = (float)$m[1];
+                }
+                break;
+            case 'hbacard':
+                $spec = $this->dataUtils->getHBACardByUUID($specUuid);
+                $watts = is_array($spec) ? ($spec['power_consumption']['typical_W'] ?? null) : null;
+                break;
+            case 'pciecard':
+                $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+                $watts = is_array($spec) ? ($spec['power_consumption']['typical_W'] ?? null) : null;
+                break;
+            default:
+                return []; // ram/motherboard/chassis/caddy/sfp: no structured power field in ims-data today
+        }
+        if ($watts === null) {
+            return [];
+        }
+        if (!is_numeric($watts)) {
+            throw new CatalogException(ucfirst($type) . " $specUuid power field is not numeric");
+        }
+        return [['resource' => 'psu_watt', 'amount' => (int)ceil((float)$watts)]];
     }
 
     /**
@@ -247,8 +308,54 @@ class ResourceCatalog
             }
             $rows[] = ['resource' => 'psu_watt', 'slot_ref' => null, 'capacity' => (int)$wattage];
         }
-        // drive_bay_2_5 / drive_bay_3_5 / u2 bays: NOT implemented, see class docblock.
+        $rows = array_merge($rows, $this->chassisDriveBayRows($specUuid, $spec));
+        // u2 bays: NOT implemented -- StorageConnectionValidator's own bay logic
+        // (calculateRequiredBays(), ComponentCompatibility.php:5286) only ever
+        // tallies 2.5"/3.5" traditional bays; M.2/U.2 storage bypasses bay
+        // validation entirely in that same method (both confirmed by reading it
+        // for U-R.5), so there is no legacy u2-bay-capacity behavior to mirror.
 
+        return $rows;
+    }
+
+    /**
+     * Mirrors ComponentDataExtractor::extractChassisBayConfiguration() (raw
+     * field `drive_bays.bay_configuration`: [{bay_type, count}, ...], summed
+     * per type) -- confirmed via ComponentCompatibility::checkChassisDecentralizedCompatibility()
+     * (was lines 3146-3243), read for U-R.5. Bay type spelling is inconsistent
+     * in real chassis JSON (both "2.5_inch" and "2.5-inch" appear — see
+     * ComponentCompatibility.php:3194 STRICT matching comment); both spellings
+     * normalize to the same resource name here so capacity isn't silently lost
+     * to a spelling variant. Only 2.5"/3.5" bay types are recognized (matches
+     * legacy's own strict scope — other bay_type values are not summed).
+     */
+    private function chassisDriveBayRows(string $specUuid, array $spec): array
+    {
+        $bayConfig = $spec['drive_bays']['bay_configuration'] ?? [];
+        if (!is_array($bayConfig)) {
+            throw new CatalogException("Chassis $specUuid drive_bays.bay_configuration is not an array");
+        }
+
+        $capacity = ['drive_bay_2_5' => 0, 'drive_bay_3_5' => 0];
+        foreach ($bayConfig as $bay) {
+            $bayType = strtolower((string)($bay['bay_type'] ?? ''));
+            $count = $bay['count'] ?? 0;
+            if (!is_numeric($count)) {
+                throw new CatalogException("Chassis $specUuid has a non-numeric drive bay count");
+            }
+            if (strpos($bayType, '2.5') !== false) {
+                $capacity['drive_bay_2_5'] += (int)$count;
+            } elseif (strpos($bayType, '3.5') !== false) {
+                $capacity['drive_bay_3_5'] += (int)$count;
+            }
+        }
+
+        $rows = [];
+        foreach ($capacity as $resource => $count) {
+            if ($count > 0) {
+                $rows[] = ['resource' => $resource, 'slot_ref' => null, 'capacity' => $count];
+            }
+        }
         return $rows;
     }
 
@@ -263,9 +370,49 @@ class ResourceCatalog
         $rows = array_merge($rows, $this->motherboardPcieSlotRows($specUuid, $spec));
         $rows = array_merge($rows, $this->motherboardM2SlotRows($specUuid, $spec));
         $rows = array_merge($rows, $this->motherboardRiserSlotRows($specUuid, $spec));
-        // cpu_socket / dimm_slot: NOT implemented, see class docblock.
+        $rows = array_merge($rows, $this->motherboardCpuSocketRows($specUuid, $spec));
+        $rows = array_merge($rows, $this->motherboardDimmSlotRows($specUuid, $spec));
 
         return $rows;
+    }
+
+    /**
+     * Mirrors ComponentValidator::parseMotherboardSpecifications()'s
+     * `socket.type`/`socket.count` read (core/models/components/ComponentValidator.php:123-126,
+     * confirmed field paths — the U-L.1 docblock's "NOT implemented, no confirmed structured
+     * field found" note predates this file being in scope; U-R.1 (04-validation-engine) added
+     * read access to it). One pooled row per motherboard: capacity = socket.count, default 1
+     * (matches ComponentCompatibility::getMotherboardLimits()'s `?? 1` fallback exactly).
+     */
+    private function motherboardCpuSocketRows(string $specUuid, array $spec): array
+    {
+        $count = $spec['socket']['count'] ?? 1;
+        if (!is_numeric($count)) {
+            throw new CatalogException("Motherboard $specUuid socket.count is not numeric");
+        }
+        $count = (int)$count;
+        if ($count <= 0) {
+            return [];
+        }
+        return [['resource' => 'cpu_socket', 'slot_ref' => null, 'capacity' => $count]];
+    }
+
+    /**
+     * Mirrors ComponentValidator::parseMotherboardSpecifications()'s
+     * `memory.slots` read (ComponentValidator.php:128, default 4 matching
+     * that file's own `?? 4` fallback exactly).
+     */
+    private function motherboardDimmSlotRows(string $specUuid, array $spec): array
+    {
+        $slots = $spec['memory']['slots'] ?? 4;
+        if (!is_numeric($slots)) {
+            throw new CatalogException("Motherboard $specUuid memory.slots is not numeric");
+        }
+        $slots = (int)$slots;
+        if ($slots <= 0) {
+            return [];
+        }
+        return [['resource' => 'dimm_slot', 'slot_ref' => null, 'capacity' => $slots]];
     }
 
     /**

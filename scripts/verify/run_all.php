@@ -30,7 +30,7 @@ const REGISTRY = [
     'ledger'      => ['script' => __DIR__ . '/ledger_report.php',      'available' => true,  'lands_in' => null],
     'slot'        => ['script' => __DIR__ . '/slot_report.php',        'available' => true,  'lands_in' => null],
     'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => true,  'lands_in' => null],
-    'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => false, 'lands_in' => 'U-V.4'],
+    'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => true,  'lands_in' => null],
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => false, 'lands_in' => 'U-D.1'],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
     'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],

@@ -305,3 +305,22 @@ gate(s) remain closed and why, per SESSION_PROTOCOL.md's Step 1."
 
 ## Expected Context Size
 ~40k tokens
+
+---
+
+## Independent verify record — 2026-07-12 (Claude Fable, separate session from implementer)
+All four changed files hash-identical between scratch and main. Verified by execution, not just review:
+- `is_virtual = 0` filters in `inventory_report.php` (Check 2) and `audit-orphans.php` confirmed to
+  mirror `equivalence_report.php`'s existing filter (F-5 decision) — correct fix, not a mask.
+- The `nic_config` `slot_position` claim verified against REAL production data in the scratch DB
+  (config 06ea5abb…: add-on NIC carries `"slot_position":"pcie_x8_slot_1"`) — the U-L.5 handoff's
+  premise was indeed wrong, and `Extractor::extractNics()`'s fix reads it exactly like its
+  pciecard/hbacard siblings, with onboard NICs still excluded.
+- `extractor_test.php` 25/25 PASS; `ledger_backfill_test.php` ALL PASS (incl. slot_report GREEN);
+  `inventory_report.php --self-test` PASS.
+- Live report re-runs reproduce the claimed residuals exactly: inventory violation_count = 1 (the
+  quarantined pciecard 07dc91dd…/config 9dbc63fa…), orphans = 12, equivalence diff_count = 5 with
+  every diff `only_in_json` and zero `only_in_rows` (expected pre-backfill state, resolves at U-B.4).
+**Verdict: session verified.** The two human-decision items stand: (1) the ambiguous pciecard
+inventory row, (2) review + run `scripts/audit-orphans.php --fix` dry-run against production for
+the 12 real orphans.

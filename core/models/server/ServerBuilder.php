@@ -4139,7 +4139,65 @@ class ServerBuilder {
      * Comprehensive component validation before adding - consolidates all validation logic
      * Phase 2 Consolidation: Moves SFP, riser, singleton, and compatibility validation from handler
      */
+    /**
+     * ENGINE_MODE hook (U-V.3, migration/04-validation-engine): the single
+     * shadow/enforce hook site for the new ValidationEngine. When the flag
+     * is 'off' (production default — see FLAGS.md) this is a pure passthrough
+     * to the untouched legacy body (now legacyValidateComponentAddition()) —
+     * one extra call frame, zero behavior change. See
+     * migration/handoffs/SESSION-20260712-P4-VALIDATION-ENGINE.md for why the
+     * legacy body was moved into a private method rather than instrumented
+     * in place: validateComponentAddition has many internal return
+     * statements, so comparing engine-vs-legacy verdicts for the SAME
+     * operation requires capturing legacy's actual return value, not just
+     * the state at method entry.
+     */
     public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1) {
+        require_once __DIR__ . '/../validation/ValidationEngine.php';
+
+        $mode = ValidationEngine::mode();
+        if ($mode === 'off') {
+            return $this->legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid, $portIndex, $quantity);
+        }
+
+        require_once __DIR__ . '/../validation/TargetStateBuilder.php';
+        require_once __DIR__ . '/../validation/ShadowRunner.php';
+        require_once __DIR__ . '/../validation/Trigger.php';
+
+        try {
+            $current = TargetStateBuilder::fromCurrent($this->pdo, $configUuid);
+            $proposed = TargetStateBuilder::withAdd($current, [
+                'component_type' => $componentType,
+                'spec_uuid' => $componentUuid,
+                'parent_id' => null,
+            ]);
+            $verdict = (new ValidationEngine())->evaluate($proposed, Trigger::ADD);
+        } catch (\Throwable $e) {
+            error_log("ValidationEngine: TargetState build/evaluate failed for $configUuid: " . $e->getMessage());
+            $verdict = new Verdict([new RuleResult('engine.build_exception', Severity::ERROR, false, $e->getMessage())], Trigger::ADD);
+        }
+
+        $legacyResult = $this->legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid, $portIndex, $quantity);
+
+        $legacyBlocked = empty($legacyResult['success']);
+        $legacyClass = $legacyBlocked ? ($legacyResult['message'] ?? 'unknown') : 'none';
+        ShadowRunner::record($configUuid, 'add', $legacyBlocked, $legacyClass, $verdict);
+
+        if ($mode === 'shadow') {
+            return $legacyResult;
+        }
+
+        // enforce
+        return ShadowRunner::mapVerdictToLegacyResult($verdict);
+    }
+
+    /**
+     * Legacy component-addition validation body (unmodified — only renamed
+     * from public validateComponentAddition() when the ENGINE_MODE hook was
+     * added above it, U-V.3). This is the sole authority whenever
+     * ENGINE_MODE=off (production default).
+     */
+    private function legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1) {
         try {
             $warnings = [];
 
