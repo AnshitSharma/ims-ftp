@@ -1,3 +1,9 @@
+-- SUPERSEDED (2026-07-13, owner request): this seeder was never run against
+--   production. Its full content is folded into the consolidated seeder
+--   2026_07_13_006_consolidated-finalize-transition-edges.sql — run THAT
+--   file instead of this one. Left in place per this repo's "never edit/
+--   delete a seeder" rule; do not run it.
+--
 -- ============================================================
 -- Seeder : 2026_07_13_001_add-finding2-finalize-edges
 -- Unit   : Finding 2 fix (owner-authorized), migration/03-state-machines
