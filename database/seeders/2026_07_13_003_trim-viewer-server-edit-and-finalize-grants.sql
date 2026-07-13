@@ -1,3 +1,9 @@
+-- SUPERSEDED (2026-07-13, owner request): this seeder was never run against
+--   production. Its full content is folded into the consolidated seeder
+--   2026_07_13_005_consolidated-server-command-permissions.sql (steps 1 and
+--   4) — run THAT file instead of this one. Left in place per this repo's
+--   "never edit/delete a seeder" rule; do not run it.
+--
 -- ============================================================
 -- Seeder : 2026_07_13_003_trim-viewer-server-edit-and-finalize-grants
 -- Date   : 2026-07-13

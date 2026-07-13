@@ -1,3 +1,9 @@
+-- SUPERSEDED (2026-07-13, owner request): documentation-only file, made moot
+--   by the consolidated seeder 2026_07_13_005_consolidated-server-command-
+--   permissions.sql, whose own Verification footer states the corrected
+--   expectation directly. Left in place per this repo's "never edit/delete a
+--   seeder" rule; running it was always a no-op anyway.
+--
 -- ============================================================
 -- Seeder : 2026_07_13_004_correct-002-expected-verification-comment
 -- Date   : 2026-07-13
