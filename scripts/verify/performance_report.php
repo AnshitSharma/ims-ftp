@@ -14,9 +14,30 @@
  * Usage:
  *   php scripts/verify/performance_report.php                    # compare vs baseline
  *   php scripts/verify/performance_report.php --capture-baseline  # (re)write reports/perf-baseline.json
+ *                                                                  # (single pass, R1-R10 as-is: 8 add / 2
+ *                                                                  # finalize samples -- fine for a first
+ *                                                                  # capture, too small to re-bless a
+ *                                                                  # baseline other numbers get compared
+ *                                                                  # against later, see --rebless below)
+ *   php scripts/verify/performance_report.php --rebless --confirm  # RE-BLESS: replays R1-R10 enough times
+ *                                                                  # to reach >=50 add / >=20 finalize
+ *                                                                  # samples, then overwrites
+ *                                                                  # reports/perf-baseline.json. Requires
+ *                                                                  # BOTH flags -- `--rebless` alone
+ *                                                                  # refuses (exit 2, baseline untouched)
+ *                                                                  # so this can never fire by accident
+ *                                                                  # (e.g. a copy-pasted `--rebless`
+ *                                                                  # without reading what it does).
  *
  * Green iff p95 delta <= +20% for every operation. Exit: 0 = green, 1 = red.
- * --capture-baseline always exits 0 (it defines the baseline, nothing to compare against yet).
+ * --capture-baseline / --rebless always exit 0 on success (they define the baseline, nothing to
+ * compare against yet); --rebless without --confirm exits 2 and writes nothing.
+ *
+ * Re-blessing changes what every future run of this report is graded against -- it is a deliberate,
+ * reviewed action, not something a verify/implementer session runs on itself. See
+ * migration/05-command-layer/PERF-BASELINE-REBLESS.md for the quiet-machine capture procedure this
+ * flag assumes (machine state affects wall-clock timings; a rebless captured on a noisy machine
+ * produces a baseline every future run will unfairly beat or fail against).
  */
 
 declare(strict_types=1);
@@ -174,13 +195,44 @@ function replayScenarios(PDO $pdo, ServerBuilder $builder, ComponentCompatibilit
 }
 
 $captureBaseline = in_array('--capture-baseline', $argv, true);
+$rebless = in_array('--rebless', $argv, true);
+$confirmed = in_array('--confirm', $argv, true);
 $reportsDir = $ROOT . '/reports';
 if (!is_dir($reportsDir)) { mkdir($reportsDir, 0755, true); }
 $baselineFile = $reportsDir . '/perf-baseline.json';
 
-$replay = replayScenarios($pdo, $builder, $compat, $SCENARIOS, $C, $tables);
-foreach ($tables as $t) {
-    if (tableExists($pdo, $t)) { $pdo->exec("DELETE FROM `$t` WHERE Flag = 'TEMP-PERF-PROBE'"); }
+if ($rebless && !$confirmed) {
+    fwrite(STDERR, "performance_report: --rebless refuses to run without --confirm (this overwrites reports/perf-baseline.json, which every future performance_report.php run is graded against).\n");
+    fwrite(STDERR, "Read migration/05-command-layer/PERF-BASELINE-REBLESS.md first (quiet-machine capture procedure), then re-run with: php scripts/verify/performance_report.php --rebless --confirm\n");
+    exit(2);
+}
+
+const REBLESS_MIN_ADD_SAMPLES = 50;
+const REBLESS_MIN_FINALIZE_SAMPLES = 20;
+
+if ($rebless) {
+    $addPerPass = count(array_filter($SCENARIOS, fn($s) => is_array($s[2])));
+    $finalizePerPass = count($SCENARIOS) - $addPerPass;
+    $iterations = max(
+        (int)ceil(REBLESS_MIN_ADD_SAMPLES / max($addPerPass, 1)),
+        (int)ceil(REBLESS_MIN_FINALIZE_SAMPLES / max($finalizePerPass, 1))
+    );
+    $timings = ['add' => [], 'finalize' => []];
+    $errors = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $pass = replayScenarios($pdo, $builder, $compat, $SCENARIOS, $C, $tables);
+        foreach ($pass['timings'] as $op => $samples) { $timings[$op] = array_merge($timings[$op], $samples); }
+        $errors += $pass['errors'];
+    }
+    foreach ($tables as $t) {
+        if (tableExists($pdo, $t)) { $pdo->exec("DELETE FROM `$t` WHERE Flag = 'TEMP-PERF-PROBE'"); }
+    }
+    $replay = ['timings' => $timings, 'errors' => $errors];
+} else {
+    $replay = replayScenarios($pdo, $builder, $compat, $SCENARIOS, $C, $tables);
+    foreach ($tables as $t) {
+        if (tableExists($pdo, $t)) { $pdo->exec("DELETE FROM `$t` WHERE Flag = 'TEMP-PERF-PROBE'"); }
+    }
 }
 
 $stats = [];
@@ -193,14 +245,16 @@ foreach ($replay['timings'] as $op => $samples) {
     ];
 }
 
-if ($captureBaseline) {
+if ($captureBaseline || $rebless) {
     file_put_contents($baselineFile, json_encode([
         'captured_at' => date('c'),
-        'note' => 'p95/p50 wall-time per operation, replaying the R1-R10 real-component scenarios from tests/fixture_scenarios_real.php',
+        'note' => $rebless
+            ? 'p95/p50 wall-time per operation, RE-BLESSED via --rebless --confirm: R1-R10 replayed ' . $iterations . 'x to reach >=' . REBLESS_MIN_ADD_SAMPLES . ' add / >=' . REBLESS_MIN_FINALIZE_SAMPLES . ' finalize samples (see migration/05-command-layer/PERF-BASELINE-REBLESS.md for the capture procedure this run assumed)'
+            : 'p95/p50 wall-time per operation, replaying the R1-R10 real-component scenarios from tests/fixture_scenarios_real.php (single pass — small sample count, fine for an initial capture only)',
         'errors' => $replay['errors'],
         'operations' => $stats,
     ], JSON_PRETTY_PRINT));
-    echo "performance_report: BASELINE CAPTURED $baselineFile\n";
+    echo ($rebless ? "performance_report: BASELINE RE-BLESSED ($iterations passes) " : "performance_report: BASELINE CAPTURED ") . "$baselineFile\n";
     foreach ($stats as $op => $s) {
         echo "  $op: p50={$s['p50_ms']}ms p95={$s['p95_ms']}ms (n={$s['samples']})\n";
     }

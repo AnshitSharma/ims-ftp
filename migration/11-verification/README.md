@@ -41,6 +41,17 @@ Compares shadow-engine verdicts vs legacy verdicts from the shadow log
 (`reports/shadow/*.jsonl`). Output = parity-report-template.md fields as JSON.
 Green iff unexplained diffs = 0 AND engine exceptions = 0.
 
+Supports an opt-in `--since YYYY-MM-DD` flag that drops shadow-log rows dated before the cutoff
+(the log is append-only and never rotated, so stale pre-fix rows would otherwise trip the gate
+forever). **Owner-adopted (2026-07-13): `run_all.php` always invokes this report with
+`--since PARITY_SINCE_DEFAULT`** (a constant in `run_all.php`, overridable via the
+`PARITY_SINCE_CUTOFF` env var) — this is the gate's standing invocation from here on. Running
+`parity_report.php` directly with no arguments is unaffected: it still scans every row, unfiltered,
+exactly as before this flag existed. `scripts/verify/prune_shadow_log.php` (dry-run by default,
+`--execute` to actually rewrite the log files) is the alternative/complementary fix — pruning
+removes the need for `--since` going forward but is a one-way file rewrite, so it stays owner-run
+only.
+
 ### 7. performance_report.php (created U-0.4)
 Replays `tests/fixture_scenarios_real.php` scenarios against scratch DB, records wall-time p50/p95
 per operation, compares to `reports/perf-baseline.json` (captured at U-0.4). Green iff p95 delta

@@ -1,0 +1,37 @@
+-- ============================================================
+-- Seeder : 2026_07_13_004_correct-002-expected-verification-comment
+-- Date   : 2026-07-13
+-- Purpose: Documentation-only correction. 2026_07_13_002's own footer
+--          "Verification" comment reads: "Expected: 1 new permission; grants
+--          mirror server.edit's current role set exactly (as of this
+--          session's scratch DB: admin, super_admin, viewer)." That
+--          statement is now WRONG as of the owner's TRIM decision recorded in
+--          2026_07_13_003 (this same session, 2026-07-13): viewer's
+--          server.edit grant is revoked, and 2026_07_13_003 also strips any
+--          server.finalize grant viewer might already hold, so the correct
+--          expectation for `server.finalize` grantees after BOTH 002 and 003
+--          have run (in either order -- see 003's own header) is admin and
+--          super_admin ONLY. This file exists solely to record that
+--          correction without editing 2026_07_13_002.sql directly, per this
+--          repo's seeder rule (never edit an existing seeder file). It makes
+--          no schema or data change of its own -- 2026_07_13_003 already
+--          performs the actual revoke.
+-- Tables : none (no-op statement below; documentation only)
+-- Notes  : Safe to run zero, one, or many times. Run 2026_07_13_002 and
+--          2026_07_13_003 (in either order) to reach the corrected state;
+--          this file changes nothing by itself.
+-- Feature: Owner decision on the ninth-session verify's viewer advisory
+--          (migration/handoffs/SESSION-20260712-FINDINGS-ABC.md).
+-- Corrected verification query and expectation (supersedes 2026_07_13_002's
+-- own footer comment for the same query):
+--
+--   SELECT r.name AS role, p.name AS perm
+--     FROM role_permissions rp
+--     JOIN roles r ON r.id = rp.role_id
+--     JOIN permissions p ON p.id = rp.permission_id
+--    WHERE p.name = 'server.finalize' ORDER BY r.name;
+--
+-- Expected (corrected): admin, super_admin -- NOT viewer.
+-- ============================================================
+
+SELECT 1; -- no-op: this seeder is a documentation correction only

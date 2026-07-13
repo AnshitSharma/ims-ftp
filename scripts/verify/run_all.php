@@ -13,6 +13,12 @@
  *                                                  # in migration/phase-status.json
  *
  * Exit: 0 iff every AVAILABLE selected report is GREEN. 1 if any is RED. 2 on usage/setup error.
+ *
+ * The `parity` report is always invoked here with `--since PARITY_SINCE_DEFAULT` (below;
+ * overridable via the PARITY_SINCE_CUTOFF env var) -- owner-adopted standing gate invocation,
+ * 2026-07-13 (see migration/11-verification/README.md #6 and the tenth-session handoff record).
+ * This does NOT change parity_report.php's own default behavior: running it directly with no
+ * arguments still scans every row in every shadow-log file, unfiltered, exactly as before.
  */
 
 declare(strict_types=1);
@@ -54,6 +60,20 @@ const GATE_REPORTS = [
 
 const QUICK_SET = ['schema', 'inventory', 'orphan', 'equivalence'];
 
+/**
+ * Owner-adopted (tenth session, 2026-07-13) standing invocation for the
+ * parity gate report: the shadow log is append-only and never rotated, so
+ * without a cutoff, rows logged before a fix landed (rule changes, the ghost-
+ * config cleanup, etc.) keep tripping the gate forever even though today's
+ * live behavior has moved on (ninth-session verify finding). Overridable via
+ * PARITY_SINCE_CUTOFF so this doesn't need a code change every time the
+ * "known-good since" date moves forward; defaults to the date the shadow log
+ * was last known clean of pre-fix rows in this environment. This constant is
+ * run_all.php-only -- a bare `php scripts/verify/parity_report.php` (no
+ * --since) is completely unaffected and keeps scanning every row, unchanged.
+ */
+const PARITY_SINCE_DEFAULT = '2026-07-13';
+
 function resolveSelection(array $argv): array {
     if (in_array('--quick', $argv, true)) {
         return QUICK_SET;
@@ -90,8 +110,15 @@ foreach ($selection as $name) {
         continue;
     }
 
+    $cmd = ['php', $entry['script']];
+    if ($name === 'parity') {
+        $since = getenv('PARITY_SINCE_CUTOFF') ?: PARITY_SINCE_DEFAULT;
+        $cmd[] = '--since';
+        $cmd[] = $since;
+    }
+
     $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-    $process = proc_open(['php', $entry['script']], $descriptors, $pipes);
+    $process = proc_open($cmd, $descriptors, $pipes);
     if (!is_resource($process)) {
         echo "$name: RED (failed to launch {$entry['script']})\n";
         $overallExit = 1;
@@ -107,7 +134,11 @@ foreach ($selection as $name) {
     // registry's short gate name) — pull the path out of it and reprint under our name.
     $lastLine = trim(strrchr(trim($stdout), "\n") ?: $stdout);
     $status = $exitCode === 0 ? 'GREEN' : 'RED';
-    if (preg_match('/:\s*(GREEN|RED)\s+(\S+)\s*$/', $lastLine, $m)) {
+    // Path capture uses .+ (not \S+): this repo's own working-directory path contains a
+    // space ("Github IMS"), which \S+ can't span — found live 2026-07-13 running run_all.php
+    // directly against the real tree (every prior session ran from C:\tmp, no space, so this
+    // never surfaced). Exit-code-based gating above is unaffected either way.
+    if (preg_match('/:\s*(GREEN|RED)\s+(.+)$/', $lastLine, $m)) {
         echo "$name: {$m[1]} {$m[2]}\n";
     } else {
         echo "$name: $status (no report line found in child output)\n";

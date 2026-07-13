@@ -40,6 +40,10 @@ function runBackfill(string $root, string $dbHost, string $dbName, string $dbUse
     $env = [
         'DB_HOST' => $dbHost, 'DB_NAME' => $dbName, 'DB_USER' => $dbUser, 'DB_PASS' => $dbPass,
         'JWT_SECRET' => 'probe', 'PATH' => getenv('PATH'), 'IMS_DATA_PATH' => getenv('IMS_DATA_PATH'),
+        // Windows' PDO mysql driver needs SystemRoot in the subprocess env to
+        // resolve sockets/winsock -- without it every connection attempt fails
+        // with SQLSTATE[HY000] [2002], masquerading as a DB-down error.
+        'SystemRoot' => getenv('SystemRoot') ?: getenv('SYSTEMROOT') ?: 'C:\\Windows',
     ];
     $cmd = array_merge(['php', $root . '/scripts/backfill/backfill.php'], $args);
     $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
@@ -177,7 +181,11 @@ try {
     // run the full scan; at this point in the suite Fixture A is the only
     // live, non-virtual config in the scratch DB.
     $runFullScan = function (string $script) use ($ROOT, $dbHost, $dbName, $dbUser, $dbPass) {
-        $env = ['DB_HOST' => $dbHost, 'DB_NAME' => $dbName, 'DB_USER' => $dbUser, 'DB_PASS' => $dbPass, 'JWT_SECRET' => 'probe', 'PATH' => getenv('PATH')];
+        $env = [
+            'DB_HOST' => $dbHost, 'DB_NAME' => $dbName, 'DB_USER' => $dbUser, 'DB_PASS' => $dbPass,
+            'JWT_SECRET' => 'probe', 'PATH' => getenv('PATH'),
+            'SystemRoot' => getenv('SystemRoot') ?: getenv('SYSTEMROOT') ?: 'C:\\Windows',
+        ];
         $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $p = proc_open(['php', $script], $descriptors, $pipes, $ROOT, $env);
         stream_get_contents($pipes[1]); stream_get_contents($pipes[2]);

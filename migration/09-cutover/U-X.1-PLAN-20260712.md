@@ -106,3 +106,42 @@ No flag was set. No file under `core/`, `api/`, or `database/` was created or
 modified for U-X.1. `phase-status.json`'s P8/U-X.1 entry is NOT changed by this
 session (stays `not_started` — a plan is not an implementation). This document is
 the only artifact.
+
+---
+
+## Re-verified — 2026-07-13 (drift check re-run against current source, no changes made)
+
+Every citation in this plan was re-derived against `ServerBuilder.php` as it
+stands today, one migration session after this plan was originally written
+(RV-4/Finding 2 landed in between, touching `ResourceCatalog.php` and
+`TransitionStatusCommand.php`/its test — neither is `ServerBuilder.php`).
+**Zero further drift found; every finding below is unchanged from
+2026-07-12:**
+
+- `getConfigurationDetails()` — still at line **2248** (re-confirmed by
+  direct grep, not re-derived from an old citation).
+- `getConfigComponents()` — still at line **5106** (same +256 offset from
+  the pack's stale 4850 citation as originally found; nothing has moved it).
+- `getConfigComponents()` still has exactly **one** call site fleet-wide:
+  `server_api.php:1344`, unchanged, still inside the virtual-config-import
+  mutation flow, not a read entrypoint. The original recommendation to
+  treat it as OUT OF SCOPE for U-X.1's router stands unrevised.
+- `ConfigComponentRepository::liveRows()` still present at line 51,
+  unchanged. The "reuse!" instruction for the rows-path source is still
+  valid.
+
+**Gate status, re-checked**: P8's prerequisite (P7 gate open) is still
+unmet — `phase-status.json` shows P7 `closed` (`U-A.2` stays `implemented`,
+its own remaining acceptance criteria — golden response-shape, real-HTTP
+409, serial-targeted remove, replace/transition legal+illegal — were
+exercised for the first time this session via a scratch-only HTTP harness,
+see the same-day handoff section; still `implemented`, not `verified`, per
+this repo's own convention that a session cannot self-certify). **P8 stays
+`not_started`.** This re-verification changes nothing about when U-X.1 can
+begin — it only confirms the plan implementers would use is still accurate
+when that day comes, so the next session (whichever one actually opens P8)
+doesn't have to re-derive this analysis from scratch or discover mid-flight
+that another session's citations have gone stale in the meantime.
+
+No file under `core/`, `api/`, or `database/` was touched for this
+re-verification. `phase-status.json`'s P8/U-X.1 entry is unchanged.

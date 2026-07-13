@@ -98,6 +98,7 @@ mkdir("$tmpImsData/pciecard", 0777, true);
 $chassisUuid = 'c1a2b3c4-1111-4000-8000-000000000001';
 $mbUuid = 'm1a2b3c4-1111-4000-8000-000000000001';
 $nvmeStorageUuid = 's1a2b3c4-1111-4000-8000-000000000001';
+$m2StorageUuid = 's1a2b3c4-1111-4000-8000-000000000002';
 $cpuUuid = 'a1a2b3c4-1111-4000-8000-000000000001';
 $nicUuid = 'n1a2b3c4-1111-4000-8000-000000000001';
 $hbaUuid = 'h1a2b3c4-1111-4000-8000-000000000001';
@@ -124,7 +125,10 @@ file_put_contents("$tmpImsData/motherboard/motherboard-level-3.json", json_encod
 
 file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
     ['brand' => 'Samsung', 'models' => [
-        ['uuid' => $nvmeStorageUuid, 'interface' => 'PCIe Gen4 x4 NVMe', 'form_factor' => 'M.2 2280'],
+        // U.2, not M.2, so this scenario keeps proving the general consumption mechanism
+        // (RV-4 fix: M.2 NVMe consumes 0 pcie_lane -- see the dedicated M.2 scenario below).
+        ['uuid' => $nvmeStorageUuid, 'interface' => 'PCIe Gen4 x4 NVMe', 'form_factor' => 'U.2'],
+        ['uuid' => $m2StorageUuid, 'interface' => 'PCIe Gen4 x4 NVMe', 'form_factor' => 'M.2 2280'],
     ]],
 ]));
 
@@ -260,6 +264,37 @@ try {
     check('storage remove: remaining row is the untouched provider', $laneRowsAfter[0]['consumer_id'] === null && (int)$laneRowsAfter[0]['capacity'] === 64);
 } finally {
     cleanupConfig($pdo, $configD);
+}
+
+// -----------------------------------------------------------------------
+// D2. RV-4 fix: M.2 NVMe storage against the SAME pre-seeded CPU-provided
+// pcie_lane budget writes NO consumption row -- it rides dedicated chipset
+// lanes, not the expansion budget (mirrors PcieLaneBudgetValidator.php:212-213).
+// -----------------------------------------------------------------------
+$configD2 = 'TEST-LDW-LANE-M2-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configD2);
+
+    $repo = new ConfigComponentRepository($pdo);
+    $pdo->beginTransaction();
+    $cpuComponentId = $repo->insert($configD2, [
+        'component_type' => 'cpu', 'inventory_table' => 'cpuinventory', 'inventory_id' => 3002,
+        'spec_uuid' => 'fake-cpu-uuid-for-ledger-seed-m2',
+    ], 1);
+    $pdo->commit();
+    $pdo->prepare('INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id) VALUES (?, ?, ?, NULL, ?, NULL)')
+        ->execute([$configD2, 'pcie_lane', $cpuComponentId, 64]);
+
+    $pdo->beginTransaction();
+    ConfigComponentWriter::afterLegacyAdd($pdo, $configD2, 'storage', $m2StorageUuid, 'STG-1', null, 'storageinventory', 4002, 1);
+    $pdo->commit();
+
+    $laneRows = $pdo->query("SELECT * FROM config_resources WHERE config_uuid = " . $pdo->quote($configD2) . " AND resource = 'pcie_lane'")->fetchAll();
+    check('M.2 storage add: exactly 1 pcie_lane row remains (the untouched CPU provider, no consumption row)', count($laneRows) === 1);
+    check('M.2 storage add: remaining row has consumer_id NULL, capacity 64 (provider unchanged)', $laneRows[0]['consumer_id'] === null && (int)$laneRows[0]['capacity'] === 64);
+} finally {
+    cleanupConfig($pdo, $configD2);
 }
 
 // -----------------------------------------------------------------------

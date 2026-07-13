@@ -227,17 +227,29 @@ if ($pdo === null) {
         // config (not the board-stranding/NIC-with-SFP config above) avoids
         // a second live chassis row landing on the same config_uuid within
         // this transaction.
+        //
+        // Finding D fix (2026-07-13 verify record): chassis A must NOT reuse
+        // the real 327e585c physical unit row -- it is Status=2/in_use and,
+        // worse, the SAME row the NIC-with-SFP scenario's $nicChassis query
+        // (an unfiltered "LIMIT 1") can also pick up in the same transaction,
+        // so a second config_components insert against the same inventory_id
+        // trips uq_inventory_once. Insert a fresh synthetic chassisinventory
+        // row carrying the R740 spec UUID instead -- exactly the pattern this
+        // fixture already uses for its own storage insert below.
+        $chASpecUuid = '327e585c-8c3a-4ef5-80a3-c434df5c79a4';
         $chBayConfigUuid = $pdo->query("SELECT config_uuid FROM server_configurations ORDER BY config_uuid LIMIT 1 OFFSET 1")->fetchColumn();
-        $chA = $pdo->query("SELECT id, UUID FROM chassisinventory WHERE UUID = '327e585c-8c3a-4ef5-80a3-c434df5c79a4'")->fetch(PDO::FETCH_ASSOC);
         $chB = $pdo->query("SELECT id, UUID FROM chassisinventory WHERE UUID = '4981e5a2-74b5-46ed-ac9d-7f9bbfdbc6d5'")->fetch(PDO::FETCH_ASSOC);
 
-        if ($chBayConfigUuid === false || $chA === false || $chB === false) {
-            echo "  SKIPPED  chassis A->B bay revalidation: fixture inventory rows (327e585c/4981e5a2 chassis, or a second config) not present in this scratch DB\n";
+        if ($chBayConfigUuid === false || $chB === false) {
+            echo "  SKIPPED  chassis A->B bay revalidation: fixture inventory rows (4981e5a2 chassis, or a second config) not present in this scratch DB\n";
         } else {
             $pdo->prepare("UPDATE chassisinventory SET Status = 1 WHERE id = ?")->execute([$chB['id']]);
 
+            $insChAUnit = $pdo->prepare("INSERT INTO chassisinventory (UUID, Status) VALUES (?, 2)");
+            $insChAUnit->execute([$chASpecUuid]);
+            $chAInvId = (int)$pdo->lastInsertId();
             $insChA = $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, parent_id, added_by) VALUES (?, 'chassis', 'chassisinventory', ?, ?, NULL, 0)");
-            $insChA->execute([$chBayConfigUuid, $chA['id'], $chA['UUID']]);
+            $insChA->execute([$chBayConfigUuid, $chAInvId, $chASpecUuid]);
 
             $insStorage = $pdo->prepare("INSERT INTO storageinventory (UUID, Status) VALUES (?, 2)");
             $insStorage->execute(['a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8']);
@@ -245,7 +257,7 @@ if ($pdo === null) {
             $insStorageRow = $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, parent_id, added_by) VALUES (?, 'storage', 'storageinventory', ?, ?, NULL, 0)");
             $insStorageRow->execute([$chBayConfigUuid, $storageInvId, 'a3b4c5d6-e7f8-a9b0-c1d2-e3f4a5b6c7d8']);
 
-            $chBayCmd = new ReplaceComponentCommand($pdo, $chBayConfigUuid, 'chassis', $chA['UUID'], null, $chB['UUID'], [], 0);
+            $chBayCmd = new ReplaceComponentCommand($pdo, $chBayConfigUuid, 'chassis', $chASpecUuid, null, $chB['UUID'], [], 0);
             $chBayVerdict = $chBayCmd->dryRun();
             $chBayFailedRules = array_map(function ($r) { return $r->ruleId(); }, $chBayVerdict->failures());
             check('chassis A(16x 2.5" bays)->B(0x 2.5" bays) replace blocks on storage.bay_capacity [in-transaction fixture]', in_array('storage.bay_capacity', $chBayFailedRules, true));

@@ -8,6 +8,11 @@
  * references, inserts each scenario as a server_configurations row, runs the real
  * validators, then cleans everything up. Local mirror only.
  *
+ * Needs a local mirror of the production DB dump (imsbdcmsbharatda_Ims_Production by
+ * default — override via PROBE_DB_HOST/PROBE_DB_NAME/PROBE_DB_USER/PROBE_DB_PASS).
+ * Same self-skip convention as tests/regression/_scratch_db.php: prints a SKIPPED line
+ * and exits 0 rather than fataling when that DB isn't reachable here.
+ *
  *   php ims-ftp/tests/fixture_scenarios_real.php
  */
 error_reporting(E_ALL); ini_set('display_errors','1');
@@ -17,8 +22,18 @@ if(!getenv('JWT_SECRET')) putenv('JWT_SECRET=probe');
 // production-DEFAULT flags (matches the live server)
 putenv('PCIE_LANE_CHECK_ENABLED=warn'); putenv('VALIDATION_PIPELINE_ENABLED=off');
 putenv('SLOT_AUTHORITY_ENABLED=off'); putenv('STORAGE_CONNECTION_AUTHORITY_ENABLED=off'); putenv('MEMORY_AUTHORITY_ENABLED=off');
-putenv('DB_HOST=127.0.0.1');putenv('DB_USER=root');putenv('DB_PASS=');putenv('DB_NAME=imsbdcmsbharatda_Ims_Production');
-$pdo=new PDO("mysql:host=127.0.0.1;dbname=imsbdcmsbharatda_Ims_Production;charset=utf8mb4",'root','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]);
+$probeHost = getenv('PROBE_DB_HOST') ?: '127.0.0.1';
+$probeName = getenv('PROBE_DB_NAME') ?: 'imsbdcmsbharatda_Ims_Production';
+$probeUser = getenv('PROBE_DB_USER') ?: 'root';
+$probePass = getenv('PROBE_DB_PASS');
+$probePass = is_string($probePass) ? $probePass : '';
+putenv('DB_HOST='.$probeHost);putenv('DB_USER='.$probeUser);putenv('DB_PASS='.$probePass);putenv('DB_NAME='.$probeName);
+try {
+    $pdo=new PDO("mysql:host=$probeHost;dbname=$probeName;charset=utf8mb4",$probeUser,$probePass,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]);
+} catch (\Throwable $e) {
+    echo "SKIPPED: fixture_scenarios_real.php needs a local '$probeName' DB mirror (override via PROBE_DB_* env vars) — not reachable here: ".$e->getMessage()."\n";
+    exit(0);
+}
 require_once "$ROOT/core/models/server/ServerBuilder.php";
 require_once "$ROOT/core/models/compatibility/ComponentCompatibility.php";
 $builder=new ServerBuilder($pdo); $compat=new ComponentCompatibility($pdo);

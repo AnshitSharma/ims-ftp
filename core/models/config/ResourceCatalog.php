@@ -242,7 +242,12 @@ class ResourceCatalog
 
     /**
      * Mirrors DataExtractionUtilities::extractStoragePCIeLanes(): NVMe/PCIe
-     * storage consumes lanes from the CPU's budget; SATA/SAS do not.
+     * storage consumes lanes from the CPU's budget; SATA/SAS do not. M.2
+     * NVMe is additionally excluded here (RV-4 fix) — it uses dedicated
+     * chipset lanes, not the expansion budget, mirroring
+     * PcieLaneBudgetValidator.php:212-213 exactly. Fixed at the catalog
+     * level, not in extractStoragePCIeLanes() itself, because legacy
+     * callers of that method depend on its current (uncorrected) behavior.
      */
     private function consumesStorage(string $specUuid): array
     {
@@ -252,6 +257,11 @@ class ResourceCatalog
         }
         if (!is_numeric($lanes)) {
             throw new CatalogException("Storage $specUuid pcie lane count is not numeric");
+        }
+        $spec = $this->dataUtils->getStorageByUUID($specUuid);
+        $ff = strtolower((string)(is_array($spec) ? ($spec['form_factor'] ?? '') : ''));
+        if (strpos($ff, 'm.2') !== false || strpos($ff, 'm2') !== false) {
+            return [];
         }
         return [['resource' => 'pcie_lane', 'amount' => (int)$lanes]];
     }

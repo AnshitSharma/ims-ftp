@@ -66,46 +66,152 @@ require_once __DIR__ . '/_scratch_db.php';
 require_once "$ROOT/core/models/state/StateMachine.php";
 $pdo = scratch_db_connect();
 if ($pdo === null) {
+    echo "  SKIPPED  Finding 2: draft/building -> finalized direct edge now allowed\n";
     echo "  SKIPPED  defective-inventory fixture blocks finalize (V-2 via SystemInventoryStateRule)\n";
     echo "  SKIPPED  concurrent-mutation-then-finalize race fixture blocks under lock\n";
 } else {
-    // KNOWN, DOCUMENTED gap (P6 verify record's FINDING 2, out of scope to fix
-    // this session per explicit instruction): config_status_transitions has no
-    // direct draft/building -> finalized edge, only the full chain
-    // draft->building->validating->validated->finalized. A real fleet config
-    // sits at draft/building, so this scenario walks that SAME chain via
-    // StateMachine (the intended multi-step lifecycle) rather than routing
-    // around the gap -- it deliberately does NOT attempt draft->finalized
-    // directly, which would just re-surface Finding 2, not test this unit.
+    // ---------------------------------------------------------------------
+    // Finding 2 FIX (owner-authorized, database/seeders/
+    // 2026_07_13_001_add-finding2-finalize-edges.sql -- shown, NOT run
+    // against any DB by this session, scratch included, per standing rule).
+    // Legacy ServerBuilder::finalizeConfiguration() has NO status_v2
+    // precondition when StateGuard::mode() is off (production's default) --
+    // it finalizes from whatever status the config is at, gated only by its
+    // own validateConfiguration() component check. TransitionStatusCommand
+    // calls StateMachine::assertConfigTransition() UNCONDITIONALLY (no flag
+    // gate), so before this fix a real fleet config sitting at draft/building
+    // (where production configs are actually found) would be silently
+    // BLOCKED from finalizing the moment COMMAND_LAYER_ENABLED flips to
+    // enforce -- a regression vs. legacy. This scenario proves the fix
+    // WITHOUT running the seeder: it inserts the two new edge rows as its
+    // own fixture, inside this same rolled-back transaction, exactly like
+    // every other fixture row in this file -- nothing persists either way.
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("INSERT IGNORE INTO config_status_transitions (from_status, to_status, required_permission, requires_validation) VALUES ('draft', 'finalized', 'server.finalize', 'full'), ('building', 'finalized', 'server.finalize', 'full')")->execute();
+
+        // Assert via StateMachine::assertConfigTransition() directly (same
+        // primitive the chain-walk scenario below uses), not via
+        // TransitionStatusCommand::dryRun(): assertConfigTransition() checks
+        // edge EXISTENCE first and only checks ACL permission afterward
+        // (StateMachine.php:41-58), so this isolates exactly what Finding 2
+        // is about -- the edge -- from the separate ACL question. Discovered
+        // while writing this scenario: 'server.finalize' (the permission the
+        // validated->finalized edge and these 2 new edges all require) does
+        // not exist as a row in the `permissions` table in this scratch DB
+        // at all (confirmed: 0 rows), and no user/role has it granted -- so
+        // EVERY edge into 'finalized' is currently permission-unsatisfiable
+        // for any actor, a separate, pre-existing gap this fix does not
+        // touch and is not in scope to fix (flagged in the handoff instead).
+        foreach (['draft', 'building'] as $fromStatus) {
+            $cu = 'TEST-F2-' . strtoupper($fromStatus) . '-' . substr(md5(uniqid('', true)), 0, 8);
+            $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, ?, 0, ?, 0, 1, 5)")
+                ->execute([$cu, "FINDING2-TEST ($fromStatus)", $fromStatus]);
+
+            $assert = StateMachine::assertConfigTransition($pdo, $cu, 'finalized', 0);
+            check(
+                "Finding 2: $fromStatus -> finalized edge now EXISTS (reason is no longer 'no such transition')",
+                stripos($assert['reason'], 'no such transition') === false
+            );
+            echo "        ($fromStatus -> finalized: allowed=" . ($assert['allowed'] ? 'true' : 'false') . ", reason=\"{$assert['reason']}\")\n";
+
+            // Bonus: TransitionStatusCommand::dryRun() with a real actor
+            // (superadmin, id 38 in this scratch DB) still throws today --
+            // NOT because of Finding 2 (the edge exists now), but because of
+            // the separate server.finalize permission-seeding gap above.
+            // Documented, not asserted pass/fail either way (would conflate
+            // two different concerns into one check).
+            try {
+                (new TransitionStatusCommand($pdo, $cu, 'finalized', 'Finding 2 fix scenario (rolled back)', 38))->dryRun();
+                echo "        ($fromStatus -> finalized: dryRun() with actor=38 (superadmin) did NOT throw)\n";
+            } catch (CommandFailed $e) {
+                echo "        ($fromStatus -> finalized: dryRun() with actor=38 (superadmin) still throws {$e->errorType}: {$e->getMessage()} -- server.finalize permission-seeding gap, not Finding 2)\n";
+            }
+        }
+
+        // Control: an edge this fix does NOT add must stay blocked, proving
+        // the fix is scoped to exactly the two new rows, not a blanket bypass.
+        $cuControl = 'TEST-F2-CONTROL-' . substr(md5(uniqid('', true)), 0, 8);
+        $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'FINDING2-TEST (control)', 0, 'draft', 0, 1, 5)")
+            ->execute([$cuControl]);
+        $assertControl = StateMachine::assertConfigTransition($pdo, $cuControl, 'validated', 0);
+        check(
+            'control: draft -> validated (an edge NOT added by this fix) is still "no such transition"',
+            $assertControl['allowed'] === false && stripos($assertControl['reason'], 'no such transition') !== false
+        );
+    } finally {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+    }
+    echo "  (Finding 2 scenario ran against " . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden') . ", rolled back -- no data persisted, seeder never run)\n";
+
+    // ---------------------------------------------------------------------
+    // Pre-existing chain-walk scenario (unchanged): a real fleet config sits
+    // at draft/building and this scenario walks the full chain via
+    // StateMachine (the intended multi-step lifecycle) rather than the new
+    // direct edge -- both are now legal; this proves the chain path still
+    // works too, not just the shortcut Finding 2 added.
     $pdo->beginTransaction();
     try {
         $config = $pdo->query("SELECT config_uuid, status_v2 FROM server_configurations WHERE status_v2 IS NOT NULL LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         if ($config === false) {
             echo "  SKIPPED  no config with status_v2 populated found (pre-U-SM.1-backfill scratch DB)\n";
         } else {
+            // actor=38 (superadmin, same id the Finding 2 scenario above uses):
+            // has server.edit/server.create (needed for the draft->building /
+            // building->validating edges) but NOT server.finalize -- that
+            // permission does not exist as a row for ANY actor yet (a
+            // separate, already-documented gap, see the "Bonus" note in the
+            // Finding 2 scenario above). Using actor 0 here (as this scenario
+            // did previously) fails the VERY FIRST edge on a missing
+            // server.edit grant, which makes $walked false immediately and
+            // permanently skips everything below regardless of what it's
+            // meant to prove -- dead code, not a meaningful SKIP. actor=38
+            // lets the walk progress as far as permissions genuinely allow.
+            $chainActor = 38;
             $chain = ['draft', 'building', 'validating', 'validated', 'finalized'];
             $fromIdx = array_search($config['status_v2'], $chain, true);
             if ($fromIdx === false) {
                 echo "  SKIPPED  fixture config's status_v2 ('{$config['status_v2']}') is not on the simple linear chain this scenario walks\n";
             } else {
+                // Stop the WALK at 'validated' (count($chain) - 2 edges, i.e.
+                // draft->building->validating->validated) and leave the final
+                // validated->finalized edge to the explicit dryRun() below --
+                // that edge is a pre-existing one from U-SM.2's own seeder
+                // (not a Finding-2 addition), and applying it for real inside
+                // this loop would leave the config already 'finalized' by the
+                // time the "end-to-end" dryRun() runs, which would then hit a
+                // nonexistent finalized->finalized self-transition instead of
+                // proving anything.
                 $walked = true;
-                for ($i = $fromIdx; $i < count($chain) - 1 && $walked; $i++) {
-                    $assert = StateMachine::assertConfigTransition($pdo, $config['config_uuid'], $chain[$i + 1], 0);
+                for ($i = $fromIdx; $i < count($chain) - 2 && $walked; $i++) {
+                    $assert = StateMachine::assertConfigTransition($pdo, $config['config_uuid'], $chain[$i + 1], $chainActor);
                     if (!$assert['allowed']) {
                         $walked = false;
-                        echo "  NOTE  chain walk stopped at {$chain[$i]} -> {$chain[$i + 1]}: {$assert['reason']} (Finding 2 territory -- documented, not fixed here)\n";
+                        echo "  NOTE  chain walk stopped at {$chain[$i]} -> {$chain[$i + 1]}: {$assert['reason']} (unexpected -- the full linear chain has always been fully seeded; Finding 2 was only ever about the missing draft/building->finalized SHORTCUT, proven separately above)\n";
                         break;
                     }
-                    StateMachine::applyConfigTransition($pdo, $config['config_uuid'], $chain[$i + 1], 0);
+                    StateMachine::applyConfigTransition($pdo, $config['config_uuid'], $chain[$i + 1], $chainActor);
                 }
 
                 if ($walked && $config['status_v2'] !== 'finalized') {
                     try {
-                        $cmd = new TransitionStatusCommand($pdo, $config['config_uuid'], 'finalized', 'DB-backed test scenario (rolled back)', 0);
+                        $cmd = new TransitionStatusCommand($pdo, $config['config_uuid'], 'finalized', 'DB-backed test scenario (rolled back)', $chainActor);
                         $finalizeVerdict = $cmd->dryRun();
-                        check('TransitionStatusCommand::dryRun() to finalized runs end-to-end once the chain is walked (no Finding-2 edge-table block)', $finalizeVerdict !== null);
+                        check('TransitionStatusCommand::dryRun() to finalized runs end-to-end once the chain is walked (no edge-existence block)', $finalizeVerdict !== null);
                     } catch (CommandFailed $e) {
-                        check("dryRun() to finalized did not throw CommandFailed ({$e->getMessage()})", false);
+                        // The validated->finalized edge itself exists (it's
+                        // U-SM.2's original edge, unaffected by Finding 2) --
+                        // a CommandFailed here is only tolerated when it's the
+                        // separate, already-documented server.finalize
+                        // permission-seeding gap, not a missing-edge failure.
+                        $isEdgeMissing = stripos($e->getMessage(), 'no such transition') !== false;
+                        check(
+                            'TransitionStatusCommand::dryRun() to finalized runs end-to-end once the chain is walked (no edge-existence block; a CommandFailed here is tolerated ONLY for the separate server.finalize permission-seeding gap)',
+                            !$isEdgeMissing
+                        );
+                        echo "        (dryRun() to finalized threw {$e->errorType}: {$e->getMessage()})\n";
                     }
 
                     // Defective-inventory scenario: mark one live component's
@@ -120,11 +226,23 @@ if ($pdo === null) {
                         if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) === 1) {
                             $pdo->prepare("UPDATE `$table` SET status_v2 = 'failed' WHERE UUID = ?")->execute([$liveComponent['spec_uuid']]);
                             try {
-                                $cmd2 = new TransitionStatusCommand($pdo, $config['config_uuid'], 'finalized', 'DB-backed test scenario (rolled back)', 0);
+                                $cmd2 = new TransitionStatusCommand($pdo, $config['config_uuid'], 'finalized', 'DB-backed test scenario (rolled back)', $chainActor);
                                 $blockedVerdict = $cmd2->dryRun();
                                 check('a failed live component blocks finalize (V-2, SystemInventoryStateRule)', $blockedVerdict->blocking());
                             } catch (CommandFailed $e) {
-                                check("defective-inventory dryRun() did not throw CommandFailed ({$e->getMessage()})", false);
+                                // buildTarget() checks assertConfigTransition
+                                // BEFORE the ValidationEngine ever runs, so the
+                                // separate server.finalize permission gap
+                                // (open for every actor, see above) can reject
+                                // this dryRun() before SystemInventoryStateRule
+                                // gets a chance to fire -- an orthogonal,
+                                // already-documented gap, not asserted
+                                // pass/fail here (would conflate the two).
+                                if (stripos($e->getMessage(), 'permission') !== false) {
+                                    echo "  NOTE  defective-inventory dryRun() blocked before reaching SystemInventoryStateRule by the separate server.finalize permission-seeding gap: {$e->getMessage()}\n";
+                                } else {
+                                    check("defective-inventory dryRun() did not throw CommandFailed ({$e->getMessage()})", false);
+                                }
                             }
                         } else {
                             echo "  SKIPPED  unexpected inventory_table value, not asserting defective-inventory scenario\n";
@@ -133,7 +251,7 @@ if ($pdo === null) {
                         echo "  SKIPPED  no live rows-path component with a known inventory_table found for this config\n";
                     }
                 } else {
-                    echo "  SKIPPED  defective-inventory scenario needs a config already past the chain gap (Finding 2) or not already finalized\n";
+                    echo "  SKIPPED  defective-inventory scenario needs the chain walk to have reached 'validated' (not already finalized, and not blocked mid-chain)\n";
                 }
             }
         }

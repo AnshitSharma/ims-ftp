@@ -1,3 +1,14 @@
+-- SUPERSEDED (2026-07-13): its own verify pass (SESSION-20260712-FINDINGS-ABC.md,
+--   independent verify record) reproduced against the live production API that
+--   config bbdd2549-5938-4e4c-9882-f1fe171477a8 does NOT exist in production
+--   (production carries 9 configs, none matching) -- this seeder's WHERE guards
+--   all target a row that isn't there, so running it against production is a
+--   harmless no-op, not a repair. Left in place per this repo's "never edit/
+--   delete a seeder" rule; do not run it. The scratch `ims_compat_golden` DB's
+--   own copy of this ghost config was separately deleted (scratch-only, see the
+--   2026-07-13 handoff's "ghost config cleanup" section) so the fleet parity
+--   sweep no longer needs this repair to go green.
+--
 -- Date: 2026-07-12
 -- Purpose: CONFIG-REPAIR seeder (owner decision, per migration handoff
 --   SESSION-20260712-FINDINGS-ABC.md, fourth-session §"Owner decision on the

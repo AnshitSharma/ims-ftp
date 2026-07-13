@@ -18,7 +18,17 @@
  *
  * Usage:
  *   php scripts/verify/parity_report.php [--file <path-to-jsonl>]...   # default: all reports/shadow/engine-*.jsonl
+ *   php scripts/verify/parity_report.php --since <YYYY-MM-DD>          # optional: drop rows with ts before this date (inclusive of the date itself)
  *   php scripts/verify/parity_report.php --self-test                  # synthetic JSONL, one unexplained diff -> exit 1
+ *
+ * --since exists because the shadow log is append-only and never rotated:
+ * rows logged before a fix landed (e.g. a rule change, a ghost-config
+ * cleanup) stay in the file and keep tripping the parity gate forever even
+ * though today's live behavior has moved on. Omitting --since preserves
+ * this report's ORIGINAL behavior exactly (scans every row in every matched
+ * file, no filtering) -- it is opt-in, not a new default, so any existing
+ * caller/gate-report invocation is unaffected until it explicitly asks for a
+ * cutoff.
  *
  * Exit: 0 = green (0 unexplained diffs AND 0 engine exceptions; an
  *       empty window is also green, but prints a loud WARNING line since a
@@ -52,14 +62,21 @@ function loadExpectedDiffs(): array {
     return $decoded['entries'];
 }
 
-/** @return array[] every {ts, config_uuid, op, trigger, legacy, engine, results} row across the given files */
-function readShadowRows(array $files): array {
+/**
+ * @return array[] every {ts, config_uuid, op, trigger, legacy, engine, results} row
+ *         across the given files, dropped to rows with ts >= $sinceCutoff
+ *         when a cutoff is given (null = no filtering, the original behavior).
+ */
+function readShadowRows(array $files, ?string $sinceCutoff = null): array {
     $rows = [];
     foreach ($files as $file) {
         if (!is_file($file)) continue;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
             $decoded = json_decode($line, true);
             if (is_array($decoded)) {
+                if ($sinceCutoff !== null && (!isset($decoded['ts']) || substr($decoded['ts'], 0, 10) < $sinceCutoff)) {
+                    continue;
+                }
                 $rows[] = $decoded;
             }
         }
@@ -198,15 +215,23 @@ if (in_array('--self-test', $argv, true)) {
 // Normal mode
 // -----------------------------------------------------------------------
 $fileArgs = [];
+$sinceCutoff = null;
 foreach ($argv as $i => $arg) {
     if ($arg === '--file' && isset($argv[$i + 1])) {
         $fileArgs[] = $argv[$i + 1];
+    }
+    if ($arg === '--since' && isset($argv[$i + 1])) {
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $argv[$i + 1]) !== 1) {
+            fwrite(STDERR, "parity_report: --since expects YYYY-MM-DD, got '{$argv[$i + 1]}'\n");
+            exit(1);
+        }
+        $sinceCutoff = $argv[$i + 1];
     }
 }
 $files = $fileArgs ?: glob(__DIR__ . '/../../reports/shadow/engine-*.jsonl') ?: [];
 
 $expectedDiffs = loadExpectedDiffs();
-$rows = readShadowRows($files);
+$rows = readShadowRows($files, $sinceCutoff);
 $analysis = analyze($rows, $expectedDiffs);
 $file = writeReport($analysis, false);
 
@@ -215,6 +240,9 @@ $status = $green ? 'GREEN' : 'RED';
 
 if ($analysis['operations_compared'] === 0) {
     echo "parity_report: WARNING operations compared: 0 -- a zero-sample GREEN proves nothing was exercised\n";
+}
+if ($sinceCutoff !== null) {
+    echo "parity_report: --since $sinceCutoff applied (rows before this date excluded)\n";
 }
 echo "parity_report: $status $file\n";
 exit($green ? 0 : 1);
