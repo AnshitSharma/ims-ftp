@@ -32,6 +32,18 @@
  * legacy write it followed too (fail-closed, INV-5) — this only happens
  * when the flag is already 'on' (mode() returns early above otherwise).
  *
+ * DEFERRED CONSUMPTION (F-PSU fix, 2026-07-15): a consumption entry whose
+ * resource has NO provider row yet in this config is NOT an error — legacy
+ * imposes no build order (power/lanes are only checked at validate/finalize
+ * time), so e.g. adding a CPU (consumes psu_watt) before the chassis (the
+ * only psu_watt provider) must succeed exactly as it always has. Such an
+ * entry is skipped with an error_log() note, and retro-attached later by
+ * attachDeferredConsumers() the moment a provider of that resource is added.
+ * Removing a provider already detaches its attached consumption rows
+ * (cleanupLedgerForRemove() deletes by provider_id), so the two directions
+ * stay symmetric. Malformed-spec CatalogExceptions still propagate
+ * fail-closed as before — only provider absence is downgraded.
+ *
  * RV-1 (carried from U-1.2's pack): DIMM slot consumer-linking is not
  * possible because RAM's legacy slot_ref is unknown at this layer.
  * RV-2 (new, this unit): discrete PCIe/riser slot consumer-linking (e.g. a
@@ -88,6 +100,12 @@ class ConfigComponentWriter
     ) {
         if (self::mode() !== 'on') {
             return;
+        }
+        if ($slotRef === '') {
+            // '' is "no slot assigned" in legacy POST data, not a slot named ''
+            // — same normalization as Extractor::resolveEntry() (slot_report
+            // treats equal non-null slot_refs as duplicates).
+            $slotRef = null;
         }
         if ($inventoryTable === null || $inventoryId === null) {
             // Nothing to key config_components' unique row on (e.g. virtual
@@ -153,30 +171,80 @@ class ConfigComponentWriter
             'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
              VALUES (?, ?, ?, ?, ?, NULL)'
         );
+        $providedResources = [];
         foreach ($catalog->provides($type, $specUuid) as $row) {
             $providerStmt->execute([$configUuid, $row['resource'], $componentId, $row['slot_ref'], $row['capacity']]);
+            $providedResources[$row['resource']] = true;
         }
 
         foreach ($catalog->consumes($type, $specUuid) as $consumed) {
-            $findProvider = $pdo->prepare(
-                'SELECT provider_id FROM config_resources
-                 WHERE config_uuid = ? AND resource = ? AND consumer_id IS NULL
-                 LIMIT 1'
-            );
-            $findProvider->execute([$configUuid, $consumed['resource']]);
-            $providerId = $findProvider->fetchColumn();
-            if ($providerId === false) {
-                throw new CatalogException(
-                    "No provider found for resource '{$consumed['resource']}' in config $configUuid " .
-                    "to attach this component's consumption to"
-                );
-            }
+            self::attachConsumption($pdo, $configUuid, $componentId, $consumed);
+        }
 
-            $consumeStmt = $pdo->prepare(
-                'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
-                 VALUES (?, ?, ?, NULL, ?, ?)'
+        if (!empty($providedResources)) {
+            self::attachDeferredConsumers($pdo, $catalog, $configUuid, array_keys($providedResources), $componentId);
+        }
+    }
+
+    /**
+     * Insert one consumption row, attached to any live provider of the
+     * resource. Provider absence is a deferred state, not an error (see the
+     * class docblock's DEFERRED CONSUMPTION note): the row is skipped and
+     * attachDeferredConsumers() creates it when a provider is added.
+     */
+    private static function attachConsumption(PDO $pdo, $configUuid, $componentId, array $consumed)
+    {
+        $findProvider = $pdo->prepare(
+            'SELECT provider_id FROM config_resources
+             WHERE config_uuid = ? AND resource = ? AND consumer_id IS NULL
+             LIMIT 1'
+        );
+        $findProvider->execute([$configUuid, $consumed['resource']]);
+        $providerId = $findProvider->fetchColumn();
+        if ($providerId === false) {
+            error_log(
+                "ConfigComponentWriter: deferred consumption of '{$consumed['resource']}' by component " .
+                "id $componentId in config $configUuid — no provider present yet; will attach when one is added"
             );
-            $consumeStmt->execute([$configUuid, $consumed['resource'], $providerId, $consumed['amount'], $componentId]);
+            return;
+        }
+
+        $pdo->prepare(
+            'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
+             VALUES (?, ?, ?, NULL, ?, ?)'
+        )->execute([$configUuid, $consumed['resource'], $providerId, $consumed['amount'], $componentId]);
+    }
+
+    /**
+     * After a component providing $resources is inserted, attach every live
+     * component in the config whose catalog consumption of one of those
+     * resources was previously deferred (has no consumption row yet). 'riser'
+     * rows are queried against the catalog as 'pciecard', same normalization
+     * as backfill.php's backfillLedgerForConfig().
+     */
+    private static function attachDeferredConsumers(PDO $pdo, ResourceCatalog $catalog, $configUuid, array $resources, $newComponentId)
+    {
+        $stmt = $pdo->prepare(
+            'SELECT id, component_type, spec_uuid FROM config_components
+             WHERE config_uuid = ? AND removed_at IS NULL AND id <> ?'
+        );
+        $stmt->execute([$configUuid, $newComponentId]);
+
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $cc) {
+            $physicalType = $cc['component_type'] === 'riser' ? 'pciecard' : $cc['component_type'];
+            foreach ($catalog->consumes($physicalType, $cc['spec_uuid']) as $consumed) {
+                if (!in_array($consumed['resource'], $resources, true)) {
+                    continue;
+                }
+                $exists = $pdo->prepare(
+                    'SELECT 1 FROM config_resources WHERE config_uuid = ? AND resource = ? AND consumer_id = ? LIMIT 1'
+                );
+                $exists->execute([$configUuid, $consumed['resource'], (int)$cc['id']]);
+                if ($exists->fetchColumn()) {
+                    continue;
+                }
+                self::attachConsumption($pdo, $configUuid, (int)$cc['id'], $consumed);
+            }
         }
     }
 

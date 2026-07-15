@@ -1835,3 +1835,176 @@ Executed evidence (scratch env):
 Board changes by this verify session: none needed.
 
 Still open (owner, unchanged): run seeders 2026_07_13_001/002/003 on the server DB (004 optional); `performance_report.php --rebless --confirm` on a quiet machine; authorize opening P4/P5/P7 (mechanically satisfiable now); DUAL_WRITE soak (→U-B.4); enforce soak (→U-C.6); P8–P10 behind those. There is no further implementable Sonnet work until at least one of these owner actions lands.
+
+## Twelfth session — 2026-07-15 (U-B.4 first real-fleet backfill attempt against a fresh production replica)
+
+**Owner actions that preceded this session (outside any session, ~2026-07-14):**
+set `DUAL_WRITE_ENABLED=on` in the production `.env` (attested; ~24h before this
+session — U-B.4's soak precondition) and ran the pending permission seeders
+(confirmed via read-only API probe: `server.finalize`/`server.replace`/
+`server.transition` permission rows now exist in production; the finalize-edge
+rows from 2026_07_13_001 are also present in the fresh dump). `COMMAND_LAYER_ENABLED`
+confirmed still off (v2 actions return 403 "not yet enabled"). Owner also added a
+new CPU spec (E5-2640 v3) to `ims-data/cpu/Cpu-details-level-3.json` plus new
+cpuinventory rows on 2026-07-14 — scratch mirrors re-synced accordingly.
+
+**What this session did:** owner supplied a fresh production dump (2026-07-14
+19:05); loaded as NEW replica DB `ims_prod_replica` (golden DB untouched, backed
+up first); ran the soak monitor pre-backfill (RED/RED/GREEN/RED + staleness
+INCONCLUSIVE — matches the documented pre-backfill state); ran `backfill.php`
+dry-run (5 configs, 24 migrate / **50 quarantine, all ambiguous-serial**) and
+`--execute` on the REPLICA (run-id `run-20260714-192824-9c9f01`: done=0,
+quarantined=4, error=1 — the error is a REAL new finding, F-PSU: config b01a5f51
+has no chassis so ledger backfill finds no `psu_watt` provider for its CPU's
+consumption). Post-backfill gate reports: all four RED, every cause traced to
+production data quality, NOT engine defects. Full per-entry triage + owner
+decision list: `migration/07-component-migration/UB4-QUARANTINE-TRIAGE-20260715.md`.
+
+**Soak caveat (important):** the dump proves production has had ZERO config
+mutations since 2026-04-21 — the dual-write hook has never fired in production
+despite the flag being on. A controlled test mutation via the production API was
+attempted and stopped by the tooling permission layer (replica-only authorization
+this session); handed to the owner as an explicit step: one throwaway
+create→add→remove→delete cycle, then verify `config_events` is non-empty.
+
+**Outcome:** U-B.4 stays `blocked` — precondition met, but execution is now
+blocked on owner data work (serialize RAM/storage/caddy/pciecard inventory OR
+prune phantom JSON entries; plus the 07dc91dd status fix and the F-PSU decision).
+No seeder could be produced (nothing exportable while done=0). No unit_status or
+gate changed. No production write occurred; production `.env` never read; scratch
+`.env` restored to `ims_compat_golden` after the replica runs.
+
+---
+
+## Thirteenth session (2026-07-15, afternoon) — U-B.4 unblocked end-to-end; both seeders ready; owner-authorized prod test mutation performed
+
+Owner decisions this session (explicit, via interactive question): (1) authorized a
+controlled dual-write test mutation directly on production; (2) chose "synthesize
+placeholder inventory" for the 50 ambiguous-serial quarantines.
+
+### 1. Production dual-write test mutation (owner-authorized, performed)
+Created throwaway config `ac32147c-d739-4daa-bffe-6bd1044bc782`
+("DUALWRITE-SOAK-TEST-20260715") via the live API as superadmin; added available
+motherboard `QTFCR2905019A` (spec d2e3f4a5, auto-added 1 onboard NIC); removed it.
+Legacy side verified clean (row back to Status=1/available, ServerUUID NULL,
+status_v2 synced). **v2-side verification is PENDING the owner pasting read-only
+SELECTs** (config_events / config_components for that uuid) — the config is
+deliberately NOT deleted yet (config_uuid FKs are RESTRICT; delete could destroy
+the evidence). Delete it via API after verification.
+
+### 2. F-PSU root-cause fix (LIVE production bug, fixed + deployed)
+`ConfigComponentWriter::writeLedgerForAdd()` threw CatalogException when a consumed
+resource had no provider — with DUAL_WRITE_ENABLED=on in production, adding any
+psu_watt consumer (cpu/storage/nic/hbacard/pciecard with a power field) BEFORE the
+chassis rolled back the whole legacy add (fail-closed INV-5). Legacy imposes no
+build order, so this was a user-visible dual-write regression. Fix (deployed via
+save): provider absence is now DEFERRED consumption — skip-with-log
+(`attachConsumption()`), retro-attached by `attachDeferredConsumers()` when a
+provider of that resource is added; chassis removal already detaches (cleanup by
+provider_id). Same skip-with-log in `backfill.php::backfillLedgerForConfig()`.
+Malformed-spec CatalogExceptions still propagate fail-closed. New Scenario J in
+`ledger_dual_write_test.php` (defer → retro-attach → dedupe → detach);
+`ledger_backfill_test.php` fixture B rewritten from "error path" to the new
+deferred contract.
+
+### 3. lane_model_mismatch root causes (ledger_report check 4) — fixed
+(a) `ResourceCatalog::consumesStorage()` used `extractStoragePCIeLanes()` whose
+`?? 4` NVMe default counts lanes legacy's `extractLaneCount()` never counts (specs
+like "NVMe PCIe 4.0" with no explicit x<N>). Rewritten to mirror
+`computeLanesUsed()`'s storage branch exactly (interface nvme/pcie gate, M.2
+exclusion, extractLaneCount width, 0 = no row). Unit test updated + new no-width
+case. (b) 06ea5abb's nic_config embedded `specifications` snapshot is missing
+`interface` (ims-data says "PCIe 2.1 x4"), so legacy counted 0 vs catalog 4 —
+DATA fix: seeder section 3 stamps the interface into the snapshot.
+
+### 4. slotless_card (slot_report check 4 / A-8) — fixed
+Real fleet pciecards carry slot_position:"" (never assigned). '' now normalizes to
+NULL in `Extractor::resolveEntry()` AND `ConfigComponentWriter::afterLegacyAdd()`
+(it's "no slot", not a slot named ''). The 6 slotless cards then get deterministic
+placeholder slots (seeder section 4): smallest FREE PCIe slot on the config's own
+motherboard, legacy `pcie_x{N}_slot_{n}` naming, skipping occupied slots —
+placeholder-class data like the serials, owner corrects later if it matters.
+
+### 5. Seeders (BOTH shown to owner, NOT yet run on production)
+- `2026_07_15_001_ub4-placeholder-inventory.sql` — 40 placeholder inventory rows
+  (INSERT IGNORE, serials MIG-<config8>-<TYPE>-<n>, Status=2/installed, linked),
+  serial stamping into config JSON (guarded exact-value UPDATEs), NIC interface
+  repair, slot assignments. Generated by scratch-tree
+  `scripts/backfill/_placeholder_seeder_gen.php` (+ 2 inline generators).
+- `2026_07_15_002_ub4-backfill-rows.sql` — the 74 config_components + 86
+  config_resources + 74 config_events + 5 state rows from run
+  `run-20260715-final-ub4`, ids offset +10000, INSERT IGNORE + per-config
+  guard (skips a config if it has any non-backfill event = live dual-write
+  touched it), guarded revision UPDATEs. Idempotency proven (second apply = no
+  count change).
+
+### 6. Verification runs (replica `ims_prod_replica`, fresh 2026-07-15 dump)
+- Dry-run after seeder 001: 74 would-migrate, **0 would-quarantine** (was 50).
+- `--execute`: done=5 quarantined=0 errors=0 (b01a5f51's psu_watt correctly
+  deferred with a log line).
+- All FIVE gate reports GREEN (equivalence, orphan, ledger, slot, inventory) —
+  both via the backfill path and via the pure paste path (dump + 001 + 002).
+- Full test sweep: 36/36 files pass (state_machine_unit needs SM_TEST_DB_PASS).
+- Scratch `.env` restored to `ims_compat_golden`.
+
+### Per-convention status notes
+This session wrote/modified: ConfigComponentWriter.php, ResourceCatalog.php,
+Extractor.php, backfill.php (+ tests). All are already-`verified`-unit territory
+(U-L.1/U-L.2 were ALREADY downgraded to `implemented` by the RV-4 session;
+U-B.1/U-B.2 now also need independent re-verify). U-B.4 itself: all machine work
+done; remaining are OWNER steps — (a) paste the two seeders into production in
+order, (b) paste the dual-write verification SELECTs for the test config, then a
+follow-up session confirms post-apply state and flips U-B.4 per convention.
+
+---
+
+## Thirteenth session, continuation (2026-07-15 evening) — backfill CONFIRMED GREEN on real production; dual-write hook confirmed NOT firing
+
+Owner ran both seeders on production and supplied a fresh post-apply dump.
+
+### Backfill verification against REAL production data (not just the replica rehearsal)
+Loaded the fresh dump into `ims_prod_postapply`: row counts match the rehearsal exactly
+(config_components=74, config_resources=86, config_events=74, migration_backfill_state=5,
+28 placeholder inventory rows visible). **All 5 gate reports (equivalence, orphan, ledger,
+slot, inventory) GREEN against this real post-apply production data.** The backfill portion
+of U-B.4 is genuinely, verifiably complete on production.
+
+### Dual-write soak evidence: CONFIRMED NOT MET (not just unconfirmed)
+Owner ran the read-only verification SELECTs for throwaway config `ac32147c-d739-4daa-bffe-
+6bd1044bc782` against production: **both `config_events` and `config_components` returned
+ZERO rows** for that config, despite the legacy-side add+remove having succeeded cleanly
+(API returned success both times; activity log has both entries; inventory status correctly
+flipped to in_use and back to available — independently confirmed in the prior message in
+this session).
+
+Root-caused via code inspection, not by reading production .env (forbidden): `ServerBuilder::
+addComponent()`'s single outer `catch (Exception $e)` (ServerBuilder.php ~970) rolls back the
+ENTIRE transaction — including the legacy JSON write that happens BEFORE the dual-write call —
+on any exception from `ConfigComponentWriter::afterLegacyAdd()`. Since the legacy write
+demonstrably persisted (proven independently), no exception was thrown. The only remaining
+explanation consistent with ALL observed evidence: `ConfigComponentWriter::mode()` returned
+`'off'`, i.e. **DUAL_WRITE_ENABLED is not actually 'on' as read by the PHP process serving the
+API**, contradicting the owner's 2026-07-14 attestation. This is now a direct positive-test
+confirmation of the 12th session's original suspicion (zero config mutations since 2026-04-21),
+not just an absence-of-evidence argument.
+
+**Owner action needed** (cannot be done by this session — no production .env access, no SSH):
+verify in the production `ims-ftp/.env` (loaded by `core/config/app.php`'s `loadEnvFile()`)
+that `DUAL_WRITE_ENABLED=on` is present, uncommented, correctly spelled, no stray whitespace;
+AND check whether the hosting environment (cPanel/CloudLinux — dump's server string is
+`10.11.18-MariaDB-cll-lve`) needs a PHP-FPM/LiteSpeed restart after .env edits, which many
+such setups require and is a common miss. Once fixed, redo one throwaway add/remove test and
+re-check `config_events` for real (non-backfill) rows before treating the ≥24h soak as
+satisfied — do not just re-check the flag's nominal value, since that's what "worked" last time.
+
+Throwaway config `ac32147c` deleted via API this session (server-delete-config; was already
+part of the originally authorized test scope). `components_released: 0` confirmed — nothing
+left behind.
+
+### U-B.4 status (accurate as of this session)
+- Backfill sub-goal: **DONE**, verified GREEN against real production data.
+- Soak-evidence sub-goal: **BLOCKED on owner-side .env/PHP-restart fix** — concrete and
+  diagnosable now, not a vague "wait longer".
+- phase-status.json: leaving U-B.4 as `blocked` (not flipping to `implemented`) until the
+  soak evidence question is actually resolved — the backfill data being correct doesn't
+  satisfy the pack's dual-write-soak precondition on its own.

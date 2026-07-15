@@ -100,6 +100,7 @@ $mbUuid = 'm1a2b3c4-1111-4000-8000-000000000001';
 $nvmeStorageUuid = 's1a2b3c4-1111-4000-8000-000000000001';
 $m2StorageUuid = 's1a2b3c4-1111-4000-8000-000000000002';
 $cpuUuid = 'a1a2b3c4-1111-4000-8000-000000000001';
+$cpuPsuUuid = 'a1a2b3c4-1111-4000-8000-000000000002';
 $nicUuid = 'n1a2b3c4-1111-4000-8000-000000000001';
 $hbaUuid = 'h1a2b3c4-1111-4000-8000-000000000001';
 $pciecardUuid = 'p1a2b3c4-1111-4000-8000-000000000001';
@@ -133,7 +134,12 @@ file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
 ]));
 
 file_put_contents("$tmpImsData/cpu/Cpu-details-level-3.json", json_encode([
-    ['brand' => 'Intel', 'models' => [['uuid' => $cpuUuid, 'pcie_lanes' => 64]]],
+    ['brand' => 'Intel', 'models' => [
+        ['uuid' => $cpuUuid, 'pcie_lanes' => 64],
+        // tdp_W makes this one CONSUME psu_watt (U-R.7) — used by Scenario J
+        // to prove deferred consumption + retro-attach (F-PSU fix).
+        ['uuid' => $cpuPsuUuid, 'pcie_lanes' => 48, 'tdp_W' => 150],
+    ]],
 ]));
 file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([
     ['brand' => 'Intel', 'series' => [['name' => 'X710', 'models' => [['uuid' => $nicUuid, 'ports' => 4]]]]],
@@ -454,6 +460,68 @@ try {
 } finally {
     if ($pdo->inTransaction()) { $pdo->rollback(); }
     cleanupConfig($pdo, $configI);
+}
+
+// -----------------------------------------------------------------------
+// J. F-PSU fix (2026-07-15): deferred psu_watt consumption + retro-attach.
+// Legacy imposes no build order, so adding a CPU (consumes psu_watt via
+// tdp_W) to a chassis-less config must NOT throw — the consumption row is
+// deferred. Adding the chassis later retro-attaches it; removing the chassis
+// detaches it again (cleanupLedgerForRemove deletes by provider_id).
+// -----------------------------------------------------------------------
+$configJ = 'TEST-LDW-DEFER-' . substr(md5(uniqid()), 0, 8);
+try {
+    putenv('DUAL_WRITE_ENABLED=on');
+    makeConfig($pdo, $configJ);
+
+    // 1. CPU first, no chassis: must not throw; psu_watt consumption deferred.
+    $pdo->beginTransaction();
+    $threw = false;
+    try {
+        ConfigComponentWriter::afterLegacyAdd($pdo, $configJ, 'cpu', $cpuPsuUuid, 'CPU-PSU-1', null, 'cpuinventory', 10001, 1);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    if ($pdo->inTransaction()) { $pdo->commit(); }
+    check('deferred: cpu (tdp_W=150) added to chassis-less config does NOT throw', !$threw);
+
+    $cpuComponentId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configJ) . " AND component_type = 'cpu'")->fetchColumn();
+    $psuRows = $pdo->query("SELECT * FROM config_resources WHERE config_uuid = " . $pdo->quote($configJ) . " AND resource = 'psu_watt'")->fetchAll();
+    check('deferred: no psu_watt row yet (consumption deferred, not guessed)', count($psuRows) === 0);
+    $laneProvider = $pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configJ) . " AND resource = 'pcie_lane' AND consumer_id IS NULL")->fetchColumn();
+    check('deferred: cpu pcie_lane provider row still written normally', (int)$laneProvider === 1);
+
+    // 2. Chassis arrives: provider row + retro-attached cpu consumption.
+    $pdo->beginTransaction();
+    ConfigComponentWriter::afterLegacyAdd($pdo, $configJ, 'chassis', $chassisUuid, 'CH-PSU-1', null, 'chassisinventory', 10002, 1);
+    $pdo->commit();
+    $chassisComponentId = (int)$pdo->query("SELECT id FROM config_components WHERE config_uuid = " . $pdo->quote($configJ) . " AND component_type = 'chassis'")->fetchColumn();
+
+    $psuRows = $pdo->query("SELECT * FROM config_resources WHERE config_uuid = " . $pdo->quote($configJ) . " AND resource = 'psu_watt' ORDER BY consumer_id IS NULL DESC")->fetchAll();
+    check('retro-attach: 2 psu_watt rows after chassis add (provider + cpu consumption)', count($psuRows) === 2);
+    $providerRow = $psuRows[0] ?? null;
+    $consumptionRow = $psuRows[1] ?? null;
+    check('retro-attach: provider row is the chassis (capacity 800, consumer_id NULL)', $providerRow
+        && (int)$providerRow['provider_id'] === $chassisComponentId
+        && (int)$providerRow['capacity'] === 800 && $providerRow['consumer_id'] === null);
+    check('retro-attach: consumption row provider=chassis, consumer=cpu, capacity=150', $consumptionRow
+        && (int)$consumptionRow['provider_id'] === $chassisComponentId
+        && (int)$consumptionRow['consumer_id'] === $cpuComponentId
+        && (int)$consumptionRow['capacity'] === 150);
+
+    // 3. Re-running the provider add path must not duplicate the attachment.
+    $dupBefore = (int)$pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configJ) . " AND resource = 'psu_watt' AND consumer_id = $cpuComponentId")->fetchColumn();
+    check('retro-attach: exactly one consumption row per (consumer, resource)', $dupBefore === 1);
+
+    // 4. Chassis removed: provider AND attached consumption rows go; deferred again.
+    $pdo->beginTransaction();
+    ConfigComponentWriter::afterLegacyRemove($pdo, $configJ, 'chassis', $chassisUuid, 'CH-PSU-1', 1);
+    $pdo->commit();
+    $psuRowsAfter = $pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configJ) . " AND resource = 'psu_watt'")->fetchColumn();
+    check('detach: chassis remove deletes provider row and attached consumption row', (int)$psuRowsAfter === 0);
+} finally {
+    if ($pdo->inTransaction()) { $pdo->rollback(); }
+    cleanupConfig($pdo, $configJ);
 }
 
 rrmdir($tmpImsData);

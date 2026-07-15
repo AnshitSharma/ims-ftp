@@ -132,11 +132,14 @@ function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extr
  * reconciles the two naming schemes. Scalar lane consumption via
  * ResourceCatalog::consumes() (storage only, today).
  *
- * A CatalogException here (malformed spec, or -- until ResourceCatalog's cpu
- * provides() gap closes -- "no pcie_lane provider found" for any NVMe
- * storage) propagates to the caller's existing per-config try/catch, which
- * marks the config 'error' (resumable) rather than quarantined: per the pack,
- * this class of failure is spec/catalog-fixable, not a shape problem.
+ * A CatalogException here (malformed spec) propagates to the caller's
+ * existing per-config try/catch, which marks the config 'error' (resumable)
+ * rather than quarantined: per the pack, this class of failure is
+ * spec/catalog-fixable, not a shape problem. Provider ABSENCE, however, is
+ * no longer an error (F-PSU fix, 2026-07-15): a mid-build config with no
+ * chassis has psu_watt consumers and nothing to attach them to — those
+ * consumption rows are skipped with a log line and the live dual-writer
+ * retro-attaches them when a provider is eventually added.
  */
 function backfillLedgerForConfig(PDO $pdo, string $configUuid, array $insertedRows): void
 {
@@ -172,10 +175,18 @@ function backfillLedgerForConfig(PDO $pdo, string $configUuid, array $insertedRo
                 $findProvider->execute([$configUuid, $consumed['resource']]);
                 $providerId = $findProvider->fetchColumn();
                 if ($providerId === false) {
-                    throw new CatalogException(
-                        "No provider found for resource '{$consumed['resource']}' in config $configUuid " .
-                        "to attach component id {$row['id']}'s consumption to"
+                    // F-PSU fix (2026-07-15): provider absence is a deferred
+                    // state, not an error — legacy imposes no build order, so a
+                    // chassis-less (mid-build) config legitimately has psu_watt
+                    // consumers and no provider. Skip the row; the live dual-
+                    // writer retro-attaches it when a provider is added (see
+                    // ConfigComponentWriter's DEFERRED CONSUMPTION docblock).
+                    // Malformed-spec CatalogExceptions still propagate.
+                    fwrite(STDERR,
+                        "ledger: deferred consumption of '{$consumed['resource']}' by component id {$row['id']} " .
+                        "in config $configUuid — no provider present (mid-build config)\n"
                     );
+                    continue;
                 }
                 $pdo->prepare(
                     'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)

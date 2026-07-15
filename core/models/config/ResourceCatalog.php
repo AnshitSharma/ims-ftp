@@ -241,29 +241,38 @@ class ResourceCatalog
     }
 
     /**
-     * Mirrors DataExtractionUtilities::extractStoragePCIeLanes(): NVMe/PCIe
-     * storage consumes lanes from the CPU's budget; SATA/SAS do not. M.2
-     * NVMe is additionally excluded here (RV-4 fix) — it uses dedicated
-     * chipset lanes, not the expansion budget, mirroring
-     * PcieLaneBudgetValidator.php:212-213 exactly. Fixed at the catalog
-     * level, not in extractStoragePCIeLanes() itself, because legacy
-     * callers of that method depend on its current (uncorrected) behavior.
+     * Mirrors PcieLaneBudgetValidator::computeLanesUsed()'s storage branch
+     * exactly (PcieLaneBudgetValidator.php:315-334, the check-4 "one lane
+     * model"): only NVMe/PCIe-interface storage consumes lanes; M.2 is
+     * excluded (RV-4 fix — dedicated chipset lanes, PcieLaneBudgetValidator
+     * .php:325-331); and the WIDTH comes from extractLaneCount()'s explicit
+     * x<N>/pcie_lanes parse — an NVMe spec with no parseable width consumes
+     * 0 lanes, same as legacy. Previously this used DataExtractionUtilities
+     * ::extractStoragePCIeLanes(), whose `?? 4` NVMe default counted 4 lanes
+     * legacy never counts (surfaced as ledger_report check-4
+     * lane_model_mismatch on the real fleet, U-B.4 triage 2026-07-15).
+     * extractStoragePCIeLanes() itself is left untouched — legacy callers
+     * depend on its current behavior.
      */
     private function consumesStorage(string $specUuid): array
     {
-        $lanes = $this->dataUtils->extractStoragePCIeLanes($specUuid);
-        if ($lanes === null) {
-            return [];
-        }
-        if (!is_numeric($lanes)) {
-            throw new CatalogException("Storage $specUuid pcie lane count is not numeric");
-        }
         $spec = $this->dataUtils->getStorageByUUID($specUuid);
-        $ff = strtolower((string)(is_array($spec) ? ($spec['form_factor'] ?? '') : ''));
+        if (!is_array($spec)) {
+            return []; // no spec -> no lanes, mirrors computeLanesUsed's `if (!$specs) continue;`
+        }
+        $interface = (string)($spec['interface'] ?? '');
+        if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) {
+            return []; // SATA/SAS don't consume PCIe lanes
+        }
+        $ff = strtolower((string)($spec['form_factor'] ?? ''));
         if (strpos($ff, 'm.2') !== false || strpos($ff, 'm2') !== false) {
             return [];
         }
-        return [['resource' => 'pcie_lane', 'amount' => (int)$lanes]];
+        $lanes = $this->extractLaneCount($spec);
+        if ($lanes <= 0) {
+            return [];
+        }
+        return [['resource' => 'pcie_lane', 'amount' => $lanes]];
     }
 
     /**

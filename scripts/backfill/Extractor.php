@@ -273,6 +273,12 @@ class Extractor
         PDO $pdo, string $configUuid, string $componentType, string $physicalType,
         array $entry, $parentRef, array &$plans, array &$quarantine, ?string $slotRef = null
     ): void {
+        if ($slotRef === '') {
+            // Real fleet data carries slot_position:"" for never-assigned slots
+            // (e.g. 809d10c9's pciecards); '' is "no slot", not a slot named '',
+            // and slot_report treats equal non-null slot_refs as duplicates.
+            $slotRef = null;
+        }
         $specUuid = $entry['uuid'] ?? null;
         if ($specUuid === null) {
             $quarantine[] = ['type' => $componentType, 'entry' => $entry, 'reason' => 'missing-uuid'];

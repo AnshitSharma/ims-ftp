@@ -206,11 +206,14 @@ try {
 }
 
 // -----------------------------------------------------------------------
-// Fixture B (error path): NVMe storage with no pcie_lane provider anywhere
-// in the config -> CatalogException -> 'error' (NOT quarantined). Then
-// resume after the gap is "fixed" (a synthetic pcie_lane provider row
-// inserted by hand, standing in for a future ResourceCatalog::provides('cpu')
-// implementation) succeeds and flips to 'done'.
+// Fixture B (deferred-consumption path, F-PSU fix 2026-07-15): NVMe storage
+// with no pcie_lane provider anywhere in the config. This USED to be a hard
+// CatalogException -> 'error'; provider absence is now a deferred state
+// (legacy imposes no build order — a mid-build config legitimately has
+// consumers before providers). The config backfills 'done' with the
+// component row present but NO consumption row; the live dual-writer's
+// attachDeferredConsumers() creates it when a provider is eventually added
+// (proven in tests/regression/ledger_dual_write_test.php Scenario J).
 // -----------------------------------------------------------------------
 $configB = 'TEST-LGBF-B-' . substr(md5(uniqid('', true)), 0, 8);
 try {
@@ -225,19 +228,15 @@ try {
     $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $fields) . ') VALUES (' . implode(',', array_map(fn($f) => ":$f", $fields)) . ')')->execute($cols);
 
     $result = runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--execute', '--run-id', 'test-lgbf-b-run', '--config', $configB]);
-    check('fixture B: backfill --execute exits 1 (error)', $result['exit'] === 1);
-    check('fixture B: run summary shows errors=1', str_contains($result['stdout'], 'errors=1'));
+    check('fixture B: backfill --execute exits 0 (provider absence is deferred, not an error)', $result['exit'] === 0);
+    check('fixture B: run summary shows done=1 errors=0', str_contains($result['stdout'], 'done=1') && str_contains($result['stdout'], 'errors=0'));
+    check('fixture B: stderr logs the deferred consumption', str_contains($result['stderr'] ?? '', 'deferred consumption'));
 
     $state = $pdo->query("SELECT status, last_error FROM migration_backfill_state WHERE config_uuid = " . $pdo->quote($configB))->fetch(PDO::FETCH_ASSOC);
-    check('fixture B: state is error, NOT quarantined', ($state['status'] ?? null) === 'error');
-    check("fixture B: last_error mentions the missing provider", str_contains((string)($state['last_error'] ?? ''), 'No provider found'));
-    check('fixture B: no config_components row leaked (whole-config rollback)', (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configB))->fetchColumn() === 0);
+    check('fixture B: state is done', ($state['status'] ?? null) === 'done');
+    check('fixture B: storage component row present (config not rolled back)', (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configB) . " AND component_type = 'storage'")->fetchColumn() === 1);
+    check('fixture B: NO pcie_lane consumption row (deferred until a provider exists)', (int)$pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configB) . " AND resource = 'pcie_lane' AND consumer_id IS NOT NULL")->fetchColumn() === 0);
     check('fixture B: nothing quarantined for this config', (int)$pdo->query("SELECT COUNT(*) FROM backfill_quarantine WHERE config_uuid = " . $pdo->quote($configB))->fetchColumn() === 0);
-
-    // "Fix" the gap by hand (stand-in for a future cpu provides() implementation) then resume.
-    $result2 = runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--resume', '--run-id', 'test-lgbf-b-run']);
-    // Resume still hits the same unresolved gap on retry (nothing external changed) -> still errors.
-    check('fixture B: resume without a real fix still reports the same error (resumable, not silently dropped)', str_contains($result2['stdout'], 'errors=1'));
 } finally {
     $pdo->exec("DELETE FROM config_resources WHERE config_uuid = " . $pdo->quote($configB));
     $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configB));

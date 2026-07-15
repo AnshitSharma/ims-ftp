@@ -62,6 +62,7 @@ $pciecardUuidUnparseableInterfaceFallback = 'p1a2b3c4-0000-4000-8000-00000000000
 $storageUuidM2Nvme = 's1a2b3c4-0000-4000-8000-000000000001';
 $storageUuidU2Nvme = 's1a2b3c4-0000-4000-8000-000000000002';
 $storageUuidSata = 's1a2b3c4-0000-4000-8000-000000000003';
+$storageUuidU2NoWidth = 's1a2b3c4-0000-4000-8000-000000000004';
 
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/motherboard", 0777, true);
@@ -195,9 +196,12 @@ file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
     [
         'brand' => 'Samsung',
         'models' => [
-            ['uuid' => $storageUuidM2Nvme, 'interface' => 'PCIe 4.0 NVMe', 'form_factor' => 'M.2 2280'],
-            ['uuid' => $storageUuidU2Nvme, 'interface' => 'PCIe 4.0 NVMe', 'form_factor' => 'U.2'],
+            ['uuid' => $storageUuidM2Nvme, 'interface' => 'PCIe 4.0 x4 NVMe', 'form_factor' => 'M.2 2280'],
+            ['uuid' => $storageUuidU2Nvme, 'interface' => 'PCIe 4.0 x4 NVMe', 'form_factor' => 'U.2'],
             ['uuid' => $storageUuidSata, 'interface' => 'SATA III', 'form_factor' => '2.5"'],
+            // no explicit x<N> width: legacy extractLaneCount() counts 0 for this,
+            // so the catalog must too (check-4 mirror, 2026-07-15 fix)
+            ['uuid' => $storageUuidU2NoWidth, 'interface' => 'NVMe PCIe 4.0', 'form_factor' => 'U.2'],
         ],
     ],
 ]));
@@ -340,7 +344,9 @@ try {
     $rows = $catalog->consumes('storage', $storageUuidU2Nvme);
     check('storage (U.2 NVMe): exactly 1 pcie_lane row', count($rows) === 1);
     check('storage (U.2 NVMe): resource=pcie_lane', ($rows[0]['resource'] ?? null) === 'pcie_lane');
-    check('storage (U.2 NVMe): amount=4 (default NVMe lane count)', ($rows[0]['amount'] ?? null) === 4);
+    check('storage (U.2 NVMe): amount=4 (explicit x4 width, extractLaneCount mirror)', ($rows[0]['amount'] ?? null) === 4);
+
+    check('storage (U.2 NVMe, NO explicit width): consumes() returns [] (legacy extractLaneCount counts 0 — no NVMe default)', $catalog->consumes('storage', $storageUuidU2NoWidth) === []);
 
     check('storage (SATA): consumes() returns [] (SATA does not use PCIe lanes)', $catalog->consumes('storage', $storageUuidSata) === []);
 
