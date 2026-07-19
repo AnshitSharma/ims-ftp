@@ -44,6 +44,8 @@ return [
         'update-location' => 'server.edit',
         'fix-onboard-nics' => 'server.edit',
         'debug-motherboard-nics' => 'server.view',
+        'debug-migration-flags' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
+        'debug-config-dualwrite' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
     ],
 
     // Operations use underscores to match the cases in

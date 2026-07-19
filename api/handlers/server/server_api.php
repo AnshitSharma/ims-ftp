@@ -127,6 +127,16 @@ switch ($action) {
         handleGetServerLogs($serverBuilder, $user);
         break;
 
+    case 'debug-migration-flags':
+    case 'server-debug-migration-flags':
+        handleDebugMigrationFlags($user);
+        break;
+
+    case 'debug-config-dualwrite':
+    case 'server-debug-config-dualwrite':
+        handleDebugConfigDualWrite($user);
+        break;
+
     default:
         send_json_response(0, 1, 400, "Invalid action specified");
 }
@@ -1636,6 +1646,99 @@ function handleGetServerLogs($serverBuilder, $user) {
     } catch (Exception $e) {
         error_log("Error getting server logs: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to retrieve server activity logs");
+    }
+}
+
+/**
+ * TEMPORARY diagnostic (command-layer migration, U-B.4 soak troubleshooting):
+ * reports what THIS live PHP process actually reads for each of the 5
+ * FLAGS.md migration flags, using the exact same getenv -> $_ENV -> default
+ * -> whitelist pattern every flag-consuming class uses (see FLAGS.md).
+ * Read-only, no DB writes, no .env content exposed (values only + whether
+ * the file was found, not its path). Admin/super_admin only, on top of the
+ * server.view ACL gate — remove once the dual-write soak question is settled.
+ */
+function handleDebugMigrationFlags($user) {
+    global $pdo;
+
+    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+    }
+
+    $readFlag = function ($name, $allowed) {
+        $v = getenv($name);
+        if (!is_string($v) || $v === '') {
+            $v = $_ENV[$name] ?? null;
+        }
+        $raw = $v;
+        $v = strtolower(trim((string)$v));
+        return [
+            'value' => in_array($v, $allowed, true) ? $v : 'off',
+            'raw_seen' => $raw === null ? null : (string)$raw,
+        ];
+    };
+
+    $flags = [
+        'DUAL_WRITE_ENABLED' => $readFlag('DUAL_WRITE_ENABLED', ['off', 'on']),
+        'STATE_MACHINE_ENABLED' => $readFlag('STATE_MACHINE_ENABLED', ['off', 'shadow', 'enforce']),
+        'ENGINE_MODE' => $readFlag('ENGINE_MODE', ['off', 'shadow', 'enforce']),
+        'COMMAND_LAYER_ENABLED' => $readFlag('COMMAND_LAYER_ENABLED', ['off', 'shadow', 'enforce']),
+        'READ_FROM_ROWS' => $readFlag('READ_FROM_ROWS', ['off', 'sample', 'on']),
+    ];
+
+    $envPath = __DIR__ . '/../../../.env';
+    $envInfo = [
+        'found' => file_exists($envPath),
+        'mtime' => file_exists($envPath) ? date('c', filemtime($envPath)) : null,
+    ];
+
+    send_json_response(1, 1, 200, "Migration flag diagnostic (this process)", [
+        'flags' => $flags,
+        'env_file' => $envInfo,
+        'php_sapi' => PHP_SAPI,
+        'server_time' => date('c'),
+    ]);
+}
+
+/**
+ * TEMPORARY diagnostic (U-B.4 soak verification): row-level view of the
+ * dual-write tables for one config, replacing the manual mysqldump/SQL-paste
+ * round-trip the owner has had to do by hand for every soak check so far.
+ * Read-only SELECTs only, no writes, no data outside these two tables for
+ * the one config_uuid given. Admin/super_admin only, same gate as
+ * handleDebugMigrationFlags(). Remove alongside it once U-B.4 closes.
+ */
+function handleDebugConfigDualWrite($user) {
+    global $pdo;
+
+    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+    }
+
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "config_uuid is required");
+    }
+
+    try {
+        $eventsStmt = $pdo->prepare("SELECT id, revision, event, component_type, component_id, actor, created_at FROM config_events WHERE config_uuid = :u ORDER BY id");
+        $eventsStmt->bindValue(':u', $configUuid);
+        $eventsStmt->execute();
+        $events = $eventsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $componentsStmt = $pdo->prepare("SELECT id, component_type, inventory_table, inventory_id, spec_uuid, serial_number, parent_id, slot_ref, added_at, removed_at FROM config_components WHERE config_uuid = :u ORDER BY id");
+        $componentsStmt->bindValue(':u', $configUuid);
+        $componentsStmt->execute();
+        $components = $componentsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        send_json_response(1, 1, 200, "Dual-write row check for this config", [
+            'config_uuid' => $configUuid,
+            'config_events' => ['count' => count($events), 'rows' => $events],
+            'config_components' => ['count' => count($components), 'rows' => $components],
+        ]);
+    } catch (Exception $e) {
+        error_log("Error in handleDebugConfigDualWrite: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to read dual-write rows");
     }
 }
 
