@@ -2008,3 +2008,109 @@ left behind.
 - phase-status.json: leaving U-B.4 as `blocked` (not flipping to `implemented`) until the
   soak evidence question is actually resolved — the backfill data being correct doesn't
   satisfy the pack's dual-write-soak precondition on its own.
+
+## Fourteenth session (2026-07-16/19) — retest after owner's .env-fix attestation, still empty
+
+Owner confirmed (2026-07-16) that production `ims-ftp/.env` was fixed and the service restarted.
+This session ran the throwaway retest the thirteenth session asked for: config
+`0477956c-e230-424b-afa3-e5d166aaff3a`, motherboard `e3f4a5b6...` serial `F5CWXM2`, add→remove.
+Legacy side clean (status back to available, `ServerUUID` null). Owner pasted the verification
+SQL results: **both `config_events` and `config_components` were STILL EMPTY** — same symptom as
+the thirteenth session, despite the attestation. No further root-causing was done this session;
+handed to the next session as "re-diagnose, do not assume the .env fix alone was sufficient" (see
+`tasks/todo.md` at the time). Not otherwise appended to this handoff file until now (fifteenth
+session backfilling the record).
+
+## Fifteenth session (2026-07-19) — root cause found, dual-write CONFIRMED firing end-to-end, a real bug found+fixed
+
+### Root cause of the "soak evidence stays empty" mystery
+Built two small, deliberately temporary, read-only diagnostic API actions rather than continuing
+to guess: `server-debug-migration-flags` (reports what the live PHP process actually reads for
+all 5 FLAGS.md flags, via the same `getenv -> $_ENV -> default -> whitelist` pattern every flag
+class already uses, plus `.env` found/mtime — never reads `.env` content) and, later,
+`server-debug-config-dualwrite` (reads `config_events`/`config_components` for one `config_uuid`
+over the API, replacing the owner's manual SQL-paste round-trip). Both live in
+`api/handlers/server/server_api.php`, registered in `api/permission_map.php` under `server.view`
+plus a code-level admin/super_admin gate (mirrors the existing `debug-motherboard-nics` precedent
+and the rack/pipeline role-gate pattern in `api.php`).
+
+First probe: **all 5 flags read `off` with `raw_seen: null`** — the keys were entirely ABSENT from
+the `.env` the live process loads, not just wrong-valued — and `env_file.mtime = 2026-06-25T11:25:23Z`,
+over three weeks before either of the owner's 2026-07-14/07-16 attestations. The file the app
+actually loads had not changed since before either fix attempt.
+
+### The blind-append attempt, and why it looked like an external revert
+With owner authorization, appended `DUAL_WRITE_ENABLED=on` via a blind FTP `APPEND` (`curl
+--append`) — a payload of a leading newline + the one line only, so `.env` content was never
+downloaded or read (hard rule intact). Confirmed live immediately (flag `on`, fresh mtime). A
+fresh throwaway add/remove test seconds later still produced zero dual-write rows, and a
+re-check of the flag showed it had reverted to `off` with the mtime back to the exact prior
+`2026-06-25T11:25:23Z` — byte-identical to the pre-fix state (confirmed by diffing the live
+`ConfigComponentWriter.php`/`ServerBuilder.php` against local, which matched exactly, ruling out
+a code-side explanation). 20 further rapid probes all showed the same reverted state consistently
+rather than flapping, which briefly looked like an external process actively reverting the file.
+
+Owner ruled out cron jobs, file-integrity monitoring (e.g. Imunify360), and a deploy pipeline —
+none exist, none wanted. Revised and confirmed theory: **`curl --append`'s `APPE` FTP command
+simply wasn't committing reliably on this FTP server**, not an external reverter. Owner added the
+same line manually via the VS Code SFTP extension (the same full-save path used for every other
+deploy on this project all along) and, independently, pasted their own SFTP-pulled copy of the
+live `.env` mid-conversation — which also showed the flag absent at that moment, cross-confirming
+the diagnostic tool from a second, unrelated access path rather than contradicting it. (That paste
+included the live `JWT_SECRET`/`DB_PASS` in plaintext — never repeated or stored anywhere, owner
+was told to rotate both.)
+
+Verified via `server-debug-migration-flags` immediately after the manual save (`on`, fresh mtime)
+and again ~2.5 minutes later (**same mtime, still `on`**) — held this time.
+
+### Dual-write confirmed firing end-to-end (first time since U-1.5 was written)
+Ran a full add→remove cycle (config `8c5684a2-c3c0-4093-af19-76cd93d703f3`, motherboard
+`d8e9f0a1-b2c3-4d4e-bf6a-7b8c9d0e1f2a` serial `2M20200BJC`) and checked
+`server-debug-config-dualwrite` after each step: add produced a real `config_events` row
+(revision 1, event=add) and a real `config_components` row; remove produced a second real
+`config_events` row (revision 2, event=remove) and correctly tombstoned the `config_components`
+row (`removed_at` set, row retained rather than deleted, per `ConfigComponentWriter`'s documented
+soft-tombstone behavior). This is the first real, non-backfill evidence that dual-write actually
+fires in production.
+
+### New bug found + fixed: `deleteConfiguration()` never cleaned up the dual-write tables
+Cleaning up the test config afterward failed: `server-delete-config` returned a genuine FK
+violation (`config_components`'s `fk_cc_config` constraint against `server_configurations`).
+`ServerBuilder::deleteConfiguration()` predates the U-1.5/U-L.2 schema entirely and only ever
+deleted `server_configuration_history` + the parent `server_configurations` row — it never knew
+about `config_resources`/`config_events`/`config_components`. This was unreachable and invisible
+under `DUAL_WRITE_ENABLED=off` (the condition P1 was verified under — those tables were always
+empty for any config, deleted or not), so it is a P2-scoped gap, not a P1 regression. Fixed in
+`core/models/server/ServerBuilder.php::deleteConfiguration()`: delete `config_resources` first
+(its `fk_cr_consumer` constraint is `ON DELETE RESTRICT` against `config_components`, so it must
+go before `config_components` can be deleted), then `config_events`, then `config_components`,
+ahead of the pre-existing history/parent deletes. Deployed via a manual FTP `STOR` (full
+overwrite, not append — confirmed reliable this session), verified byte-identical against the
+server copy, retested: delete now succeeds cleanly. Left uncaught, this would have broken
+`server.delete` for every real config from now on, since the flag is genuinely live. Fortunate it
+surfaced on a throwaway config first.
+
+### Cleanup and where things stand
+Both throwaway configs deleted (`8c5684a2-...` from this session, and the older `0477956c-...`
+left over from the fourteenth session — zero dual-write rows, safe no-op). Production has no
+leftover test debris. `DUAL_WRITE_ENABLED=on` is confirmed genuinely live and holding as of
+session end. **The 24h real-traffic soak clock effectively starts now (~2026-07-19 11:37 UTC) —
+treat this as day zero**, not as continuation of the earlier (invalid) soak windows. No
+`unit_status` or gate changed this session — the `deleteConfiguration()` fix is implemented, not
+verified (self-certification: this session both wrote and tested it). Both temporary diagnostic
+actions stay deployed for ongoing soak monitoring; remove them once U-B.4 fully closes. See
+`tasks/todo.md` steps 12-20 for the blow-by-blow.
+
+### Where the dual-written data actually lives (for anyone new to this thread)
+Not a separate store — `config_events`, `config_components`, and `config_resources` are real
+InnoDB tables in the same production database (`imsbdcmsbharatda_Ims_Production`) as
+`server_configurations` and everything else, introduced by seeders `2026_07_06_001/002/003`.
+`config_components` is the row-level mirror of what `server_configurations`' JSON columns already
+say (one row per physical component ever attached to a config, tombstoned via `removed_at` rather
+than deleted on removal). `config_events` is the append-only audit trail / optimistic-concurrency
+log (one row per mutation, driving `server_configurations.revision`). `config_resources` is the
+U-L.2 ledger (provider/consumer rows for scalar resources like `pcie_lane`/`psu_watt`). All three
+are currently only populated when `DUAL_WRITE_ENABLED=on` (true right now); they were force-
+populated once already for the existing fleet by the U-B.4 backfill seeders. Inspect them via
+direct SQL (mysqldump/phpMyAdmin, as the owner has done throughout this migration) or, now, via
+the two read-only diagnostic API actions added this session.

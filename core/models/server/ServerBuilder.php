@@ -3794,8 +3794,24 @@ class ServerBuilder {
                 }
             }
 
-            // Note: Component data is now stored in JSON columns, no separate table to delete
-            
+            // Note: legacy component data lives in JSON columns, no separate table
+            // to delete for that. BUT U-1.5/U-L.2's dual-write tables (config_events,
+            // config_components, config_resources) are real FK children of
+            // server_configurations now that DUAL_WRITE_ENABLED can be 'on' -- this
+            // delete predates that schema and never cleaned them up, which throws an
+            // FK violation on any config that actually picked up dual-write rows.
+            // Order matters: config_resources first (fk_cr_consumer is ON DELETE
+            // RESTRICT against config_components), then config_events and
+            // config_components (both have a real, non-cascading FK to
+            // server_configurations.config_uuid), then the parent row. Harmless
+            // no-ops when the flag was never on for this config.
+            $stmt = $this->pdo->prepare("DELETE FROM config_resources WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $stmt = $this->pdo->prepare("DELETE FROM config_events WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $stmt = $this->pdo->prepare("DELETE FROM config_components WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+
             // Delete configuration history if exists
             try {
                 $stmt = $this->pdo->prepare("DELETE FROM server_configuration_history WHERE config_uuid = ?");
@@ -3803,7 +3819,7 @@ class ServerBuilder {
             } catch (Exception $historyError) {
                 error_log("Could not delete history (table might not exist): " . $historyError->getMessage());
             }
-            
+
             // Delete configuration
             $stmt = $this->pdo->prepare("DELETE FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
