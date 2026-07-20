@@ -447,8 +447,10 @@ function assignRoleToUser($pdo, $userId, $roleId) {
             return true; // Already assigned
         }
 
-        // Assign role
-        $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id, created_at) VALUES (?, ?, NOW())");
+        // Assign role. Schema is user_roles(id, user_id, role_id, assigned_by,
+        // assigned_at) — there is no created_at column; assigned_at defaults to
+        // CURRENT_TIMESTAMP.
+        $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
         $result = $stmt->execute([$userId, $roleId]);
         clearPermissionCache($userId);
         return $result;
@@ -1079,7 +1081,35 @@ function getAllUsers($pdo) {
     try {
         $stmt = $pdo->prepare("SELECT id, username, email, firstname, lastname, status, created_at FROM users ORDER BY username");
         $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($users)) {
+            return [];
+        }
+
+        // Attach each user's assigned roles in a single extra query (no N+1).
+        // Additive: existing callers ignore the new `roles` field.
+        $rolesByUser = [];
+        $roleStmt = $pdo->query("
+            SELECT ur.user_id, r.id, r.name, r.display_name
+            FROM user_roles ur
+            JOIN roles r ON r.id = ur.role_id
+            ORDER BY r.display_name
+        ");
+        foreach ($roleStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $rolesByUser[$row['user_id']][] = [
+                'id' => (int)$row['id'],
+                'name' => $row['name'],
+                'display_name' => $row['display_name'],
+            ];
+        }
+
+        foreach ($users as &$user) {
+            $user['roles'] = $rolesByUser[$user['id']] ?? [];
+        }
+        unset($user);
+
+        return $users;
     } catch (Exception $e) {
         error_log("Error getting all users: " . $e->getMessage());
         return [];

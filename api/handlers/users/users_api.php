@@ -79,13 +79,25 @@ function handleUserOperations($operation, $user) {
             $userId = createUser($pdo, $username, $email, $password, $firstname, $lastname);
 
             if ($userId) {
+                $roleAssigned = false;
                 if ($resolvedRoleId !== null) {
-                    assignRoleToUser($pdo, $userId, $resolvedRoleId);
+                    $roleAssigned = assignRoleToUser($pdo, $userId, $resolvedRoleId);
+                    if (!$roleAssigned) {
+                        error_log("User $userId created but role assignment to role $resolvedRoleId failed");
+                    }
                 }
-                send_json_response(1, 1, 201, "User created successfully", [
-                    'user_id' => (int)$userId,
-                    'role_id' => $resolvedRoleId
-                ]);
+
+                if ($roleAssigned) {
+                    send_json_response(1, 1, 201, "User created successfully", [
+                        'user_id' => (int)$userId,
+                        'role_id' => $resolvedRoleId
+                    ]);
+                } else {
+                    send_json_response(1, 1, 201, "User created, but role assignment failed — assign a role manually", [
+                        'user_id' => (int)$userId,
+                        'role_id' => null
+                    ]);
+                }
             } else {
                 send_json_response(0, 1, 400, "Failed to create user. Username or email may already exist.");
             }

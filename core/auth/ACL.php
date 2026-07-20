@@ -540,9 +540,9 @@ class ACL {
     public function getAllRoles() {
         try {
             $stmt = $this->pdo->prepare("
-                SELECT r.*, 
-                       COUNT(ur.user_id) as user_count,
-                       COUNT(rp.permission_id) as permission_count
+                SELECT r.*,
+                       COUNT(DISTINCT ur.user_id) as user_count,
+                       COUNT(DISTINCT rp.permission_id) as permission_count
                 FROM roles r
                 LEFT JOIN user_roles ur ON r.id = ur.role_id
                 LEFT JOIN role_permissions rp ON r.id = rp.role_id AND rp.granted = 1
