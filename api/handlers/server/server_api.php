@@ -831,7 +831,11 @@ function handleRemoveComponent($serverBuilder, $user) {
     $configUuid = $_POST['config_uuid'] ?? '';
     $componentType = $_POST['component_type'] ?? '';
     $componentUuid = $_POST['component_uuid'] ?? '';
-    
+    // Identifies WHICH physical unit when several share the model UUID. Optional:
+    // ServerBuilder falls back to the config JSON, then to the inventory row's
+    // ServerUUID. add-component has always accepted this; remove never read it.
+    $serialNumber = $_POST['serial_number'] ?? null;
+
     if (empty($configUuid) || empty($componentType) || empty($componentUuid)) {
         send_json_response(0, 1, 400, "Configuration UUID, component type, and component UUID are required");
     }
@@ -878,7 +882,7 @@ function handleRemoveComponent($serverBuilder, $user) {
             } catch (CommandFailed $shadowFailure) {
                 error_log('RemoveComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
             }
-            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
+            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
         } elseif ($commandLayerMode === 'enforce') {
             try {
                 $commandResult = $removeCommand->execute();
@@ -900,7 +904,7 @@ function handleRemoveComponent($serverBuilder, $user) {
                 send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
             }
         } else {
-            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid);
+            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
         }
 
         if ($result['success']) {

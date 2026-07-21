@@ -1074,6 +1074,43 @@ class ServerBuilder {
                 ];
             }
 
+            // Fall back to the inventory row's ServerUUID to identify the PHYSICAL
+            // unit when the config JSON carries no serial for it.
+            //
+            // motherboard, chassis and hbacard live in scalar columns
+            // (motherboard_uuid, chassis_uuid, hbacard_uuid) that store only the
+            // model UUID, so the loop above leaves $componentSerialNumber null for
+            // them -- and no caller supplies one either (the frontend's
+            // removeComponentFromServer() posts no serial_number, and
+            // handleRemoveComponent() reads none). The release below then hits
+            // updateComponentStatusAndServerUuid()'s ambiguity refusal whenever the
+            // model has more than one physical unit, returns false, and the unit is
+            // left Status=2 with a stale ServerUUID while this method still reports
+            // success. Observed live 2026-07-21: motherboardinventory #45 stayed
+            // installed in a config whose motherboard_uuid was already NULL.
+            //
+            // ServerUUID is the authoritative record of which unit is in this
+            // config, so it resolves the serial exactly -- same reasoning as
+            // deleteConfiguration()'s release sweep.
+            //
+            // The count also tells us whether there is anything to release at all.
+            // Zero is a real state, not an error: F-1 released units while leaving
+            // them listed in the config JSON, so a config can name a component whose
+            // inventory row is already free. Removing that entry is exactly the
+            // cleanup such a config needs, so it must not be blocked.
+            $boundUnits = [];
+            if (isset($this->componentTables[$componentType])) {
+                $table = $this->componentTables[$componentType];
+                $unitStmt = $this->pdo->prepare(
+                    "SELECT SerialNumber FROM `$table` WHERE UUID = ? AND ServerUUID = ?"
+                );
+                $unitStmt->execute([$componentUuid, $configUuid]);
+                $boundUnits = $unitStmt->fetchAll(PDO::FETCH_COLUMN);
+            }
+            if ($componentSerialNumber === null && count($boundUnits) === 1) {
+                $componentSerialNumber = $boundUnits[0];
+            }
+
             // Phase 3: NIC removal validation - Check if any SFPs are installed on ports
             if ($componentType === 'nic') {
                 $sfpConfigJson = $config['sfp_configuration'] ?? null;
@@ -1143,7 +1180,39 @@ class ServerBuilder {
 
             // Update component status back to "Available" and clear ServerUUID, installation date, and rack position (SECOND)
             // CRITICAL: Pass serial number to update only the specific physical component
-            $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
+            // Nothing bound to this config means there is nothing to release; the
+            // JSON entry was already drift (see $boundUnits above). Skip the release
+            // rather than calling it with a null serial, which would either refuse
+            // (blocking the cleanup) or, for a single-unit model, free a unit that
+            // belongs to some other config.
+            $released = empty($boundUnits)
+                ? true
+                : $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
+
+            if (empty($boundUnits)) {
+                error_log(
+                    "Removed $componentType $componentUuid from config $configUuid with no inventory "
+                    . "row bound to it (stale config entry — nothing to release)"
+                );
+            }
+
+            // A refused/failed release used to be ignored, which orphaned the unit:
+            // dropped from the config JSON but still Status=2 with this config's
+            // ServerUUID, and reported to the user as a successful removal. Roll the
+            // whole removal back instead -- leaving the component in the config is
+            // recoverable, silently leaking a physical unit is not.
+            if (!$released) {
+                if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                error_log(
+                    "Removal aborted: could not release $componentType $componentUuid "
+                    . "(serial: " . ($componentSerialNumber ?? 'unresolved') . ") from config $configUuid"
+                );
+                return [
+                    'success' => false,
+                    'message' => "Could not identify which physical unit to release from this server. "
+                        . "The component was not removed."
+                ];
+            }
 
             // P3.4 FIX: Recalculate form factor lock on chassis/storage removal
             if ($componentType === 'chassis' || $componentType === 'storage') {
