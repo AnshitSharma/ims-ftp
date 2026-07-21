@@ -887,6 +887,10 @@ function handleRemoveComponent($serverBuilder, $user) {
             try {
                 $commandResult = $removeCommand->execute();
                 $result = ['success' => true, 'revision' => $commandResult->revision];
+                $cascadeRemoved = $removeCommand->cascadeRemovedRows();
+                if (!empty($cascadeRemoved)) {
+                    $result['cascade_removed'] = $cascadeRemoved;
+                }
             } catch (CommandFailed $commandFailure) {
                 if ($commandFailure->errorType === 'revision_mismatch') {
                     $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
@@ -896,10 +900,16 @@ function handleRemoveComponent($serverBuilder, $user) {
                 if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
                     require_once __DIR__ . '/VerdictShim.php';
                     $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
-                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], [
+                    $blockedData = [
                         'component_type' => $componentType, 'component_uuid' => $componentUuid,
                         'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
-                    ]);
+                    ];
+                    if ($shimmed['error_type'] === 'dependency_blocked' && !$cascade) {
+                        // The dependents blocking this removal are listed in details;
+                        // same hint convention as the legacy NIC->SFP block above.
+                        $blockedData['hint'] = 'Retry with cascade=true to remove this component together with the listed dependents';
+                    }
+                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], $blockedData);
                 }
                 send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
             }
@@ -912,13 +922,19 @@ function handleRemoveComponent($serverBuilder, $user) {
             logActivity($pdo, $user['id'], 'Component removed', 'server', $config->get('id'),
                 "Removed $componentType ($componentUuid) from server config $configUuid");
 
-            send_json_response(1, 1, 200, "Component removed successfully", [
+            $successData = [
                 'component_removed' => [
                     'type' => $componentType,
                     'uuid' => $componentUuid,
                     'server_uuid_cleared' => true
                 ]
-            ]);
+            ];
+            // Enforce-mode cascade: name the dependent rows the cascade took with
+            // it, so the caller learns more than just the component it asked for.
+            if (!empty($result['cascade_removed'])) {
+                $successData['cascade_removed'] = $result['cascade_removed'];
+            }
+            send_json_response(1, 1, 200, "Component removed successfully", $successData);
         } else {
             // Extract error details from removal result (e.g., NIC removal validation errors)
             $errorData = [

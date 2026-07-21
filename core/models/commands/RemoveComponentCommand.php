@@ -29,6 +29,20 @@ require_once __DIR__ . '/../server/ServerBuilder.php';
  * updateComponentStatusAndServerUuid(), then recalculates the chassis/storage
  * form-factor lock once for the whole operation.
  *
+ * Unit release is FAIL-CLOSED (port of legacy removeComponent()'s 2026-07-21
+ * hardening): when a row carries no serial (motherboard/chassis/hbacard live
+ * in scalar UUID columns that never stored one), the serial is resolved from
+ * the inventory row whose ServerUUID binds it to this config — the
+ * authoritative record of which physical unit is installed here. Zero bound
+ * units is a stale config entry (F-1 class): nothing to release, the removal
+ * is exactly the cleanup needed, so it proceeds. A release that still fails
+ * (updateComponentStatusAndServerUuid() returns false, e.g. its ambiguity
+ * refusal) throws CommandFailed so the whole command rolls back — leaving the
+ * component in the config is recoverable, silently leaking a physical unit
+ * (tombstoned config row, inventory still Status=2 with a stale ServerUUID)
+ * is not. That leak was observed live 2026-07-21 (motherboardinventory #45)
+ * on the legacy path; this keeps the command layer from reintroducing it.
+ *
  * Storage-path recompute: NONE needed here (per the pack) -- storage
  * connection paths are derived post-U-R.5 from resource/consumer data, not
  * stored state this command would need to invalidate.
@@ -60,6 +74,26 @@ final class RemoveComponentCommand extends BaseCommand
     protected function trigger(): string
     {
         return Trigger::REMOVE;
+    }
+
+    /**
+     * Rows removed BECAUSE of the cascade (the parent_id/resource closure),
+     * excluding the target row itself. Valid after execute()/dryRun() has run
+     * buildTarget(); empty when cascade=false. Lets the API adapter tell the
+     * caller what else the cascade took — the target alone is otherwise the
+     * only thing the response names.
+     *
+     * @return array[] each ['component_type'=>…, 'spec_uuid'=>…, 'serial_number'=>…]
+     */
+    public function cascadeRemovedRows(): array
+    {
+        return array_map(function ($row) {
+            return [
+                'component_type' => $row['component_type'],
+                'spec_uuid' => $row['spec_uuid'],
+                'serial_number' => $row['serial_number'],
+            ];
+        }, $this->cascadeRows);
     }
 
     protected function buildTarget(TargetState $current, array $lockedRow): TargetState
@@ -115,9 +149,44 @@ final class RemoveComponentCommand extends BaseCommand
             );
 
             if ($row['inventory_table'] !== null) {
-                $sb->updateComponentStatusAndServerUuid(
-                    $row['component_type'], $row['spec_uuid'], 1, null, 'Removed via command layer (U-C.3)', null, null, $row['serial_number']
-                );
+                $serial = $row['serial_number'];
+                $releasable = true;
+                if ($serial === null) {
+                    // Serial-less row (scalar-column types): resolve the physical
+                    // unit from its ServerUUID binding — see class docblock.
+                    $unitStmt = $pdo->prepare(
+                        "SELECT SerialNumber FROM `{$row['inventory_table']}` WHERE UUID = ? AND ServerUUID = ?"
+                    );
+                    $unitStmt->execute([$row['spec_uuid'], $this->configUuid]);
+                    $boundUnits = $unitStmt->fetchAll(PDO::FETCH_COLUMN);
+                    if (count($boundUnits) === 1) {
+                        $serial = $boundUnits[0];
+                    } elseif (count($boundUnits) === 0) {
+                        // Stale config entry — no unit bound, nothing to release.
+                        $releasable = false;
+                        error_log(
+                            "Removed {$row['component_type']} {$row['spec_uuid']} from config {$this->configUuid} "
+                            . "with no inventory row bound to it (stale config entry — nothing to release)"
+                        );
+                    }
+                    // >1 bound units with no serial: leave $serial null so the
+                    // release below hits the ambiguity refusal and this command
+                    // fails closed instead of guessing a unit.
+                }
+
+                if ($releasable) {
+                    $released = $sb->updateComponentStatusAndServerUuid(
+                        $row['component_type'], $row['spec_uuid'], 1, null, 'Removed via command layer (U-C.3)', null, null, $serial
+                    );
+                    if (!$released) {
+                        throw new CommandFailed(
+                            'unit_release_failed',
+                            "Could not identify which physical {$row['component_type']} unit to release from this server. "
+                            . 'Nothing was removed.',
+                            409
+                        );
+                    }
+                }
             }
         }
 
