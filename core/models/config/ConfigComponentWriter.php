@@ -15,11 +15,38 @@
  * try/catch, which rolls back the whole transaction — the legacy write
  * this call followed is undone too, so the two stores never diverge.
  *
- * parent_id resolution is BEST-EFFORT NULL: only the two trivially-known
- * cases are resolved here (sfp -> its parent NIC's row, onboard nic -> the
- * config's motherboard row). Every other component_type gets parent_id =
- * NULL; the real backfill (U-B.2) owns filling in the rest from historical
- * data. This class does no ims-data spec loading of its own (CLAUDE.md:
+ * parent_id resolution (revised 2026-07-21, finding F-5): resolves sfp -> its
+ * parent NIC's row, and every board-hosted type -> the config's motherboard row
+ * (cpu, ram, pciecard, hbacard, nic — onboard and component NICs alike).
+ *
+ * Previously only sfp and ONBOARD nic were resolved and everything else got
+ * parent_id = NULL, on the reasoning that the U-B.2 backfill owned the rest.
+ * But the backfill parents cpu/ram/pciecard/hbacard to the motherboard
+ * (scripts/backfill/Extractor.php:233,132,152), so backfilled rows and rows
+ * written by this live path were NOT equivalent: the same component carried a
+ * parent_id if it predated the backfill and NULL if added afterwards. Since
+ * RemoveComponentCommand's cascade walks the parent_id subtree, removal
+ * behaviour silently depended on a row's provenance, and the gap widened with
+ * every add.
+ *
+ * Component NICs are parented here even though the backfill leaves them NULL
+ * (Extractor.php:180, `$isOnboard ? 'motherboard' : null`). That asymmetry looks
+ * like an oversight rather than a decision: a component NIC is a PCIe slot
+ * device carrying a slot_ref, treated identically to pciecard/hbacard
+ * everywhere else (AddComponentCommand.php:82 groups exactly those three for
+ * slot planning), and leaving it unparented is what made a cascaded motherboard
+ * removal block on dependency.blocked_removal. Seeder 2026_07_21_002 aligns the
+ * existing backfilled rows to match.
+ *
+ * KNOWN NARROWER GAP (deliberate): the backfill can parent a riser-hosted
+ * pciecard/hbacard to the RISER row instead of the motherboard when the slot_ref
+ * names a riser and exactly one riser exists. This path always parents to the
+ * motherboard, because identifying a riser requires an ims-data spec read
+ * (component_subtype === 'Riser Card') and this class deliberately does no spec
+ * loading. The practical difference is small: cascading the motherboard still
+ * reaches the card either way; only a cascade of the riser alone differs.
+ *
+ * This class does no ims-data spec loading of its own (CLAUDE.md:
  * specs come from ComponentDataService only) — ResourceCatalog (U-L.1) is
  * the one exception, since it exists specifically to own that parsing.
  *
@@ -59,6 +86,14 @@
  */
 class ConfigComponentWriter
 {
+    /**
+     * Types that physically hang off the motherboard and therefore take it as
+     * their parent_id. Anchors (motherboard, chassis) and types with no
+     * structural parent in this schema (storage, caddy) are excluded, matching
+     * the backfill. sfp is excluded because it parents to its NIC, not the board.
+     */
+    const BOARD_HOSTED_TYPES = ['cpu', 'ram', 'pciecard', 'hbacard', 'nic'];
+
     /**
      * Current rollout mode. Reads env; falls back to "off" per FLAGS.md.
      *
@@ -270,7 +305,11 @@ class ConfigComponentWriter
             return $nic['id'] ?? null;
         }
 
-        if ($type === 'nic' && strpos((string)$specUuid, 'onboard-') === 0) {
+        // Board-hosted types parent to the config's motherboard row. Mirrors the
+        // U-B.2 backfill (Extractor.php:233 for cpu/ram, :132/:152 for
+        // pciecard/hbacard) so live-written rows match backfilled ones; see the
+        // class docblock for why component NICs are included here but not there.
+        if (in_array($type, self::BOARD_HOSTED_TYPES, true)) {
             $stmt = $pdo->prepare('SELECT motherboard_uuid FROM server_configurations WHERE config_uuid = ?');
             $stmt->execute([$configUuid]);
             $motherboardUuid = $stmt->fetchColumn();

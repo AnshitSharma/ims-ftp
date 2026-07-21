@@ -3703,11 +3703,20 @@ class ServerBuilder {
     
     /**
      * Delete configuration
+     *
+     * Refuses to delete a server that still has components installed: pulling
+     * the config out from under them is a bulk inventory mutation disguised as
+     * a delete, and the user gets no say in which units are freed. They must
+     * remove the components first, which is the path that runs the normal
+     * per-component validation and logging.
+     *
+     * $force bypasses that guard and restores the old release-everything
+     * behaviour. It exists so a config whose components cannot be removed for
+     * some other reason can never become undeletable; nothing in the UI sets it.
      */
-    public function deleteConfiguration($configUuid) {
+    public function deleteConfiguration($configUuid, $force = false) {
         // RACE CONDITION FIX: Initialize transaction control early
         $ownTransaction = false;
-        $components = [];
         $releasedCount = 0;
 
         try {
@@ -3724,7 +3733,23 @@ class ServerBuilder {
             $configData = $this->lockAndLoadConfigRow($configUuid);
 
             if ($configData) {
-                $components = $this->extractComponentsFromJson($configData);
+                $installed = $this->summarizeInstalledComponents($configUuid, $configData);
+
+                if ($installed['total'] > 0 && !$force) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return [
+                        'success' => false,
+                        'reason' => 'components_installed',
+                        'message' => 'This server still has ' . $installed['total'] . ' component'
+                            . ($installed['total'] === 1 ? '' : 's') . ' installed ('
+                            . $installed['summary'] . '). Remove all components from the server '
+                            . 'before deleting it.',
+                        'installed_total' => $installed['total'],
+                        'installed_components' => $installed['by_type']
+                    ];
+                }
 
                 // Release components back to available status and clear ServerUUID,
                 // installation date, and rack position.
@@ -3778,8 +3803,7 @@ class ServerBuilder {
             $stmt->execute([$configUuid]);
             $stmt = $this->pdo->prepare("DELETE FROM config_events WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
-            $stmt = $this->pdo->prepare("DELETE FROM config_components WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
+            $this->purgeConfigComponentRows($configUuid);
 
             // Delete configuration history if exists
             try {
@@ -3807,14 +3831,155 @@ class ServerBuilder {
             if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollback();
             }
-            error_log("Error deleting configuration: " . $e->getMessage());
+            // Never hand the raw driver message back: it carries the production
+            // database name and constraint internals (hard rule #8).
+            error_log("Error deleting configuration $configUuid: " . $e->getMessage());
             return [
                 'success' => false,
-                'message' => "Failed to delete configuration: " . $e->getMessage()
+                'message' => "Failed to delete configuration. The error has been logged."
             ];
         }
     }
-    
+
+    /**
+     * What is still physically installed in a config, for the delete guard.
+     *
+     * Counts BOTH sources and takes the larger per type, because they can
+     * disagree and either one alone would under-report: the inventory rows'
+     * ServerUUID is what the release path acts on, while the config JSON is
+     * what the builder UI renders. A unit whose ServerUUID drifted (F-1
+     * collateral) shows only in the JSON; one missing from the JSON shows only
+     * in inventory. Blocking on the larger count is the fail-safe direction --
+     * worst case the user is asked to remove something already gone, which is
+     * visible and recoverable, rather than silently losing units to a delete.
+     *
+     * @return array{total:int, by_type:array<string,int>, summary:string}
+     */
+    private function summarizeInstalledComponents($configUuid, $configData) {
+        $fromInventory = [];
+        foreach ($this->componentTables as $componentType => $table) {
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE ServerUUID = ?");
+            $stmt->execute([$configUuid]);
+            $count = (int)$stmt->fetchColumn();
+            if ($count > 0) {
+                $fromInventory[$componentType] = $count;
+            }
+        }
+
+        $fromJson = [];
+        foreach ($this->extractComponentsFromJson($configData) as $component) {
+            $type = $component['component_type'] ?? null;
+            if ($type === null || empty($component['component_uuid'])) {
+                continue;
+            }
+            $quantity = (int)($component['quantity'] ?? 1);
+            $fromJson[$type] = ($fromJson[$type] ?? 0) + max(1, $quantity);
+        }
+
+        $labels = [
+            'cpu' => 'CPU', 'ram' => 'RAM', 'storage' => 'storage', 'motherboard' => 'motherboard',
+            'nic' => 'network card', 'caddy' => 'caddy', 'chassis' => 'chassis',
+            'pciecard' => 'PCIe card', 'hbacard' => 'HBA card', 'sfp' => 'SFP module'
+        ];
+
+        $byType = [];
+        $parts = [];
+        $total = 0;
+        foreach ($this->componentTables as $componentType => $unusedTable) {
+            $count = max($fromInventory[$componentType] ?? 0, $fromJson[$componentType] ?? 0);
+            if ($count === 0) {
+                continue;
+            }
+            $byType[$componentType] = $count;
+            $total += $count;
+            $parts[] = $count . ' ' . ($labels[$componentType] ?? $componentType) . ($count === 1 ? '' : 's');
+        }
+
+        return [
+            'total'    => $total,
+            'by_type'  => $byType,
+            'summary'  => implode(', ', $parts)
+        ];
+    }
+
+    /**
+     * Delete a config's config_components rows in an FK-safe order.
+     *
+     * Two things make the obvious `DELETE ... WHERE config_uuid = ?` unsafe:
+     *
+     * 1. parent_id is self-referential and fk_cc_parent has no ON DELETE clause
+     *    (RESTRICT). A single statement gives MySQL no child-before-parent
+     *    ordering, so it fails or succeeds depending on the order rows happen to
+     *    be visited -- the same defect already fixed in
+     *    scripts/backfill/backfill.php (see its rollbackRun() comment).
+     *
+     * 2. Rows can be referenced from OTHER configs. uq_inventory_once is keyed on
+     *    the physical unit rather than the placement, so a unit moving between
+     *    configs keeps its row id and takes it to the new config, stranding the
+     *    old config's children on a pointer into a config they don't belong to.
+     *    That is how deleting a server showing ZERO components still threw
+     *    fk_cc_parent. The stale config_resources rows behind fk_cr_consumer
+     *    (RESTRICT -- blocks) and fk_cr_provider (CASCADE -- silently eats
+     *    another config's ledger) are the same problem one table over, so they
+     *    are cleared explicitly instead of left to the constraints.
+     *
+     * ConfigComponentRepository::insert() now prevents new strandings; this
+     * handles rows stranded before that fix, and the intra-config ordering.
+     */
+    private function purgeConfigComponentRows($configUuid) {
+        $stmt = $this->pdo->prepare("SELECT id FROM config_components WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        if (!$ids) {
+            return 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        $stmt = $this->pdo->prepare(
+            "DELETE FROM config_resources
+              WHERE provider_id IN ($placeholders) OR consumer_id IN ($placeholders)"
+        );
+        $stmt->execute(array_merge($ids, $ids));
+
+        require_once __DIR__ . '/../config/ConfigComponentRepository.php';
+        $repo = new ConfigComponentRepository($this->pdo);
+        $repo->repointChildrenAwayFrom($ids, $configUuid);
+
+        // Peel off leaves until nothing is left. The parent chain here is at most
+        // motherboard -> nic -> sfp, so this converges in a couple of passes; the
+        // bound is only there so a cycle in the data cannot spin forever.
+        $deleteLeaves = $this->pdo->prepare(
+            "DELETE target FROM config_components target
+               LEFT JOIN config_components child ON child.parent_id = target.id
+              WHERE target.config_uuid = ? AND child.id IS NULL"
+        );
+        $deleted = 0;
+        for ($pass = 0; $pass < 10; $pass++) {
+            $deleteLeaves->execute([$configUuid]);
+            $removed = $deleteLeaves->rowCount();
+            if ($removed === 0) {
+                break;
+            }
+            $deleted += $removed;
+        }
+
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM config_components WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $remaining = (int)$stmt->fetchColumn();
+        if ($remaining > 0) {
+            // Something outside this config still depends on these rows in a way
+            // the repair above did not cover. Fail loudly inside the transaction
+            // rather than leave a half-deleted config behind.
+            throw new RuntimeException(
+                "Cannot delete config $configUuid: $remaining component row(s) are still "
+                . "referenced by another configuration"
+            );
+        }
+
+        return $deleted;
+    }
+
     // Private helper methods
     
     /**

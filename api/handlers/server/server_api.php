@@ -1565,7 +1565,13 @@ function handleDeleteConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Cannot delete finalized configurations");
         }
         
-        $result = $serverBuilder->deleteConfiguration($configUuid);
+        // Deleting a server that still holds components is refused (the user has
+        // to remove them first). Only server.delete_finalized holders can force
+        // past that, since forcing is a bulk inventory release.
+        $force = filter_var($_POST['force'] ?? false, FILTER_VALIDATE_BOOLEAN)
+            && hasPermission($pdo, 'server.delete_finalized', $user['id']);
+
+        $result = $serverBuilder->deleteConfiguration($configUuid, $force);
 
         if ($result['success']) {
             $releasedCount = $result['components_released'] ?? 0;
@@ -1574,6 +1580,14 @@ function handleDeleteConfiguration($serverBuilder, $user) {
 
             send_json_response(1, 1, 200, "Configuration deleted successfully", [
                 'components_released' => $result['components_released']
+            ]);
+        } elseif (($result['reason'] ?? null) === 'components_installed') {
+            // 409: the request is valid, the server's state just doesn't allow it
+            // yet. The frontend renders this as an actionable warning, not an error.
+            send_json_response(0, 1, 409, $result['message'], [
+                'reason' => 'components_installed',
+                'installed_total' => $result['installed_total'] ?? 0,
+                'installed_components' => $result['installed_components'] ?? []
             ]);
         } else {
             send_json_response(0, 1, 400, $result['message'] ?? "Failed to delete configuration");

@@ -82,6 +82,18 @@ class ConfigComponentRepository
         $slotRef        = $row['slot_ref'] ?? null;
         $addedBy        = $row['added_by'] ?? $actor;
 
+        // Which config (if any) this physical unit's row belongs to RIGHT NOW.
+        // The ON DUPLICATE KEY UPDATE below keeps the row id and rewrites
+        // config_uuid, so when that previous config differs from $configUuid the
+        // unit is MOVING and any children still sitting in the old config would
+        // keep pointing at a row that no longer belongs to them — see
+        // repointChildrenAwayFrom() for why that has to be repaired here.
+        $prior = $this->pdo->prepare(
+            'SELECT id, config_uuid FROM config_components WHERE inventory_table = ? AND inventory_id = ?'
+        );
+        $prior->execute([$inventoryTable, $inventoryId]);
+        $priorRow = $prior->fetch(PDO::FETCH_ASSOC) ?: null;
+
         $stmt = $this->pdo->prepare('
             INSERT INTO config_components
                 (config_uuid, component_type, inventory_table, inventory_id, spec_uuid,
@@ -114,12 +126,108 @@ class ConfigComponentRepository
             $id = (int)$lookup->fetchColumn();
         }
 
+        if ($priorRow !== null && $priorRow['config_uuid'] !== $configUuid) {
+            // The unit moved configs and took its row id with it. Children left
+            // behind in the old config now reference a row owned by $configUuid.
+            $this->repointChildrenAwayFrom([$id], $configUuid);
+        }
+
         $this->bumpRevision($configUuid, 'add', [
             'component_id'   => $id,
             'component_type' => $componentType,
         ], $actor);
 
         return $id;
+    }
+
+    /**
+     * Repair children that reference $parentIds from OUTSIDE $parentConfigUuid.
+     *
+     * uq_inventory_once is keyed on the physical unit (inventory_table,
+     * inventory_id) and NOT on the placement, so insert() reuses a row — same
+     * id, new config_uuid — when a unit is placed into a different config. Any
+     * child rows still sitting in the old config keep pointing at that id, which
+     * is now owned by another config. Those cross-config parent links are always
+     * wrong (a component cannot hang off a board that lives in a different
+     * server) and they turn fk_cc_parent (RESTRICT) into a landmine: deleting
+     * the new owner config blows up on rows the user cannot even see.
+     *
+     * Repair rule — the same one ConfigComponentWriter::resolveParentId() would
+     * have applied: a live board-hosted child re-parents to its OWN config's
+     * live motherboard; everything else (sfp, whose parent is a NIC rather than
+     * the board; tombstoned history rows; configs with no motherboard) is
+     * detached to NULL. Tombstoned children are included because the FK holds
+     * regardless of removed_at.
+     *
+     * Deliberately does NOT bump revision or append an event: this repairs a
+     * pointer that should never have existed, it is not a change to what the
+     * old config contains.
+     *
+     * @param int[]  $parentIds         config_components ids being moved/removed
+     * @param string $parentConfigUuid  the config those ids now belong to
+     * @return int number of child rows repaired
+     */
+    public function repointChildrenAwayFrom(array $parentIds, $parentConfigUuid)
+    {
+        $this->requireTransaction('repointChildrenAwayFrom');
+
+        $parentIds = array_values(array_unique(array_filter(array_map('intval', $parentIds))));
+        if (!$parentIds) {
+            return 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($parentIds), '?'));
+        $stmt = $this->pdo->prepare(
+            "SELECT id, config_uuid, component_type, removed_at
+               FROM config_components
+              WHERE parent_id IN ($placeholders)
+                AND config_uuid <> ?"
+        );
+        $stmt->execute(array_merge($parentIds, [$parentConfigUuid]));
+        $children = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        if (!$children) {
+            return 0;
+        }
+
+        require_once __DIR__ . '/ConfigComponentWriter.php';
+        $update = $this->pdo->prepare('UPDATE config_components SET parent_id = ? WHERE id = ?');
+        $motherboards = [];
+        $repaired = 0;
+
+        foreach ($children as $child) {
+            $newParent = null;
+
+            $boardHosted = in_array($child['component_type'], ConfigComponentWriter::BOARD_HOSTED_TYPES, true);
+            if ($boardHosted && $child['removed_at'] === null) {
+                $childConfig = $child['config_uuid'];
+                if (!array_key_exists($childConfig, $motherboards)) {
+                    $mb = $this->pdo->prepare(
+                        'SELECT id FROM config_components
+                          WHERE config_uuid = ? AND component_type = ? AND removed_at IS NULL
+                          LIMIT 1'
+                    );
+                    $mb->execute([$childConfig, 'motherboard']);
+                    $found = $mb->fetchColumn();
+                    $motherboards[$childConfig] = $found === false ? null : (int)$found;
+                }
+                $candidate = $motherboards[$childConfig];
+                // Never re-point at a row that is itself moving away.
+                if ($candidate !== null && !in_array($candidate, $parentIds, true)) {
+                    $newParent = $candidate;
+                }
+            }
+
+            $update->execute([$newParent, $child['id']]);
+            $repaired++;
+        }
+
+        error_log(sprintf(
+            'ConfigComponentRepository: repaired %d cross-config parent link(s) pointing into config %s',
+            $repaired,
+            $parentConfigUuid
+        ));
+
+        return $repaired;
     }
 
     /**
