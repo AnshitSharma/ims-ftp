@@ -126,21 +126,54 @@ function runChecks(PDO $pdo): array {
                 $table = COMPONENT_TABLES[$ref['type']] ?? null;
                 if ($table === null || !tableExists($pdo, $table)) continue;
 
-                $where = 'UUID = ?';
-                $params = [$ref['uuid']];
-                if ($ref['serial'] !== null) { $where .= ' AND SerialNumber = ?'; $params[] = $ref['serial']; }
+                // UUID is the MODEL/spec id — many physical units share it; SerialNumber
+                // is the unit. When the config ref carries a serial we can match the unit
+                // exactly. When it does not (only CPU refs carry one today), a bare
+                // `UUID = ? LIMIT 1` samples an ARBITRARY unit of that model: it reports a
+                // violation when some other unit happens to be available even though this
+                // config's own unit is correctly installed, and conversely can mask a real
+                // violation by sampling an in-use unit. Both directions were observed on
+                // model 4c8f5e1b (2026-07-21, finding F-2).
+                //
+                // The question this check actually asks is "does a physical unit of this
+                // model belong to THIS config, and is it marked in-use?" — so scope by
+                // ServerUUID rather than sampling.
+                if ($ref['serial'] !== null) {
+                    $check = $pdo->prepare("SELECT Status FROM `$table` WHERE UUID = ? AND SerialNumber = ? LIMIT 1");
+                    $check->execute([$ref['uuid'], $ref['serial']]);
+                    $status = $check->fetchColumn();
+                    $available = ($status !== false && (int)$status === 1);
+                    $detail = 'Status=1 (available) but referenced by config ' . $config['config_uuid'];
+                } else {
+                    // Any unit of this model actually allocated to this config?
+                    $check = $pdo->prepare(
+                        "SELECT Status FROM `$table`
+                          WHERE UUID = ?
+                            AND ServerUUID = ?
+                          ORDER BY Status DESC LIMIT 1"
+                    );
+                    $check->execute([$ref['uuid'], $config['config_uuid']]);
+                    $status = $check->fetchColumn();
 
-                $check = $pdo->prepare("SELECT Status FROM `$table` WHERE $where LIMIT 1");
-                $check->execute($params);
-                $status = $check->fetchColumn();
+                    if ($status === false) {
+                        // Nothing of this model is allocated to this config at all.
+                        $available = true;
+                        $detail = 'referenced by config ' . $config['config_uuid']
+                                . ' but NO physical unit of this model is allocated to it';
+                    } else {
+                        $available = ((int)$status === 1);
+                        $detail = 'unit allocated to config ' . $config['config_uuid']
+                                . ' is marked Status=1 (available)';
+                    }
+                }
 
-                if ($status !== false && (int)$status === 1) {
+                if ($available) {
                     $violations[] = [
                         'check' => 'referenced_while_available',
                         'type' => $ref['type'], 'table' => $table,
                         'uuid' => $ref['uuid'], 'serial' => $ref['serial'],
                         'config_uuid' => $config['config_uuid'],
-                        'detail' => 'Status=1 (available) but referenced by config ' . $config['config_uuid'],
+                        'detail' => $detail,
                     ];
                 }
             }

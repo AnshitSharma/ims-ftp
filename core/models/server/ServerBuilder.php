@@ -3708,6 +3708,7 @@ class ServerBuilder {
         // RACE CONDITION FIX: Initialize transaction control early
         $ownTransaction = false;
         $components = [];
+        $releasedCount = 0;
 
         try {
             $ownTransaction = !$this->pdo->inTransaction();
@@ -3725,15 +3726,40 @@ class ServerBuilder {
             if ($configData) {
                 $components = $this->extractComponentsFromJson($configData);
 
-                // Release components back to available status and clear ServerUUID, installation date, and rack position
-                foreach ($components as $component) {
-                    $this->updateComponentStatusAndServerUuid(
-                        $component['component_type'],
-                        $component['component_uuid'],
-                        1,
-                        null,
-                        "Released from deleted configuration $configUuid"
-                    );
+                // Release components back to available status and clear ServerUUID,
+                // installation date, and rack position.
+                //
+                // Driven by the inventory rows' own ServerUUID, NOT by the config JSON.
+                // extractComponentsFromJson() only carries serial_number for CPUs, so a
+                // JSON-driven release passed $serialNumber = null for the other nine
+                // types, collapsing updateComponentStatusAndServerUuid()'s WHERE to
+                // `UUID = ?` alone -- which frees EVERY physical unit sharing that model
+                // UUID, in every other configuration. That is how motherboards 49/53/55
+                // (model 4c8f5e1b, three different configs) were all released by a single
+                // delete at 2026-07-20 22:48:46. Same model-vs-unit conflation as the
+                // 2026-07-20 onboard-NIC fix, in a place that remediation did not cover.
+                //
+                // ServerUUID is the authoritative record of which PHYSICAL unit belongs to
+                // this config, so releasing by it is unit-precise by construction, and also
+                // covers quantity>1 entries and units missing from the JSON.
+                foreach ($this->componentTables as $componentType => $table) {
+                    $stmt = $this->pdo->prepare("SELECT UUID, SerialNumber FROM `$table` WHERE ServerUUID = ?");
+                    $stmt->execute([$configUuid]);
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $unit) {
+                        $released = $this->updateComponentStatusAndServerUuid(
+                            $componentType,
+                            $unit['UUID'],
+                            1,
+                            null,
+                            "Released from deleted configuration $configUuid",
+                            null,
+                            null,
+                            $unit['SerialNumber']
+                        );
+                        if ($released) {
+                            $releasedCount++;
+                        }
+                    }
                 }
             }
 
@@ -3774,7 +3800,7 @@ class ServerBuilder {
             return [
                 'success' => true,
                 'message' => "Configuration deleted successfully",
-                'components_released' => count($components)
+                'components_released' => $releasedCount
             ];
 
         } catch (Exception $e) {
@@ -5359,6 +5385,25 @@ class ServerBuilder {
             if ($serialNumber !== null) {
                 $whereClause .= " AND SerialNumber = ?";
                 $whereParams[] = $serialNumber;
+            }
+
+            // Fail closed on an AMBIGUOUS update. Without a serial the WHERE above is
+            // `UUID = ?` alone, which matches every physical unit of that model -- so a
+            // single caller omitting the serial silently rewrites Status/ServerUUID for
+            // other servers' components (the deleteConfiguration() defect fixed
+            // 2026-07-21; see its note). Refusing only when the model genuinely has more
+            // than one unit keeps the unambiguous single-unit case working for any
+            // caller that legitimately has no serial to hand.
+            if ($serialNumber === null) {
+                $ambiguityStmt = $this->pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE UUID = ?");
+                $ambiguityStmt->execute([$componentUuid]);
+                if ((int)$ambiguityStmt->fetchColumn() > 1) {
+                    error_log(
+                        "REFUSED ambiguous inventory update: $componentType $componentUuid has multiple "
+                        . "physical units and no SerialNumber was supplied (reason: $reason)"
+                    );
+                    return false;
+                }
             }
 
             // Get current status first for logging
@@ -8138,78 +8183,13 @@ class ServerBuilder {
         }
     }
 
-    /**
-     * P4.4: Detect and fix orphaned ServerUUID assignments
-     * When a component shows ServerUUID but is not in that config's JSON, remove the orphaned reference
-     *
-     * @param string $configUuid Server configuration UUID
-     * @return array Fix summary
-     */
-    public function fixOrphanedServerUUIDs($configUuid) {
-        try {
-            $fixed = [];
-            $errors = [];
-
-            // Get configuration
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $config = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$config) {
-                return ['success' => false, 'message' => 'Configuration not found'];
-            }
-
-            // Extract components actually in this config
-            $components = $this->extractComponentsFromJson($config);
-            $configComponentUuids = [];
-            foreach ($components as $comp) {
-                $configComponentUuids[$comp['component_type']][] = $comp['component_uuid'];
-            }
-
-            // P4.4: Check each component type table for orphaned ServerUUID
-            foreach ($this->componentTables as $type => $table) {
-                try {
-                    $stmt = $this->pdo->prepare("SELECT UUID FROM $table WHERE ServerUUID = ?");
-                    $stmt->execute([$configUuid]);
-                    $rows = $stmt->fetchAll();
-
-                    foreach ($rows as $row) {
-                        $uuid = $row['UUID'];
-                        // Check if this component is actually in the configuration
-                        $isInConfig = in_array($uuid, $configComponentUuids[$type] ?? []);
-
-                        if (!$isInConfig) {
-                            // P4.4: ORPHANED! Clear ServerUUID
-                            $updateStmt = $this->pdo->prepare("UPDATE $table SET ServerUUID = NULL, Location = NULL, RackPosition = NULL, InstallationDate = NULL WHERE UUID = ?");
-                            if ($updateStmt->execute([$uuid])) {
-                                $fixed[] = "Cleared orphaned ServerUUID from $type:$uuid";
-                                error_log("P4.4 AUTOFIX: Cleared orphaned ServerUUID from $type:$uuid in config $configUuid");
-                            } else {
-                                $errors[] = "Failed to fix $type:$uuid";
-                            }
-                        }
-                    }
-                } catch (Exception $e) {
-                    error_log("P4.4: Error checking $table for orphaned ServerUUIDs: " . $e->getMessage());
-                }
-            }
-
-            return [
-                'success' => true,
-                'fixed_count' => count($fixed),
-                'fixed_items' => $fixed,
-                'errors' => $errors,
-                'message' => count($fixed) > 0 ? "Fixed " . count($fixed) . " orphaned ServerUUID(s)" : "No orphaned ServerUUIDs found"
-            ];
-
-        } catch (Exception $e) {
-            error_log("Error fixing orphaned ServerUUIDs: " . $e->getMessage());
-            return [
-                'success' => false,
-                'message' => 'Failed to fix orphaned ServerUUIDs: ' . $e->getMessage()
-            ];
-        }
-    }
+    // NOTE (2026-07-21): fixOrphanedServerUUIDs() was removed here. It was dead
+    // code -- zero callers fleet-wide -- and carried the same model-vs-unit defect
+    // fixed in deleteConfiguration() this session: it cleared ServerUUID with
+    // `UPDATE $table ... WHERE UUID = ?`, unscoped by SerialNumber AND unscoped by
+    // the config it was called for, so a single "autofix" would have detached every
+    // physical unit of that model across the whole fleet. Deleted rather than fixed;
+    // scripts/verify/orphan_report.php is the supported way to detect orphans.
 
     /**
      * P4.1: Get deterministic lock order for multiple resources
