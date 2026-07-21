@@ -766,6 +766,62 @@ function formatAssetTag($type, $inventoryId) {
 }
 
 /**
+ * Turn a duplicate-key PDOException into an operator-readable message.
+ *
+ * Inventory rows carry UNIQUE indexes on SerialNumber and AssetTag. Violating
+ * one is an operator mistake (typing a serial that already exists), not a
+ * server fault, so it must surface as a 400 naming the unit that already holds
+ * the value — the AssetTag is what the operator can actually go and find on a
+ * shelf. Returns InvalidArgumentException, which the component handlers already
+ * map to 400; any non-duplicate PDOException is handed straight back so real
+ * database faults keep their 500.
+ *
+ * @param  string $tableName caller-supplied, already resolved via getComponentTableName()
+ * @return Exception the exception the caller should throw
+ */
+function describeDuplicateComponentKey(PDO $pdo, $tableName, $type, array $safeData, PDOException $e) {
+    // 23000 = integrity constraint violation; driver code 1062 = duplicate entry.
+    $isDuplicate = ($e->getCode() === '23000')
+        && isset($e->errorInfo[1]) && (int)$e->errorInfo[1] === 1062;
+    if (!$isDuplicate) {
+        return $e;
+    }
+
+    $serial = isset($safeData['SerialNumber']) ? trim((string)$safeData['SerialNumber']) : '';
+    if ($serial === '') {
+        // Duplicate on some other unique key (AssetTag, or a type-specific one).
+        // Say so plainly rather than guessing at a column.
+        return new InvalidArgumentException(
+            "This " . $type . " conflicts with an existing inventory record."
+        );
+    }
+
+    // Name the offending unit. Wrapped because this runs on the heels of a
+    // failed write — if the lookup itself fails we still owe the caller the
+    // duplicate-serial message, just without the pointer.
+    $existing = null;
+    try {
+        $lookup = $pdo->prepare("SELECT ID, AssetTag FROM `$tableName` WHERE SerialNumber = ? LIMIT 1");
+        $lookup->execute([$serial]);
+        $existing = $lookup->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $ignored) {
+        error_log("Duplicate-key lookup failed on $tableName: " . $ignored->getMessage());
+    }
+
+    if ($existing && !empty($existing['AssetTag'])) {
+        return new InvalidArgumentException(
+            "Serial number '$serial' is already registered to " . $existing['AssetTag']
+            . ". If this is a different unit, leave the serial blank — it will be "
+            . "identified by its own asset tag."
+        );
+    }
+
+    return new InvalidArgumentException(
+        "Serial number '$serial' is already registered to another " . $type . " unit."
+    );
+}
+
+/**
  * Convert CamelCase to snake_case
  */
 function convertCamelToSnake($input) {
@@ -1065,6 +1121,16 @@ function addComponent($pdo, $type, $data, $userId) {
                 'asset_tag' => $assetTag
             ];
 
+        } catch (PDOException $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            // A duplicate serial is a data-entry mistake, not a server fault:
+            // report it as a 400 naming the unit already holding that serial so
+            // the operator can go look at it, instead of the bare 500 the raw
+            // PDOException used to produce. Anything else is a real error and
+            // keeps propagating.
+            throw describeDuplicateComponentKey($pdo, $tableName, $type, $safeData, $e);
         } catch (Exception $e) {
             if ($ownsTransaction && $pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -1120,6 +1186,15 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
             $safeData[$allowedCols[$lc]] = $value;
         }
 
+        // Same NULL-not-'' rule as addComponent: clearing the serial on an edit
+        // must store NULL. SerialNumber is UNIQUE and MySQL allows many NULLs but
+        // only one '', so without this the first unit edited to a blank serial
+        // succeeds and every later one dies on a duplicate key.
+        if (array_key_exists('SerialNumber', $safeData)
+            && trim((string)$safeData['SerialNumber']) === '') {
+            $safeData['SerialNumber'] = null;
+        }
+
         if (empty($safeData)) {
             throw new InvalidArgumentException("No valid fields provided for $type update");
         }
@@ -1141,6 +1216,11 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
 
     } catch (InvalidArgumentException $e) {
         throw $e;
+    } catch (PDOException $e) {
+        error_log("Error updating $type component: " . $e->getMessage());
+        // $safeData is unset if the failure came from the column lookup, before
+        // it was built — a duplicate key cannot be the cause in that case.
+        throw describeDuplicateComponentKey($pdo, $tableName, $type, isset($safeData) ? $safeData : [], $e);
     } catch (Exception $e) {
         error_log("Error updating $type component: " . $e->getMessage());
         throw $e;
