@@ -941,10 +941,23 @@ class ServerBuilder {
                 try {
                     require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                     $nicHandler = new OnboardNICHandler($this->pdo);
-                    $onboardNICResult = $nicHandler->autoAddOnboardNICs($configUuid, $componentUuid);
+                    // Onboard NICs are identified by the PHYSICAL board, so pass the
+                    // locked inventory row id. Virtual configs have no such row
+                    // (see the dummy $componentDetails above) and are skipped.
+                    $onboardNICResult = $nicHandler->autoAddOnboardNICs(
+                        $configUuid,
+                        $componentUuid,
+                        $componentDetails['ID'] ?? null
+                    );
 
                     if ($onboardNICResult['count'] > 0) {
                         $response['onboard_nics_added'] = $onboardNICResult;
+                    }
+                    // A board whose spec declares onboard NICs but materialized none
+                    // is a defect, not a no-op -- say so rather than returning a
+                    // success envelope that hides an empty network section.
+                    if (isset($onboardNICResult['error'])) {
+                        $response['onboard_nic_warning'] = "Motherboard added but onboard NICs could not be attached: " . $onboardNICResult['error'];
                     }
                 } catch (Exception $nicError) {
                     error_log("Error auto-adding onboard NICs: " . $nicError->getMessage());
@@ -2415,8 +2428,10 @@ class ServerBuilder {
                         $updateFields[] = "motherboard_uuid = ?";
                         $updateValues[] = $componentUuid;
 
-                        // Auto-create onboard NICs from motherboard JSON specs
-                        $this->createOnboardNICsFromMotherboard($configUuid, $componentUuid);
+                        // Onboard NICs are materialized by OnboardNICHandler at the
+                        // add-component call sites (ServerBuilder::addComponent and
+                        // AddComponentCommand::apply), which have the locked physical
+                        // inventory row this table-update method does not.
                     } elseif ($action === 'remove') {
                         $updateFields[] = "motherboard_uuid = NULL";
                     }
@@ -3080,78 +3095,6 @@ class ServerBuilder {
         } catch (Exception $e) {
             error_log("Error updating HBA card configuration: " . $e->getMessage());
             throw $e;
-        }
-    }
-
-    /**
-     * Create onboard NICs from motherboard JSON specifications
-     */
-    private function createOnboardNICsFromMotherboard($configUuid, $motherboardUuid) {
-        try {
-            // Load motherboard JSON specs using ComponentDataService
-            require_once __DIR__ . '/../components/ComponentDataService.php';
-            $dataService = ComponentDataService::getInstance($this->pdo);
-
-            $motherboardSpecs = $dataService->findComponentByUuid('motherboard', $motherboardUuid);
-
-            if (!$motherboardSpecs) {
-                return;
-            }
-
-            // Check if motherboard has onboard NICs
-            $onboardNics = $motherboardSpecs['networking']['onboard_nics'] ?? [];
-
-            if (empty($onboardNics)) {
-                return;
-            }
-
-            // Create each onboard NIC
-            foreach ($onboardNics as $index => $nicSpec) {
-                $onboardNicIndex = $index + 1;
-
-                // Generate a unique UUID for this onboard NIC
-                $onboardNicUuid = "onboard-nic-" . substr($motherboardUuid, 0, 24) . "-{$onboardNicIndex}";
-
-                // Prepare data for insert
-                $serialNumber = "ONBOARD-NIC-{$motherboardUuid}-{$onboardNicIndex}";
-                $controller = $nicSpec['controller'] ?? 'Unknown';
-                $ports = $nicSpec['ports'] ?? 1;
-                $speed = $nicSpec['speed'] ?? 'Unknown';
-                $connector = $nicSpec['connector'] ?? 'Unknown';
-                $location = "Onboard NIC #{$onboardNicIndex} from Motherboard";
-                $notes = "Auto-created onboard NIC from motherboard $motherboardUuid";
-
-                // Insert into nicinventory table
-                $insertNicStmt = $this->pdo->prepare("
-                    INSERT INTO nicinventory
-                    (UUID, SerialNumber, Status, SourceType, ParentComponentUUID, OnboardIndex,
-                     Controller, Ports, Speed, Connector, Location, Notes, ServerUUID)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-
-                $insertNicStmt->execute([
-                    $onboardNicUuid,
-                    $serialNumber,
-                    2, // In use
-                    'onboard',
-                    $motherboardUuid,
-                    $onboardNicIndex,
-                    $controller,
-                    $ports,
-                    $speed,
-                    $connector,
-                    $location,
-                    $notes,
-                    $configUuid
-                ]);
-
-                // Update nic_configuration JSON column
-                $this->updateNicConfiguration($configUuid, $onboardNicUuid, 1, 'add');
-            }
-
-        } catch (Exception $e) {
-            error_log("Error in createOnboardNICsFromMotherboard: " . $e->getMessage());
-            // Don't throw - allow motherboard addition to succeed even if onboard NIC creation fails
         }
     }
 

@@ -17,13 +17,23 @@ class OnboardNICHandler {
     }
 
     /**
-     * Extract and add onboard NICs when motherboard is added to config
+     * Extract and attach onboard NICs when a motherboard is added to a config
      *
-     * @param string $configUuid Server configuration UUID
-     * @param string $motherboardUuid Motherboard component UUID
+     * An onboard NIC is a permanent physical feature of ONE physical board, so
+     * its identity is keyed on that board's inventory row id -- NOT on the
+     * motherboard spec/model uuid. Keying on the model made every physical
+     * board of the same model compete for a single identity
+     * ("ONBOARD-{mb8}-{index}"), and since nicinventory.SerialNumber is UNIQUE,
+     * the 2nd+ board's INSERT died on a duplicate key that was swallowed here,
+     * leaving that server silently without onboard NICs.
+     *
+     * @param string   $configUuid             Server configuration UUID
+     * @param string   $motherboardUuid        Motherboard SPEC uuid (ims-data JSON)
+     * @param int|null $motherboardInventoryId motherboardinventory.ID of the
+     *                                         physical board being added
      * @return array Result with count and NIC details
      */
-    public function autoAddOnboardNICs($configUuid, $motherboardUuid) {
+    public function autoAddOnboardNICs($configUuid, $motherboardUuid, $motherboardInventoryId = null) {
         // Load motherboard specifications from JSON (no DB ops, safe before transaction)
         $mbSpecs = $this->getMotherboardSpecs($motherboardUuid);
 
@@ -35,6 +45,19 @@ class OnboardNICHandler {
             return ['count' => 0, 'nics' => [], 'message' => 'No onboard NICs in motherboard'];
         }
 
+        // Without the physical board's inventory id there is no unit-scoped
+        // identity to mint. Virtual/test configs legitimately have no inventory
+        // row (ServerBuilder skips locking for them) and must not materialize
+        // real nicinventory rows -- they are reported as skipped, not failed.
+        if ($motherboardInventoryId === null) {
+            return [
+                'count' => 0,
+                'nics' => [],
+                'message' => 'Skipped: no physical motherboard inventory row (virtual config)'
+            ];
+        }
+        $motherboardInventoryId = (int)$motherboardInventoryId;
+
         $onboardNICs = $mbSpecs['networking']['onboard_nics'];
         $addedNICs = [];
 
@@ -44,20 +67,49 @@ class OnboardNICHandler {
                 $this->pdo->beginTransaction();
             }
 
-            // Check if onboard NICs already exist in nicinventory (including orphaned ones with NULL ServerUUID)
+            // Rows for THIS physical board, whatever config (if any) it was last
+            // in -- an onboard NIC travels with the board between servers.
             $checkExistingStmt = $this->pdo->prepare("
-                SELECT UUID, OnboardNICIndex, ServerUUID, Status FROM nicinventory
-                WHERE ParentComponentUUID = ?
+                SELECT UUID, OnboardNICIndex, ServerUUID, Status, Flag FROM nicinventory
+                WHERE ParentInventoryID = ?
                 AND SourceType = 'onboard'
-                AND (ServerUUID = ? OR ServerUUID IS NULL)
             ");
-            $checkExistingStmt->execute([$motherboardUuid, $configUuid]);
-            $existingOnboardNICs = $checkExistingStmt->fetchAll(PDO::FETCH_ASSOC);
+            $checkExistingStmt->execute([$motherboardInventoryId]);
 
-            // If onboard NICs exist, just make sure they're properly tracked in configuration
-            if (!empty($existingOnboardNICs)) {
-                foreach ($existingOnboardNICs as $existingNIC) {
-                    // Fix ServerUUID and Status in nicinventory if they're wrong
+            $existingByIndex = [];
+            foreach ($checkExistingStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $existingByIndex[(int)$row['OnboardNICIndex']] = $row;
+            }
+
+            $mbShort = substr($motherboardUuid, 0, 8);
+
+            foreach ($onboardNICs as $index => $nicSpec) {
+                $nicIndex = $index + 1;
+
+                // Identity is per PHYSICAL board: onboard-{mb8}-{inventoryId}-{n}
+                $syntheticUuid = "onboard-{$mbShort}-{$motherboardInventoryId}-{$nicIndex}";
+                $serialNumber = "ONBOARD-{$mbShort}-{$motherboardInventoryId}-{$nicIndex}";
+
+                // Create descriptive notes
+                $notes = sprintf(
+                    "Onboard: %s %d-port %s %s",
+                    $nicSpec['controller'] ?? 'Unknown Controller',
+                    $nicSpec['ports'] ?? 0,
+                    $nicSpec['speed'] ?? 'Unknown Speed',
+                    $nicSpec['connector'] ?? 'Unknown Connector'
+                );
+
+                if (isset($existingByIndex[$nicIndex])) {
+                    $existingNIC = $existingByIndex[$nicIndex];
+
+                    // A NIC deliberately disabled by replaceOnboardNIC() (TP-4C:
+                    // Status=0, Flag='replaced') stays disabled -- re-adding the
+                    // board must not silently resurrect a port the user replaced.
+                    if ($existingNIC['Flag'] === 'replaced') {
+                        continue;
+                    }
+
+                    // Re-attach this board's existing NIC row to the current config
                     if ($existingNIC['ServerUUID'] !== $configUuid || $existingNIC['Status'] != 2) {
                         $fixNICStmt = $this->pdo->prepare("
                             UPDATE nicinventory
@@ -71,87 +123,43 @@ class OnboardNICHandler {
                         'uuid' => $existingNIC['UUID'],
                         'source_type' => 'onboard',
                         'parent_motherboard_uuid' => $motherboardUuid,
-                        'onboard_index' => $existingNIC['OnboardNICIndex'],
-                        'action' => 're-added'
+                        'parent_inventory_id' => $motherboardInventoryId,
+                        'onboard_index' => $nicIndex,
+                        'action' => 're-attached'
                     ];
+                    continue;
                 }
 
-                // Update nic_config JSON (this is the source of truth now)
-                $this->updateNICConfigJSON($configUuid);
-
-                if ($ownTransaction) {
-                    $this->pdo->commit();
-                }
-                return [
-                    'count' => count($addedNICs),
-                    'nics' => $addedNICs,
-                    'message' => count($addedNICs) . ' onboard NIC(s) restored to configuration'
-                ];
-            }
-
-            // If no existing onboard NICs, clean up any orphaned entries and create new ones
-            $cleanupStmt = $this->pdo->prepare("
-                DELETE FROM nicinventory
-                WHERE ParentComponentUUID = ?
-                AND SourceType = 'onboard'
-                AND ServerUUID = ?
-            ");
-            $cleanupStmt->execute([$motherboardUuid, $configUuid]);
-            // Note: No need to clean up from server_configuration_components as it's deprecated
-            // The nic_config JSON will be updated at the end to reflect current state
-
-            foreach ($onboardNICs as $index => $nicSpec) {
-                $nicIndex = $index + 1;
-                // Create shorter UUID that fits in varchar(36): onboard-MB_SHORT-N
-                // Format: onboard-{first_8_chars}-{nic_index} = max 18 chars
-                $mbShort = substr($motherboardUuid, 0, 8);
-                $syntheticUuid = "onboard-{$mbShort}-{$nicIndex}";
-
-                // Create descriptive notes
-                $notes = sprintf(
-                    "Onboard: %s %d-port %s %s",
-                    $nicSpec['controller'] ?? 'Unknown Controller',
-                    $nicSpec['ports'] ?? 0,
-                    $nicSpec['speed'] ?? 'Unknown Speed',
-                    $nicSpec['connector'] ?? 'Unknown Connector'
-                );
-
-                // Generate unique serial number for onboard NIC
-                $serialNumber = sprintf('ONBOARD-%s-%d', substr($motherboardUuid, 0, 8), $nicIndex);
-
-                // Insert into nicinventory with onboard tracking
+                // Insert into nicinventory with onboard tracking. No pre-INSERT
+                // cleanup DELETE: identity is stable per board now, so there are
+                // no orphans of a different shape to clear.
                 $stmt = $this->pdo->prepare("
                     INSERT INTO nicinventory
-                    (UUID, SourceType, ParentComponentUUID, OnboardNICIndex, Status, ServerUUID, Notes, SerialNumber, Flag, CreatedAt, UpdatedAt)
-                    VALUES (?, 'onboard', ?, ?, 2, ?, ?, ?, 'Onboard', NOW(), NOW())
+                    (UUID, SourceType, ParentComponentUUID, ParentInventoryID, OnboardNICIndex, Status, ServerUUID, Notes, SerialNumber, Flag, CreatedAt, UpdatedAt)
+                    VALUES (?, 'onboard', ?, ?, ?, 2, ?, ?, ?, 'Onboard', NOW(), NOW())
                 ");
 
-                $result = $stmt->execute([
+                $stmt->execute([
                     $syntheticUuid,
                     $motherboardUuid,
+                    $motherboardInventoryId,
                     $nicIndex,
                     $configUuid,
                     $notes,
                     $serialNumber
                 ]);
 
-                if (!$result) {
-                    error_log("Failed to insert onboard NIC into nicinventory: " . json_encode($stmt->errorInfo()));
-                    continue;
-                }
-
-                // Note: No need to add to server_configuration_components as it's deprecated
-                // The nic_config JSON will be updated at the end to include this NIC
-
                 $addedNICs[] = array_merge($nicSpec, [
                     'uuid' => $syntheticUuid,
                     'source_type' => 'onboard',
                     'parent_motherboard_uuid' => $motherboardUuid,
-                    'onboard_index' => $nicIndex
+                    'parent_inventory_id' => $motherboardInventoryId,
+                    'onboard_index' => $nicIndex,
+                    'action' => 'created'
                 ]);
             }
 
-            // Update nic_config JSON in server_build_templates
+            // Update nic_config JSON (this is the source of truth for reads)
             $this->updateNICConfigJSON($configUuid);
 
             if ($ownTransaction) {
@@ -160,14 +168,16 @@ class OnboardNICHandler {
             return [
                 'count' => count($addedNICs),
                 'nics' => $addedNICs,
-                'message' => count($addedNICs) . ' onboard NIC(s) automatically added'
+                'message' => count($addedNICs) . ' onboard NIC(s) attached to configuration'
             ];
 
         } catch (Exception $e) {
             if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-            error_log("Error in autoAddOnboardNICs: " . $e->getMessage());
+            // Never swallow silently: a failure here is why onboard NICs went
+            // missing unnoticed for months. Callers surface this to the client.
+            error_log("Error in autoAddOnboardNICs (config $configUuid, board inventory id $motherboardInventoryId): " . $e->getMessage());
             return [
                 'count' => 0,
                 'nics' => [],
@@ -350,15 +360,23 @@ class OnboardNICHandler {
     }
 
     /**
-     * Remove onboard NICs when motherboard is removed from configuration
+     * Detach onboard NICs when a motherboard is removed from a configuration
      *
-     * @param string $motherboardUuid
+     * An onboard NIC cannot be unplugged from its board, so removing the board
+     * from a server does NOT destroy the NIC -- the row is detached
+     * (ServerUUID=NULL, Status=available) and re-attaches when that same
+     * physical board goes into another server. Deleting the row used to lose
+     * the board linkage and any replaced/disabled state along with it, which is
+     * the recreate-from-scratch cycle the TP-4C note in replaceOnboardNIC()
+     * describes.
+     *
+     * @param string $motherboardUuid Motherboard SPEC uuid
      * @param string $configUuid
-     * @return array Result with count of removed NICs
+     * @return array Result with count of detached NICs
      */
     public function removeOnboardNICs($motherboardUuid, $configUuid) {
         try {
-            // Get onboard NIC UUIDs before deletion
+            // Get onboard NIC UUIDs before detaching
             $stmt = $this->pdo->prepare("
                 SELECT UUID FROM nicinventory
                 WHERE ParentComponentUUID = ? AND SourceType = 'onboard' AND ServerUUID = ?
@@ -366,25 +384,27 @@ class OnboardNICHandler {
             $stmt->execute([$motherboardUuid, $configUuid]);
             $onboardNICs = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
-            // Note: No need to delete from server_configuration_components as it's deprecated
-            // The nic_config JSON will be updated at the end to reflect current state
-
-            // Delete from nicinventory
+            // Detach from this config. A row disabled by replaceOnboardNIC()
+            // (Flag='replaced') keeps its Status=0 -- it leaves the server, but
+            // it does not become an available port again.
             $stmt = $this->pdo->prepare("
-                DELETE FROM nicinventory
+                UPDATE nicinventory
+                SET ServerUUID = NULL,
+                    Status = CASE WHEN Flag = 'replaced' THEN Status ELSE 1 END,
+                    UpdatedAt = NOW()
                 WHERE ParentComponentUUID = ? AND SourceType = 'onboard' AND ServerUUID = ?
             ");
             $stmt->execute([$motherboardUuid, $configUuid]);
-            $deletedFromInventory = $stmt->rowCount();
+            $detachedCount = $stmt->rowCount();
 
             // Update nic_config JSON to reflect removal
             $this->updateNICConfigJSON($configUuid);
 
             return [
                 'success' => true,
-                'removed_count' => $deletedFromInventory,
-                'removed_uuids' => $onboardNICs,
-                'message' => $deletedFromInventory . ' onboard NIC(s) removed'
+                'detached_count' => $detachedCount,
+                'detached_uuids' => $onboardNICs,
+                'message' => $detachedCount . ' onboard NIC(s) detached from configuration'
             ];
 
         } catch (Exception $e) {

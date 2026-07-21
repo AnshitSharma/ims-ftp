@@ -75,8 +75,9 @@ file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([]));
 putenv("IMS_DATA_PATH=$tmpImsData");
 
 $catalog = new ResourceCatalog();
-$onboard1 = 'onboard-4f8e6c3d-1';           // OnboardNICHandler format (8-char prefix)
-$onboard2 = 'onboard-nic-' . substr($mbUuid, 0, 24) . '-2'; // ServerBuilder format (24-char prefix)
+$onboard1 = 'onboard-4f8e6c3d-1';           // LEGACY model-scoped format (8-char prefix)
+$onboard2 = 'onboard-nic-' . substr($mbUuid, 0, 24) . '-2'; // LEGACY ServerBuilder format (24-char prefix)
+$onboard3 = 'onboard-4f8e6c3d-55-1';        // CURRENT unit-scoped format (board inventory id 55)
 
 // -----------------------------------------------------------------------
 // 1. uuid recognition / parsing
@@ -84,12 +85,39 @@ $onboard2 = 'onboard-nic-' . substr($mbUuid, 0, 24) . '-2'; // ServerBuilder for
 echo "uuid recognition:\n";
 check('isOnboardNicUuid true for onboard- prefix', ResourceCatalog::isOnboardNicUuid($onboard1));
 check('isOnboardNicUuid true for onboard-nic- prefix', ResourceCatalog::isOnboardNicUuid($onboard2));
+check('isOnboardNicUuid true for unit-scoped format', ResourceCatalog::isOnboardNicUuid($onboard3));
 check('isOnboardNicUuid false for a real uuid', !ResourceCatalog::isOnboardNicUuid($mbUuid));
 $p1 = ResourceCatalog::parseOnboardNicUuid($onboard1);
 $p2 = ResourceCatalog::parseOnboardNicUuid($onboard2);
-check('parse 8-char format: prefix + index', $p1 === ['board_prefix' => '4f8e6c3d', 'index' => 1]);
-check('parse 24-char format: prefix + index', $p2 === ['board_prefix' => substr($mbUuid, 0, 24), 'index' => 2]);
+$p3 = ResourceCatalog::parseOnboardNicUuid($onboard3);
+check('parse 8-char legacy: prefix + index, no inventory id',
+    $p1 === ['board_prefix' => '4f8e6c3d', 'inventory_id' => null, 'index' => 1]);
+check('parse 24-char legacy: prefix + index, no inventory id',
+    $p2 === ['board_prefix' => substr($mbUuid, 0, 24), 'inventory_id' => null, 'index' => 2]);
+check('parse unit-scoped: prefix + inventory id + index',
+    $p3 === ['board_prefix' => '4f8e6c3d', 'inventory_id' => 55, 'index' => 1]);
 check('parse rejects malformed uuid', ResourceCatalog::parseOnboardNicUuid('onboard-') === null);
+
+// board_prefix must stay the motherboard SPEC-uuid prefix across BOTH formats,
+// otherwise TargetState::onboardParentBoardSpecUuid()'s json-fallback prefix
+// match silently stops resolving the parent board (= lost sfp_port capacity).
+check('unit-scoped board_prefix still prefixes the board spec uuid',
+    strpos('4f8e6c3d-1111-2222-3333-444455556666', $p3['board_prefix']) === 0);
+
+// REGRESSION (2026-07-20): two physical boards of ONE model must mint two
+// distinct identities. Under the old model-scoped scheme both produced
+// "onboard-4f8e6c3d-1" and the 2nd board's INSERT died on the SerialNumber
+// UNIQUE key, silently leaving that server with no onboard NICs.
+$board49 = 'onboard-4f8e6c3d-49-1';
+$board55 = 'onboard-4f8e6c3d-55-1';
+check('two boards, one model -> distinct uuids', $board49 !== $board55);
+check('board 49 parses to inventory id 49',
+    ResourceCatalog::parseOnboardNicUuid($board49)['inventory_id'] === 49);
+check('board 55 parses to inventory id 55',
+    ResourceCatalog::parseOnboardNicUuid($board55)['inventory_id'] === 55);
+check('both resolve to the same parent board spec (same model)',
+    ResourceCatalog::parseOnboardNicUuid($board49)['board_prefix']
+    === ResourceCatalog::parseOnboardNicUuid($board55)['board_prefix']);
 
 // -----------------------------------------------------------------------
 // 2. catalog never throws on onboard uuids

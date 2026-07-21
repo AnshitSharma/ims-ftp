@@ -74,9 +74,9 @@ class ResourceCatalog
     }
 
     /**
-     * Synthetic onboard-NIC rows (spec_uuid "onboard-{mb8}-{n}" from
-     * OnboardNICHandler::autoAddOnboardNICs(), or "onboard-nic-{mb24}-{n}"
-     * from ServerBuilder's own generator) are runtime-materialized from the
+     * Synthetic onboard-NIC rows (spec_uuid "onboard-{mb8}-{inventoryId}-{n}"
+     * from OnboardNICHandler::autoAddOnboardNICs(), plus the two legacy formats
+     * listed on parseOnboardNicUuid()) are runtime-materialized from the
      * parent motherboard's networking.onboard_nics and never exist in the
      * nic ims-data JSON — every spec lookup on them is guaranteed to fail.
      * provides()/consumes() therefore return [] for them instead of throwing
@@ -92,14 +92,28 @@ class ResourceCatalog
     }
 
     /**
-     * @return array{board_prefix:string, index:int}|null board-uuid prefix
-     *         (8 or 24 chars of the parent motherboard uuid) and 1-based
-     *         onboard_nics index encoded in the synthetic uuid
+     * Three synthetic formats exist and all must parse:
+     *   onboard-{mb8}-{inventoryId}-{n}  current, scoped to the PHYSICAL board
+     *   onboard-{mb8}-{n}                legacy, scoped to the motherboard model
+     *   onboard-nic-{mb24}-{n}           legacy, ServerBuilder's dead generator
+     *
+     * board_prefix is the parent motherboard's SPEC-uuid prefix in every case,
+     * so prefix-matching callers stay correct across the format change; the
+     * physical board is exposed separately as inventory_id (null on legacy
+     * rows, which encoded no such thing — that was the collision bug).
+     *
+     * @return array{board_prefix:string, inventory_id:int|null, index:int}|null
      */
     public static function parseOnboardNicUuid(string $specUuid): ?array
     {
+        // Unit-scoped: {mb8} is exactly 8 hex chars, then two numeric segments.
+        // A legacy "onboard-{mb8}-{n}" has only ONE trailing numeric segment and
+        // so cannot match here; "onboard-nic-..." fails the hex test on "nic-".
+        if (preg_match('/^onboard-([0-9a-fA-F]{8})-(\d+)-(\d+)$/', $specUuid, $m)) {
+            return ['board_prefix' => $m[1], 'inventory_id' => (int)$m[2], 'index' => (int)$m[3]];
+        }
         if (preg_match('/^onboard-(?:nic-)?(.+)-(\d+)$/', $specUuid, $m)) {
-            return ['board_prefix' => $m[1], 'index' => (int)$m[2]];
+            return ['board_prefix' => $m[1], 'inventory_id' => null, 'index' => (int)$m[2]];
         }
         return null;
     }

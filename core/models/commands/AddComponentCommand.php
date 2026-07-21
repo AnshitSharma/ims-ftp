@@ -129,13 +129,34 @@ final class AddComponentCommand extends BaseCommand
         if ($this->plannedSlotRef !== null) {
             $legacyOptions['slot_position'] = $this->plannedSlotRef;
         }
-        // updateServerConfigurationTable() also materializes onboard NICs for a
-        // motherboard add (createOnboardNICsFromMotherboard, called internally) —
-        // running here, pre-commit, inside this same transaction closes A-11's
-        // first half without this command needing its own OnboardNICHandler call.
         $sb->updateServerConfigurationTable(
             $this->configUuid, $this->componentType, $this->componentUuid, 1, 'add', $serialNumber, $legacyOptions
         );
+
+        // A-11's first half: onboard NICs. This used to be delegated to
+        // updateServerConfigurationTable() on the belief that it materialized
+        // them internally via createOnboardNICsFromMotherboard() — that method
+        // inserted into five columns nicinventory does not have (OnboardIndex,
+        // Controller, Ports, Speed, Connector), so it threw on every call and
+        // swallowed it. It never once succeeded, and has been deleted; onboard
+        // NICs only ever appeared because the LEGACY add path called
+        // OnboardNICHandler separately. At COMMAND_LAYER_ENABLED=enforce that
+        // legacy path is gone, so this command must call the handler itself.
+        // Runs pre-commit inside this same transaction (the handler joins an
+        // open transaction rather than opening its own).
+        if ($this->componentType === 'motherboard') {
+            require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+            $onboard = (new OnboardNICHandler($pdo))->autoAddOnboardNICs(
+                $this->configUuid, $this->componentUuid, (int)$inventoryData['ID']
+            );
+            if (isset($onboard['error'])) {
+                throw new CommandFailed(
+                    'onboard_nic_failed',
+                    'Motherboard added but onboard NICs could not be attached: ' . $onboard['error'],
+                    500
+                );
+            }
+        }
 
         $sb->updateComponentStatusAndServerUuid(
             $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber
