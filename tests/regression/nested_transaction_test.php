@@ -115,10 +115,20 @@ try {
         ->execute($cols);
 
     $pdo->beginTransaction(); // outer transaction, owned by the test
+
+    // This fixture still HAS its RAM installed, so the 2026-07-21 guard refuses
+    // an unforced delete. Assert that first, then force past it — this test is
+    // about transaction ownership, and skipping the guard would mean the nested
+    // path below never actually runs the delete.
+    $guarded = $builder->deleteConfiguration($configUuid2);
+    check('deleteConfiguration: refuses while components are installed',
+        ($guarded['success'] ?? true) === false && ($guarded['reason'] ?? null) === 'components_installed');
+    check('deleteConfiguration: refusal left the outer transaction alone', $pdo->inTransaction());
+
     $threw = false;
     $result = null;
     try {
-        $result = $builder->deleteConfiguration($configUuid2);
+        $result = $builder->deleteConfiguration($configUuid2, true);
     } catch (\Throwable $e) {
         $threw = true;
         check('deleteConfiguration nested: no exception', false);
