@@ -1,193 +1,223 @@
-# BDC IMS — Real Server Build Guide
+# BDC IMS — Realistic Server Builds & Compatibility-Engine Defect Report
 
-**Purpose:** a *buildable* recipe for assembling a server from your current inventory and
-recreating it in the IMS so you can confirm it "works." Every step below was **verified against
-the live production engine** on 2026-07-21 using throwaway *virtual* configs and temporary rows
-that were all deleted afterward — **no production data was changed** by the verification.
+**Objective (the real one):** take servers that are **physically buildable** from the inventory we
+actually have — a motherboard with its onboard NIC, an HBA, an NVMe adapter card, NVMe drives *on that
+adapter*, SAS/SATA drives *behind the HBA*, plus discrete NIC/PCIe cards — try to build each one in
+IMS, and **catalog every place the engine wrongly blocks a build that would work in the real world.**
+Those wrong blocks are bugs. Fixing them is the goal.
 
-> How to read this: Part 1 is the workflow. Part 2 is a live inventory snapshot. Part 3 gives two
-> ready-to-run builds (both proven to add cleanly). Part 4 is the honest part — the hard limits
-> discovered in *your* data that stop a build from becoming "fully valid," and exactly what to fix.
+Everything below was run **live against production** on 2026-07-21 using throwaway `is_virtual=1`
+configs (zero stock reserved) — all four probe configs were deleted afterward and inventory was
+confirmed byte-for-byte unchanged (motherboard 14, cpu 38, ram 1, storage 40, pciecard 10, hbacard 15,
+nic 12; chassis/caddy/sfp 0).
 
----
-
-## Part 1 — How an IMS build works
-
-Single endpoint, one action per call:
-
-```
-BASE=https://ims.bdcms.bharatdatacenter.com/Ims_backend/api/api.php
-```
-
-1. **Log in** → get a JWT (valid ~30 min), sent as `Authorization: Bearer <token>` on every later call.
-2. **`server-create-start`** → returns a `config_uuid` (the draft you build into). Only `server_name` is required.
-3. **`server-add-component`** (once per part) → each add is validated *at add time*. Order matters:
-   add the **motherboard first**, then CPU, then everything else. Add a **carrier before the thing it carries**
-   (adapter/HBA before drives).
-4. **`server-validate-config`** → whole-config check (stricter than add-time).
-5. **`server-finalize-config`** → locks the config.
-
-**Two facts that matter:**
-
-- Adding a part to a **real** (non-virtual) config **immediately marks that physical unit In Use**
-  (`Status=2`) and, when a model UUID has more than one physical unit, you **must pass its
-  `serial_number`** (the add fails closed otherwise). Use `is_virtual=1` to rehearse without touching stock.
-- **Onboard NICs auto-materialize** when you add a motherboard to a *real* config (they are skipped in
-  virtual configs). You do **not** add a NIC card for a board that has one — this is your "onboard → no NIC" rule.
-
-### Auth snippet (used by every example)
-
-```bash
-BASE=https://ims.bdcms.bharatdatacenter.com/Ims_backend/api/api.php
-TOKEN=$(curl -s -X POST "$BASE" -d action=auth-login \
-  -d username=superadmin -d "password=$IMS_PASSWORD" | jq -r .data.tokens.access_token)
-auth(){ curl -s -X POST "$BASE" -H "Authorization: Bearer $TOKEN" "$@"; }   # helper
-```
+> **Bottom line:** three engine defects make it **impossible to fully build any server today**, no
+> matter how correct the hardware is. In order of impact: (1) storage can't connect through an HBA or
+> PCIe adapter, (2) HPE/Dell boards reject every expansion card, (3) RAM is failed at validate-time by
+> a check that contradicts the add-time check that just passed it. Each is root-caused to a file+line
+> below, with a suggested fix.
 
 ---
 
-## Part 2 — Live availability snapshot (2026-07-21)
+## Part 1 — The realistic builds we attempted
 
-| Type | Available | Usable highlights |
-|---|---|---|
-| motherboard | 14 | **Quanta D52BQ-2U** `c1d2e3f4…` ×2, **Quanta D52B-1U** `d2e3f4a5…` ×2, DL380 Gen10 ×3, DL360 Gen9 ×2, R630 ×5 |
-| cpu | 38 | E5-2670 v3 ×12, E5-2673 v4 ×4, E5-2699 v4 ×4, E5-2680 v3 ×3, E5-2640 v3 ×4; Scalable singles: Platinum 8173M, 8168, 8163, Gold 6149, 5120, 6338 |
-| ram | **1** | `a2b3c4d5…` (`RAM-TEMP-0002`) — the only free DIMM |
-| pciecard | 10 | AORUS Gen4 AIC `07dc91dd…` ×6, AORUS M.2 x2 adapter `8f3a2c1d…` ×2, `e20b7772…` ×2 |
-| hbacard | 15 | tri-mode 9500-16i `d4b7202e…`, 9500-8i `266cf3e8…`, 9600-16i `098d3c20…`, 9600-8i `c790040c…`, + 9400/9300/ATTO/Microchip |
-| storage | 40 | 16 models (mixed SATA/SAS/NVMe) |
-| chassis / caddy / sfp | **0 / 0 / 0** | none free |
+Each of these is a loadout a hardware engineer would sign off on. The "Result" column is what the
+engine actually did.
 
----
+### Build A — HPE DL360 Gen9 (1U) · onboard-NIC branch
+| Part | Type | Model UUID | Serial | Physically valid? | Engine result |
+|---|---|---|---|---|---|
+| HPE DL360 Gen9 | motherboard | `4c8f5e1b-2b4a-4c8d-b9e7-f6d2a3c1e9b8` | `2` | ✅ | **added** |
+| 2× Xeon E5-2670 v3 | cpu | `6de47d5d-6649-4d09-9799-31feee56a7f3` | `35505255A0077`, `2L506050A0184` | ✅ | **added** |
+| DDR4 DIMM | ram | `a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d` | `RAM-TEMP-0002` | ✅ | added (but see Bug 3) |
+| HBA 9500-16i Tri-Mode | hbacard | `d4b7202e-0c59-4557-a964-7c38c4b2ef32` | `BC9500-16I-001` | ✅ | ❌ **BLOCKED — Bug 2** |
+| AORUS Gen4 NVMe adapter | pciecard | `07dc91dd-e630-4f4a-befb-272906748f36` | `1` | ✅ | ❌ **BLOCKED — Bug 2** |
+| HP 331i 4-port NIC | nic | `6f8a0b2c-4d6e-4f8a-0b2c-4d6e8f0a2b4c` | `DCMISGH631X7A5` | ✅ | ❌ **BLOCKED — Bug 2** |
+| NVMe + SAS drives | storage | (16 models tried) | — | ✅ | ❌ **BLOCKED — Bug 1** |
 
-## Part 3 — Two ready-to-build servers (verified)
+### Build B — Dell R630 (1U) · same shape, different vendor
+Same story as Build A: board + 2× E5-2673 v4 (`dfbac286…`) + DIMM **add fine**; HBA, AORUS adapter and
+Intel X540 NIC (`83f7ddb2…`) are **all blocked** (Bug 2); every drive is **blocked** (Bug 1).
 
-Both boards below are the **only** available boards the engine will let you install add-in PCIe cards
-into (see Part 4). Both have an onboard NIC, so they illustrate the two NIC branches you asked for:
-**Build A relies on the onboard NIC (no NIC card); Build B adds a discrete NIC.**
-
-Run these **for real** by omitting `is_virtual` (or `-d is_virtual=0`). Each `add` returned
-`success:true` in verification.
-
-### Build A — onboard-NIC branch · Quanta **D52BQ-2U** (2U, LGA3647)
-
-Onboard: 1× Dedicated 1GbE LOM (auto-added) → **no NIC card**. 3 PCIe cards. Power ≈ 353 W.
-
-| Slot | Part | type | model UUID | serial to use |
+### Build C — Quanta D52BQ-2U (2U) · the control that *should* pass
+This board models its PCIe slots directly, so it does **not** hit Bug 2:
+| Part | Type | Model UUID | Serial | Engine result |
 |---|---|---|---|---|
-| Board | Quanta D52BQ-2U | motherboard | `c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f` | `QTFCR290701BE` |
-| CPU | Xeon Platinum 8173M | cpu | `3e31758b-04d4-495b-9b46-fc79102c16ff` | `4` |
-| RAM | DDR4 DIMM | ram | `a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d` | `RAM-TEMP-0002` |
-| PCIe | GIGABYTE AORUS Gen4 AIC (NVMe carrier) | pciecard | `07dc91dd-e630-4f4a-befb-272906748f36` | `gigabyte` |
-| PCIe | Broadcom HBA 9500-16i Tri-Mode | hbacard | `d4b7202e-0c59-4557-a964-7c38c4b2ef32` | `BC9500-16I-001` |
-| PCIe | add-in card | pciecard | `e20b7772-bdb9-454d-941e-4e43fd1e5fba` | `BN26160154813` |
-| NIC | — | *(onboard, auto-added — do not add a card)* | | |
+| Quanta D52BQ-2U | motherboard | `c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f` | `QTFCR290701BE` | added |
+| Xeon Platinum 8173M | cpu | `3e31758b-04d4-495b-9b46-fc79102c16ff` | `4` | added |
+| DDR4 DIMM | ram | `a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d` | `RAM-TEMP-0002` | added |
+| HBA 9500-16i | hbacard | `d4b7202e-0c59-4557-a964-7c38c4b2ef32` | `BC9500-16I-001` | ✅ added |
+| AORUS Gen4 adapter | pciecard | `07dc91dd-e630-4f4a-befb-272906748f36` | `1` | ✅ added |
+| HP 331i NIC | nic | `6f8a0b2c-4d6e-4f8a-0b2c-4d6e8f0a2b4c` | `DCMISGH631X7A5` | ✅ added |
+| any drive | storage | (16 models tried) | — | ❌ **BLOCKED — Bug 1** |
+| **validate-config** | | | | ❌ **`valid:false`, RAM scored 0 — Bug 3** |
 
+Build C proves the point cleanly: a perfectly-specced Quanta server with CPU/RAM/HBA/adapter/NIC all
+accepted **still cannot be finished** — no storage will attach (Bug 1), and validation zeroes the RAM
+(Bug 3). **This is why all 11 servers already in the database are stuck as drafts.**
+
+---
+
+## Part 2 — Defects (ranked by impact)
+
+### 🔴 Bug 1 — Storage will not connect through an HBA or PCIe adapter; only chassis bays / motherboard M.2 count
+**What should happen:** a SAS/SATA drive connects behind an HBA; an NVMe/M.2 drive connects on a PCIe
+NVMe adapter. That is the normal, primary way drives are attached.
+
+**What the engine does:** every one of the 16 drive models is blocked at *add* time, even with an
+LSI 9500-16i tri-mode HBA already in the config:
+- 2.5"/3.5" drives → `Storage incompatible: No chassis bays available for 2.5-inch storage`
+- M.2 drives → `Storage incompatible: No M.2 slots available on motherboard for M.2 storage`
+
+The block's own `details` array proves the engine *saw* the HBA and threw the drive away anyway:
+```json
+"details": [
+  "HBA supports SAS protocol", "HBA supports SATA protocol", "HBA supports NVMe protocol",
+  "HBA: LSI 9500-16i - 16 internal ports, 0 used, 16 available",
+  "No chassis bays available for 2.5-inch storage"
+]
+```
+With **0 chassis** in inventory, this means **no drive can be added to any server, ever** — which
+guts the whole "put NVMes on the adapter, SAS behind the HBA" requirement.
+
+**Reproduce:**
 ```bash
-CFG=$(auth -d action=server-create-start -d server_name="Build-A D52BQ-2U" | jq -r .data.config_uuid)
-
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=motherboard \
-     -d component_uuid=c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f -d serial_number=QTFCR290701BE
-# ^ response includes onboard_nics_added: {"count":1, ... "Dedicated 1GbE LOM"} — that's your NIC.
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=cpu \
-     -d component_uuid=3e31758b-04d4-495b-9b46-fc79102c16ff -d serial_number=4
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=ram \
-     -d component_uuid=a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d -d serial_number=RAM-TEMP-0002
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=pciecard \
-     -d component_uuid=07dc91dd-e630-4f4a-befb-272906748f36 -d serial_number=gigabyte
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=hbacard \
-     -d component_uuid=d4b7202e-0c59-4557-a964-7c38c4b2ef32 -d serial_number=BC9500-16I-001
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=pciecard \
-     -d component_uuid=e20b7772-bdb9-454d-941e-4e43fd1e5fba -d serial_number=BN26160154813
-
-auth -d action=server-get-config -d config_uuid=$CFG          # review
-auth -d action=server-validate-config -d config_uuid=$CFG     # see Part 4 re: RAM/chassis/storage
+CFG=$(auth -d action=server-create-start -d server_name=repro -d is_virtual=1 | jq -r .data.config_uuid)
+auth -d action=server-add-component -d config_uuid=$CFG -d component_type=motherboard -d component_uuid=c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f
+auth -d action=server-add-component -d config_uuid=$CFG -d component_type=hbacard    -d component_uuid=d4b7202e-0c59-4557-a964-7c38c4b2ef32
+auth -d action=server-add-component -d config_uuid=$CFG -d component_type=storage    -d component_uuid=319944c5-f35e-4298-ad75-b6afd243a31b  # -> BLOCKED
+auth -d action=server-delete-config -d config_uuid=$CFG -d force=1
 ```
 
-### Build B — add-NIC branch · Quanta **D52B-1U** (1U, LGA3647)
+**Root cause:** the *enforced* add-time path only inspects `chassis_bays` / `motherboard_m2_slots`
+and never consults the HBA or adapter:
+- `core/models/components/ComponentValidator.php:983` (`validateChassisBayStorage` → "No chassis bays available")
+- `core/models/components/ComponentValidator.php:1046` (`validateMotherboardM2Storage` → "No M.2 slots available")
+- `core/models/components/ComponentValidator.php:1071` (`validateGenericStorage` — checks only bays/M.2/U.2)
 
-Onboard is only a single 1GbE LOM, so we **add a 4-port data NIC** (HP 331i). Demonstrates the
-add-in NIC path (the card takes a PCIe slot). 3 PCIe cards + NIC. Power ≈ 281 W.
+A **more correct** validator already exists and is *not* the one gating the add:
+`core/models/compatibility/StorageConnectionValidator.php:43` (`validate()`) has `CHECK 3` (HBA, line 91)
+and `CHECK 4` (PCIe adapter, line 100), and for non-SAS drives merely *warns*
+("Storage added but not yet connected") instead of blocking.
 
-| Slot | Part | type | model UUID | serial to use |
+**Fix:** gate the add-time storage check through `StorageConnectionValidator` (or teach the
+`ComponentValidator` path to count HBA ports and PCIe-adapter slots as valid connection paths). A drive
+with a matching controller present must be allowed to connect to it.
+
+---
+
+### 🔴 Bug 2 — HPE DL360 Gen9 and Dell R630 reject **every** expansion card ("no PCIe slots — only riser slots available")
+**What should happen:** a DL360 Gen9 (up to 3 PCIe 3.0 slots via risers) and an R630 (up to 3 PCIe
+slots via risers) obviously accept an HBA, a NIC, or an NVMe adapter. On these 1U servers, the riser
+*is* where the PCIe slots live.
+
+**What the engine does:** on both boards, every card is blocked at add time —
+- hbacard → `Cannot add hbacard: no free x8-compatible PCIe slot available on motherboard`
+- pciecard → `Cannot add pciecard: no free x16-compatible PCIe slot available on motherboard`
+- nic → `Failed to add component: No available PCIe slots for NIC (requires x8 slot)`
+
+and validate-config emits `pcie_slot_warning: "Motherboard has no PCIe slots - only riser slots
+available"`. The **identical cards add cleanly on the Quanta D52BQ-2U**, which models direct
+`pcie_slots`.
+
+**Root cause:** these board specs put 100% of their PCIe connectivity under a *riser* model with an
+empty direct `pcie_slots` list. `UnifiedSlotTracker` only merges riser-provided slots when a separate
+**riser-card component** is present in the config
+(`core/models/compatibility/UnifiedSlotTracker.php:76-91`), and no riser card exists in inventory to
+add — so `assignSlot()` returns nothing and the card is blocked
+(`core/models/server/ServerBuilder.php:5004-5024`; NIC path `:2538-2542`). The engine demands a
+riser-card component the catalog never ships, making these boards permanently un-expandable.
+
+**Fix:** treat a motherboard's built-in riser slots as usable PCIe capacity by default (no separate
+riser-card component required), **or** seed the riser cards these servers physically ship with. The
+first is more correct — the slots exist on the board.
+
+---
+
+### 🔴 Bug 3 — RAM is failed at validate-time by a raw string compare, contradicting the add-time check that just passed it
+**What should happen:** a DDR4 DIMM is compatible with a board whose memory type is "DDR4 ECC". (ECC is
+a *feature* on top of the DDR generation, not a different generation. Non-ECC RAM in an ECC board runs
+with ECC disabled; and server DIMMs are typically ECC anyway and just mislabeled "DDR4".)
+
+**What the engine does — self-contradiction:**
+- **Add-time says OK.** `server-add-component` returns `ram_compatibility.memory_type: "compatible"`,
+  `ecc_support: "ECC configuration validated" (compatible)`, `form_factor: compatible`.
+- **Validate-time says NO.** `server-validate-config` returns `category_scores.ram = 0`, `valid:false`,
+  error `ram_type_incompatible: "DDR4 memory incompatible with motherboard supporting DDR4 ECC"`.
+
+Same DIMM, same board, opposite verdicts — and the validate-time `ram=0` alone flips the whole config
+to invalid, even on Build C where everything else is 100.
+
+**Root cause:** `core/models/components/ComponentValidator.php:471` does a **raw**
+`in_array($ramType, $supportedTypes)` — `in_array("DDR4", ["DDR4 ECC"])` → `false` — with **no
+normalization**. It is called from `core/models/server/ServerBuilder.php:7826`, which then forces
+`category_scores['ram'] = 0` (`:7835`). Two other paths get this right:
+- the add-time ECC check (`ComponentValidator.php:914-920`) correctly rules non-ECC-in-ECC-system
+  compatible-with-warning, and
+- the newer pipeline rule `core/models/validation/rules/MemoryTypeRule.php:76-88` normalizes both sides
+  via `DataNormalizationUtils::normalizeMemoryType()`, which **already strips the "ECC" suffix**
+  (`core/models/shared/DataNormalizationUtils.php:30-32`, "DDR4 ECC" → "DDR4").
+
+**Fix (small, contained):** in `validateRAMTypeCompatibility` normalize both operands with
+`DataNormalizationUtils::normalizeMemoryType()` before comparing (compare the DDR generation), exactly
+as `MemoryTypeRule` already does, and leave ECC to the dedicated ECC check. This unblocks the RAM score
+for every server.
+
+---
+
+### Secondary findings (lower impact)
+- **Contradictory RAM-slot display at add-time.** `ram_compatibility.slot_availability` returns
+  `available_slots: 24` but `max_slots: 4`, and `can_add_more: false` despite `used_slots: 0` —
+  internally inconsistent. The validate-time `resource_availability.ram_slots` is correct (max 24). Traces
+  to the `?? 4` default in `ComponentValidator.php:953/969`.
+- **Required-component deadlock.** validate-config lists `chassis`, `storage` and `nic` as *required*
+  (missing → error). But chassis has **0** available inventory, storage can't attach without a chassis
+  (Bug 1), and a discrete NIC can't be slotted on HPE/Dell (Bug 2). On a **real** (non-virtual) build
+  the onboard NIC auto-materializes and satisfies the NIC requirement — but chassis + storage remain a
+  hard deadlock until Bug 1 is fixed or chassis stock is registered.
+- **Real blockers are hidden from the summary field.** validate-config returns the actual failures only
+  in `validation.errors`; the top-level `issues`/`recommendations` fields were `null`. A caller reading
+  `issues` sees nothing wrong.
+
+---
+
+## Part 3 — Which build hits which bug
+| Build | Board slots (Bug 2) | Storage attach (Bug 1) | RAM validate (Bug 3) | Buildable end-to-end? |
 |---|---|---|---|---|
-| Board | Quanta D52B-1U | motherboard | `d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a` | `QTFCR2905019A` |
-| CPU | Xeon Gold 5120 | cpu | `6def2015-bbf6-478d-8e48-4ae32d5443c1` | `CPU5120-TEMP-0001` |
-| RAM | DDR4 DIMM | ram | `a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d` | `RAM-TEMP-0002` |
-| **NIC** | **HP Ethernet 1Gb 4-port 331i** | **nic** | **`6f8a0b2c-4d6e-4f8a-0b2c-4d6e8f0a2b4c`** | **`DCMISGH631X7A5`** |
-| PCIe | GIGABYTE AORUS Gen4 AIC | pciecard | `07dc91dd-e630-4f4a-befb-272906748f36` | (next free AORUS serial, e.g. `1`) |
-| PCIe | Broadcom HBA 9500-16i Tri-Mode | hbacard | `d4b7202e-0c59-4557-a964-7c38c4b2ef32` | `BC9500-16I-001` |
-| PCIe | add-in card | pciecard | `e20b7772-bdb9-454d-941e-4e43fd1e5fba` | `BN26160154813` |
+| A — DL360 Gen9 | ❌ blocked | ❌ blocked | ❌ ram=0 | **No** |
+| B — R630 | ❌ blocked | ❌ blocked | ❌ ram=0 | **No** |
+| C — Quanta D52BQ-2U | ✅ OK | ❌ blocked | ❌ ram=0 | **No** |
+
+---
+
+## Part 4 — Suggested fix order
+> ⚠️ Every code save auto-deploys to production ~20 s later, and these are the compatibility-engine
+> hot paths. Any change here must be proven at parity against the golden baseline
+> (`tests/characterize_compatibility.php`) before it lands. Get sign-off before editing.
+
+1. **Bug 3 (RAM normalization)** — smallest, safest, highest leverage. One method in
+   `ComponentValidator::validateRAMTypeCompatibility`. Unblocks the RAM score for every config.
+2. **Bug 1 (storage via HBA/adapter)** — route add-time storage validation through
+   `StorageConnectionValidator` (or credit HBA ports / adapter slots in the `ComponentValidator` path).
+   Unblocks all drive attachment. Medium risk — touches the most-used validator.
+3. **Bug 2 (riser slots)** — make built-in riser slots usable PCIe capacity by default, or seed riser
+   cards. Unblocks HPE/Dell expansion. Medium risk — data + `UnifiedSlotTracker` behavior.
+
+---
+
+## Appendix — API workflow & verification method
+Single endpoint; one action per call. Log in → `server-create-start` (→ `config_uuid`) →
+`server-add-component` (motherboard first, then CPU, then the rest; carrier before what it carries) →
+`server-validate-config` → `server-finalize-config`. Adding to a **real** config immediately marks the
+unit In Use (`Status=2`) and requires `serial_number` when a UUID has more than one unit; `is_virtual=1`
+rehearses without touching stock.
 
 ```bash
-CFG=$(auth -d action=server-create-start -d server_name="Build-B D52B-1U" | jq -r .data.config_uuid)
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=motherboard \
-     -d component_uuid=d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a -d serial_number=QTFCR2905019A
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=cpu \
-     -d component_uuid=6def2015-bbf6-478d-8e48-4ae32d5443c1 -d serial_number=CPU5120-TEMP-0001
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=ram \
-     -d component_uuid=a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d -d serial_number=RAM-TEMP-0002
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=nic \
-     -d component_uuid=6f8a0b2c-4d6e-4f8a-0b2c-4d6e8f0a2b4c -d serial_number=DCMISGH631X7A5
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=pciecard \
-     -d component_uuid=07dc91dd-e630-4f4a-befb-272906748f36 -d serial_number=1
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=hbacard \
-     -d component_uuid=d4b7202e-0c59-4557-a964-7c38c4b2ef32 -d serial_number=BC9500-16I-001
-auth -d action=server-add-component -d config_uuid=$CFG -d component_type=pciecard \
-     -d component_uuid=e20b7772-bdb9-454d-941e-4e43fd1e5fba -d serial_number=BN26160154813
+BASE=https://ims.bdcms.bharatdatacenter.com/Ims_backend/api/api.php
+TOKEN=$(curl -s -X POST "$BASE" -d action=auth-login -d username=superadmin -d "password=$IMS_PASSWORD" | jq -r .data.tokens.access_token)
+auth(){ curl -s -X POST "$BASE" -H "Authorization: Bearer $TOKEN" "$@"; }
 ```
 
-> **Undo a real build:** `server-remove-component` releases each unit back to Available (`Status=1`);
-> `server-delete-config` removes the draft. (Removing the motherboard also cascades its onboard NIC.)
-
----
-
-## Part 4 — Reality check: what blocks a *fully-valid* server (and how to fix it)
-
-These were all confirmed live. They don't stop the two builds above from **adding** (they produce a
-draft config identical in shape to every server already in your DB) — but they stop `validate-config`
-from passing. That's not a quirk of this guide: **all 11 servers currently in your system are drafts
-for exactly these reasons.**
-
-1. **RAM is rejected by validation on every board.** Every DIMM's spec says **`DDR4`**, but every
-   board's spec requires **`DDR4 ECC`**, so `validate-config` returns
-   *"DDR4 memory incompatible with motherboard supporting DDR4 ECC"* — even for `9e1a4532…`, the DIMM
-   used in all your real servers. **Fix:** correct the memory specs (label the ECC server DIMMs
-   `DDR4 ECC`) or the board `memory.type` list, so the two sides match. This is the single biggest
-   blocker to finalizing *any* server.
-
-2. **Only the two Quanta boards accept add-in PCIe cards.** DL360 Gen9, DL380 Gen10 and R630 expose
-   **no usable PCIe slots** to the engine (`"no free x8/x16 slot available"`) — their specs model
-   expansion through riser cards that aren't in inventory. **Fix (optional):** register the riser
-   cards, or add `expansion_slots.pcie_slots` to those board specs, if you want to build on HPE/Dell boards.
-
-3. **No storage can be attached right now.** A drive needs a **chassis bay** (2.5"/3.5"/U.2) or a
-   **motherboard M.2 slot**; there are **0 chassis** and no board here has M.2 slots. A tri-mode HBA
-   supplies *ports* but not *bays*. Even after registering a chassis, a drive must also match the
-   **motherboard's** supported interface list — e.g. a SAS drive on the Quanta board fails
-   *"Storage requires SAS 12Gb/s but motherboard only supports: …"*. **Fix / real-build path:** when you
-   physically build the box, register its chassis and drives, and make sure the drive interface is one
-   the board spec lists. To add these parts: `chassis-add`, `caddy-add`, `storage-add`
-   (params are DB columns: `UUID`, `SerialNumber`, `Status=1`).
-
-4. **No available board lacks an onboard NIC.** Every board here (including R630 and D52B-1U) auto-adds
-   an onboard NIC. So the strict "board has *no* onboard NIC → add a NIC" case has no candidate in
-   current inventory; Build B instead shows adding a discrete data NIC on top of a minimal 1GbE LOM.
-
-5. **RAM stock = 1 DIMM.** Both builds validate the memory step with a single module; register more
-   DIMMs before a production build.
-
-### To reach a server that passes `validate-config`
-Register the real parts your physical server will have (**a chassis with a backplane/bays matching your
-drives, ECC-labelled DIMMs, drives whose interface the board lists, caddies**), add them in the same
-sequence as Part 3, then `server-validate-config` → `server-finalize-config`. Item **#1 (RAM ECC
-labelling)** must be corrected in the specs first, or validation will still reject the memory.
-
----
-
-## Appendix — verification method
-
-Everything above was checked by driving the live API with `is_virtual=1` configs (no stock reserved)
-and a few temporary inventory rows (chassis/RAM/caddy) that were created, tested, and **deleted**.
-Post-run inventory matched the pre-run baseline exactly (motherboard 14, cpu 38, ram 1, pciecard 10,
-hbacard 15, nic 12, storage 40; chassis/caddy/sfp 0), with no leftover probe rows or configs.
+All findings were produced by driving the live API with four `is_virtual=1` configs (storage
+classification + Builds A/B/C), capturing every response, then deleting all four. Post-run inventory
+matched the pre-run baseline exactly, with no leftover probe rows or configs.
