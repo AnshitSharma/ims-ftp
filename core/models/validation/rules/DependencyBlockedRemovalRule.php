@@ -23,10 +23,12 @@ require_once __DIR__ . '/../Trigger.php';
  *
  *   1. DANGLING PARENT: a live row whose parent_id is set but does not
  *      resolve via TargetState::find() -- its parent was the row just
- *      removed. Today only sfp->nic ever populates parent_id (confirmed:
- *      U-V.2's TargetStateBuilder docblock), so this is exactly legacy's one
- *      real case (parity with removeComponent's nic->sfp special case),
- *      generalized to any future parent_id-linked type.
+ *      removed. parent_id is populated for sfp->nic AND for every
+ *      board-hosted type -> motherboard (cpu/ram/pciecard/hbacard/nic; see
+ *      ConfigComponentWriter::BOARD_HOSTED_TYPES and seeder 2026_07_21_002
+ *      which aligned pre-existing rows). Anchors (motherboard, chassis) and
+ *      types with no structural parent in this schema (storage, caddy) stay
+ *      NULL and are covered only by mechanism 2.
  *   2. STRUCTURAL ORPHAN: a live row whose component_type is a
  *      DEPENDS_ON key, where NONE of its allowed provider types exist
  *      anywhere in the (post-removal) state at all. Since motherboard and
