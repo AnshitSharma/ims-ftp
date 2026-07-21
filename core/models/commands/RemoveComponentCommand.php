@@ -151,16 +151,23 @@ final class RemoveComponentCommand extends BaseCommand
             if ($row['inventory_table'] !== null) {
                 $serial = $row['serial_number'];
                 $releasable = true;
-                if ($serial === null) {
+                // config_components is keyed on the physical unit, so when it carries an
+                // inventory_id that is the exact row to release -- no serial needed, which
+                // is what makes serial-less stock (SerialNumber NULL) releasable at all.
+                $unitId = isset($row['inventory_id']) && $row['inventory_id'] !== null
+                    ? (int)$row['inventory_id']
+                    : null;
+                if ($serial === null && $unitId === null) {
                     // Serial-less row (scalar-column types): resolve the physical
                     // unit from its ServerUUID binding — see class docblock.
                     $unitStmt = $pdo->prepare(
-                        "SELECT SerialNumber FROM `{$row['inventory_table']}` WHERE UUID = ? AND ServerUUID = ?"
+                        "SELECT ID, SerialNumber FROM `{$row['inventory_table']}` WHERE UUID = ? AND ServerUUID = ?"
                     );
                     $unitStmt->execute([$row['spec_uuid'], $this->configUuid]);
-                    $boundUnits = $unitStmt->fetchAll(PDO::FETCH_COLUMN);
+                    $boundUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
                     if (count($boundUnits) === 1) {
-                        $serial = $boundUnits[0];
+                        $serial = $boundUnits[0]['SerialNumber'];
+                        $unitId = (int)$boundUnits[0]['ID'];
                     } elseif (count($boundUnits) === 0) {
                         // Stale config entry — no unit bound, nothing to release.
                         $releasable = false;
@@ -176,7 +183,7 @@ final class RemoveComponentCommand extends BaseCommand
 
                 if ($releasable) {
                     $released = $sb->updateComponentStatusAndServerUuid(
-                        $row['component_type'], $row['spec_uuid'], 1, null, 'Removed via command layer (U-C.3)', null, null, $serial
+                        $row['component_type'], $row['spec_uuid'], 1, null, 'Removed via command layer (U-C.3)', null, null, $serial, $unitId
                     );
                     if (!$released) {
                         throw new CommandFailed(

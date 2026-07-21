@@ -901,8 +901,11 @@ class ServerBuilder {
             // Virtual configs don't lock components - they're for testing only
             if (!$this->isVirtualConfig($configUuid)) {
                 // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
-                // CRITICAL: Pass serial number to update only the specific physical component
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $resolvedSerialNumber);
+                // Identify the unit by the inventory row ID that lockAndCheckComponent()
+                // already resolved and locked -- exact, and the only identifier that works
+                // for stock with no manufacturer serial (SerialNumber NULL). The serial is
+                // still passed so the legacy path stays available if the ID is absent.
+                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $resolvedSerialNumber, $componentDetails['ID'] ?? null);
             }
             
             // Update calculated fields (power, compatibility, etc.)
@@ -1098,17 +1101,36 @@ class ServerBuilder {
             // them listed in the config JSON, so a config can name a component whose
             // inventory row is already free. Removing that entry is exactly the
             // cleanup such a config needs, so it must not be blocked.
+            // Read the row ID as well as the serial: a unit with no manufacturer serial
+            // (SerialNumber NULL, addressed by its AssetTag) cannot be identified by
+            // serial at all, and three such units of one model -- e.g. the KC600 drives
+            // seeded 2026-07-22 -- are indistinguishable without the ID.
             $boundUnits = [];
             if (isset($this->componentTables[$componentType])) {
                 $table = $this->componentTables[$componentType];
                 $unitStmt = $this->pdo->prepare(
-                    "SELECT SerialNumber FROM `$table` WHERE UUID = ? AND ServerUUID = ?"
+                    "SELECT ID, SerialNumber FROM `$table` WHERE UUID = ? AND ServerUUID = ?"
                 );
                 $unitStmt->execute([$componentUuid, $configUuid]);
-                $boundUnits = $unitStmt->fetchAll(PDO::FETCH_COLUMN);
+                $boundUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
             }
-            if ($componentSerialNumber === null && count($boundUnits) === 1) {
-                $componentSerialNumber = $boundUnits[0];
+
+            $boundInventoryId = null;
+            if (count($boundUnits) === 1) {
+                // Exactly one unit of this model is bound to this config, so it is the
+                // one being removed regardless of what the caller supplied.
+                $boundInventoryId = (int)$boundUnits[0]['ID'];
+                if ($componentSerialNumber === null) {
+                    $componentSerialNumber = $boundUnits[0]['SerialNumber'];
+                }
+            } elseif ($componentSerialNumber !== null) {
+                // Several units of this model in one config: the caller's serial picks one.
+                foreach ($boundUnits as $unit) {
+                    if ($unit['SerialNumber'] === $componentSerialNumber) {
+                        $boundInventoryId = (int)$unit['ID'];
+                        break;
+                    }
+                }
             }
 
             // Phase 3: NIC removal validation - Check if any SFPs are installed on ports
@@ -1187,7 +1209,7 @@ class ServerBuilder {
             // belongs to some other config.
             $released = empty($boundUnits)
                 ? true
-                : $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber);
+                : $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber, $boundInventoryId);
 
             if (empty($boundUnits)) {
                 error_log(
@@ -3836,8 +3858,15 @@ class ServerBuilder {
                 // ServerUUID is the authoritative record of which PHYSICAL unit belongs to
                 // this config, so releasing by it is unit-precise by construction, and also
                 // covers quantity>1 entries and units missing from the JSON.
+                //
+                // The row ID is read and passed too: ServerUUID identifies the unit, but
+                // the release itself was still keyed on UUID + SerialNumber, so a unit
+                // with SerialNumber NULL (serial-less stock, addressed by AssetTag) fell
+                // back to the model-wide WHERE and was refused by the ambiguity guard --
+                // leaking it as Status=2 against a config that no longer exists. The ID
+                // is exact for every unit, serialised or not.
                 foreach ($this->componentTables as $componentType => $table) {
-                    $stmt = $this->pdo->prepare("SELECT UUID, SerialNumber FROM `$table` WHERE ServerUUID = ?");
+                    $stmt = $this->pdo->prepare("SELECT ID, UUID, SerialNumber FROM `$table` WHERE ServerUUID = ?");
                     $stmt->execute([$configUuid]);
                     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $unit) {
                         $released = $this->updateComponentStatusAndServerUuid(
@@ -3848,7 +3877,8 @@ class ServerBuilder {
                             "Released from deleted configuration $configUuid",
                             null,
                             null,
-                            $unit['SerialNumber']
+                            $unit['SerialNumber'],
+                            (int)$unit['ID']
                         );
                         if ($released) {
                             $releasedCount++;
@@ -5603,7 +5633,7 @@ class ServerBuilder {
      * CRITICAL: Now requires $serialNumber to update only the specific physical component
      * U-C.2/U-C.3/U-C.5: exposed as a library call for the command layer.
      */
-    public function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null, $serialNumber = null) {
+    public function updateComponentStatusAndServerUuid($componentType, $componentUuid, $newStatus, $serverUuid, $reason = '', $serverLocation = null, $serverRackPosition = null, $serialNumber = null, $inventoryId = null) {
         if (!isset($this->componentTables[$componentType])) {
             error_log("Cannot update status - invalid component type: $componentType");
             return false;
@@ -5612,31 +5642,55 @@ class ServerBuilder {
         try {
             $table = $this->componentTables[$componentType];
 
-            // Build WHERE clause - MUST include SerialNumber if provided to target specific physical component
-            $whereClause = "WHERE UUID = ?";
-            $whereParams = [$componentUuid];
+            // Identify the target row. Three ways, in descending order of precision:
+            //
+            //   1. $inventoryId  -- the row's own primary key. Exact by definition, so
+            //      no ambiguity check is needed or wanted. PREFER THIS. Every caller
+            //      that has already located the physical unit (by locking it, or by
+            //      reading it back via ServerUUID) has the ID in hand and should pass it.
+            //
+            //   2. UUID + SerialNumber -- exact only while every unit carries a serial.
+            //      Since 2026-07-22 units may legitimately have SerialNumber NULL (see
+            //      AssetTag, seeder 2026_07_22_001): a NULL serial cannot be matched with
+            //      `= ?` and silently falls through to case 3.
+            //
+            //   3. UUID alone -- the MODEL, matching every physical unit of it. Never
+            //      precise; guarded below.
+            if ($inventoryId !== null) {
+                $whereClause = "WHERE ID = ?";
+                $whereParams = [(int)$inventoryId];
+            } else {
+                $whereClause = "WHERE UUID = ?";
+                $whereParams = [$componentUuid];
 
-            if ($serialNumber !== null) {
-                $whereClause .= " AND SerialNumber = ?";
-                $whereParams[] = $serialNumber;
-            }
+                if ($serialNumber !== null) {
+                    $whereClause .= " AND SerialNumber = ?";
+                    $whereParams[] = $serialNumber;
+                }
 
-            // Fail closed on an AMBIGUOUS update. Without a serial the WHERE above is
-            // `UUID = ?` alone, which matches every physical unit of that model -- so a
-            // single caller omitting the serial silently rewrites Status/ServerUUID for
-            // other servers' components (the deleteConfiguration() defect fixed
-            // 2026-07-21; see its note). Refusing only when the model genuinely has more
-            // than one unit keeps the unambiguous single-unit case working for any
-            // caller that legitimately has no serial to hand.
-            if ($serialNumber === null) {
-                $ambiguityStmt = $this->pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE UUID = ?");
-                $ambiguityStmt->execute([$componentUuid]);
-                if ((int)$ambiguityStmt->fetchColumn() > 1) {
-                    error_log(
-                        "REFUSED ambiguous inventory update: $componentType $componentUuid has multiple "
-                        . "physical units and no SerialNumber was supplied (reason: $reason)"
-                    );
-                    return false;
+                // Fail closed on an AMBIGUOUS update. Without a serial the WHERE above is
+                // `UUID = ?` alone, which matches every physical unit of that model -- so a
+                // single caller omitting the serial silently rewrites Status/ServerUUID for
+                // other servers' components (the deleteConfiguration() defect fixed
+                // 2026-07-21; see its note). Refusing only when the model genuinely has more
+                // than one unit keeps the unambiguous single-unit case working for any
+                // caller that legitimately has no serial to hand.
+                //
+                // NOTE: serial-less stock makes this branch fire far more often than it did
+                // when every unit had a serial -- three KC600 drives sharing one model UUID
+                // and no serials are indistinguishable here. That is why callers must pass
+                // $inventoryId; reaching this guard now usually means a caller was missed.
+                if ($serialNumber === null) {
+                    $ambiguityStmt = $this->pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE UUID = ?");
+                    $ambiguityStmt->execute([$componentUuid]);
+                    if ((int)$ambiguityStmt->fetchColumn() > 1) {
+                        error_log(
+                            "REFUSED ambiguous inventory update: $componentType $componentUuid has multiple "
+                            . "physical units and neither SerialNumber nor inventoryId was supplied "
+                            . "(reason: $reason)"
+                        );
+                        return false;
+                    }
                 }
             }
 

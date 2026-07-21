@@ -158,8 +158,12 @@ final class AddComponentCommand extends BaseCommand
             }
         }
 
+        // Identify the unit by the inventory row this command already locked, not by
+        // serial: serial-less stock (SerialNumber NULL, addressed by AssetTag) cannot be
+        // matched by serial and would otherwise fall through to the model-wide WHERE and
+        // be refused by the ambiguity guard.
         $sb->updateComponentStatusAndServerUuid(
-            $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber
+            $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber, (int)$inventoryData['ID']
         );
     }
 

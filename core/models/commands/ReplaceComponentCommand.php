@@ -191,8 +191,14 @@ final class ReplaceComponentCommand extends BaseCommand
         $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->oldComponentUuid, 1, 'remove', $oldSerial);
         $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->newComponentUuid, 1, 'add', $newSerial, $legacyOptions);
 
-        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial);
-        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial);
+        // Both sides are identified by inventory row ID -- the outgoing unit from its
+        // config_components row, the incoming one from the row this command locked.
+        // Serial alone cannot address serial-less stock (SerialNumber NULL).
+        $oldUnitId = isset($this->oldRow['inventory_id']) && $this->oldRow['inventory_id'] !== null
+            ? (int)$this->oldRow['inventory_id']
+            : null;
+        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
+        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, (int)$newInventoryData['ID']);
 
         $sb->recalculateFormFactorLock($this->configUuid);
     }
