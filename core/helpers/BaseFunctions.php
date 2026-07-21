@@ -676,6 +676,7 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
     foreach (VALID_COMPONENT_TYPES as $type) {
         $tableName = getComponentTableName($type);
         $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE
+                AssetTag LIKE ? OR
                 SerialNumber LIKE ? OR
                 Notes LIKE ? OR
                 Location LIKE ?
@@ -685,7 +686,7 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
         $escapedQuery = addcslashes($query, '%_\\');
         $searchTerm = '%' . $escapedQuery . '%';
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $limit]);
+        $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm, $limit]);
 
         $typeResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $results = array_merge($results, $typeResults);
@@ -717,6 +718,51 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
 function getComponentTableName($type) {
     validateComponentType($type);
     return $type . 'inventory';
+}
+
+/**
+ * Three-letter asset-tag code for a component type.
+ *
+ * MUST stay in lock-step with seeder 2026_07_22_001, which backfilled every
+ * pre-existing inventory row using these exact codes. Changing one here without
+ * a migration would split a table's tags across two formats.
+ */
+function getComponentAssetTagCode($type) {
+    validateComponentType($type);
+
+    $codes = [
+        'cpu'         => 'CPU',
+        'ram'         => 'RAM',
+        'storage'     => 'STO',
+        'motherboard' => 'MBD',
+        'nic'         => 'NIC',
+        'caddy'       => 'CAD',
+        'chassis'     => 'CHS',
+        'pciecard'    => 'PCI',
+        'hbacard'     => 'HBA',
+        'sfp'         => 'SFP',
+    ];
+
+    if (!isset($codes[$type])) {
+        throw new InvalidArgumentException("No asset tag code defined for component type: $type");
+    }
+
+    return $codes[$type];
+}
+
+/**
+ * Build the asset tag for a unit from its own inventory primary key.
+ *
+ * The tag is the system-issued identity a technician can physically sticker on
+ * hardware whose manufacturer serial is missing or unreadable. Deriving it from
+ * the row's own auto-increment ID makes it unique BY CONSTRUCTION — no counter
+ * table, no contention, no collision — and matches the backfill formula in
+ * seeder 2026_07_22_001 exactly.
+ *
+ * IDs past 999999 simply produce a longer tag; the column has room to 20 chars.
+ */
+function formatAssetTag($type, $inventoryId) {
+    return sprintf('BDC-%s-%06d', getComponentAssetTagCode($type), (int)$inventoryId);
 }
 
 /**
@@ -773,8 +819,8 @@ function buildComponentSearchWhere($search, &$params) {
         return '';
     }
     $term = '%' . addcslashes($search, '%_\\') . '%';
-    $params = array_merge($params, [$term, $term, $term, $term, $term]);
-    return "WHERE (SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
+    $params = array_merge($params, [$term, $term, $term, $term, $term, $term]);
+    return "WHERE (AssetTag LIKE ? OR SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
 }
 
 /**
@@ -878,6 +924,8 @@ function getInventoryTableColumns($pdo, $tableName) {
 function getBlockedComponentColumns() {
     return [
         'id',               // primary key
+        'assettag',         // system-issued unit identity — never client-settable
+        'asset_tag',
         'created_at',
         'updated_at',
         'createdat',
@@ -947,6 +995,17 @@ function addComponent($pdo, $type, $data, $userId) {
             $safeData[$allowedCols[$lc]] = $value;
         }
 
+        // A unit with no readable manufacturer serial is normal (worn label,
+        // white-box part, pull) — store that absence as NULL, never ''.
+        // SerialNumber carries a UNIQUE index: MySQL permits many NULLs but only
+        // ONE ''. An empty string from the form would therefore let the first
+        // serial-less unit save and make the *second* one die on a duplicate-key
+        // error. The unit stays addressable either way via its AssetTag.
+        if (array_key_exists('SerialNumber', $safeData)
+            && trim((string)$safeData['SerialNumber']) === '') {
+            $safeData['SerialNumber'] = null;
+        }
+
         if (empty($safeData)) {
             throw new InvalidArgumentException("No valid fields provided for $type component");
         }
@@ -967,17 +1026,51 @@ function addComponent($pdo, $type, $data, $userId) {
 
         error_log("Inserting $type data into $tableName: " . json_encode(array_keys($safeData)));
 
-        $stmt = $pdo->prepare($sql);
-        $result = $stmt->execute($values);
-
-        if ($result) {
-            return [
-                'id' => $pdo->lastInsertId(),
-                'uuid' => $safeData['UUID'] ?? ($convertedData['UUID'] ?? null)
-            ];
+        // The row and its asset tag must land together: a row that committed
+        // without a tag would be a unit the system cannot name. The tag is
+        // derived from the auto-increment ID, so it can only be written after
+        // the INSERT — hence insert + tag in one transaction.
+        //
+        // Only own the transaction if no caller already opened one (import and
+        // build flows call this inside their own); committing someone else's
+        // transaction here would publish their half-finished work.
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
         }
 
-        return false;
+        try {
+            $stmt = $pdo->prepare($sql);
+
+            if (!$stmt->execute($values)) {
+                if ($ownsTransaction) {
+                    $pdo->rollBack();
+                }
+                return false;
+            }
+
+            $newId = (int)$pdo->lastInsertId();
+            $assetTag = formatAssetTag($type, $newId);
+
+            $tagStmt = $pdo->prepare("UPDATE `$tableName` SET AssetTag = ? WHERE ID = ?");
+            $tagStmt->execute([$assetTag, $newId]);
+
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+
+            return [
+                'id' => $newId,
+                'uuid' => $safeData['UUID'] ?? ($convertedData['UUID'] ?? null),
+                'asset_tag' => $assetTag
+            ];
+
+        } catch (Exception $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
 
     } catch (InvalidArgumentException $e) {
         throw $e;

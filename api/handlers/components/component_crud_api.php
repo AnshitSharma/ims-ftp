@@ -146,10 +146,14 @@ function handleComponentOperations($module, $operation, $user) {
                 $result = addComponent($pdo, $module, $componentData, $user['id']);
 
                 if ($result) {
-                    error_log("Successfully added $module component with ID: " . $result['id']);
+                    error_log("Successfully added $module component with ID: " . $result['id']
+                        . " (asset tag " . $result['asset_tag'] . ")");
                     send_json_response(1, 1, 201, ucfirst($module) . " component added successfully", [
                         'component_id' => $result['id'],
-                        'uuid' => $result['uuid']
+                        'uuid' => $result['uuid'],
+                        // The tag a technician writes on the physical unit — the
+                        // caller needs it back, especially when no serial was given.
+                        'asset_tag' => $result['asset_tag']
                     ]);
                 } else {
                     send_json_response(0, 1, 400, "Failed to add " . $module . " component");
@@ -243,6 +247,7 @@ function handleComponentOperations($module, $operation, $user) {
                         $entry['success'] = true;
                         $entry['component_id'] = $result['id'];
                         $entry['uuid'] = $result['uuid'];
+                        $entry['asset_tag'] = $result['asset_tag'];
                         $succeeded++;
                     } else {
                         $entry['error'] = "Failed to add component";
