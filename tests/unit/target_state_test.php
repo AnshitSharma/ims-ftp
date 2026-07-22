@@ -31,31 +31,58 @@ $pdo = new PDO(
 );
 
 // -----------------------------------------------------------------------
-echo "-- fromCurrent(): JSON fallback path (config_components empty, real fixture) --\n";
+echo "-- fromCurrent(): JSON fallback path (real fixture, rows cleared inside the tx) --\n";
 $configUuid = '06ea5abb-ddb0-4945-ba88-7eba61ba3905';
 $row = $pdo->prepare('SELECT COUNT(*) c FROM server_configurations WHERE config_uuid = ?');
 $row->execute([$configUuid]);
 if ((int)$row->fetch()['c'] === 0) {
     echo "  SKIP fixture config $configUuid not present in this scratch DB -- fromCurrent tests skipped\n";
 } else {
-    $state = TargetStateBuilder::fromCurrent($pdo, $configUuid);
-    check('non-empty component set from JSON fallback', count($state->components()) > 0);
-    foreach ($state->components() as $c) {
-        check("component {$c['component_type']}/{$c['id']} tagged source=json", $c['source'] === 'json');
-    }
-    $nics = $state->byType('nic');
-    check('byType(nic) returns at least one nic', count($nics) >= 1);
-
-    // -------------------------------------------------------------------
-    echo "-- fromCurrent(): rows path == JSON fallback path (tuple-equal on type+spec_uuid multiset) --\n";
+    // Both paths are exercised inside ONE transaction that is always rolled back.
+    //
+    // This test originally assumed config_components was empty for this fixture, so
+    // fromCurrent() would take the JSON fallback on its own. U-B.4's backfill made
+    // that premise false -- every config now has live rows, and TargetStateBuilder's
+    // own docblock (lines 21-22) says the rows path is taken for every config once
+    // the backfill lands. The fallback is therefore unreachable unless the rows are
+    // cleared first, which is what this transaction now does.
     $pdo->beginTransaction();
     try {
+        $pdo->prepare('DELETE FROM config_resources WHERE config_uuid = ?')->execute([$configUuid]);
+        // Leaf-first: fk_cc_parent is RESTRICT and the tree can be two deep
+        // (motherboard -> nic -> sfp), so one pass is not enough.
+        do {
+            $del = $pdo->prepare(
+                'DELETE FROM config_components
+                  WHERE config_uuid = ?
+                    AND id NOT IN (SELECT id FROM (
+                            SELECT parent_id AS id FROM config_components
+                             WHERE config_uuid = ? AND parent_id IS NOT NULL
+                        ) AS still_parents)'
+            );
+            $del->execute([$configUuid, $configUuid]);
+        } while ($del->rowCount() > 0);
+
+        $state = TargetStateBuilder::fromCurrent($pdo, $configUuid);
+        check('non-empty component set from JSON fallback', count($state->components()) > 0);
+        foreach ($state->components() as $c) {
+            check("component {$c['component_type']}/{$c['id']} tagged source=json", $c['source'] === 'json');
+        }
+        $nics = $state->byType('nic');
+        check('byType(nic) returns at least one nic', count($nics) >= 1);
+
+        // -------------------------------------------------------------------
+        echo "-- fromCurrent(): rows path == JSON fallback path (tuple-equal on type+spec_uuid multiset) --\n";
         $repo = new ConfigComponentRepository($pdo);
         foreach ($state->components() as $c) {
             $repo->insert($configUuid, [
                 'component_type' => $c['component_type'],
                 'inventory_table' => $c['component_type'] . 'inventory',
-                'inventory_id' => abs($c['id']), // synthetic but unique/stable within this rolled-back tx
+                // Offset well clear of real inventory ids: uq_inventory_once is
+                // (inventory_table, inventory_id) GLOBALLY, so a bare abs($c['id'])
+                // can collide with another config's row and make insert()'s upsert
+                // steal it, corrupting the count comparison below.
+                'inventory_id' => 900000 + abs($c['id']),
                 'spec_uuid' => $c['spec_uuid'],
                 'serial_number' => $c['serial_number'],
                 'parent_id' => null, // parent linkage not required for this multiset comparison

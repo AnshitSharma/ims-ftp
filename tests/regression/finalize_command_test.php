@@ -65,6 +65,16 @@ echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) 
 require_once __DIR__ . '/_scratch_db.php';
 require_once "$ROOT/core/models/state/StateMachine.php";
 $pdo = scratch_db_connect();
+
+// server_configurations.created_by is FK-constrained to users.id
+// (fk_server_config_user). This test used to hardcode id 5, which no longer
+// exists in the production data these scratch replicas are loaded from --
+// every fixture INSERT then died on the FK rather than testing anything.
+// Resolve a real id instead of pinning one.
+$fixtureUserId = $pdo === null
+    ? 0
+    : (int)($pdo->query('SELECT id FROM users ORDER BY id LIMIT 1')->fetchColumn() ?: 0);
+
 if ($pdo === null) {
     echo "  SKIPPED  Finding 2: draft/building -> finalized direct edge now allowed\n";
     echo "  SKIPPED  defective-inventory fixture blocks finalize (V-2 via SystemInventoryStateRule)\n";
@@ -105,7 +115,7 @@ if ($pdo === null) {
         // touch and is not in scope to fix (flagged in the handoff instead).
         foreach (['draft', 'building'] as $fromStatus) {
             $cu = 'TEST-F2-' . strtoupper($fromStatus) . '-' . substr(md5(uniqid('', true)), 0, 8);
-            $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, ?, 0, ?, 0, 1, 5)")
+            $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, ?, 0, ?, 0, 1, $fixtureUserId)")
                 ->execute([$cu, "FINDING2-TEST ($fromStatus)", $fromStatus]);
 
             $assert = StateMachine::assertConfigTransition($pdo, $cu, 'finalized', 0);
@@ -132,7 +142,7 @@ if ($pdo === null) {
         // Control: an edge this fix does NOT add must stay blocked, proving
         // the fix is scoped to exactly the two new rows, not a blanket bypass.
         $cuControl = 'TEST-F2-CONTROL-' . substr(md5(uniqid('', true)), 0, 8);
-        $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'FINDING2-TEST (control)', 0, 'draft', 0, 1, 5)")
+        $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'FINDING2-TEST (control)', 0, 'draft', 0, 1, $fixtureUserId)")
             ->execute([$cuControl]);
         $assertControl = StateMachine::assertConfigTransition($pdo, $cuControl, 'validated', 0);
         check(
@@ -291,7 +301,7 @@ if ($conn1 === null || $conn2 === null) {
         echo "  SKIPPED  409 real-revision after concurrent mutation: no available RAM unit in this scratch DB\n";
     } else {
         try {
-            $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (409-revision)', 1, 'building', 0, 1, 5)")
+            $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (409-revision)', 1, 'building', 0, 1, $fixtureUserId)")
                 ->execute([$cuA]);
             $conn1->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, added_by) VALUES (?, 'ram', 'raminventory', ?, ?, 0)")
                 ->execute([$cuA, $ramUnit['id'], $ramUnit['UUID']]);
@@ -331,7 +341,7 @@ if ($conn1 === null || $conn2 === null) {
     // --- Scenario 2: finalize race -- blocks under lock -------------------
     $cuB = uuidv4();
     try {
-        $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (lock-race)', 1, 'building', 0, 1, 5)")
+        $conn1->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, 'CONCURRENCY-TEST (lock-race)', 1, 'building', 0, 1, $fixtureUserId)")
             ->execute([$cuB]);
 
         // conn1 simulates a command mid-flight: holds the SAME row-level lock
