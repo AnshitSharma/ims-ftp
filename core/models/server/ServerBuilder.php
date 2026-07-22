@@ -152,12 +152,17 @@ class ServerBuilder {
             $nicConfig = $this->safeJsonDecode($configData['nic_config'], true, 'nic_config');
             if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
                 foreach ($nicConfig['nics'] as $nic) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'nic',
                         'component_uuid' => $nic['uuid'] ?? null,
                         'quantity' => 1,
                         'added_at' => date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
+                    if (isset($nic['serial_number'])) {
+                        $component['serial_number'] = $nic['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         }
@@ -171,12 +176,17 @@ class ServerBuilder {
                     $hbaConfigs = [$hbaConfigs];
                 }
                 foreach ($hbaConfigs as $hba) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'hbacard',
                         'component_uuid' => $hba['uuid'] ?? null,
                         'quantity' => 1,
                         'added_at' => $hba['added_at'] ?? date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
+                    if (isset($hba['serial_number'])) {
+                        $component['serial_number'] = $hba['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         } elseif (!empty($configData['hbacard_uuid'])) {
@@ -214,12 +224,19 @@ class ServerBuilder {
             $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], true, 'pciecard_configurations');
             if (is_array($pcieConfigs)) {
                 foreach ($pcieConfigs as $pcie) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'pciecard',
                         'component_uuid' => $pcie['uuid'] ?? null,
                         'quantity' => $pcie['quantity'] ?? 1,
                         'added_at' => $pcie['added_at'] ?? date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
+                    // Without it, four same-model adapters in one config are indistinguishable
+                    // and the ambiguity guard refuses to release any of them.
+                    if (isset($pcie['serial_number'])) {
+                        $component['serial_number'] = $pcie['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         }
