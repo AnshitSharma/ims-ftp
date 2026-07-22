@@ -168,7 +168,7 @@ try {
     check('exactly 2 nic plans (regular + onboard)', count($byType['nic'] ?? []) === 2);
     $regularNic = array_values(array_filter($byType['nic'], fn($p) => $p['spec_uuid'] === $nicUuid))[0] ?? null;
     $onboardNic = array_values(array_filter($byType['nic'], fn($p) => $p['spec_uuid'] === $onboardNicUuid))[0] ?? null;
-    check('regular nic has no parent', $regularNic && $regularNic['parent_ref'] === null);
+    check('regular nic parents to motherboard (F-5: matches live path + seeder 2026_07_21_002)', $regularNic && $regularNic['parent_ref'] === 'motherboard');
     check('regular nic gets slot_ref from slot_position (fixes slot_report slotless_card gap)', $regularNic && $regularNic['slot_ref'] === 'pcie_x8_slot_1');
     check('onboard nic parents to motherboard', $onboardNic && $onboardNic['parent_ref'] === 'motherboard');
     check('onboard nic has null slot_ref (no discrete slot)', $onboardNic && $onboardNic['slot_ref'] === null);

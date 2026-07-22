@@ -158,9 +158,17 @@ class Extractor
 
     /**
      * nic_config['nics']: onboard NICs (uuid prefix 'onboard-') live in the
-     * same array as add-on NICs (OnboardNICHandler writes them there too) and
-     * parent to the motherboard; regular NICs get no parent (matches
-     * ConfigComponentWriter::resolveParentId(), which only resolves sfp/onboard-nic).
+     * same array as add-on NICs (OnboardNICHandler writes them there too).
+     * BOTH onboard and component NICs parent to the motherboard, matching
+     * ConfigComponentWriter::resolveParentId()'s BOARD_HOSTED_TYPES (revised
+     * 2026-07-21, finding F-5) and the alignment seeder 2026_07_21_002. A
+     * component NIC is a PCIe slot device handled identically to
+     * pciecard/hbacard; leaving it unparented made cascade removal depend on a
+     * row's provenance (backfilled row = NULL, live-written row = motherboard)
+     * and blocked motherboard cascades on dependency.blocked_removal. The
+     * narrow riser-parenting distinction pciecard/hbacard get is deliberately
+     * NOT applied here, to stay byte-identical to the live path (which does no
+     * spec read) and to the seeder.
      */
     private function extractNics(PDO $pdo, string $configUuid, array $configRow, array &$plans, array &$quarantine): void
     {
@@ -177,7 +185,9 @@ class Extractor
             // this session's slot_report triage). Onboard NICs legitimately have no
             // discrete slot; slot_report.php already excludes them.
             $slotRef = $isOnboard ? null : ($nic['slot_position'] ?? null);
-            $this->resolveEntry($pdo, $configUuid, 'nic', 'nic', $nic, $isOnboard ? 'motherboard' : null, $plans, $quarantine, $slotRef);
+            // F-5: every NIC (onboard or component) parents to the motherboard,
+            // matching ConfigComponentWriter::resolveParentId() + seeder 2026_07_21_002.
+            $this->resolveEntry($pdo, $configUuid, 'nic', 'nic', $nic, 'motherboard', $plans, $quarantine, $slotRef);
         }
     }
 
