@@ -87,12 +87,21 @@ class ServerBuilder {
             $ramConfigs = $this->safeJsonDecode($configData['ram_configuration'], true, 'ram_configuration');
             if (is_array($ramConfigs)) {
                 foreach ($ramConfigs as $ram) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'ram',
                         'component_uuid' => $ram['uuid'] ?? null,
                         'quantity' => $ram['quantity'] ?? 1,
                         'added_at' => $ram['added_at'] ?? date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: Include serial_number to identify specific physical component
+                    // (mirrors the CPU branch above). removeComponent() recovers this serial
+                    // from the config JSON when the caller omits one; without it the fail-closed
+                    // ambiguity guard refuses to release any of several same-model DIMMs bound to
+                    // the config ("Could not identify which physical unit to release").
+                    if (isset($ram['serial_number'])) {
+                        $component['serial_number'] = $ram['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         }
@@ -102,13 +111,18 @@ class ServerBuilder {
             $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], true, 'storage_configuration');
             if (is_array($storageConfigs)) {
                 foreach ($storageConfigs as $storage) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'storage',
                         'component_uuid' => $storage['uuid'] ?? null,
                         'quantity' => $storage['quantity'] ?? 1,
                         'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s'),
                         'connection' => $storage['connection'] ?? null
                     ];
+                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
+                    if (isset($storage['serial_number'])) {
+                        $component['serial_number'] = $storage['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         }
@@ -118,12 +132,17 @@ class ServerBuilder {
             $caddyConfigs = $this->safeJsonDecode($configData['caddy_configuration'], true, 'caddy_configuration');
             if (is_array($caddyConfigs)) {
                 foreach ($caddyConfigs as $caddy) {
-                    $components[] = [
+                    $component = [
                         'component_type' => 'caddy',
                         'component_uuid' => $caddy['uuid'] ?? null,
                         'quantity' => $caddy['quantity'] ?? 1,
                         'added_at' => $caddy['added_at'] ?? date('Y-m-d H:i:s')
                     ];
+                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
+                    if (isset($caddy['serial_number'])) {
+                        $component['serial_number'] = $caddy['serial_number'];
+                    }
+                    $components[] = $component;
                 }
             }
         }
@@ -3846,9 +3865,10 @@ class ServerBuilder {
                 // installation date, and rack position.
                 //
                 // Driven by the inventory rows' own ServerUUID, NOT by the config JSON.
-                // extractComponentsFromJson() only carries serial_number for CPUs, so a
-                // JSON-driven release passed $serialNumber = null for the other nine
-                // types, collapsing updateComponentStatusAndServerUuid()'s WHERE to
+                // extractComponentsFromJson() does not carry serial_number for every type
+                // (motherboard and chassis among those it omits), so a JSON-driven release
+                // passed $serialNumber = null for those types, collapsing
+                // updateComponentStatusAndServerUuid()'s WHERE to
                 // `UUID = ?` alone -- which frees EVERY physical unit sharing that model
                 // UUID, in every other configuration. That is how motherboards 49/53/55
                 // (model 4c8f5e1b, three different configs) were all released by a single
