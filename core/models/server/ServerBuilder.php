@@ -7619,7 +7619,7 @@ class ServerBuilder {
                 return; // No storage to validate
             }
 
-            require_once __DIR__ . '/StorageConnectionValidator.php';
+            require_once __DIR__ . '/../compatibility/StorageConnectionValidator.php';
             $storageValidator = new StorageConnectionValidator($this->pdo);
 
             // Get existing components for validation
