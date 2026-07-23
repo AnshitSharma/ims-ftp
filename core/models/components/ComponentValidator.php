@@ -1041,11 +1041,13 @@ class ComponentValidator {
      * Validate motherboard M.2 storage
      */
     public function validateMotherboardM2Storage($storageInterface, $storageFormFactor, $storageRequirements, $result) {
-        $m2Slots = $storageRequirements['motherboard_m2_slots'] ?? 0;
+        // M.2 slots may come from the motherboard AND/OR NVMe-adaptor PCIe cards.
+        $m2Slots = ($storageRequirements['motherboard_m2_slots'] ?? 0)
+                 + ($storageRequirements['adapter_m2_slots'] ?? 0);
 
         if ($m2Slots <= 0) {
             $result['compatible'] = false;
-            $result['issues'][] = "No M.2 slots available on motherboard for M.2 storage";
+            $result['issues'][] = "No M.2 slots available (motherboard or NVMe adaptor) for M.2 storage";
         }
 
         return $result;
@@ -1072,6 +1074,7 @@ class ComponentValidator {
         // Generic validation - check if any connection path is available
         $hasPath = !empty($storageRequirements['chassis_bays']) ||
                    ($storageRequirements['motherboard_m2_slots'] ?? 0) > 0 ||
+                   ($storageRequirements['adapter_m2_slots'] ?? 0) > 0 ||
                    ($storageRequirements['motherboard_u2_slots'] ?? 0) > 0;
 
         if (!$hasPath) {

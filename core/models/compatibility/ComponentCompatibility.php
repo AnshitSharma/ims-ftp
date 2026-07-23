@@ -3011,6 +3011,12 @@ class ComponentCompatibility {
                         $result['issues'] = array_merge($result['issues'], $chassisCompatResult['issues']);
                     }
                     $result['details'] = array_merge($result['details'], $chassisCompatResult['details']);
+
+                } elseif ($compType === 'pciecard') {
+                    // NVMe-adaptor PCIe cards provide M.2 slots the motherboard may lack.
+                    // Only ADDS availability (M.2 slots + NVMe interface support) - never blocks.
+                    $pcieCompatResult = $this->analyzeExistingPcieForStorage($existingComp, $storageRequirements);
+                    $result['details'] = array_merge($result['details'], $pcieCompatResult['details']);
                 }
             }
 
@@ -4640,6 +4646,59 @@ class ComponentCompatibility {
             'max_devices' => $maxDevices
         ];
         $storageRequirements['hba_protocol'] = $hbaProtocol;
+
+        return $result;
+    }
+
+    /**
+     * Analyze an existing PCIe card for storage compatibility.
+     *
+     * NVMe-adaptor cards (component_subtype === "NVMe Adaptor") expose M.2 slots
+     * so M.2 NVMe drives can be installed even when the motherboard has none. This
+     * only contributes availability - it never marks storage incompatible. Per the
+     * "unlock M.2" scope, used-slot/capacity enforcement stays at add-time/finalize.
+     */
+    private function analyzeExistingPcieForStorage($pcieComponent, &$storageRequirements) {
+        $result = ['compatible' => true, 'issues' => [], 'details' => []];
+
+        // Load PCIe card specifications from JSON (merged with inventory row).
+        // enrichModel() surfaces component_subtype; m2_slots lives at model level.
+        $pcieData = $this->dataLoader->getComponentData('pciecard', $pcieComponent['uuid']);
+        if (!$pcieData) {
+            $result['details'][] = 'PCIe card specifications not found in JSON';
+            return $result;
+        }
+
+        $subtype = $pcieData['component_subtype'] ?? '';
+        $adapterM2Slots = (int)($pcieData['m2_slots'] ?? 0);
+
+        // Only NVMe adaptors that actually provide M.2 slots contribute here.
+        if (strcasecmp($subtype, 'NVMe Adaptor') !== 0 || $adapterM2Slots <= 0) {
+            return $result;
+        }
+
+        // Accumulate adaptor-provided M.2 slots (multiple adaptors add up).
+        $storageRequirements['adapter_m2_slots'] = ($storageRequirements['adapter_m2_slots'] ?? 0) + $adapterM2Slots;
+
+        // Track the adaptor's supported M.2 form factors (retained for future
+        // form-factor checks; not gated on under the current "unlock M.2" scope).
+        $adapterFormFactors = $pcieData['m2_form_factors'] ?? [];
+        if (!empty($adapterFormFactors) && is_array($adapterFormFactors)) {
+            $existingFormFactors = $storageRequirements['m2_form_factors'] ?? [];
+            $storageRequirements['m2_form_factors'] = array_values(array_unique(array_merge($existingFormFactors, $adapterFormFactors)));
+        }
+
+        // Advertise NVMe connectivity so a coexisting non-NVMe (SAS/SATA) HBA does
+        // not block M.2 NVMe drives at the HBA-interface pre-check above. Mirrors
+        // what the motherboard-M.2 and NVMe-backplane-chassis branches already do.
+        $nvmeInterfaces = ['NVMe', 'PCIe NVMe', 'NVMe PCIe 3.0', 'NVMe PCIe 4.0', 'NVMe PCIe 5.0'];
+        foreach ($nvmeInterfaces as $nvmeInterface) {
+            if (!in_array($nvmeInterface, $storageRequirements['supported_interfaces'])) {
+                $storageRequirements['supported_interfaces'][] = $nvmeInterface;
+            }
+        }
+
+        $result['details'][] = "NVMe adaptor provides {$adapterM2Slots} M.2 slot(s)";
 
         return $result;
     }
