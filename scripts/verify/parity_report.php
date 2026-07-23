@@ -88,9 +88,24 @@ function matchesExpected(array $entry, array $row): bool {
     if ($entry['legacy_blocked'] !== $row['legacy']['blocked']) return false;
     if ($entry['engine_blocked'] !== $row['engine']['blocked']) return false;
     if (array_key_exists('engine_error_class', $entry) && $entry['engine_error_class'] !== null) {
-        return $entry['engine_error_class'] === ($row['engine']['error_class'] ?? null);
+        if ($entry['engine_error_class'] !== ($row['engine']['error_class'] ?? null)) return false;
     }
-    return true;
+    // The cited rule must actually have fired on this row. Without this, any
+    // entry whose engine_error_class is "none" (the E->VF downgrade shape, e.g.
+    // A-12 cpu.requires_board) silently absolves EVERY row where the engine
+    // allowed what legacy blocked -- regardless of which rule caused it. That is
+    // the dangerous direction, so an exemption must name the rule that earned it.
+    return ruleFailedOnRow($entry['rule_id'], $row);
+}
+
+/** True iff $ruleId is present in the row's per-rule results AND did not pass. */
+function ruleFailedOnRow(string $ruleId, array $row): bool {
+    foreach ($row['results'] ?? [] as $result) {
+        if (($result['rule_id'] ?? null) === $ruleId) {
+            return ($result['passed'] ?? true) === false;
+        }
+    }
+    return false;
 }
 
 /**
