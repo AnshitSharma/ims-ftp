@@ -3982,18 +3982,28 @@ class ServerBuilder {
             }
             
             // Phase 3: Generate detailed compatibility scores
+            // Each score is computed once and reused; both used to be evaluated twice,
+            // once for their own key and again inside the min().
+            $jsonExistenceScore = $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']);
+            $matrixScore = $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix']);
+
             $enhancedValidation['json_validation']['detailed_scores'] = [
-                'json_existence_score' => $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']),
-                'compatibility_matrix_score' => $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix']),
-                'overall_json_score' => min(
-                    $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']),
-                    $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix'])
-                )
+                'json_existence_score' => $jsonExistenceScore,
+                'compatibility_matrix_score' => $matrixScore,
+                'overall_json_score' => min($jsonExistenceScore, $matrixScore)
             ];
-            
-            // Adjust overall scores based on JSON validation
+
+            // Adjust overall scores based on JSON validation.
+            // Clamped to [0, 1]: the `-= 0.2` per component missing from ims-data above
+            // had no floor, and min() alone cannot restore one, so a config missing
+            // several components reported a NEGATIVE overall_score to the client. The
+            // same branch already sets is_valid = false, so the arithmetic never
+            // carried meaning past zero.
             $jsonScore = $enhancedValidation['json_validation']['detailed_scores']['overall_json_score'];
-            $enhancedValidation['overall_score'] = min($enhancedValidation['overall_score'], $jsonScore / 100.0);
+            $enhancedValidation['overall_score'] = max(
+                0.0,
+                min($enhancedValidation['overall_score'], $jsonScore / 100.0)
+            );
 
             if ($jsonScore < 70) {
                 $enhancedValidation['is_valid'] = false;

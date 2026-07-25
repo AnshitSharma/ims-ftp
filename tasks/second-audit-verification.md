@@ -213,7 +213,48 @@ Original plan text follows.
   Blocking, not cascading — cascade would mass-release inventory from a single
   call, which is the class of defect the first pass spent its time removing.
 
-### Phase 4 — auth hardening (independent of the engine)
+### Phase 4 — auth hardening — **DONE**
+
+- **I** — `attempt()` and `hit()` now hold `LOCK_EX` across the whole
+  read-modify-write via `withExclusiveLock()`; `loadAttempts()` takes `LOCK_SH`.
+  Opened with `c+` rather than `file_put_contents(..., LOCK_EX)`, which opens
+  with `w` and truncates *before* locking — the mechanism by which a reader
+  could see an empty file and silently reset the counter.
+  **Measured**: 40 concurrent requests against a limit of 5 admitted **17**
+  before the fix, exactly **5** after. Regression test:
+  `tests/unit/rate_limiter_concurrency_test.php` (12 checks, forks real
+  processes — a single-process test passes against the broken version too).
+- **J** — `handleResetPassword()` wrapped in a transaction; the token is
+  consumed by `UPDATE ... WHERE token = ? AND used_at IS NULL` and the reset
+  proceeds only on `rowCount() === 1`. The preceding `SELECT` is now explicitly
+  advisory (it only picks the error message); the conditional UPDATE arbitrates.
+- **H** — leading-`*` wildcards no longer expand into `users.%` / `roles.%` for
+  non-view operations. Scoped to non-view so `*.view`'s existing reach is
+  untouched — changing read access is a policy call, not part of this fix.
+  **Requires a seeder**: `assignRolePermissions()` runs only at bootstrap, so
+  the code fix cannot remove grants already in `role_permissions`. Ships as
+  `database/seeders/2026_07_25_001_revoke-wildcard-user-role-write-grants.sql`
+  (idempotent; no-op on an installation seeded from SQL). **Not auto-deployed —
+  must be run manually.**
+- **K** — deleted `JWTHelper::getUserIdFromToken()`, `JWTHelper::refreshToken()`,
+  `getUserIdFromJWT()`, `refreshJWTToken()`, `logoutJWT()`. All confirmed zero
+  callers; all routed through `verifyToken()` without `$pdo`, skipping
+  revocation. Deleted rather than repaired so nothing implies they are supported.
+- **L** — padding computed as `(4 - strlen % 4) % 4`. Verified: encode/decode
+  round-trips, and output is now valid under **strict** `base64_decode($s, true)`,
+  which the old form was not.
+- **M** — `array_change_key_case()` plus `HTTP_AUTHORIZATION` /
+  `REDIRECT_HTTP_AUTHORIZATION` fallbacks, and a `function_exists` guard on
+  `getallheaders()`.
+
+### Phase 5 — correctness cleanup — **DONE**
+
+- **N** — `overall_score` clamped with `max(0.0, min(...))`.
+- **T** — both scores computed once into locals instead of twice.
+
+### Original plan text (phases 4–6)
+
+#### Phase 4 — auth hardening (independent of the engine)
 
 - **I** — `RateLimiter::attempt()` / `hit()`: hold one `flock(LOCK_EX)` across
   open → read → filter → append → `ftruncate` → write → unlock. `loadAttempts()`

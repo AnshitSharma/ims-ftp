@@ -26,7 +26,13 @@ class JWTHelper {
      * Base64 URL decode
      */
     private static function base64UrlDecode($data) {
-        return base64_decode(str_pad(strtr($data, '-_', '+/'), strlen($data) % 4, '=', STR_PAD_RIGHT));
+        // str_pad's 2nd argument is a TARGET length, not a number of pad characters.
+        // The old expression passed strlen($data) % 4 -- a value of 0..3, always at
+        // or below the current length -- so str_pad returned the string untouched and
+        // no padding was ever added. It only worked because PHP's base64_decode
+        // tolerates missing padding; a stricter decoder would have broken every token.
+        $padding = (4 - (strlen($data) % 4)) % 4;
+        return base64_decode(str_pad(strtr($data, '-_', '+/'), strlen($data) + $padding, '=', STR_PAD_RIGHT));
     }
     
     /**
@@ -216,11 +222,29 @@ class JWTHelper {
      * Get token from Authorization header
      */
     public static function getTokenFromHeader() {
-        $headers = getallheaders();
+        // Header names are case-insensitive per RFC 7230, and getallheaders() does
+        // not normalise casing consistently across SAPIs -- several FastCGI setups
+        // return 'authorization' lowercased. Matching the exact key 'Authorization'
+        // therefore dropped valid credentials on those servers and produced 401s
+        // that looked like expired tokens.
+        $headers = function_exists('getallheaders') ? getallheaders() : [];
+        $headers = is_array($headers) ? array_change_key_case($headers, CASE_LOWER) : [];
 
-        if (isset($headers['Authorization'])) {
-            if (preg_match('/Bearer\s+(.*)$/i', $headers['Authorization'], $matches)) {
-                return $matches[1];
+        $candidates = [];
+        if (isset($headers['authorization'])) {
+            $candidates[] = $headers['authorization'];
+        }
+        // Some configurations strip the header before it reaches getallheaders();
+        // mod_rewrite/CGI commonly re-expose it under these names instead.
+        foreach (['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION'] as $serverKey) {
+            if (!empty($_SERVER[$serverKey])) {
+                $candidates[] = $_SERVER[$serverKey];
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            if (preg_match('/Bearer\s+(.*)$/i', (string)$candidate, $matches)) {
+                return trim($matches[1]);
             }
         }
 
@@ -228,39 +252,23 @@ class JWTHelper {
     }
 
     /**
-     * Get user ID from current request token
+     * REMOVED (audit K): getUserIdFromToken() and refreshToken().
+     *
+     * Both called verifyToken($token) with no $pdo, which skips the revoked_tokens
+     * blacklist and the users.password_changed_at cutoff (see the guard block in
+     * verifyToken above). refreshToken() would therefore mint a fresh access token
+     * from a token that had been logged out or invalidated by a password reset.
+     *
+     * Neither had any caller: their only wrappers -- getUserIdFromJWT(),
+     * refreshJWTToken() and logoutJWT() in JWTAuthFunctions.php -- were themselves
+     * unreachable and have been deleted alongside them. The live paths
+     * (authenticateWithJWT, handleTokenRefresh, handleLogout) all pass $pdo.
+     *
+     * If a token-derived user id is ever needed again, call verifyToken($token, $pdo)
+     * directly so revocation is enforced.
      */
-    public static function getUserIdFromToken() {
-        $token = self::getTokenFromHeader();
-        if (!$token) {
-            return null;
-        }
 
-        try {
-            $payload = self::verifyToken($token);
-            return $payload['user_id'] ?? null;
-        } catch (Exception $e) {
-            return null;
-        }
-    }
 
-    /**
-     * Refresh token - Generate new token from existing valid token
-     */
-    public static function refreshToken($token) {
-        try {
-            $payload = self::verifyToken($token);
-
-            // Remove time-based claims to regenerate fresh ones
-            unset($payload['iat'], $payload['exp'], $payload['iss']);
-
-            // Generate new token with fresh timestamps
-            return self::generateToken($payload);
-        } catch (Exception $e) {
-            return false;
-        }
-    }
-    
     /**
      * Hash refresh token with SHA-256
      * Refresh tokens are high-entropy random bytes, so fast hash (not bcrypt) is appropriate
