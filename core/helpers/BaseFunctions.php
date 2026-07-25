@@ -103,9 +103,17 @@ function authenticateWithJWT($pdo) {
             return false;
         }
 
-        // Update last activity
-        $stmt = $pdo->prepare("UPDATE auth_tokens SET last_used_at = NOW() WHERE user_id = ?");
-        $stmt->execute([$user['id']]);
+        // A-L15: the per-request `UPDATE auth_tokens SET last_used_at = NOW()
+        // WHERE user_id = ?` that used to live here has been removed.
+        //   * It was scoped to the USER, not the presented token, so a user with five
+        //     active sessions had all five rows stamped on every request -- which
+        //     defeats the only purpose of the column (spotting a stale session).
+        //   * auth_tokens holds REFRESH tokens; this path authenticates an ACCESS
+        //     token, so the rows being stamped were not the credential in use.
+        //   * It was an unconditional write on the hot path, executed before any
+        //     permission check, taking a row lock per request.
+        // The column is now stamped in JWTHelper::verifyRefreshToken(), against the
+        // single row whose token was actually presented.
 
         return $user;
     } catch (Exception $e) {

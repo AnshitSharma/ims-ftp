@@ -316,8 +316,18 @@ class JWTHelper {
                 WHERE at.token = ? AND at.expires_at > NOW() AND u.status = 'active'
             ");
             $stmt->execute([$tokenHash]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            return $stmt->fetch(PDO::FETCH_ASSOC);
+            // A-L15: stamp last_used_at against the ONE row whose token was actually
+            // presented. This used to be done per-request in authenticateWithJWT(),
+            // scoped to user_id, which stamped every session the user had and made the
+            // column useless for identifying a stale token.
+            if ($user) {
+                $touch = $pdo->prepare("UPDATE auth_tokens SET last_used_at = NOW() WHERE token = ?");
+                $touch->execute([$tokenHash]);
+            }
+
+            return $user;
         } catch (PDOException $e) {
             error_log("Error verifying refresh token: " . $e->getMessage());
             return false;

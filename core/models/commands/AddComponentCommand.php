@@ -193,9 +193,17 @@ final class AddComponentCommand extends BaseCommand
             ");
             $stmt->execute([$this->componentUuid, $serialNumber]);
         } else {
+            // BUGFIX (A-L1, matching ServerBuilder::lockAndCheckComponent()): the
+            // ordering was `ORDER BY Status ASC` with no LIMIT. Status is
+            // 0=failed / 1=available / 2=in_use, so ASC returned the FAILED unit first
+            // and any add without an explicit serial was rejected as defective while
+            // good stock sat available. LIMIT 1 also stops FOR UPDATE locking every
+            // unit of the model for the transaction's lifetime.
             $stmt = $this->pdo->prepare("
                 SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
-                FROM `$table` WHERE UUID = ? ORDER BY Status ASC FOR UPDATE
+                FROM `$table` WHERE UUID = ?
+                ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+                LIMIT 1 FOR UPDATE
             ");
             $stmt->execute([$this->componentUuid]);
         }

@@ -14,6 +14,26 @@ class ServerBuilder {
     private $configCache;
     private $activeLocks = [];  // P4.1: Track acquired locks for deterministic ordering
 
+    /**
+     * Upper bound on units accepted in a single add-component call (A-E7).
+     * Comfortably above any real board's DIMM/bay/slot count, so it rejects
+     * malformed input without constraining legitimate builds.
+     */
+    /**
+     * When true, safeJsonDecode() throws instead of degrading a malformed persisted
+     * column to an empty array (A-E2). Enabled only around mutations and finalize --
+     * read/display paths keep the graceful degradation.
+     */
+    private $strictJsonDecode = false;
+
+    const MAX_ADD_QUANTITY = 128;
+
+    /**
+     * Cap on inventory rows scanned by getCompatibleComponents() (A-P2).
+     * The response reports `results_truncated` when the cap is hit.
+     */
+    const COMPATIBLE_SCAN_LIMIT = 200;
+
     public function __construct($pdo) {
         $this->pdo = $pdo;
         $this->componentTables = [
@@ -71,11 +91,16 @@ class ServerBuilder {
                         'component_type' => 'cpu',
                         'component_uuid' => $cpu['uuid'] ?? null,
                         'quantity' => $cpu['quantity'] ?? 1,
-                        'added_at' => $cpu['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $cpu['added_at'] ?? null
                     ];
                     // CRITICAL: Include serial_number to identify specific physical component
                     if (isset($cpu['serial_number'])) {
                         $component['serial_number'] = $cpu['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($cpu['inventory_id'])) {
+                        $component['inventory_id'] = (int)$cpu['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -91,7 +116,7 @@ class ServerBuilder {
                         'component_type' => 'ram',
                         'component_uuid' => $ram['uuid'] ?? null,
                         'quantity' => $ram['quantity'] ?? 1,
-                        'added_at' => $ram['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $ram['added_at'] ?? null
                     ];
                     // CRITICAL: Include serial_number to identify specific physical component
                     // (mirrors the CPU branch above). removeComponent() recovers this serial
@@ -100,6 +125,11 @@ class ServerBuilder {
                     // the config ("Could not identify which physical unit to release").
                     if (isset($ram['serial_number'])) {
                         $component['serial_number'] = $ram['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($ram['inventory_id'])) {
+                        $component['inventory_id'] = (int)$ram['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -115,12 +145,17 @@ class ServerBuilder {
                         'component_type' => 'storage',
                         'component_uuid' => $storage['uuid'] ?? null,
                         'quantity' => $storage['quantity'] ?? 1,
-                        'added_at' => $storage['added_at'] ?? date('Y-m-d H:i:s'),
+                        'added_at' => $storage['added_at'] ?? null,
                         'connection' => $storage['connection'] ?? null
                     ];
                     // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
                     if (isset($storage['serial_number'])) {
                         $component['serial_number'] = $storage['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($storage['inventory_id'])) {
+                        $component['inventory_id'] = (int)$storage['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -136,11 +171,16 @@ class ServerBuilder {
                         'component_type' => 'caddy',
                         'component_uuid' => $caddy['uuid'] ?? null,
                         'quantity' => $caddy['quantity'] ?? 1,
-                        'added_at' => $caddy['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $caddy['added_at'] ?? null
                     ];
                     // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
                     if (isset($caddy['serial_number'])) {
                         $component['serial_number'] = $caddy['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($caddy['inventory_id'])) {
+                        $component['inventory_id'] = (int)$caddy['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -156,11 +196,16 @@ class ServerBuilder {
                         'component_type' => 'nic',
                         'component_uuid' => $nic['uuid'] ?? null,
                         'quantity' => 1,
-                        'added_at' => date('Y-m-d H:i:s')
+                        'added_at' => $nic['added_at'] ?? null
                     ];
                     // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
                     if (isset($nic['serial_number'])) {
                         $component['serial_number'] = $nic['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($nic['inventory_id'])) {
+                        $component['inventory_id'] = (int)$nic['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -180,11 +225,16 @@ class ServerBuilder {
                         'component_type' => 'hbacard',
                         'component_uuid' => $hba['uuid'] ?? null,
                         'quantity' => 1,
-                        'added_at' => $hba['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $hba['added_at'] ?? null
                     ];
                     // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
                     if (isset($hba['serial_number'])) {
                         $component['serial_number'] = $hba['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($hba['inventory_id'])) {
+                        $component['inventory_id'] = (int)$hba['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -195,7 +245,7 @@ class ServerBuilder {
                 'component_type' => 'hbacard',
                 'component_uuid' => $configData['hbacard_uuid'],
                 'quantity' => 1,
-                'added_at' => date('Y-m-d H:i:s')
+                'added_at' => null
             ];
         }
 
@@ -205,7 +255,7 @@ class ServerBuilder {
                 'component_type' => 'motherboard',
                 'component_uuid' => $configData['motherboard_uuid'],
                 'quantity' => 1,
-                'added_at' => date('Y-m-d H:i:s')
+                'added_at' => null
             ];
         }
 
@@ -215,7 +265,7 @@ class ServerBuilder {
                 'component_type' => 'chassis',
                 'component_uuid' => $configData['chassis_uuid'],
                 'quantity' => 1,
-                'added_at' => date('Y-m-d H:i:s')
+                'added_at' => null
             ];
         }
 
@@ -228,13 +278,18 @@ class ServerBuilder {
                         'component_type' => 'pciecard',
                         'component_uuid' => $pcie['uuid'] ?? null,
                         'quantity' => $pcie['quantity'] ?? 1,
-                        'added_at' => $pcie['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $pcie['added_at'] ?? null
                     ];
                     // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
                     // Without it, four same-model adapters in one config are indistinguishable
                     // and the ambiguity guard refuses to release any of them.
                     if (isset($pcie['serial_number'])) {
                         $component['serial_number'] = $pcie['serial_number'];
+                    }
+                    // A-L5: the physical unit's inventory row id -- the only identifier
+                    // that separates two units of one model when both serials are NULL.
+                    if (isset($pcie['inventory_id'])) {
+                        $component['inventory_id'] = (int)$pcie['inventory_id'];
                     }
                     $components[] = $component;
                 }
@@ -254,7 +309,7 @@ class ServerBuilder {
                         'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
                         'port_index' => $sfp['port_index'] ?? null,
                         'quantity' => 1,
-                        'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s')
+                        'added_at' => $sfp['added_at'] ?? null
                     ];
                 }
             }
@@ -268,7 +323,7 @@ class ServerBuilder {
                         'parent_nic_uuid' => null,
                         'port_index' => null,
                         'quantity' => 1,
-                        'added_at' => $sfp['added_at'] ?? date('Y-m-d H:i:s'),
+                        'added_at' => $sfp['added_at'] ?? null,
                         'status' => 'unassigned'
                     ];
                 }
@@ -499,6 +554,17 @@ class ServerBuilder {
             // allowing multi-unit adds (e.g. 8 DIMMs / 4 PCIe cards) to over-allocate
             // slots, bays, lanes and DIMMs. Normalize to a positive integer once,
             // here, so every downstream consumer sees the real value.
+            // A-E7: clamp the upper bound too. An unbounded quantity built a JSON array
+            // of that size and wrote it to the column; no physical server accepts
+            // anything near this ceiling, so anything above it is a malformed request.
+            // No transaction is open yet at this point, so this returns directly.
+            if ((int)($options['quantity'] ?? 1) > self::MAX_ADD_QUANTITY) {
+                return [
+                    'success' => false,
+                    'error_type' => 'invalid_quantity',
+                    'message' => 'Quantity exceeds the maximum of ' . self::MAX_ADD_QUANTITY . ' units per add'
+                ];
+            }
             $quantity = max(1, (int)($options['quantity'] ?? 1));
 
             // RACE CONDITION FIX: Start transaction BEFORE any availability checks
@@ -526,6 +592,10 @@ class ServerBuilder {
                 ];
             }
 
+            // A-E2: from here on this call MUTATES the configuration, so a column it
+            // cannot parse must abort rather than silently read as empty.
+            $this->strictJsonDecode = true;
+
             // U-SM.4: StateGuard evaluated first. shadow logs divergence and
             // never blocks (TEMP-GUARD below stays the sole enforcement);
             // enforce is authoritative and TEMP-GUARD is skipped, not deleted.
@@ -533,38 +603,75 @@ class ServerBuilder {
             $stateGuardVerdict = StateGuard::checkMutation($this->pdo, $lockedConfigRow);
             if (StateGuard::mode() === 'enforce') {
                 if ($stateGuardVerdict !== null) {
-                    if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                     return $stateGuardVerdict;
                 }
             } else {
                 // TEMP-GUARD(U-0.2): removed by U-SM.4
                 if ((int)($lockedConfigRow['configuration_status'] ?? 0) === 3) {
-                    if (isset($ownTransaction) ? ($ownTransaction && $this->pdo->inTransaction()) : $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
                     return ['success'=>false,'error_type'=>'config_finalized',
                             'message'=>'Configuration is finalized and immutable. Move it to maintenance (not yet available) or unfinalize via an administrator.'];
                 }
             }
 
-            // Phase 1.2: Auto-resolve serial_number if not provided
-            // When multiple inventory items share the same UUID (same model), we need a serial
-            // to identify which specific physical component is being added.
-            // Without this, the duplicate check treats all same-UUID components as identical.
-            if ($serialNumber === null) {
-                $table = $this->getComponentInventoryTable($componentType);
-                if ($table) {
-                    $stmt = $this->pdo->prepare("
-                        SELECT SerialNumber FROM `$table`
-                        WHERE UUID = ? AND Status = 1
-                        ORDER BY ID ASC
-                        LIMIT 1
-                    ");
-                    $stmt->execute([$componentUuid]);
-                    $autoResolved = $stmt->fetchColumn();
-                    if ($autoResolved) {
-                        $serialNumber = $autoResolved;
+            // Phase 1.2: Resolve and LOCK the physical inventory unit.
+            //
+            // BUGFIX (A-L5/A-E1): this used to be an unlocked
+            // `SELECT SerialNumber ... WHERE Status = 1 LIMIT 1` whose result was fed to
+            // the duplicate check, with the real lock taken much later (old Phase 4).
+            // Two defects:
+            //   * `if ($autoResolved)` is falsy for a NULL serial, so serial-less stock
+            //     (AssetTag-addressed, seeder 2026_07_22_001) left $serialNumber null and
+            //     isDuplicateComponent() then matched ANY serial-less entry of the same
+            //     model -- the second unit of such a model could never be added.
+            //   * the unlocked read was a TOCTOU window: two configs adding the same model
+            //     concurrently both resolved the same unit, and the loser failed with
+            //     "currently In Use" even though other units were free.
+            // Locking here (server_configurations is already locked above, so the
+            // documented lock order is preserved) resolves the exact physical row once,
+            // under lock, and every later phase reuses it.
+            $isVirtual = (bool)($lockedConfigRow['is_virtual'] ?? 0);
+            $inventoryId = null;
+
+            if (!$isVirtual) {
+                $lockResult = $this->lockAndCheckComponent($componentType, $componentUuid, $serialNumber);
+                if (!$lockResult['found']) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
                     }
+                    return [
+                        'success' => false,
+                        'message' => $lockResult['error']
+                    ];
                 }
+                // Component row is now LOCKED - no other transaction can modify it.
+                $componentDetails = $lockResult['data'];
+                $inventoryId = isset($componentDetails['ID']) ? (int)$componentDetails['ID'] : null;
+            } else {
+                // Virtual config - synthetic details, nothing to lock.
+                $componentDetails = [
+                    'UUID' => $componentUuid,
+                    'SerialNumber' => $serialNumber ?? 'VIRTUAL-' . substr($componentUuid, 0, 8),
+                    'Status' => 1, // Virtual component (always "available")
+                    'ServerUUID' => null,
+                    'Location' => null,
+                    'Notes' => 'Virtual component for testing'
+                ];
             }
+
+            // The serial actually stored on the locked row. May legitimately be null for
+            // serial-less stock -- $inventoryId is the identity that always works.
+            //
+            // Virtual configs keep the caller's original value: their $componentDetails
+            // carries a synthetic 'VIRTUAL-<uuid>' placeholder for the availability check
+            // and the response, and that placeholder is identical for every unit of a
+            // model, so persisting it into the config JSON would make virtual entries
+            // falsely indistinguishable. updateCpuConfiguration() mints its own unique
+            // per-instance virtual serial where one is needed.
+            $resolvedSerialNumber = $isVirtual
+                ? $serialNumber
+                : ($componentDetails['SerialNumber'] ?? $serialNumber);
 
             // Phase 1.5: Validate compatibility with existing components (flexible order)
             $compatibilityValidation = $this->validateComponentCompatibility($configUuid, $componentType, $componentUuid);
@@ -577,10 +684,12 @@ class ServerBuilder {
                 return $compatibilityValidation;
             }
 
-            // Phase 2: Check for duplicate component with configuration row locked
-            // CRITICAL: Pass serial_number to allow multiple components with same UUID but different serials
-            // Skip duplicate check for virtual configs (allow same component UUID multiple times for testing)
-            if (!$this->isVirtualConfig($configUuid) && $this->isDuplicateComponent($configUuid, $componentUuid, $serialNumber)) {
+            // Phase 2: Check for duplicate component with configuration row locked.
+            // Identity is the inventory row ID resolved under lock in Phase 1.2; the serial
+            // is passed only so legacy JSON entries (written before inventory_id was
+            // stored) still match. Skipped for virtual configs, which intentionally allow
+            // the same component UUID many times.
+            if (!$isVirtual && $this->isDuplicateComponent($configUuid, $componentUuid, $resolvedSerialNumber, $inventoryId, $componentType)) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
                     $this->pdo->rollback();
                 }
@@ -629,8 +738,8 @@ class ServerBuilder {
                     }
                     $compatibility = new ComponentCompatibility($this->pdo);
 
-                    // Skip JSON validation for virtual configs (they don't need real inventory)
-                    $isVirtual = $this->isVirtualConfig($configUuid);
+                    // $isVirtual comes from the locked config row (Phase 1.2). Virtual
+                    // configs skip JSON validation - they hold no real inventory.
 
                     // C6: Validate every real component UUID against its JSON spec, per the project
                     // rule "all component UUIDs must exist in ims-data". storage/nic/caddy/sfp were
@@ -667,46 +776,10 @@ class ServerBuilder {
                 ];
             }
             
-            // Phase 4: RACE CONDITION FIX - Lock and get component details atomically
-            // Note: $serialNumber was already extracted in Phase 1.1
-            // For virtual configs, create dummy component details if not found in inventory
+            // Phase 4: the inventory unit was resolved and LOCKED in Phase 1.2, before the
+            // duplicate check that consumes its identity ($inventoryId /
+            // $resolvedSerialNumber / $componentDetails). Nothing to do here.
 
-            // Check if this is a virtual config
-            $isVirtual = $this->isVirtualConfig($configUuid);
-
-            if (!$isVirtual) {
-                // Real config - LOCK the component row to prevent race conditions
-                $lockResult = $this->lockAndCheckComponent($componentType, $componentUuid, $serialNumber);
-
-                if (!$lockResult['found']) {
-                    if ($ownTransaction && $this->pdo->inTransaction()) {
-                        $this->pdo->rollback();
-                    }
-                    return [
-                        'success' => false,
-                        'message' => $lockResult['error']
-                    ];
-                }
-
-                // Component is now LOCKED - no other transaction can modify it
-                $componentDetails = $lockResult['data'];
-            } else {
-                // Virtual config - create dummy component details (no locking needed)
-                $componentDetails = [
-                    'UUID' => $componentUuid,
-                    'SerialNumber' => $serialNumber ?? 'VIRTUAL-' . substr($componentUuid, 0, 8),
-                    'Status' => 1, // Virtual component (always "available")
-                    'ServerUUID' => null,
-                    'Location' => null,
-                    'Notes' => 'Virtual component for testing'
-                ];
-            }
-
-            // Extract the actual serial number from component details (in case it wasn't provided in options)
-            // CRITICAL: Keep $serialNumber as original user input (null if not provided) for JSON config logic.
-            // $resolvedSerialNumber is used only for inventory DB row targeting.
-            $resolvedSerialNumber = $componentDetails['SerialNumber'] ?? $serialNumber;
-            
             // Phase 5: Chassis-specific validations BEFORE adding
             // Validation already done in Phase 3 for chassis, skip here
 
@@ -803,13 +876,11 @@ class ServerBuilder {
                 }
             }
             
-            // Get server configuration location and rack position for component assignment
-            $stmt = $this->pdo->prepare("SELECT location, rack_position FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $serverConfig = $stmt->fetch(PDO::FETCH_ASSOC);
-            $serverLocation = $serverConfig['location'] ?? null;
-            $serverRackPosition = $serverConfig['rack_position'] ?? null;
-            $serverRackPosition = $serverConfig['rack_position'] ?? null;
+            // Location / rack position come from the config row locked in Phase 1 --
+            // re-selecting them here was a redundant round-trip (A-P1), and the
+            // assignment was duplicated on two consecutive lines.
+            $serverLocation = $lockedConfigRow['location'] ?? null;
+            $serverRackPosition = $lockedConfigRow['rack_position'] ?? null;
 
 
             // RACE CONDITION FIX: Transaction already started at beginning of method
@@ -904,12 +975,83 @@ class ServerBuilder {
                 $options['connection_data'] = $storageConnectionData;
             }
 
+            // BUGFIX (A-L3): reserve one physical unit PER requested quantity.
+            //
+            // $quantity was validated against slot/bay/lane budgets, written into the
+            // config JSON as `quantity => N`, and then exactly ONE inventory row was
+            // flipped to in_use. A `qty=8` RAM add therefore claimed 8 DIMM slots on this
+            // config while leaving 7 units Status=1 and allocatable to other servers --
+            // physical hardware double-booked, with no signal anywhere.
+            //
+            // Phase 1.2 already locked the first unit. Lock the remaining N-1 here, in the
+            // same transaction, excluding rows already claimed. Falling short is fatal to
+            // the add: partially reserving stock is exactly the corruption being fixed.
+            // Slot-consuming types are one-unit-per-call by construction:
+            // assignComponentSlot() allocates exactly ONE discrete PCIe slot id per add
+            // (see Phase 10.5 above), so N units would all be recorded in that single
+            // slot. This was always broken for quantity>1; reserving N physical units now
+            // would make it worse by claiming hardware for cards with nowhere to sit.
+            // Callers that genuinely need N cards issue N adds -- which is what the
+            // command layer already does (server_api.php's quantity>1 loop).
+            if ($quantity > 1 && in_array($componentType, ['nic', 'pciecard', 'hbacard'], true)) {
+                if ($ownTransaction && $this->pdo->inTransaction()) {
+                    $this->pdo->rollback();
+                }
+                return [
+                    'success' => false,
+                    'error_type' => 'invalid_quantity',
+                    'message' => "Add one $componentType at a time: each card is assigned its own PCIe slot",
+                    'details' => ['component_type' => $componentType, 'requested' => $quantity]
+                ];
+            }
+
+            $reservedUnits = [];
+            if (!$isVirtual) {
+                $reservedUnits[] = [
+                    'ID' => $inventoryId,
+                    'SerialNumber' => $resolvedSerialNumber,
+                ];
+
+                if ($quantity > 1) {
+                    $extraUnits = $this->lockAdditionalUnits(
+                        $componentType,
+                        $componentUuid,
+                        $quantity - 1,
+                        array_column($reservedUnits, 'ID')
+                    );
+
+                    if (count($extraUnits) < ($quantity - 1)) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) {
+                            $this->pdo->rollback();
+                        }
+                        $found = count($extraUnits) + 1;
+                        return [
+                            'success' => false,
+                            'error_type' => 'insufficient_inventory',
+                            'message' => "Only $found available unit(s) of $componentUuid in inventory, $quantity requested",
+                            'details' => [
+                                'component_type' => $componentType,
+                                'component_uuid' => $componentUuid,
+                                'requested' => $quantity,
+                                'available' => $found
+                            ]
+                        ];
+                    }
+                    $reservedUnits = array_merge($reservedUnits, $extraUnits);
+                }
+            }
+
             // P4.3 FIX: Update JSON BEFORE status (safer transaction order)
             // This ensures JSON is persisted even if status update fails
 
-            // Update the main server_configurations table with component info (FIRST)
-            // CRITICAL: Pass serial_number to store in configuration JSON
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $serialNumber, $options);
+            // Update the main server_configurations table with component info (FIRST).
+            // `inventory_id` identifies the PHYSICAL unit in the JSON entry; without it,
+            // two serial-less units of one model are indistinguishable on read (A-L5).
+            // `reserved_units` records every unit this entry claims, so removal releases
+            // exactly what the add reserved.
+            $options['inventory_id'] = $inventoryId;
+            $options['reserved_units'] = $reservedUnits;
+            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, 'add', $resolvedSerialNumber, $options);
 
             // U-1.5: dual-write hook (flag off by default per FLAGS.md; no-op unless
             // the flag is 'on'). Same transaction as the legacy write above; any
@@ -933,20 +1075,98 @@ class ServerBuilder {
                 );
             }
 
-            // Update component status to "In Use" ONLY for real builds (not virtual/test builds) (SECOND)
-            // Virtual configs don't lock components - they're for testing only
-            if (!$this->isVirtualConfig($configUuid)) {
-                // Update component status to "In Use" AND set ServerUUID, location, rack position, and installation date
-                // Identify the unit by the inventory row ID that lockAndCheckComponent()
-                // already resolved and locked -- exact, and the only identifier that works
-                // for stock with no manufacturer serial (SerialNumber NULL). The serial is
-                // still passed so the legacy path stays available if the ID is absent.
-                $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 2, $configUuid, "Added to configuration $configUuid", $serverLocation, $serverRackPosition, $resolvedSerialNumber, $componentDetails['ID'] ?? null);
+            // Update component status to "In Use" ONLY for real builds (not virtual/test
+            // builds) (SECOND). Virtual configs reserve nothing.
+            //
+            // Each unit is identified by its inventory row ID -- exact, and the only
+            // identifier that works for stock with no manufacturer serial
+            // (SerialNumber NULL). The serial is still passed so the legacy path stays
+            // available if the ID is absent.
+            foreach ($reservedUnits as $unit) {
+                $reserved = $this->updateComponentStatusAndServerUuid(
+                    $componentType,
+                    $componentUuid,
+                    2,
+                    $configUuid,
+                    "Added to configuration $configUuid",
+                    $serverLocation,
+                    $serverRackPosition,
+                    $unit['SerialNumber'] ?? null,
+                    $unit['ID'] ?? null
+                );
+                // A refused reservation must not be reported as a successful add: that is
+                // how a config ends up claiming stock it never took (A-L3).
+                if (!$reserved) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    error_log(
+                        "Add aborted: could not reserve $componentType $componentUuid "
+                        . "(inventory id: " . ($unit['ID'] ?? 'unresolved') . ") for config $configUuid"
+                    );
+                    return [
+                        'success' => false,
+                        'error_type' => 'reservation_failed',
+                        'message' => 'Could not reserve the physical unit for this server. The component was not added.'
+                    ];
+                }
             }
-            
-            // Update calculated fields (power, compatibility, etc.)
+
+            // Post-add side effects.
+            //
+            // BUGFIX (A-L6): these used to run AFTER commit(), which released the
+            // server_configurations lock taken in Phase 1. Consequences: a failed onboard
+            // NIC materialization was reported as success=true with a warning string and
+            // an empty network section that no retry path could repair; updateNICConfigJSON's
+            // unlocked read-modify-write of nic_config raced concurrent adds; and the cache
+            // was invalidated BEFORE these writes landed, so getConfigurationDetails()
+            // served a stale snapshot for the full 300s TTL. They now run inside the
+            // transaction, under the lock, and their failure rolls the add back.
+            $response = [
+                'success' => true,
+                'message' => "Component added successfully",
+                'component_details' => $componentDetails
+            ];
+
+            if ($componentType === 'motherboard' && !$isVirtual) {
+                require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+                $nicHandler = new OnboardNICHandler($this->pdo);
+                // Onboard NICs are identified by the PHYSICAL board, so pass the
+                // locked inventory row id.
+                $onboardNICResult = $nicHandler->autoAddOnboardNICs(
+                    $configUuid,
+                    $componentUuid,
+                    $inventoryId
+                );
+
+                if (!empty($onboardNICResult['error'])) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    error_log("Motherboard add aborted: onboard NIC materialization failed: " . $onboardNICResult['error']);
+                    return [
+                        'success' => false,
+                        'error_type' => 'onboard_nic_failed',
+                        'message' => 'Motherboard not added: its onboard NICs could not be attached. '
+                                   . 'The configuration is unchanged.'
+                    ];
+                }
+
+                if (($onboardNICResult['count'] ?? 0) > 0) {
+                    $response['onboard_nics_added'] = $onboardNICResult;
+                }
+            }
+
+            if ($componentType === 'nic') {
+                require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+                $nicHandler = new OnboardNICHandler($this->pdo);
+                $nicHandler->updateNICConfigJSON($configUuid);
+            }
+
+            // Update calculated fields (power, compatibility, etc.) AFTER the side effects,
+            // so onboard NIC power is counted.
             $this->updateConfigurationMetrics($configUuid);
-            
+
             // Log the action
             $this->logConfigurationAction($configUuid, 'add_component', $componentType, $componentUuid, $options);
 
@@ -955,17 +1175,12 @@ class ServerBuilder {
                 $this->pdo->commit();
             }
 
-            // Invalidate configuration cache if available
+            // Invalidate the cache LAST -- after every write is durable. Invalidating
+            // before the side effects (as this used to) re-populated the cache from a
+            // half-written config.
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
             }
-
-            // Build response with optional RAM validation details
-            $response = [
-                'success' => true,
-                'message' => "Component added successfully",
-                'component_details' => $componentDetails
-            ];
 
             // Include RAM validation results if available
             if ($ramValidationResults !== null && $componentType === 'ram') {
@@ -973,55 +1188,12 @@ class ServerBuilder {
                 $response['compatibility_details'] = $ramValidationResults['compatibility_details'] ?? [];
             }
 
-            // Phase 3: Post-add side effects consolidation
-
-            // SIDE EFFECT 1: AUTO-ADD ONBOARD NICs when motherboard is added
-            if ($componentType === 'motherboard') {
-                try {
-                    require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
-                    $nicHandler = new OnboardNICHandler($this->pdo);
-                    // Onboard NICs are identified by the PHYSICAL board, so pass the
-                    // locked inventory row id. Virtual configs have no such row
-                    // (see the dummy $componentDetails above) and are skipped.
-                    $onboardNICResult = $nicHandler->autoAddOnboardNICs(
-                        $configUuid,
-                        $componentUuid,
-                        $componentDetails['ID'] ?? null
-                    );
-
-                    if ($onboardNICResult['count'] > 0) {
-                        $response['onboard_nics_added'] = $onboardNICResult;
-                    }
-                    // A board whose spec declares onboard NICs but materialized none
-                    // is a defect, not a no-op -- say so rather than returning a
-                    // success envelope that hides an empty network section.
-                    if (isset($onboardNICResult['error'])) {
-                        $response['onboard_nic_warning'] = "Motherboard added but onboard NICs could not be attached: " . $onboardNICResult['error'];
-                    }
-                } catch (Exception $nicError) {
-                    error_log("Error auto-adding onboard NICs: " . $nicError->getMessage());
-                    // Don't fail the motherboard addition if onboard NIC addition fails
-                    $response['onboard_nic_warning'] = "Motherboard added but onboard NICs could not be auto-added: " . $nicError->getMessage();
-                }
-            }
-
-            // SIDE EFFECT 2: UPDATE NIC CONFIG when NIC is added
-            if ($componentType === 'nic') {
-                try {
-                    require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
-                    $nicHandler = new OnboardNICHandler($this->pdo);
-                    $nicHandler->updateNICConfigJSON($configUuid);
-                } catch (Exception $nicError) {
-                    error_log("Error updating NIC config: " . $nicError->getMessage());
-                    // Don't fail the NIC addition if config update fails
-                }
-            }
-
             return $response;
-            
-        } catch (Exception $e) {
-            // Only rollback if we started the transaction
-            if (isset($ownTransaction) && $ownTransaction && $this->pdo->inTransaction()) {
+
+        } catch (\Throwable $e) {
+            // A-E3: \Throwable, not Exception -- a TypeError/Error thrown anywhere in the
+            // add path used to escape this handler with the transaction still open.
+            if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollback();
             }
             error_log("Error adding component to configuration: " . $e->getMessage());
@@ -1029,6 +1201,8 @@ class ServerBuilder {
                 'success' => false,
                 'message' => "Failed to add component: " . $e->getMessage()
             ];
+        } finally {
+            $this->strictJsonDecode = false;
         }
     }
     
@@ -1060,6 +1234,9 @@ class ServerBuilder {
                 ];
             }
 
+            // A-E2: mutation path -- refuse to act on an unparseable column.
+            $this->strictJsonDecode = true;
+
             // U-SM.4: StateGuard evaluated first. shadow logs divergence and
             // never blocks (TEMP-GUARD below stays the sole enforcement);
             // enforce is authoritative and TEMP-GUARD is skipped, not deleted.
@@ -1083,25 +1260,32 @@ class ServerBuilder {
             $components = $this->extractComponentsFromJson($config);
             $componentFound = false;
             $componentSerialNumber = null;
+            // Inventory row id recorded on the matched entry (A-L5). Authoritative when
+            // present -- it identifies the physical unit even for serial-less stock.
+            $entryInventoryId = null;
+            // Every unit a quantity>1 entry claims (A-L3), so the release below frees
+            // exactly what the add reserved.
+            $entryReservedUnits = [];
 
             foreach ($components as $comp) {
-                // Match by serial_number if provided, otherwise fallback to UUID only
-                $isMatch = false;
-                if ($serialNumber !== null && isset($comp['serial_number'])) {
-                    $isMatch = ($comp['component_type'] === $componentType &&
-                                $comp['component_uuid'] === $componentUuid &&
-                                $comp['serial_number'] === $serialNumber);
-                } else {
-                    $isMatch = ($comp['component_type'] === $componentType &&
-                                $comp['component_uuid'] === $componentUuid);
+                if (($comp['component_type'] ?? null) !== $componentType
+                    || ($comp['component_uuid'] ?? null) !== $componentUuid) {
+                    continue;
+                }
+                // When the caller named a serial, only an entry carrying that serial
+                // matches; otherwise the first entry of this model is the target.
+                if ($serialNumber !== null && isset($comp['serial_number'])
+                    && $comp['serial_number'] !== $serialNumber) {
+                    continue;
                 }
 
-                if ($isMatch) {
-                    $componentFound = true;
-                    // Extract serial number from config if not provided
-                    $componentSerialNumber = $comp['serial_number'] ?? $serialNumber;
-                    break;
-                }
+                $componentFound = true;
+                $componentSerialNumber = $comp['serial_number'] ?? $serialNumber;
+                $entryInventoryId = isset($comp['inventory_id']) ? (int)$comp['inventory_id'] : null;
+                $entryReservedUnits = (isset($comp['reserved_units']) && is_array($comp['reserved_units']))
+                    ? array_map('intval', $comp['reserved_units'])
+                    : [];
+                break;
             }
 
             if (!$componentFound) {
@@ -1152,7 +1336,20 @@ class ServerBuilder {
             }
 
             $boundInventoryId = null;
-            if (count($boundUnits) === 1) {
+            $boundById = [];
+            foreach ($boundUnits as $unit) {
+                $boundById[(int)$unit['ID']] = $unit;
+            }
+
+            // A-L5: the config entry's own inventory_id wins when it is present and the
+            // unit really is bound here. It is exact for serial-less stock, where neither
+            // the caller's serial nor the bound-unit count can disambiguate.
+            if ($entryInventoryId !== null && isset($boundById[$entryInventoryId])) {
+                $boundInventoryId = $entryInventoryId;
+                if ($componentSerialNumber === null) {
+                    $componentSerialNumber = $boundById[$entryInventoryId]['SerialNumber'];
+                }
+            } elseif (count($boundUnits) === 1) {
                 // Exactly one unit of this model is bound to this config, so it is the
                 // one being removed regardless of what the caller supplied.
                 $boundInventoryId = (int)$boundUnits[0]['ID'];
@@ -1167,6 +1364,20 @@ class ServerBuilder {
                         break;
                     }
                 }
+            }
+
+            // A-L3: a quantity>1 entry reserved several units. Release every one it
+            // recorded (restricted to units actually bound to this config), not just the
+            // first -- otherwise the surplus stays Status=2 against a config that no
+            // longer lists it.
+            $releaseIds = [];
+            foreach ($entryReservedUnits as $reservedId) {
+                if (isset($boundById[$reservedId])) {
+                    $releaseIds[] = $reservedId;
+                }
+            }
+            if (empty($releaseIds) && $boundInventoryId !== null) {
+                $releaseIds[] = $boundInventoryId;
             }
 
             // Phase 3: NIC removal validation - Check if any SFPs are installed on ports
@@ -1200,31 +1411,49 @@ class ServerBuilder {
                 }
             }
 
-            // SPECIAL HANDLING: If removing a motherboard, also remove its onboard NICs
+            // SPECIAL HANDLING: If removing a motherboard, also remove its onboard NICs.
+            //
+            // BUGFIX (A-E6): a failed detach used to be logged as a warning and the
+            // removal continued, nulling motherboard_uuid while the nicinventory rows kept
+            // ParentComponentUUID pointing at the departed board and ServerUUID at this
+            // config -- orphans no code path can reach. This method already rolls back on a
+            // failed component release below; apply the same discipline here.
             if ($componentType === 'motherboard') {
-                // Remove onboard NICs via OnboardNICHandler
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $removeResult = $nicHandler->removeOnboardNICs($componentUuid, $configUuid);
 
                 if (!$removeResult['success']) {
-                    error_log("Warning: Failed to remove onboard NICs: " . ($removeResult['error'] ?? 'Unknown error'));
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    error_log("Removal aborted: failed to detach onboard NICs for motherboard $componentUuid "
+                        . "from config $configUuid: " . ($removeResult['error'] ?? 'Unknown error'));
+                    return [
+                        'success' => false,
+                        'error_type' => 'onboard_nic_detach_failed',
+                        'message' => 'Could not detach this motherboard\'s onboard NICs. '
+                                   . 'The component was not removed.'
+                    ];
                 }
             }
 
             // P4.3 FIX: Update JSON BEFORE status (safer transaction order)
             // This ensures JSON is persisted even if status update fails
 
-            // Update the main server_configurations table (FIRST)
-            // CRITICAL: Pass serial number to remove correct component from JSON
-            $this->updateServerConfigurationTable($configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber);
+            // Update the main server_configurations table (FIRST).
+            // The inventory row id targets the exact entry to drop (A-L4/A-L5); the serial
+            // is the fallback for legacy entries that predate it.
+            $this->updateServerConfigurationTable(
+                $configUuid, $componentType, $componentUuid, 0, 'remove', $componentSerialNumber,
+                ['inventory_id' => $boundInventoryId]
+            );
 
             // U-1.5: dual-write hook (flag off by default per FLAGS.md; no-op unless
             // the flag is 'on'). Same transaction as the legacy write above; any
             // failure here propagates and rolls back both stores (fail-closed, INV-5).
             // Virtual configs are never dual-written on add, so there is nothing to
             // tombstone here either.
-            if (!$this->isVirtualConfig($configUuid)) {
+            // is_virtual comes from the config row locked above -- no re-query (A-P1).
+            if (!(bool)($config['is_virtual'] ?? 0)) {
                 require_once __DIR__ . '/../config/ConfigComponentWriter.php';
                 ConfigComponentWriter::afterLegacyRemove(
                     $this->pdo,
@@ -1243,15 +1472,28 @@ class ServerBuilder {
             // rather than calling it with a null serial, which would either refuse
             // (blocking the cleanup) or, for a single-unit model, free a unit that
             // belongs to some other config.
-            $released = empty($boundUnits)
-                ? true
-                : $this->updateComponentStatusAndServerUuid($componentType, $componentUuid, 1, null, "Removed from configuration $configUuid", null, null, $componentSerialNumber, $boundInventoryId);
-
+            $released = true;
             if (empty($boundUnits)) {
                 error_log(
                     "Removed $componentType $componentUuid from config $configUuid with no inventory "
                     . "row bound to it (stale config entry — nothing to release)"
                 );
+            } elseif (empty($releaseIds)) {
+                // Units are bound but none could be pinned to this entry -- fail closed
+                // rather than guess, exactly as the ambiguity guard would.
+                $released = false;
+            } else {
+                foreach ($releaseIds as $releaseId) {
+                    $unitSerial = $boundById[$releaseId]['SerialNumber'] ?? $componentSerialNumber;
+                    if (!$this->updateComponentStatusAndServerUuid(
+                        $componentType, $componentUuid, 1, null,
+                        "Removed from configuration $configUuid",
+                        null, null, $unitSerial, $releaseId
+                    )) {
+                        $released = false;
+                        break;
+                    }
+                }
             }
 
             // A refused/failed release used to be ignored, which orphaned the unit:
@@ -1277,7 +1519,16 @@ class ServerBuilder {
                 $this->recalculateFormFactorLock($configUuid);
             }
 
-            // Update calculated fields
+            // Post-removal side effect. BUGFIX (A-L6): this ran AFTER commit(), so its
+            // read-modify-write of nic_config was unlocked and raced concurrent flows, and
+            // the cache had already been invalidated from the pre-side-effect state.
+            if ($componentType === 'nic') {
+                require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+                $nicHandler = new OnboardNICHandler($this->pdo);
+                $nicHandler->updateNICConfigJSON($configUuid);
+            }
+
+            // Update calculated fields (after the side effect, so NIC changes are counted)
             $this->updateConfigurationMetrics($configUuid);
 
             // Log the action
@@ -1287,31 +1538,15 @@ class ServerBuilder {
                 $this->pdo->commit();
             }
 
-            // Invalidate configuration cache if available
+            // Invalidate the cache LAST -- after every write is durable.
             if ($this->configCache !== null) {
                 $this->configCache->invalidateConfiguration($configUuid);
             }
 
-            $response = [
+            return [
                 'success' => true,
                 'message' => "Component removed successfully"
             ];
-
-            // Phase 3: POST-REMOVAL SIDE EFFECTS
-
-            // SIDE EFFECT 3: UPDATE NIC CONFIG when NIC is removed
-            if ($componentType === 'nic') {
-                try {
-                    require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
-                    $nicHandler = new OnboardNICHandler($this->pdo);
-                    $nicHandler->updateNICConfigJSON($configUuid);
-                } catch (Exception $nicError) {
-                    error_log("Error updating NIC config after removal: " . $nicError->getMessage());
-                    // Don't fail the NIC removal if config update fails
-                }
-            }
-
-            return $response;
 
         } catch (\Throwable $e) {
             if ($ownTransaction && $this->pdo->inTransaction()) {
@@ -1322,6 +1557,8 @@ class ServerBuilder {
                 'success' => false,
                 'message' => "Failed to remove component: " . $e->getMessage()
             ];
+        } finally {
+            $this->strictJsonDecode = false;
         }
     }
 
@@ -1353,22 +1590,50 @@ class ServerBuilder {
             // Step 2: Get existing components in configuration
             $existingComponents = $this->extractComponentsFromJson($config->getData(), true);
 
-            // Process existing components for compatibility checking
+            // Process existing components for compatibility checking.
+            //
+            // A-P2: this issued one `SELECT * ... WHERE UUID = ? LIMIT 1` PER existing
+            // component (N+1 on a hot, user-facing endpoint). Batched to one query per
+            // TYPE. The rows are still keyed by model UUID -- as before -- because the
+            // compatibility checks below only read model-level spec fields.
+            $uuidsByType = [];
+            foreach ($existingComponents as $existing) {
+                $type = $existing['component_type'] ?? null;
+                $uuid = $existing['component_uuid'] ?? null;
+                if ($type === null || $uuid === null) {
+                    continue;
+                }
+                $uuidsByType[$type][$uuid] = true;
+            }
+
+            $rowsByTypeUuid = [];
+            foreach ($uuidsByType as $type => $uuidSet) {
+                $table = $this->getComponentInventoryTable($type);
+                if (!$table) {
+                    continue;
+                }
+                $uuids = array_keys($uuidSet);
+                $placeholders = implode(',', array_fill(0, count($uuids), '?'));
+                $stmt = $this->pdo->prepare("SELECT * FROM `$table` WHERE UUID IN ($placeholders)");
+                $stmt->execute($uuids);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    // First row per UUID wins, matching the previous LIMIT 1 behaviour.
+                    if (!isset($rowsByTypeUuid[$type][$row['UUID']])) {
+                        $rowsByTypeUuid[$type][$row['UUID']] = $row;
+                    }
+                }
+            }
+
             $existingComponentsData = [];
             foreach ($existingComponents as $existing) {
-                $table = $this->getComponentInventoryTable($existing['component_type']);
-                if ($table) {
-                    $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? LIMIT 1");
-                    $stmt->execute([$existing['component_uuid']]);
-                    $componentData = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                    if ($componentData) {
-                        $existingComponentsData[] = [
-                            'type' => $existing['component_type'],
-                            'uuid' => $existing['component_uuid'],
-                            'data' => $componentData
-                        ];
-                    }
+                $type = $existing['component_type'] ?? null;
+                $uuid = $existing['component_uuid'] ?? null;
+                if (isset($rowsByTypeUuid[$type][$uuid])) {
+                    $existingComponentsData[] = [
+                        'type' => $type,
+                        'uuid' => $uuid,
+                        'data' => $rowsByTypeUuid[$type][$uuid]
+                    ];
                 }
             }
 
@@ -1393,19 +1658,34 @@ class ServerBuilder {
                 SELECT UUID, SerialNumber, Status, Location, Notes, ServerUUID
                 FROM $table
                 $whereClause
-                ORDER BY Status ASC, SerialNumber ASC
-                LIMIT 200
+                ORDER BY (Status = 1) DESC, SerialNumber ASC
+                LIMIT " . (self::COMPATIBLE_SCAN_LIMIT + 1) . "
             ");
             $stmt->execute();
             $allComponents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // Debug info
-            $debugInfo = [
-                'query_table' => $table,
-                'where_clause' => $whereClause,
-                'total_found_in_db' => count($allComponents),
-                'available_only' => $availableOnly
-            ];
+            // A-P2: the scan is capped for performance, but the cap used to be silent --
+            // callers had no way to tell a genuinely short list from a truncated one.
+            // One extra row is fetched purely to detect the overflow, then dropped.
+            $resultsTruncated = count($allComponents) > self::COMPATIBLE_SCAN_LIMIT;
+            if ($resultsTruncated) {
+                $allComponents = array_slice($allComponents, 0, self::COMPATIBLE_SCAN_LIMIT);
+            }
+
+            // Debug info. A-P2: only assembled when the caller actually asked for it --
+            // this array previously accumulated a record per scanned component (plus full
+            // nested result arrays for HBA) on EVERY call, and was then discarded unless
+            // $includeDebug was set.
+            $debugInfo = [];
+            if ($includeDebug) {
+                $debugInfo = [
+                    'query_table' => $table,
+                    'where_clause' => $whereClause,
+                    'total_found_in_db' => count($allComponents),
+                    'available_only' => $availableOnly,
+                    'results_truncated' => $resultsTruncated
+                ];
+            }
 
             // Step 4: Run compatibility checks
             $compatibleComponents = [];
@@ -1425,22 +1705,22 @@ class ServerBuilder {
 
                 foreach ($allComponents as $component) {
                     $hasJSON = $compatibility->validateComponentExistsInJSON($componentType, $component['UUID']);
-                    $validationDetail = [
-                        'uuid' => $component['UUID'],
-                        'serial_number' => $component['SerialNumber'],
-                        'has_json' => $hasJSON,
-                        'status' => $component['Status']
-                    ];
 
                     if ($hasJSON) {
                         $componentsWithJSON[] = $component;
-                        $validationDetail['result'] = 'included';
                     } else {
                         $componentsWithoutJSON[] = $component['UUID'];
-                        $validationDetail['result'] = 'excluded - no JSON spec found';
                     }
 
-                    $jsonValidationDetails[] = $validationDetail;
+                    if ($includeDebug) {
+                        $jsonValidationDetails[] = [
+                            'uuid' => $component['UUID'],
+                            'serial_number' => $component['SerialNumber'],
+                            'has_json' => $hasJSON,
+                            'status' => $component['Status'],
+                            'result' => $hasJSON ? 'included' : 'excluded - no JSON spec found'
+                        ];
+                    }
                 }
 
                 // Replace allComponents with filtered list
@@ -1448,6 +1728,7 @@ class ServerBuilder {
                 $allComponents = $componentsWithJSON;
 
                 // Add to debug info
+                if ($includeDebug) {
                 $debugInfo['total_before_json_filter'] = $totalBeforeFiltering;
                 $debugInfo['total_with_json'] = count($allComponents);
                 $debugInfo['components_without_json'] = $componentsWithoutJSON;
@@ -1461,6 +1742,7 @@ class ServerBuilder {
                         'status' => $c['Status']
                     ];
                 }, $allComponents);
+                } // end if ($includeDebug)
 
                 // Run compatibility checks for each component
                 foreach ($allComponents as $component) {
@@ -1533,9 +1815,11 @@ class ServerBuilder {
                             $compatibilityReasons = [$hbaCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
 
                             // Add debug info for HBA samples
-                            if (!isset($debugInfo['hba_compat_samples'])) {
+                            // A-P2: full nested result arrays -- only retained on request.
+                            if ($includeDebug && !isset($debugInfo['hba_compat_samples'])) {
                                 $debugInfo['hba_compat_samples'] = [];
                             }
+                            if ($includeDebug)
                             if (count($debugInfo['hba_compat_samples']) < 3) {
                                 $debugInfo['hba_compat_samples'][] = [
                                     'uuid' => $component['UUID'],
@@ -1702,83 +1986,83 @@ class ServerBuilder {
                 );
             }
 
-            $responseData = [
-                'config_uuid' => $configUuid,
+            // A-P2: $responseData used to be built in full and then discarded except for
+            // three sub-keys re-read at the return. Only those are assembled now.
+            $incompatibleOnly = array_values($incompatibleOnly);
+
+            $filtersApplied = [
+                'available_only' => $availableOnly,
                 'component_type' => $componentType,
-                'compatible_components' => $allCompatibleComponents,
-                'incompatible_components' => array_values($incompatibleOnly),
-                'total_compatible' => count($allCompatibleComponents),
-                'total_compatible_and_available' => count($compatibleAndAvailable),
-                'total_compatible_but_unavailable' => count($compatibleButNotAvailable),
-                'total_incompatible' => count($incompatibleOnly),
-                'total_found' => count($compatibleComponents),
-                'filters_applied' => [
-                    'available_only' => $availableOnly,
-                    'component_type' => $componentType,
-                    'note' => $availableOnly
-                        ? 'Only available components shown (Status=1 and not assigned to another server).'
-                        : 'All physical components shown. Check available_for_use flag to see which can be added.'
-                ],
-                'existing_components_summary' => [
-                    'total_existing' => count($existingComponentsData),
-                    'types' => array_values(array_unique(array_column($existingComponentsData, 'type')))
-                ],
-                'compatibility_summary' => [
-                    'has_compatible' => count($allCompatibleComponents) > 0,
-                    'has_incompatible' => count($incompatibleOnly) > 0,
-                    'main_issues' => count($incompatibleOnly) > 0 ?
-                        array_slice(array_unique(array_column($incompatibleOnly, 'compatibility_reason')), 0, 3) : []
-                ]
+                'note' => $availableOnly
+                    ? 'Only available components shown (Status=1 and not assigned to another server).'
+                    : 'All physical components shown. Check available_for_use flag to see which can be added.'
             ];
 
-            // Add inventory summary
-            $stmt = $this->pdo->prepare("
-                SELECT UUID, COUNT(*) as total_count,
-                       SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available_count,
-                       SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use_count,
-                       SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed_count
-                FROM $table
-                GROUP BY UUID
-                HAVING COUNT(*) > 0
-            ");
-            $stmt->execute();
-            $inventoryCounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $compatibilitySummary = [
+                'has_compatible' => count($allCompatibleComponents) > 0,
+                'has_incompatible' => count($incompatibleOnly) > 0,
+                'main_issues' => count($incompatibleOnly) > 0 ?
+                    array_slice(array_unique(array_column($incompatibleOnly, 'compatibility_reason')), 0, 3) : []
+            ];
+
+            // Add inventory summary.
+            //
+            // A-P2: this had no WHERE clause -- it grouped the ENTIRE inventory table and
+            // returned a row for every UUID in it, including thousands never referenced in
+            // this response, all of which were then serialised into the payload. (The
+            // `HAVING COUNT(*) > 0` was a tautology after GROUP BY.) Scoped to the UUIDs
+            // actually being returned.
+            $summaryUuids = array_values(array_unique(array_merge(
+                array_column($allCompatibleComponents, 'uuid'),
+                array_column($incompatibleOnly, 'uuid')
+            )));
 
             $uuidInventorySummary = [];
-            foreach ($inventoryCounts as $inv) {
-                $uuidInventorySummary[$inv['UUID']] = [
-                    'total' => (int)$inv['total_count'],
-                    'available' => (int)$inv['available_count'],
-                    'in_use' => (int)$inv['in_use_count'],
-                    'failed' => (int)$inv['failed_count']
-                ];
-            }
+            if (!empty($summaryUuids)) {
+                $placeholders = implode(',', array_fill(0, count($summaryUuids), '?'));
+                $stmt = $this->pdo->prepare("
+                    SELECT UUID, COUNT(*) as total_count,
+                           SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available_count,
+                           SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use_count,
+                           SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed_count
+                    FROM `$table`
+                    WHERE UUID IN ($placeholders)
+                    GROUP BY UUID
+                ");
+                $stmt->execute($summaryUuids);
 
-            $responseData['inventory_summary'] = [
-                'by_uuid' => $uuidInventorySummary,
-                'note' => 'Multiple physical components can share the same UUID (representing the same model). Use serial_number to identify individual components.'
-            ];
-
-            // Add debug info if requested
-            if ($includeDebug) {
-                $responseData['debug_info'] = $debugInfo;
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $inv) {
+                    $uuidInventorySummary[$inv['UUID']] = [
+                        'total' => (int)$inv['total_count'],
+                        'available' => (int)$inv['available_count'],
+                        'in_use' => (int)$inv['in_use_count'],
+                        'failed' => (int)$inv['failed_count']
+                    ];
+                }
             }
 
             return [
                 'success' => true,
                 'message' => count($allCompatibleComponents) > 0 ? "Compatible components found" : "No compatible components found",
                 'compatible_components' => $allCompatibleComponents,
-                'incompatible_components' => array_values($incompatibleOnly),
+                'incompatible_components' => $incompatibleOnly,
                 'totals' => [
                     'compatible_and_available' => count($compatibleAndAvailable),
                     'compatible_but_unavailable' => count($compatibleButNotAvailable),
                     'incompatible' => count($incompatibleOnly),
                     'total_found' => count($compatibleComponents)
                 ],
-                'filters_applied' => $responseData['filters_applied'],
-                'debug_info' => $includeDebug ? $debugInfo : [],
-                'inventory_summary' => $responseData['inventory_summary'],
-                'compatibility_summary' => $responseData['compatibility_summary']
+                // A-P2: tell the caller when the inventory scan hit its cap, instead of
+                // silently returning a truncated list.
+                'results_truncated' => $resultsTruncated,
+                'scan_limit' => self::COMPATIBLE_SCAN_LIMIT,
+                'filters_applied' => $filtersApplied,
+                'debug_info' => $debugInfo,
+                'inventory_summary' => [
+                    'by_uuid' => $uuidInventorySummary,
+                    'note' => 'Multiple physical components can share the same UUID (representing the same model). Use serial_number to identify individual components.'
+                ],
+                'compatibility_summary' => $compatibilitySummary
             ];
 
         } catch (Exception $e) {
@@ -2547,7 +2831,7 @@ class ServerBuilder {
                     break;
 
                 case 'cpu':
-                    $this->updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
+                    $this->updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
                     break;
 
                 case 'motherboard':
@@ -2565,7 +2849,7 @@ class ServerBuilder {
                     break;
 
                 case 'ram':
-                    $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
+                    $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
                     break;
 
                 case 'storage':
@@ -2573,41 +2857,23 @@ class ServerBuilder {
                     break;
 
                 case 'nic':
+                    // A-L10: slot assignment belongs to assignComponentSlot(), which runs
+                    // before this method and propagates its result via
+                    // $options['slot_position'] (C4). The local fallback that used to live
+                    // here re-derived the slot width with a DIFFERENT rule --
+                    // `interface` only, hard-defaulting to x8 -- so a card whose width is
+                    // declared in slot_type/pcie_interface got x8 here and its true width
+                    // there, and it threw on exhaustion where the pciecard path stored
+                    // null. One authority now, one failure mode.
                     if ($action === 'add') {
-                        $slotPosition = $options['slot_position'] ?? null;
-
-                        if (!$slotPosition) {
-                            // Auto-assign PCIe slot for NIC card (same pattern as HBA)
-                            require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
-                            require_once __DIR__ . '/../components/ComponentDataService.php';
-
-                            $slotTracker = new UnifiedSlotTracker($this->pdo);
-                            $dataService = ComponentDataService::getInstance();
-
-                            $nicSpecs = $dataService->getComponentSpecifications('nic', $componentUuid);
-
-                            if ($nicSpecs && isset($nicSpecs['interface'])) {
-                                preg_match('/x(\d+)/', $nicSpecs['interface'], $matches);
-                                $slotSize = 'x' . ($matches[1] ?? '8');
-                            } else {
-                                $slotSize = 'x8'; // Default NIC slot size
-                            }
-
-                            $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
-
-                            if (!$slotPosition) {
-                                throw new Exception("No available PCIe slots for NIC (requires $slotSize slot)");
-                            }
-                        }
-
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $slotPosition, $serialNumber);
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $options['slot_position'] ?? null, $serialNumber, $options);
                     } elseif ($action === 'remove') {
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null, $serialNumber);
+                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null, $serialNumber, $options);
                     }
                     break;
 
                 case 'caddy':
-                    $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber);
+                    $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
                     break;
 
                 case 'sfp':
@@ -2620,50 +2886,17 @@ class ServerBuilder {
                 case 'pciecard':
                     // Extract slot position from options if provided
                     $slotPosition = $options['slot_position'] ?? null;
-                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition, $serialNumber);
+                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition, $serialNumber, $options);
                     break;
 
                 case 'hbacard':
-                    // HBA-TRACK FIX: Store HBA with PCIe slot position in JSON format
+                    // HBA-TRACK FIX: Store HBA with PCIe slot position in JSON format.
+                    // A-L10: slot assignment is assignComponentSlot()'s job (see the 'nic'
+                    // case above) -- the divergent inline fallback has been removed.
                     if ($action === 'add') {
-                        // Get slot position from options or auto-assign
-                        $slotPosition = $options['slot_position'] ?? null;
-
-                        if (!$slotPosition) {
-                            // Auto-assign PCIe slot for HBA card
-                            require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
-                            require_once __DIR__ . '/../components/ComponentDataService.php';
-
-                            $slotTracker = new UnifiedSlotTracker($this->pdo);
-                            $dataService = ComponentDataService::getInstance();
-
-                            // Get HBA specs to determine slot size requirement
-                            $hbaSpecs = $dataService->getComponentSpecifications('hbacard', $componentUuid);
-
-                            if ($hbaSpecs && isset($hbaSpecs['interface'])) {
-                                // Extract slot size from interface (e.g., "PCIe 3.0 x8" → "x8")
-                                $interface = $hbaSpecs['interface'];
-                                preg_match('/x(\d+)/', $interface, $matches);
-                                $slotSize = 'x' . ($matches[1] ?? '8'); // Default to x8 if not found
-                            } else {
-                                $slotSize = 'x8'; // Default HBA slot size
-                            }
-
-                            // Assign available PCIe slot
-                            $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
-
-                            if (!$slotPosition) {
-                                error_log("HBA-TRACK: No available PCIe slots for HBA card (requires $slotSize)");
-                                throw new Exception("No available PCIe slots for HBA card (requires $slotSize slot)");
-                            }
-
-                        }
-
-                        // Delegate to dedicated method (handles JSON array accumulation)
-                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'add', $slotPosition, $serialNumber);
-
+                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'add', $options['slot_position'] ?? null, $serialNumber, $options);
                     } elseif ($action === 'remove') {
-                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove', null, $serialNumber);
+                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove', null, $serialNumber, $options);
                     }
                     break; // Skip generic UPDATE below — method handles its own SQL
             }
@@ -2683,10 +2916,101 @@ class ServerBuilder {
     }
 
     /**
+     * Build the identity fields common to every component JSON entry.
+     *
+     * `inventory_id` is the PHYSICAL unit's row id and is the only identifier that
+     * distinguishes two units of one model when both have SerialNumber NULL
+     * (serial-less stock, AssetTag-addressed). `reserved_units` records every unit an
+     * entry claims, so a quantity>1 entry can be released exactly (A-L3/A-L5).
+     *
+     * @return array identity fields to merge into the entry
+     */
+    private function componentEntryIdentity($serialNumber, array $options = []) {
+        $identity = [];
+
+        if ($serialNumber !== null) {
+            $identity['serial_number'] = $serialNumber;
+        }
+        if (!empty($options['inventory_id'])) {
+            $identity['inventory_id'] = (int)$options['inventory_id'];
+        }
+        if (!empty($options['reserved_units']) && is_array($options['reserved_units'])) {
+            $ids = [];
+            foreach ($options['reserved_units'] as $unit) {
+                if (!empty($unit['ID'])) {
+                    $ids[] = (int)$unit['ID'];
+                }
+            }
+            // Only worth storing when the entry claims more than the one unit that
+            // inventory_id already names.
+            if (count($ids) > 1) {
+                $identity['reserved_units'] = $ids;
+            }
+        }
+
+        return $identity;
+    }
+
+    /**
+     * Does a stored JSON entry denote the same PHYSICAL unit the caller is targeting?
+     *
+     * Precedence mirrors isDuplicateComponent(): inventory_id when both sides have it,
+     * serial when both sides have it, model UUID only as a last resort.
+     */
+    private function componentEntryMatches(array $entry, $componentUuid, $serialNumber = null, $inventoryId = null) {
+        if (($entry['uuid'] ?? null) !== $componentUuid) {
+            return false;
+        }
+
+        $entryInventoryId = isset($entry['inventory_id']) ? (int)$entry['inventory_id'] : null;
+        if ($inventoryId !== null && $entryInventoryId !== null) {
+            return $entryInventoryId === (int)$inventoryId;
+        }
+
+        $entrySerial = $entry['serial_number'] ?? null;
+        if ($serialNumber !== null && $entrySerial !== null) {
+            return $entrySerial === $serialNumber;
+        }
+
+        // Neither side can distinguish units of this model. Match on the model alone --
+        // the caller removes at most ONE entry, so this can no longer wipe the set.
+        return true;
+    }
+
+    /**
+     * Remove exactly ONE entry matching the target unit from a flat entry list.
+     *
+     * BUGFIX (A-L4): every removal path used
+     * `array_filter(... return $e['uuid'] !== $uuid)` as its fallback, which deleted
+     * EVERY entry of the model whenever the caller had no serial or the stored entry
+     * had none -- while removeComponent() released a single inventory row. The surplus
+     * units were left Status=2 with a stale ServerUUID and no longer referenced by the
+     * config, i.e. unreachable from the UI. A mixed set (one entry with a serial, one
+     * without) hit the same fallback and over-removed too.
+     *
+     * @return array the list with at most one entry removed, reindexed
+     */
+    private function removeOneComponentEntry(array $entries, $componentUuid, $serialNumber = null, $inventoryId = null) {
+        $removed = false;
+        $kept = [];
+
+        foreach ($entries as $entry) {
+            if (!$removed && is_array($entry)
+                && $this->componentEntryMatches($entry, $componentUuid, $serialNumber, $inventoryId)) {
+                $removed = true;
+                continue;
+            }
+            $kept[] = $entry;
+        }
+
+        return array_values($kept);
+    }
+
+    /**
      * Update CPU configuration in JSON format
      * New schema: cpu_configuration as JSON array supporting 1-2 CPUs
      */
-    private function updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
+    private function updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
         try {
             if ($action === 'add') {
                 // Retrieve current CPU configuration
@@ -2704,33 +3028,19 @@ class ServerBuilder {
                 // Check if this is a virtual configuration
                 $isVirtual = $this->isVirtualConfig($configUuid);
 
-                // CRITICAL: Check for duplicates by BOTH uuid AND serial_number to prevent same physical component being added twice
-                // Skip duplicate check for virtual configs - allow multiple instances of same component for testing
+                // Does this exact PHYSICAL unit already have an entry? Virtual configs
+                // intentionally allow repeats of the same model.
+                $inventoryId = $options['inventory_id'] ?? null;
                 $cpuExists = false;
                 if (!$isVirtual) {
                     foreach ($cpuData as &$cpu) {
-                        // FIXED: Proper matching logic to support multiple physical components with same UUID
-                        $isMatch = false;
-
-                        if ($serialNumber !== null) {
-                            // When adding with serial_number, ONLY match if existing entry also has serial_number AND both match
-                            // This allows multiple physical CPUs with same UUID (model) but different serial numbers
-                            if (isset($cpu['serial_number'])) {
-                                $isMatch = ($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
-                            }
-                            // If existing CPU doesn't have serial_number, it's NOT a match (different physical component)
-                        } else {
-                            // When adding without serial_number, only match if existing entry also has no serial
-                            // (same-model CPUs with serial numbers are different physical units)
-                            if (!isset($cpu['serial_number'])) {
-                                $isMatch = ($cpu['uuid'] === $componentUuid);
-                            }
-                        }
-
-                        if ($isMatch) {
+                        if (is_array($cpu)
+                            && $this->componentEntryMatches($cpu, $componentUuid, $serialNumber, $inventoryId)) {
                             $cpuExists = true;
-                            // Update quantity if CPU already exists
-                            $cpu['quantity'] = $quantity;
+                            // BUGFIX (A-L11): accumulate. Assigning $quantity here dropped
+                            // whatever the entry already claimed, so add(qty 2) then
+                            // add(qty 1) for one unit left quantity = 1.
+                            $cpu['quantity'] = (int)($cpu['quantity'] ?? 0) + (int)$quantity;
                             break;
                         }
                     }
@@ -2739,19 +3049,18 @@ class ServerBuilder {
 
                 // Add new CPU if it doesn't exist (or always add for virtual configs)
                 if (!$cpuExists) {
-                    $newCpu = [
+                    $newCpu = array_merge([
                         'uuid' => $componentUuid,
                         'quantity' => $quantity,
                         'socket' => 'LGA3647', // Default socket - will be overridden by actual specs
                         'added_at' => date('Y-m-d H:i:s')
-                    ];
-                    // CRITICAL: Store serial_number to identify specific physical component
-                    // For virtual configs, generate unique serial to differentiate multiple instances
+                    ], $this->componentEntryIdentity($serialNumber, $options));
+
+                    // For virtual configs, generate a unique serial so repeated instances
+                    // of one model stay distinguishable.
                     if ($isVirtual) {
                         $virtualIndex = count($cpuData) + 1;
                         $newCpu['serial_number'] = 'VIRTUAL-CPU-' . $virtualIndex . '-' . time();
-                    } elseif ($serialNumber !== null) {
-                        $newCpu['serial_number'] = $serialNumber;
                     }
                     $cpuData[] = $newCpu;
                 }
@@ -2773,20 +3082,10 @@ class ServerBuilder {
                     $decoded = json_decode($currentConfig, true);
                     $cpuData = $decoded['cpus'] ?? [];
 
-                    // CRITICAL: Remove the specified CPU by matching both UUID and serial_number
-                    $cpuData = array_filter($cpuData, function($cpu) use ($componentUuid, $serialNumber) {
-                        // Match by serial_number if provided, otherwise fallback to uuid only
-                        if ($serialNumber !== null && isset($cpu['serial_number'])) {
-                            // Match by both uuid and serial_number
-                            return !($cpu['uuid'] === $componentUuid && $cpu['serial_number'] === $serialNumber);
-                        } else {
-                            // Legacy: Match by uuid only
-                            return $cpu['uuid'] !== $componentUuid;
-                        }
-                    });
-
-                    // Re-index array
-                    $cpuData = array_values($cpuData);
+                    // Remove exactly ONE entry -- the targeted physical unit (A-L4).
+                    $cpuData = $this->removeOneComponentEntry(
+                        $cpuData, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
+                    );
 
                     // Update database
                     if (empty($cpuData)) {
@@ -2811,7 +3110,7 @@ class ServerBuilder {
     /**
      * Update RAM configuration in JSON format
      */
-    private function updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
+    private function updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT ram_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -2823,25 +3122,18 @@ class ServerBuilder {
             }
 
             if ($action === 'add') {
-                $entry = [
+                $ramConfig[] = array_merge([
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
-                ];
-                if ($serialNumber !== null) {
-                    $entry['serial_number'] = $serialNumber;
-                }
-                $ramConfig[] = $entry;
+                ], $this->componentEntryIdentity($serialNumber, $options));
             } elseif ($action === 'remove') {
-                $ramConfig = array_filter($ramConfig, function($ram) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null && isset($ram['serial_number'])) {
-                        return !($ram['uuid'] === $componentUuid && $ram['serial_number'] === $serialNumber);
-                    }
-                    return $ram['uuid'] !== $componentUuid;
-                });
-                $ramConfig = array_values($ramConfig); // Reindex array
+                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
+                $ramConfig = $this->removeOneComponentEntry(
+                    $ramConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
+                );
             }
-            
+
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET ram_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($ramConfig), $configUuid]);
             
@@ -2866,28 +3158,23 @@ class ServerBuilder {
             }
 
             if ($action === 'add') {
-                $entry = [
+                $entry = array_merge([
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
-                ];
-                if ($serialNumber !== null) {
-                    $entry['serial_number'] = $serialNumber;
-                }
+                ], $this->componentEntryIdentity($serialNumber, $options));
+
                 if (!empty($options['connection_data'])) {
                     $entry['connection'] = $options['connection_data'];
                 }
                 $storageConfig[] = $entry;
             } elseif ($action === 'remove') {
-                $storageConfig = array_filter($storageConfig, function($storage) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null && isset($storage['serial_number'])) {
-                        return !($storage['uuid'] === $componentUuid && $storage['serial_number'] === $serialNumber);
-                    }
-                    return $storage['uuid'] !== $componentUuid;
-                });
-                $storageConfig = array_values($storageConfig);
+                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
+                $storageConfig = $this->removeOneComponentEntry(
+                    $storageConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
+                );
             }
-            
+
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET storage_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($storageConfig), $configUuid]);
             
@@ -2941,7 +3228,7 @@ class ServerBuilder {
     /**
      * Update NIC configuration in JSON format
      */
-    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null) {
+    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -3001,7 +3288,7 @@ class ServerBuilder {
     /**
      * Update caddy configuration in JSON format
      */
-    private function updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null) {
+    private function updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT caddy_configuration FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -3013,25 +3300,18 @@ class ServerBuilder {
             }
 
             if ($action === 'add') {
-                $entry = [
+                $caddyConfig[] = array_merge([
                     'uuid' => $componentUuid,
                     'quantity' => $quantity,
                     'added_at' => date('Y-m-d H:i:s')
-                ];
-                if ($serialNumber !== null) {
-                    $entry['serial_number'] = $serialNumber;
-                }
-                $caddyConfig[] = $entry;
+                ], $this->componentEntryIdentity($serialNumber, $options));
             } elseif ($action === 'remove') {
-                $caddyConfig = array_filter($caddyConfig, function($caddy) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null && isset($caddy['serial_number'])) {
-                        return !($caddy['uuid'] === $componentUuid && $caddy['serial_number'] === $serialNumber);
-                    }
-                    return $caddy['uuid'] !== $componentUuid;
-                });
-                $caddyConfig = array_values($caddyConfig);
+                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
+                $caddyConfig = $this->removeOneComponentEntry(
+                    $caddyConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
+                );
             }
-            
+
             $stmt = $this->pdo->prepare("UPDATE server_configurations SET caddy_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
             $stmt->execute([json_encode($caddyConfig), $configUuid]);
 
@@ -3108,7 +3388,7 @@ class ServerBuilder {
      * Update PCIe card configuration in JSON format
      * Stores PCIe cards (including riser cards, NVMe adapters, etc.) in pciecard_configurations column
      */
-    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null) {
+    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT pciecard_configurations FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -3159,7 +3439,7 @@ class ServerBuilder {
      * Update HBA card configuration using JSON array (supports multiple HBA cards)
      * Mirrors updatePcieCardConfiguration() pattern: read array → append/remove → write back
      */
-    private function updateHbaCardConfiguration($configUuid, $componentUuid, $action, $slotPosition = null, $serialNumber = null) {
+    private function updateHbaCardConfiguration($configUuid, $componentUuid, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
         try {
             $stmt = $this->pdo->prepare("SELECT hbacard_config, hbacard_uuid FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
@@ -3248,15 +3528,21 @@ class ServerBuilder {
 
             $totalPowerWithOverhead = $totalPower * 1.2;
 
-            // Calculate compatibility score
+            // Calculate compatibility score.
+            //
+            // BUGFIX (A-L2): this was gated on `class_exists('CompatibilityEngine')`, and
+            // no such class exists anywhere in the codebase -- so the gate was always
+            // false and calculateHardwareCompatibilityScore() was unreachable. Even when
+            // forced, the score could not be stored: the call below passed 3 arguments to
+            // a 2-parameter method, and PHP silently discards the extra. Net effect,
+            // server_configurations.compatibility_score was never maintained by the
+            // add/remove path. Gate removed, arity fixed (see the method signature).
             $compatibilityScore = null;
-            if (class_exists('CompatibilityEngine')) {
-                try {
-                    $compatibilityResult = $this->calculateHardwareCompatibilityScore($details);
-                    $compatibilityScore = $compatibilityResult['score'];
-                } catch (Exception $e) {
-                    error_log("Error calculating compatibility: " . $e->getMessage());
-                }
+            try {
+                $compatibilityResult = $this->calculateHardwareCompatibilityScore($details);
+                $compatibilityScore = $compatibilityResult['score'] ?? null;
+            } catch (Exception $e) {
+                error_log("Error calculating compatibility score for $configUuid: " . $e->getMessage());
             }
 
             // Update the configuration
@@ -3270,14 +3556,24 @@ class ServerBuilder {
     /**
      * Update calculated fields in configuration
      */
-    private function updateConfigurationCalculatedFields($configUuid, $powerConsumption) {
+    private function updateConfigurationCalculatedFields($configUuid, $powerConsumption, $compatibilityScore = null) {
         try {
-            $sql = "UPDATE server_configurations SET power_consumption = ?, updated_at = NOW() WHERE config_uuid = ?";
-            $params = [$powerConsumption, $configUuid];
-            
+            // A-L2: $compatibilityScore was silently dropped -- callers passed it but the
+            // signature only accepted two parameters. Persist it when the caller computed
+            // one; leave the stored value untouched when it could not be derived.
+            if ($compatibilityScore !== null) {
+                $sql = "UPDATE server_configurations
+                        SET power_consumption = ?, compatibility_score = ?, updated_at = NOW()
+                        WHERE config_uuid = ?";
+                $params = [$powerConsumption, $compatibilityScore, $configUuid];
+            } else {
+                $sql = "UPDATE server_configurations SET power_consumption = ?, updated_at = NOW() WHERE config_uuid = ?";
+                $params = [$powerConsumption, $configUuid];
+            }
+
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($params);
-            
+
         } catch (Exception $e) {
             error_log("Error updating calculated fields: " . $e->getMessage());
         }
@@ -3727,6 +4023,11 @@ class ServerBuilder {
                 $this->pdo->beginTransaction();
             }
 
+            // A-E2: finalize locks a configuration as immutable and correct. A column it
+            // cannot parse would otherwise read as empty -- a corrupt ram_configuration
+            // presenting as "no RAM" and passing validation.
+            $this->strictJsonDecode = true;
+
             $lockedRow = $this->lockAndLoadConfigRow($configUuid);
             if ($lockedRow === null) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
@@ -3816,7 +4117,7 @@ class ServerBuilder {
                 'finalization_timestamp' => date('Y-m-d H:i:s')
             ];
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollback();
             }
@@ -3825,6 +4126,8 @@ class ServerBuilder {
                 'success' => false,
                 'message' => "Failed to finalize configuration: " . $e->getMessage()
             ];
+        } finally {
+            $this->strictJsonDecode = false;
         }
     }
     
@@ -3902,25 +4205,27 @@ class ServerBuilder {
                 // back to the model-wide WHERE and was refused by the ambiguity guard --
                 // leaking it as Status=2 against a config that no longer exists. The ID
                 // is exact for every unit, serialised or not.
+                // A-P4: released with ONE statement per table instead of a SELECT plus a
+                // per-unit SELECT+UPDATE (updateComponentStatusAndServerUuid does both).
+                // A 30-component server cost ~80 round-trips; it now costs 10. The
+                // release is unconditional and identical for every bound unit, and
+                // ServerUUID is already the exact per-unit predicate, so nothing is lost
+                // by doing it in bulk -- including the ambiguity guard, which only ever
+                // mattered for UUID-keyed writes.
+                require_once __DIR__ . '/../state/StatusMap.php';
+                $statusV2 = StatusMap::INVENTORY_LEGACY_TO_V2[1] ?? null;
+
                 foreach ($this->componentTables as $componentType => $table) {
-                    $stmt = $this->pdo->prepare("SELECT ID, UUID, SerialNumber FROM `$table` WHERE ServerUUID = ?");
-                    $stmt->execute([$configUuid]);
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $unit) {
-                        $released = $this->updateComponentStatusAndServerUuid(
-                            $componentType,
-                            $unit['UUID'],
-                            1,
-                            null,
-                            "Released from deleted configuration $configUuid",
-                            null,
-                            null,
-                            $unit['SerialNumber'],
-                            (int)$unit['ID']
-                        );
-                        if ($released) {
-                            $releasedCount++;
-                        }
-                    }
+                    $setV2 = ($statusV2 !== null) ? ", status_v2 = ?" : "";
+                    $sql = "UPDATE `$table`
+                            SET Status = 1{$setV2}, ServerUUID = NULL, InstallationDate = NULL,
+                                RackPosition = NULL, UpdatedAt = NOW()
+                            WHERE ServerUUID = ?";
+                    $params = ($statusV2 !== null) ? [$statusV2, $configUuid] : [$configUuid];
+
+                    $stmt = $this->pdo->prepare($sql);
+                    $stmt->execute($params);
+                    $releasedCount += $stmt->rowCount();
                 }
             }
 
@@ -4130,7 +4435,29 @@ class ServerBuilder {
      * @param string|null $serialNumber Optional serial number for physical component identification
      * @return bool True if duplicate found, false otherwise
      */
-    private function isDuplicateComponent($configUuid, $componentUuid, $serialNumber = null) {
+    /**
+     * Is this PHYSICAL UNIT already present in the configuration?
+     *
+     * BUGFIX (A-L5/A-L13): identity is the inventory row ID, not the model UUID.
+     * Previously the match ran on component_uuid (+ serial), which meant:
+     *   * serial-less stock (SerialNumber NULL) could never have a second unit added:
+     *     $serialNumber was null on both sides, so any serial-less entry of the same
+     *     model matched and the add was rejected as a duplicate; and
+     *   * component_type was never compared at all (it was read into a local that was
+     *     then discarded), so a UUID shared across two spec families collided.
+     *
+     * $inventoryId is authoritative when both sides carry it. $serialNumber is the
+     * fallback for legacy JSON entries written before inventory_id was persisted, and
+     * a bare UUID match is the last resort for entry shapes that carry neither (the
+     * scalar motherboard_uuid / chassis_uuid columns, which are single-instance anyway).
+     *
+     * @param string      $configUuid
+     * @param string      $componentUuid  Model UUID
+     * @param string|null $serialNumber   Serial of the resolved unit (may be null)
+     * @param int|null    $inventoryId    Inventory row ID of the resolved unit
+     * @param string|null $componentType  Restrict matching to this type
+     */
+    private function isDuplicateComponent($configUuid, $componentUuid, $serialNumber = null, $inventoryId = null, $componentType = null) {
         try {
             // RACE CONDITION FIX: Lock configuration row to prevent concurrent JSON updates
             // This REQUIRES being in a transaction (should be started in addComponent)
@@ -4152,38 +4479,44 @@ class ServerBuilder {
 
             // Extract components and check for duplicate
             $components = $this->extractComponentsFromJson($configData);
-            $isDuplicate = false;
-            $componentType = null;
 
             foreach ($components as $comp) {
-                // CRITICAL: Check both UUID and serial_number to identify specific physical component
-                $isMatch = false;
-
-                if ($serialNumber !== null) {
-                    // When serial_number is provided, ONLY match if both UUID and serial_number match
-                    // This allows multiple physical components with same UUID (model) but different serials
-                    if (isset($comp['serial_number'])) {
-                        $isMatch = ($comp['component_uuid'] === $componentUuid &&
-                                   $comp['serial_number'] === $serialNumber);
-                    }
-                    // If existing component doesn't have serial_number, it's NOT a match
-                    // (they're different physical components)
-                } else {
-                    // When adding without serial_number, only match if existing entry also has no serial
-                    // (same-model components with serial numbers are different physical units)
-                    if (!isset($comp['serial_number'])) {
-                        $isMatch = ($comp['component_uuid'] === $componentUuid);
-                    }
+                if (($comp['component_uuid'] ?? null) !== $componentUuid) {
+                    continue;
+                }
+                if ($componentType !== null && ($comp['component_type'] ?? null) !== $componentType) {
+                    continue;
                 }
 
-                if ($isMatch) {
-                    $isDuplicate = true;
-                    $componentType = $comp['component_type'];
-                    break;
+                $entryInventoryId = isset($comp['inventory_id']) ? (int)$comp['inventory_id'] : null;
+                $entrySerial      = $comp['serial_number'] ?? null;
+
+                // 1. Both sides know the physical row -> exact.
+                if ($inventoryId !== null && $entryInventoryId !== null) {
+                    if ($entryInventoryId === $inventoryId) {
+                        return true;
+                    }
+                    continue; // different physical unit of the same model
+                }
+
+                // 2. Legacy entry (no inventory_id) but both carry a serial -> exact.
+                if ($serialNumber !== null && $entrySerial !== null) {
+                    if ($entrySerial === $serialNumber) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                // 3. Neither side can distinguish units. Only treat as a duplicate when
+                //    the type genuinely admits a single instance; otherwise allow the add
+                //    rather than block legitimate multi-unit stock.
+                $entryType = $comp['component_type'] ?? $componentType;
+                if ($entryType !== null && $this->isSingleInstanceComponent($entryType)) {
+                    return true;
                 }
             }
 
-            return $isDuplicate;
+            return false;
 
         } catch (PDOException $e) {
             error_log("Error in duplicate check: " . $e->getMessage());
@@ -5104,11 +5437,18 @@ class ServerBuilder {
             }
 
         } catch (Exception $slotError) {
-            error_log("Slot assignment error: " . $slotError->getMessage());
+            // BUGFIX (A-L9): this returned success=true, converting ANY thrown failure
+            // inside UnifiedSlotTracker (malformed motherboard spec, unreadable ims-data
+            // JSON, PDO error) into "component added without a slot" -- which is exactly
+            // the silent over-subscription the C4 fix above was written to stop. The
+            // tracker already degrades its own expected failures to success:false, so
+            // reaching here means something genuinely unexpected broke. Fail closed.
+            error_log("Slot assignment error for $componentType $componentUuid: " . $slotError->getMessage());
             return [
-                'success' => true,
+                'success' => false,
                 'slot_id' => null,
-                'message' => 'Slot assignment unavailable - component added without slot assignment'
+                'message' => 'Slot assignment failed - component not added',
+                'error_code' => 'slot_assignment_exception'
             ];
         }
     }
@@ -5143,13 +5483,13 @@ class ServerBuilder {
      * Generate UUID for configuration
      */
     private function generateUuid() {
-        return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
+        // A-L14: mt_rand() is a seeded Mersenne Twister, not a CSPRNG. config_uuid is
+        // the primary external handle for a configuration and travels in API
+        // parameters, so it must not be predictable from observed values.
+        $data = random_bytes(16);
+        $data[6] = chr(ord($data[6]) & 0x0f | 0x40); // version 4
+        $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
     
     /**
@@ -5788,14 +6128,6 @@ class ServerBuilder {
             $stmt = $this->pdo->prepare($sql);
             $result = $stmt->execute($updateValues);
 
-            if ($result) {
-                $locationInfo = "";
-                if ($serverLocation !== null || $serverRackPosition !== null) {
-                    $locationInfo = " Location: '$serverLocation', RackPosition: '$serverRackPosition'";
-                }
-                $serialInfo = " SerialNumber: '{$current['SerialNumber']}'";
-            }
-
             return $result;
 
         } catch (Exception $e) {
@@ -5859,14 +6191,31 @@ class ServerBuilder {
                 ");
                 $stmt->execute([$componentUuid, $serialNumber]);
             } else {
-                // Lock by UUID only, preferring available (Status=1) rows first.
-                // This ensures a second available unit is picked for multi-socket configurations
-                // rather than re-fetching the already-in-use unit.
+                // Lock by UUID only, preferring available (Status=1) rows.
+                //
+                // BUGFIX (A-L1): this was `ORDER BY Status ASC` with no LIMIT. Status
+                // is 0=failed / 1=available / 2=in_use, so ASC returned the FAILED unit
+                // first -- the exact opposite of the stated intent. Any add without an
+                // explicit serial, for a model with one RMA'd unit, then hit
+                // checkComponentAvailability()'s "Failed/Defective" branch and was
+                // rejected while good stock sat available. One retired unit poisoned
+                // its whole model permanently.
+                //
+                // Ordering on `Status = 1` explicitly puts available rows first
+                // regardless of how the other status codes sort. The unit already
+                // assigned to THIS config stays reachable (checkComponentAvailability()
+                // treats ServerUUID = configUuid as available) but never outranks a
+                // genuinely free unit.
+                //
+                // LIMIT 1 also bounds the lock: without it FOR UPDATE locked every
+                // physical unit of the model for the transaction's lifetime, which is a
+                // deadlock generator against any concurrent add of the same model.
                 $stmt = $this->pdo->prepare("
                     SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                     FROM `$table`
                     WHERE UUID = ?
-                    ORDER BY Status ASC
+                    ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+                    LIMIT 1
                     FOR UPDATE
                 ");
                 $stmt->execute([$componentUuid]);
@@ -5896,6 +6245,72 @@ class ServerBuilder {
                 'data' => null,
                 'error' => "Database error: " . $e->getMessage()
             ];
+        }
+    }
+
+    /**
+     * Lock N additional AVAILABLE units of a model, excluding rows already claimed.
+     *
+     * Supports quantity > 1 adds (A-L3): the caller has already locked the first unit
+     * via lockAndCheckComponent() and needs the remaining N-1 reserved in the SAME
+     * transaction. Returns fewer rows than requested when stock is short -- the caller
+     * must treat that as fatal rather than reserving a partial set.
+     *
+     * @param string $componentType
+     * @param string $componentUuid   Model UUID
+     * @param int    $count           How many more units to lock
+     * @param array  $excludeIds      Inventory row IDs already locked by this transaction
+     * @return array<int, array{ID:int, SerialNumber:string|null}>
+     */
+    private function lockAdditionalUnits($componentType, $componentUuid, $count, array $excludeIds = []) {
+        $count = (int)$count;
+        if ($count < 1) {
+            return [];
+        }
+
+        $table = $this->getComponentInventoryTable($componentType);
+        if (!$table) {
+            return [];
+        }
+
+        try {
+            $params = [$componentUuid];
+            $excludeSql = '';
+
+            $excludeIds = array_values(array_filter($excludeIds, function ($id) {
+                return $id !== null;
+            }));
+            if (!empty($excludeIds)) {
+                $excludeSql = ' AND ID NOT IN (' . implode(',', array_fill(0, count($excludeIds), '?')) . ')';
+                foreach ($excludeIds as $id) {
+                    $params[] = (int)$id;
+                }
+            }
+
+            // LIMIT is interpolated, not bound: it is a cast int, and emulated prepares
+            // bind LIMIT placeholders as strings, which MySQL rejects.
+            $sql = "SELECT ID, SerialNumber
+                    FROM `$table`
+                    WHERE UUID = ? AND Status = 1" . $excludeSql . "
+                    ORDER BY ID ASC
+                    LIMIT " . $count . "
+                    FOR UPDATE";
+
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+
+            $units = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $units[] = [
+                    'ID' => (int)$row['ID'],
+                    'SerialNumber' => $row['SerialNumber'],
+                ];
+            }
+            return $units;
+
+        } catch (PDOException $e) {
+            error_log("Error locking additional units of $componentUuid: " . $e->getMessage());
+            return [];
         }
     }
 
@@ -8340,6 +8755,20 @@ class ServerBuilder {
             if (json_last_error() !== JSON_ERROR_NONE) {
                 $errorMsg = json_last_error_msg();
                 error_log("P5.2 JSON ERROR in $fieldName: " . $errorMsg . " | Raw: " . substr($jsonString, 0, 100));
+
+                // A-E2: malformed JSON in a PERSISTED column is data corruption, not an
+                // empty set. Degrading to [] made every component in that column vanish
+                // from extractComponentsFromJson() -- so a corrupt ram_configuration
+                // presented as "this server has no RAM", validateConfiguration() agreed,
+                // and finalizeConfiguration() locked the config as valid. Read-only
+                // display paths still degrade gracefully; anything that mutates or
+                // finalizes a configuration must refuse to act on a column it cannot read.
+                if ($this->strictJsonDecode) {
+                    throw new RuntimeException(
+                        "Configuration column '$fieldName' contains malformed JSON and cannot be modified safely"
+                    );
+                }
+
                 return $associative ? [] : new stdClass();
             }
 
@@ -8355,6 +8784,48 @@ class ServerBuilder {
             error_log("P5.2 JSON EXCEPTION in $fieldName: " . $e->getMessage());
             return $associative ? [] : new stdClass();
         }
+    }
+
+    /**
+     * Run a mutation with strict JSON decoding enabled (A-E2).
+     *
+     * Restores the previous setting even when the callable throws, so a failed
+     * mutation cannot leave the instance in strict mode for later read paths.
+     *
+     * @param callable $fn
+     * @return mixed the callable's return value
+     */
+    private function withStrictJson(callable $fn) {
+        $previous = $this->strictJsonDecode;
+        $this->strictJsonDecode = true;
+        try {
+            return $fn();
+        } finally {
+            $this->strictJsonDecode = $previous;
+        }
+    }
+
+    /**
+     * Total units claimed by a flat list of component JSON entries.
+     *
+     * A-L8: capacity budgets counted ENTRIES, so one entry of quantity=4 consumed a
+     * single slot in the arithmetic. Each entry claims its own `quantity` (>= 1).
+     *
+     * @param array $entries decoded JSON entries
+     * @return int
+     */
+    private function sumEntryQuantities($entries) {
+        if (!is_array($entries)) {
+            return 0;
+        }
+        $total = 0;
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $total += max(1, (int)($entry['quantity'] ?? 1));
+        }
+        return $total;
     }
 
     /**
@@ -8409,17 +8880,25 @@ class ServerBuilder {
                             $existingRam = $ramConfigs;
                         }
                     }
-                    $totalRam = count($existingRam) + $quantity;
+                    // A-L8: sum each entry's own quantity. count() treated an entry of
+                    // quantity=4 as ONE occupied DIMM slot, so the budget under-counted
+                    // and permitted over-allocation -- the very over-subscription this
+                    // guard exists to stop.
+                    $usedSlots = $this->sumEntryQuantities($existingRam);
+                    $totalRam = $usedSlots + $quantity;
 
                     if ($totalRam > $dimms) {
                         return [
                             'valid' => false,
-                            'message' => "Insufficient RAM slots: trying to add $quantity RAM modules but only " . ($dimms - count($existingRam)) . " slots available (board has $dimms total, $existingRam currently used)",
+                            // A-L8: "$existingRam" interpolated an ARRAY into the message
+                            // (rendered as "Array", plus a PHP warning on every rejection).
+                            'message' => "Insufficient RAM slots: trying to add $quantity RAM module(s) but only "
+                                . ($dimms - $usedSlots) . " slot(s) available (board has $dimms total, $usedSlots currently used)",
                             'details' => [
                                 'total_slots' => $dimms,
-                                'used_slots' => count($existingRam),
+                                'used_slots' => $usedSlots,
                                 'requesting' => $quantity,
-                                'available' => $dimms - count($existingRam)
+                                'available' => $dimms - $usedSlots
                             ]
                         ];
                     }
@@ -8448,17 +8927,20 @@ class ServerBuilder {
                                 $existingStorage = $storageConfigs;
                             }
                         }
-                        $totalStorage = count($existingStorage) + $quantity;
+                        // A-L8: sum quantities, not entry count.
+                        $usedBays = $this->sumEntryQuantities($existingStorage);
+                        $totalStorage = $usedBays + $quantity;
 
                         if ($totalStorage > $driveBays) {
                             return [
                                 'valid' => false,
-                                'message' => "Insufficient drive bays: trying to add $quantity storage devices but only " . ($driveBays - count($existingStorage)) . " bays available (chassis has $driveBays total, " . count($existingStorage) . " currently used)",
+                                'message' => "Insufficient drive bays: trying to add $quantity storage device(s) but only "
+                                    . ($driveBays - $usedBays) . " bay(s) available (chassis has $driveBays total, $usedBays currently used)",
                                 'details' => [
                                     'total_bays' => $driveBays,
-                                    'used_bays' => count($existingStorage),
+                                    'used_bays' => $usedBays,
                                     'requesting' => $quantity,
-                                    'available' => $driveBays - count($existingStorage)
+                                    'available' => $driveBays - $usedBays
                                 ]
                             ];
                         }
@@ -8482,17 +8964,20 @@ class ServerBuilder {
                                 $existingPcie = $pcieConfigs;
                             }
                         }
-                        $totalPcie = count($existingPcie) + $quantity;
+                        // A-L8: sum quantities, not entry count.
+                        $usedPcie = $this->sumEntryQuantities($existingPcie);
+                        $totalPcie = $usedPcie + $quantity;
 
                         if ($totalPcie > $totalPcieSlots) {
                             return [
                                 'valid' => false,
-                                'message' => "Insufficient PCIe slots: trying to add $quantity PCIe cards but only " . ($totalPcieSlots - count($existingPcie)) . " slots available (motherboard has $totalPcieSlots total, " . count($existingPcie) . " currently used)",
+                                'message' => "Insufficient PCIe slots: trying to add $quantity PCIe card(s) but only "
+                                    . ($totalPcieSlots - $usedPcie) . " slot(s) available (motherboard has $totalPcieSlots total, $usedPcie currently used)",
                                 'details' => [
                                     'total_slots' => $totalPcieSlots,
-                                    'used_slots' => count($existingPcie),
+                                    'used_slots' => $usedPcie,
                                     'requesting' => $quantity,
-                                    'available' => $totalPcieSlots - count($existingPcie)
+                                    'available' => $totalPcieSlots - $usedPcie
                                 ]
                             ];
                         }
