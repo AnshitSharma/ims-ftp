@@ -98,7 +98,32 @@ revocation.
 Ordered so that each phase is independently shippable and independently
 revertable. Phases 1–2 are the only ones that touch the compatibility engine.
 
-### Phase 1 — D: riser-provided slot accounting (compatibility engine)
+### Phase 1 — D: riser-provided slot accounting (compatibility engine) — **DONE**
+
+**New finding D2, discovered while implementing Phase 1 (neither audit caught it):**
+`validateRiserSlotIntegrity()` gated its "does this card reference a real riser?"
+check on the bare `riser_` prefix, then applied the namespace-3 regex
+`/^riser_([a-z0-9-]+)_pcie_/`. A motherboard riser bay (`riser_x16_slot_1`)
+matches the prefix but can never match the regex — it carries `_slot_` where the
+pattern requires `_pcie_` — so it fell to the `else` and reported
+**"invalid riser slot format" for every riser card sitting exactly where it
+belongs.** Riser-slot integrity validation failed on *correct* configurations.
+Fixed by gating on `isRiserProvidedPcieSlot()`, with a separate positive
+format check (`/^riser_x\d+_slot_\d+$/i`) preserving genuine malformed-id
+detection.
+
+Implemented: three private static discriminators on `UnifiedSlotTracker`
+(`isRiserProvidedPcieSlot` / `isPcieSlotPosition` / `isRiserBaySlot`);
+converted `getUsedPCIeSlots()` (4 sites), `getUsedRiserSlots()`, the riser
+count in `validateAllSlots()`, `getRiserCardsInConfig()`, and
+`validateRiserSlotIntegrity()`. Covered by `tests/unit/slot_namespace_test.php`
+(25 checks, DB-free, all pass).
+
+**Deliberately left unchanged:** the `pcie_`-prefix test in `validateAllSlots()`
+Check 5 ("verify no risers in PCIe slots"). Extending it to namespace 3 would
+newly flag riser-on-riser nesting — a validation *expansion* that could raise
+errors on existing configs, which is a separate judgment call, not part of
+fixing D.
 
 Add three private discriminators to `UnifiedSlotTracker` and route every
 slot-namespace test through them:

@@ -39,6 +39,43 @@ class UnifiedSlotTracker {
     }
 
     /**
+     * ---------------------------------------------------------------------
+     * Slot-ID namespaces (audit D)
+     * ---------------------------------------------------------------------
+     * Three distinct namespaces exist, and two of them share a `riser_`
+     * prefix. Testing them with bare strpos() conflated the last two, which
+     * is the whole of finding D:
+     *
+     *   1. Motherboard PCIe slot   pcie_x16_slot_1
+     *   2. Motherboard riser BAY   riser_x16_slot_1                 (a riser plugs in here)
+     *   3. Riser-PROVIDED PCIe     riser_{riserUuid}_pcie_x16_slot_1 (a card plugs into the riser)
+     *
+     * Namespace 2 can never be mistaken for namespace 3: it carries `_slot_`
+     * where the riser-provided pattern requires `_pcie_`, and UUIDs are
+     * hex+hyphen so they contain no underscore. The discriminator is total.
+     *
+     * Every slot-namespace test in this class routes through these three
+     * helpers so the classification can never drift apart again.
+     */
+
+    /** Namespace 3 — a PCIe slot physically provided by an installed riser. */
+    private static function isRiserProvidedPcieSlot($slotId) {
+        return (bool)preg_match('/^riser_[a-z0-9-]+_pcie_/i', (string)$slotId);
+    }
+
+    /** Namespaces 1 + 3 — anything that consumes a PCIe slot, wherever it lives. */
+    private static function isPcieSlotPosition($slotId) {
+        return strpos((string)$slotId, 'pcie_') === 0
+            || self::isRiserProvidedPcieSlot($slotId);
+    }
+
+    /** Namespace 2 — a motherboard riser bay, which only a riser card occupies. */
+    private static function isRiserBaySlot($slotId) {
+        return strpos((string)$slotId, 'riser_') === 0
+            && !self::isRiserProvidedPcieSlot($slotId);
+    }
+
+    /**
      * Get comprehensive PCIe slot availability for a server configuration
      * Includes riser-provided PCIe slots if risers are installed
      *
@@ -526,9 +563,12 @@ class UnifiedSlotTracker {
                     $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                     if (is_array($pcieConfigs)) {
                         foreach ($pcieConfigs as $pcie) {
-                            // Count risers (slot_position starts with 'riser_')
+                            // Count risers = cards seated in a motherboard riser BAY.
+                            // Audit D: the bare `riser_` prefix also matched ordinary
+                            // cards seated in riser-PROVIDED slots, so a single riser
+                            // holding three NICs counted as four risers.
                             if (!empty($pcie['slot_position']) &&
-                                strpos($pcie['slot_position'], 'riser_') === 0) {
+                                self::isRiserBaySlot($pcie['slot_position'])) {
                                 $riserCount++;
                             }
                         }
@@ -1145,7 +1185,7 @@ class UnifiedSlotTracker {
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         if (!empty($pcie['slot_position']) &&
-                            strpos($pcie['slot_position'], 'pcie_') === 0) {
+                            self::isPcieSlotPosition($pcie['slot_position'])) {
                             $occupants[$pcie['slot_position']][] = $pcie['uuid'];
                         }
                     }
@@ -1161,7 +1201,7 @@ class UnifiedSlotTracker {
                         $hbaConfigs = [$hbaConfigs];
                     }
                     foreach ($hbaConfigs as $hba) {
-                        if (!empty($hba['slot_position']) && strpos($hba['slot_position'], 'pcie_') === 0) {
+                        if (!empty($hba['slot_position']) && self::isPcieSlotPosition($hba['slot_position'])) {
                             $occupants[$hba['slot_position']][] = $hba['uuid'];
                             error_log("HBA-TRACK: HBA card occupies slot: {$hba['slot_position']}");
                         }
@@ -1181,7 +1221,7 @@ class UnifiedSlotTracker {
                         // Only component NICs use PCIe slots, not onboard NICs
                         if (($nic['source_type'] ?? 'component') === 'component' &&
                             !empty($nic['slot_position']) &&
-                            strpos($nic['slot_position'], 'pcie_') === 0) {
+                            self::isPcieSlotPosition($nic['slot_position'])) {
                             $occupants[$nic['slot_position']][] = $nic['uuid'];
                         }
                     }
@@ -1197,7 +1237,7 @@ class UnifiedSlotTracker {
                 if (is_array($storageConfigs)) {
                     foreach ($storageConfigs as $storage) {
                         if (!empty($storage['slot_position']) &&
-                            strpos($storage['slot_position'], 'pcie_') === 0) {
+                            self::isPcieSlotPosition($storage['slot_position'])) {
                             $occupants[$storage['slot_position']][] = $storage['uuid'] ?? 'storage-aic';
                         }
                     }
@@ -1244,13 +1284,18 @@ class UnifiedSlotTracker {
             $configData = $config->getData();
             $usedSlots = [];
 
-            // Check PCIe cards configuration for risers (riser cards have slot_position like 'riser_%')
+            // Riser BAYS only (namespace 2). Audit D: this used to test the bare
+            // `riser_` prefix, which also matched riser-PROVIDED PCIe slots
+            // (namespace 3) -- so an ordinary card seated in a riser was counted
+            // as consuming a motherboard riser bay it does not occupy, inflating
+            // riser usage while that same card stayed invisible to
+            // getUsedPCIeSlots(). One card, miscounted in both directions.
             if (!empty($configData['pciecard_configurations'])) {
                 $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
                         if (!empty($pcie['slot_position']) &&
-                            strpos($pcie['slot_position'], 'riser_') === 0) {
+                            self::isRiserBaySlot($pcie['slot_position'])) {
                             $usedSlots[$pcie['slot_position']] = $pcie['uuid'];
                         }
                     }
@@ -1470,9 +1515,13 @@ class UnifiedSlotTracker {
                 $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
                 if (is_array($pcieConfigs)) {
                     foreach ($pcieConfigs as $pcie) {
-                        // Check if it's in a riser slot
+                        // Seated in a motherboard riser BAY. Audit D: the bare `riser_`
+                        // prefix also admitted cards in riser-provided slots; the
+                        // subtype check below then rejected them, so the result was
+                        // correct but cost a spec lookup per card. Narrowing the test
+                        // keeps the same output and drops those lookups.
                         if (!empty($pcie['slot_position']) &&
-                            strpos($pcie['slot_position'], 'riser_') === 0) {
+                            self::isRiserBaySlot($pcie['slot_position'])) {
 
                             // Verify this is actually a riser card by checking JSON specs
                             $specs = $this->componentDataService->getComponentSpecifications('pciecard', $pcie['uuid']);
@@ -2024,16 +2073,28 @@ class UnifiedSlotTracker {
                     foreach ($pcieConfigs as $pcie) {
                         $slotPosition = $pcie['slot_position'] ?? '';
 
-                        // If card claims to be in a riser slot, verify riser exists
-                        if (strpos($slotPosition, 'riser_') === 0) {
-                            // Extract riser UUID from slot position
-                            if (preg_match('/^riser_([a-z0-9-]+)_pcie_/', $slotPosition, $matches)) {
-                                $referencedRiserUuid = $matches[1];
+                        // A card in a riser-PROVIDED slot (namespace 3) must reference a
+                        // riser that is actually installed.
+                        //
+                        // BUGFIX (audit D2): this branch used to be gated on the bare
+                        // `riser_` prefix, which also caught motherboard riser BAYS
+                        // (namespace 2, `riser_x16_slot_1`). Those never satisfy the
+                        // namespace-3 regex -- they carry `_slot_` where it requires
+                        // `_pcie_` -- so they fell to the else and reported "invalid
+                        // riser slot format" for every riser card sitting exactly where
+                        // it belongs. Integrity validation failed on correct configs.
+                        if (self::isRiserProvidedPcieSlot($slotPosition)) {
+                            preg_match('/^riser_([a-z0-9-]+)_pcie_/i', $slotPosition, $matches);
+                            $referencedRiserUuid = $matches[1];
 
-                                if (!in_array($referencedRiserUuid, $riserUuids)) {
-                                    $errors[] = "PCIe card {$pcie['uuid']} references non-existent riser: $referencedRiserUuid";
-                                }
-                            } else {
+                            if (!in_array($referencedRiserUuid, $riserUuids)) {
+                                $errors[] = "PCIe card {$pcie['uuid']} references non-existent riser: $referencedRiserUuid";
+                            }
+                        } elseif (strpos($slotPosition, 'riser_') === 0) {
+                            // Namespace 2 -- legitimate for a riser card. Still flag ids
+                            // that match neither namespace, which is the genuine
+                            // malformed-data case this else used to (over-)report.
+                            if (!preg_match('/^riser_x\d+_slot_\d+$/i', $slotPosition)) {
                                 $errors[] = "PCIe card {$pcie['uuid']} has invalid riser slot format: $slotPosition";
                             }
                         }
