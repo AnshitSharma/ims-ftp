@@ -551,10 +551,11 @@ function handleAddComponent($serverBuilder, $user) {
                 // inside ONE outer transaction, all-or-nothing (a later unit,
                 // U-D.3, removes multi-unit quantity support entirely). Each
                 // dispatch re-locks the same UUID's inventory rows
-                // (AddComponentCommand::lockAndCheckComponent, ORDER BY Status
-                // ASC) -- the row the previous iteration just claimed is no
-                // longer Status=1, so each iteration naturally claims the
-                // NEXT available physical unit of this component model.
+                // (AddComponentCommand::lockAndCheckComponent, which orders
+                // available units first -- A-L1) -- the row the previous
+                // iteration just claimed is no longer Status=1, so each
+                // iteration naturally claims the NEXT available physical unit
+                // of this component model.
                 if ($quantity > 1) {
                     $ownTx = !$pdo->inTransaction();
                     if ($ownTx) { $pdo->beginTransaction(); }

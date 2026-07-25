@@ -212,9 +212,14 @@ final class ReplaceComponentCommand extends BaseCommand
         }
         $table = $sb->getComponentInventoryTable($this->componentType);
 
+        // BUGFIX (A-L1, matching ServerBuilder::lockAndCheckComponent()): `ORDER BY
+        // Status ASC` put FAILED units (Status=0) first, so a replacement picked a
+        // defective unit ahead of an available one. LIMIT 1 bounds the lock scope.
         $stmt = $this->pdo->prepare("
             SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
-            FROM `$table` WHERE UUID = ? ORDER BY Status ASC FOR UPDATE
+            FROM `$table` WHERE UUID = ?
+            ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+            LIMIT 1 FOR UPDATE
         ");
         $stmt->execute([$this->newComponentUuid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);

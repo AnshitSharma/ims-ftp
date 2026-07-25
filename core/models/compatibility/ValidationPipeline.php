@@ -93,6 +93,23 @@ class ValidationPipeline
             return null;
         }
 
+        if ($pipelineMode === 'shadow') {
+            // BUGFIX (A-P3): shadow used to RUN both authorities and then discard the
+            // result. The per-authority delegate blocks in
+            // ServerBuilder::legacyValidateComponentAddition() run the same authorities
+            // immediately afterwards, so every add evaluated each authority twice --
+            // two full UnifiedSlotTracker passes (motherboard spec load, riser
+            // expansion, used-slot computation) per add, for a verdict that was thrown
+            // away. Worse, it doubled every shadow-divergence log line, corrupting the
+            // soak metrics that gate the flip to enforce. Shadow is now a true no-op:
+            // the delegates remain the sole evaluators and the sole loggers.
+            error_log(sprintf(
+                'ValidationPipeline::run() shadow no-op (per-authority delegates are authoritative): config=%s type=%s uuid=%s',
+                $configUuid, $componentType, $componentUuid
+            ));
+            return null;
+        }
+
         require_once __DIR__ . '/SlotAuthority.php';
         require_once __DIR__ . '/StorageConnectionAuthority.php';
 
@@ -116,16 +133,6 @@ class ValidationPipeline
             if ($scaResult !== null) {
                 $override = $scaResult;
             }
-        }
-
-        if ($pipelineMode === 'shadow') {
-            // Authorities have logged their own divergences; pipeline returns null so
-            // per-authority delegate blocks in ServerBuilder also run (no double-override).
-            error_log(sprintf(
-                'ValidationPipeline::run() shadow pass complete: config=%s type=%s uuid=%s',
-                $configUuid, $componentType, $componentUuid
-            ));
-            return null;
         }
 
         // enforce: return the combined authority verdict (null = no authority had an opinion)
@@ -153,19 +160,21 @@ class ValidationPipeline
         array $legacyTypeResult,
         array &$warningsAccumulator
     ): ?array {
-        if (self::mode() === 'off') {
+        $mode = self::mode();
+        if ($mode === 'off') {
+            return null;
+        }
+
+        // A-P3 (matching run()): in shadow the MemoryAuthority delegate block in
+        // validateConfigurationEnhanced() is authoritative and does its own logging, so
+        // evaluating here as well was a duplicated pass and a duplicated log line.
+        if ($mode === 'shadow') {
             return null;
         }
 
         require_once __DIR__ . '/MemoryAuthority.php';
-        $result = (new MemoryAuthority($this->pdo))->evaluate(
+        return (new MemoryAuthority($this->pdo))->evaluate(
             $ramUuid, $allComponentsForMemory, $compatibility, $legacyTypeResult, $warningsAccumulator
         );
-
-        if (self::mode() === 'shadow') {
-            return null; // shadow: MemoryAuthority already logged; delegate block still runs
-        }
-
-        return $result; // enforce: return authority verdict
     }
 }

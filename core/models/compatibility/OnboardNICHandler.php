@@ -425,8 +425,18 @@ class OnboardNICHandler {
      * @return array Result of replacement operation
      */
     public function replaceOnboardNIC($configUuid, $onboardNICUuid, $componentNICUuid) {
+        // BUGFIX (A-L7): beginTransaction() was unconditional, so any caller that
+        // already held a transaction got "There is already an active transaction" --
+        // and the catch below then called rollBack() unconditionally, which throws
+        // "no active transaction" OUT of the catch block. Honour an ambient
+        // transaction the way every other mutation in this codebase does.
+        $ownTransaction = false;
+
         try {
-            $this->pdo->beginTransaction();
+            $ownTransaction = !$this->pdo->inTransaction();
+            if ($ownTransaction) {
+                $this->pdo->beginTransaction();
+            }
 
             // Verify onboard NIC exists and belongs to this config
             $stmt = $this->pdo->prepare("
@@ -441,21 +451,38 @@ class OnboardNICHandler {
                 throw new Exception("Onboard NIC not found or doesn't belong to this configuration");
             }
 
-            // Verify component NIC exists and is available
+            // Resolve and LOCK exactly ONE available physical unit of the replacement NIC.
+            //
+            // BUGFIX (A-L7): this used to SELECT without a lock and then
+            // `UPDATE ... WHERE UUID = ?`. UUID is the MODEL identifier, shared by every
+            // physical unit of that NIC, so a single replacement flipped EVERY unit of the
+            // model to Status=2 and stamped this config's ServerUUID on all of them --
+            // including units installed in other servers. Same model-vs-unit conflation
+            // fixed in deleteConfiguration() and removeComponent(); this call site was
+            // missed. The unlocked read was also a TOCTOU window between the Status check
+            // and the write.
             $stmt = $this->pdo->prepare("
-                SELECT UUID, Status, SerialNumber
+                SELECT ID, UUID, Status, SerialNumber
                 FROM nicinventory
-                WHERE UUID = ? AND SourceType = 'component'
+                WHERE UUID = ? AND SourceType = 'component' AND Status = 1
+                ORDER BY ID ASC
+                LIMIT 1
+                FOR UPDATE
             ");
             $stmt->execute([$componentNICUuid]);
             $componentNIC = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$componentNIC) {
-                throw new Exception("Component NIC not found in inventory");
-            }
-
-            if ($componentNIC['Status'] != 1) {
-                throw new Exception("Component NIC is not available (Status: {$componentNIC['Status']})");
+                // Distinguish "no such model" from "all units already in use" so the
+                // caller gets an actionable message.
+                $probe = $this->pdo->prepare("
+                    SELECT COUNT(*) FROM nicinventory WHERE UUID = ? AND SourceType = 'component'
+                ");
+                $probe->execute([$componentNICUuid]);
+                if ((int)$probe->fetchColumn() === 0) {
+                    throw new Exception("Component NIC not found in inventory");
+                }
+                throw new Exception("No available unit of component NIC $componentNICUuid (all units are in use or failed)");
             }
 
             // Note: No need to delete from server_configuration_components as it's deprecated
@@ -480,28 +507,35 @@ class OnboardNICHandler {
             // Note: No need to add to server_configuration_components as it's deprecated
             // The nic_config JSON will be updated to reflect the replacement
 
-            // Update component NIC status to In Use
+            // Update the ONE locked component NIC unit to In Use. Keyed on the row's
+            // primary key, never on the model UUID (A-L7).
             $stmt = $this->pdo->prepare("
                 UPDATE nicinventory
                 SET Status = 2, ServerUUID = ?, UpdatedAt = NOW()
-                WHERE UUID = ?
+                WHERE ID = ?
             ");
-            $stmt->execute([$configUuid, $componentNICUuid]);
+            $stmt->execute([$configUuid, (int)$componentNIC['ID']]);
 
             // Update nic_config JSON
             $this->updateNICConfigJSON($configUuid);
 
-            $this->pdo->commit();
+            if ($ownTransaction) {
+                $this->pdo->commit();
+            }
 
             return [
                 'success' => true,
                 'message' => 'Onboard NIC successfully replaced with component NIC',
                 'replaced_onboard_nic' => $onboardNICUuid,
-                'new_component_nic' => $componentNICUuid
+                'new_component_nic' => $componentNICUuid,
+                'new_component_nic_inventory_id' => (int)$componentNIC['ID'],
+                'new_component_nic_serial' => $componentNIC['SerialNumber']
             ];
 
         } catch (Exception $e) {
-            $this->pdo->rollBack();
+            if ($ownTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
             error_log("Error in replaceOnboardNIC: " . $e->getMessage());
             return [
                 'success' => false,

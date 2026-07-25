@@ -43,18 +43,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit();
 }
 
-// Global error handler
+// Global error handler.
+// NOTE: PHP never dispatches E_ERROR / E_PARSE / E_CORE_ERROR to a userland error
+// handler, so this only ever sees non-fatal diagnostics. Fatals are covered by the
+// shutdown function below (A-E3).
 set_error_handler(function($severity, $message, $file, $line) {
     error_log("PHP Error: $message in $file on line $line");
-    if ($severity === E_ERROR || $severity === E_PARSE || $severity === E_CORE_ERROR) {
-        send_json_response(0, 0, 500, "Internal server error");
-    }
+    return false; // let PHP's standard handler run too (display_errors is off)
 });
 
-// Exception handler
+// Exception handler. \Throwable, not Exception: an Error/TypeError is not an
+// Exception and would otherwise bypass this entirely (A-E3).
 set_exception_handler(function($exception) {
-    error_log("Uncaught exception: " . $exception->getMessage());
+    error_log("Uncaught throwable: " . $exception->getMessage()
+        . " in " . $exception->getFile() . ":" . $exception->getLine());
     send_json_response(0, 0, 500, "Internal server error");
+});
+
+// Fatal-error safety net (A-E3). Without this a fatal — OOM on a large compatibility
+// sweep, a TypeError in a strict path — ended the request with an EMPTY body under an
+// already-sent `Content-Type: application/json`, which every client parses as a
+// protocol error rather than a server error.
+register_shutdown_function(function() {
+    $lastError = error_get_last();
+    if ($lastError === null) {
+        return;
+    }
+    $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_CORE_WARNING, E_COMPILE_ERROR, E_COMPILE_WARNING];
+    if (!in_array($lastError['type'], $fatalTypes, true)) {
+        return;
+    }
+
+    error_log("FATAL: {$lastError['message']} in {$lastError['file']}:{$lastError['line']}");
+
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    // Hard rule #8: never leak the message, file path or any internals to the client.
+    echo json_encode([
+        'success' => false,
+        'authenticated' => 0,
+        'code' => 500,
+        'message' => 'Internal server error',
+        'timestamp' => date('c'),
+        'data' => null
+    ]);
 });
 
 // Initialize ACL system
@@ -71,7 +105,12 @@ try {
     $module = $parts[0] ?? '';
     $operation = $parts[1] ?? '';
 
-    error_log("API called with action: $action (Module: $module, Operation: $operation)");
+    // A-P6: per-request logging is diagnostic only. It was unconditional, costing an
+    // I/O write on every call and persisting usernames indefinitely (see below).
+    $verboseRequestLog = defined('APP_ENV') && APP_ENV !== 'production';
+    if ($verboseRequestLog) {
+        error_log("API called with action: $action (Module: $module, Operation: $operation)");
+    }
 
     // Authentication operations (no login required)
     if ($module === 'auth') {
@@ -86,7 +125,9 @@ try {
         send_json_response(0, 0, 401, "Valid JWT token required - please login");
     }
 
-    error_log("Authenticated user: " . $user['username'] . " (ID: " . $user['id'] . ")");
+    if ($verboseRequestLog) {
+        error_log("Authenticated user: " . $user['username'] . " (ID: " . $user['id'] . ")");
+    }
 
     // Route to appropriate module handlers
     switch ($module) {
@@ -182,8 +223,10 @@ try {
             send_json_response(0, 1, 400, "Invalid module: $module");
     }
 
-} catch (Exception $e) {
-    error_log("API error: " . $e->getMessage());
+} catch (\Throwable $e) {
+    // A-E3: \Throwable -- an Error/TypeError raised in a handler is not an Exception
+    // and used to escape this block entirely.
+    error_log("API error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
     send_json_response(0, 0, 500, "Internal server error");
 }
 
