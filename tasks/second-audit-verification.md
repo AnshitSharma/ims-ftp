@@ -280,7 +280,36 @@ Original plan text follows.
 - **N** — clamp with `max(0.0, min(1.0, ...))` at 3919.
 - **T** — hoist the two duplicated score calls into locals at 3909–3913.
 
-### Phase 6 — performance (no behavior change)
+### Phase 6 — performance — **P DONE; O/Q/R/S deferred**
+
+**P — done.** `getSlotAvailability()` now loads the configuration once and passes
+it into `getMotherboardFromConfig()`, `getRiserCardsInConfig()`,
+`getInstalledCpuCount()` and `getUsedPCIeSlots()` via an optional
+`$preloadedConfig` argument (default `null`, so the other 8 call sites of those
+helpers are unchanged). Four identical `SELECT`s per call become one.
+
+This mattered more after Phase 2, which added a `getSlotAvailability()` call to
+the add path — without P, that fix would have added four queries per add rather
+than one.
+
+Threaded rather than memoised on the instance deliberately: the row is read at
+the top of the call and reused only within it, so no later mutation can be
+served from a stale copy. An instance-level cache would have that window.
+
+**O, Q, R, S deferred.** These touch `addComponent()`'s validation flow
+(threading `$lockedConfigRow` into the validators, collapsing the duplicate
+legacy compatibility passes, memoising `extractComponentsFromJson()`, replacing
+table-probing with the config JSON's `component_type`). Each is a pure refactor
+whose only failure mode is a stale read — the exact class of bug that needs the
+golden master to catch, and the golden master cannot run in this environment.
+They are also the lowest-value items in the set: `S` probes 3 tables rather than
+the 10 the audit implied, and `T` (done) was already the measurable half of the
+scoring duplication.
+
+Sequencing them after the correctness work is baselined is the right call, not a
+reason to rush them in now.
+
+### Original plan text (phase 6)
 
 **O**, **P**, **R**, **Q**, **S** — thread the already-locked `$lockedConfigRow`
 into the validators; load the config once at the top of `getSlotAvailability()`

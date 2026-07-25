@@ -84,8 +84,19 @@ class UnifiedSlotTracker {
      */
     public function getSlotAvailability($configUuid) {
         try {
+            // Load the configuration ONCE for the whole call. Each of the four helpers
+            // below used to issue its own ServerConfiguration::loadByUuid(), so a single
+            // getSlotAvailability() cost four identical SELECTs -- and this method runs
+            // on every canFitCard(), assignSlot(), PCIe quantity check and
+            // SlotAuthority::evaluate().
+            //
+            // Passed down rather than memoised on the instance: the row is read once at
+            // the top and reused only within this call, so there is no window in which a
+            // later mutation could be served from a stale copy.
+            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+
             // Step 1: Get motherboard from configuration
-            $motherboard = $this->getMotherboardFromConfig($configUuid);
+            $motherboard = $this->getMotherboardFromConfig($configUuid, $config);
 
             if (!$motherboard) {
                 return [
@@ -111,7 +122,7 @@ class UnifiedSlotTracker {
             }
 
             // Step 3: Get riser cards and add their provided PCIe slots
-            $riserCards = $this->getRiserCardsInConfig($configUuid);
+            $riserCards = $this->getRiserCardsInConfig($configUuid, $config);
             $mergedSlots = $totalSlots['slots'];
 
             foreach ($riserCards as $riser) {
@@ -135,7 +146,7 @@ class UnifiedSlotTracker {
             $socketMap = $totalSlots['socket_map'] ?? [];
             $socketGatedSlots = [];
             if (!empty($socketMap)) {
-                $installedCpuCount = $this->getInstalledCpuCount($configUuid);
+                $installedCpuCount = $this->getInstalledCpuCount($configUuid, $config);
                 foreach ($mergedSlots as $slotSize => $slotIds) {
                     $kept = [];
                     foreach ($slotIds as $slotId) {
@@ -151,7 +162,7 @@ class UnifiedSlotTracker {
             }
 
             // Step 4: Get used PCIe slots from database
-            $usedSlots = $this->getUsedPCIeSlots($configUuid);
+            $usedSlots = $this->getUsedPCIeSlots($configUuid, $config);
 
             // Step 5: Calculate available slots
             $availableSlots = $this->calculateAvailableSlots($mergedSlots, $usedSlots);
@@ -896,10 +907,11 @@ class UnifiedSlotTracker {
      * @param string $configUuid Server configuration UUID
      * @return array|null Motherboard component data
      */
-    private function getMotherboardFromConfig($configUuid) {
+    private function getMotherboardFromConfig($configUuid, $preloadedConfig = null) {
         try {
-            // Load configuration using ServerConfiguration class (JSON-based storage)
-            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+            // $preloadedConfig lets a caller that already holds the row reuse it
+            // instead of re-issuing the SELECT (see getSlotAvailability).
+            $config = $preloadedConfig ?: ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
                 error_log("UnifiedSlotTracker: Configuration $configUuid not found");
@@ -931,9 +943,9 @@ class UnifiedSlotTracker {
      * @param string $configUuid Server configuration UUID
      * @return int Number of populated CPU sockets (0 if none / on error)
      */
-    private function getInstalledCpuCount($configUuid) {
+    private function getInstalledCpuCount($configUuid, $preloadedConfig = null) {
         try {
-            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+            $config = $preloadedConfig ?: ServerConfiguration::loadByUuid($this->pdo, $configUuid);
             if (!$config) {
                 return 0;
             }
@@ -1162,10 +1174,9 @@ class UnifiedSlotTracker {
      * @param string $configUuid Server configuration UUID
      * @return array Mapping of slot_id => component_uuid
      */
-    private function getUsedPCIeSlots($configUuid) {
+    private function getUsedPCIeSlots($configUuid, $preloadedConfig = null) {
         try {
-            // Load configuration using ServerConfiguration class (JSON-based storage)
-            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+            $config = $preloadedConfig ?: ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
                 error_log("UnifiedSlotTracker: Configuration $configUuid not found");
@@ -1497,10 +1508,9 @@ class UnifiedSlotTracker {
      * @param string $configUuid Server configuration UUID
      * @return array Array of riser card components with their details
      */
-    private function getRiserCardsInConfig($configUuid) {
+    private function getRiserCardsInConfig($configUuid, $preloadedConfig = null) {
         try {
-            // Load configuration using ServerConfiguration class (JSON-based storage)
-            $config = ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+            $config = $preloadedConfig ?: ServerConfiguration::loadByUuid($this->pdo, $configUuid);
 
             if (!$config) {
                 error_log("UnifiedSlotTracker: Configuration $configUuid not found");
