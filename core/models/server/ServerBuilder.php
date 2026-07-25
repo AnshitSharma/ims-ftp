@@ -8948,39 +8948,64 @@ class ServerBuilder {
                     break;
 
                 case 'pciecard':
-                    // Count PCIe slots
-                    $pcieSlots = $mbSpecs['expansion_slots']['pcie_slots'] ?? [];
-                    $totalPcieSlots = 0;
-                    foreach ($pcieSlots as $slot) {
-                        $totalPcieSlots += $slot['count'] ?? 0;
+                case 'nic':
+                case 'hbacard':
+                    // These three share ONE physical pool of PCIe slots, so the budget
+                    // has to be computed over that pool -- not per type, and not from
+                    // the motherboard spec alone.
+                    //
+                    // The previous implementation handled only 'pciecard' and read
+                    // $mbSpecs['expansion_slots']['pcie_slots'] directly, which was wrong
+                    // in three independent ways:
+                    //
+                    //   1. It ignored riser-PROVIDED slots, so a board with 2 slots and a
+                    //      riser supplying 4 more budgeted 2. Adds that physically fit
+                    //      were rejected.
+                    //   2. It counted the riser CARD against that budget even though a
+                    //      riser occupies a riser bay, not a PCIe slot -- so installing a
+                    //      riser (which ADDS capacity) instead consumed it.
+                    //   3. It counted only pciecard entries, ignoring NICs and HBAs
+                    //      already holding PCIe slots, so the budget under-counted usage
+                    //      across types.
+                    //
+                    // 'nic' and 'hbacard' were listed in $slotBasedTypes but had no case
+                    // at all, falling through to valid. Mirroring the old pciecard
+                    // arithmetic onto them would have propagated (1) and (2) to all three
+                    // types rather than fixing anything.
+                    //
+                    // UnifiedSlotTracker::getSlotAvailability() is already the authority
+                    // assignComponentSlot() uses to place the card moments later. It
+                    // merges riser-provided slots, excludes riser bays from the PCIe
+                    // pool, and counts occupancy from pciecard + hbacard + nic + PCIe
+                    // AIC storage. Asking it here means one authority, one answer.
+                    $slotTracker = new UnifiedSlotTracker($this->pdo);
+                    $availability = $slotTracker->getSlotAvailability($configUuid);
+
+                    if (empty($availability['success'])) {
+                        // No motherboard, unreadable spec, etc. Not this guard's call to
+                        // make -- assignComponentSlot() fails closed on exhaustion.
+                        return ['valid' => true];
                     }
 
-                    if ($totalPcieSlots > 0) {
-                        // Count existing PCIe cards
-                        $existingPcie = [];
-                        if (!empty($config['pciecard_configurations'])) {
-                            $pcieConfigs = json_decode($config['pciecard_configurations'], true);
-                            if (is_array($pcieConfigs)) {
-                                $existingPcie = $pcieConfigs;
-                            }
-                        }
-                        // A-L8: sum quantities, not entry count.
-                        $usedPcie = $this->sumEntryQuantities($existingPcie);
-                        $totalPcie = $usedPcie + $quantity;
+                    $totalPcieSlots = 0;
+                    foreach (($availability['total_slots'] ?? []) as $slotIds) {
+                        $totalPcieSlots += count($slotIds);
+                    }
+                    $usedPcie = count($availability['used_slots'] ?? []);
 
-                        if ($totalPcie > $totalPcieSlots) {
-                            return [
-                                'valid' => false,
-                                'message' => "Insufficient PCIe slots: trying to add $quantity PCIe card(s) but only "
-                                    . ($totalPcieSlots - $usedPcie) . " slot(s) available (motherboard has $totalPcieSlots total, $usedPcie currently used)",
-                                'details' => [
-                                    'total_slots' => $totalPcieSlots,
-                                    'used_slots' => $usedPcie,
-                                    'requesting' => $quantity,
-                                    'available' => $totalPcieSlots - $usedPcie
-                                ]
-                            ];
-                        }
+                    if ($totalPcieSlots > 0 && ($usedPcie + $quantity) > $totalPcieSlots) {
+                        $available = $totalPcieSlots - $usedPcie;
+                        return [
+                            'valid' => false,
+                            'message' => "Insufficient PCIe slots: trying to add $quantity $componentType(s) but only "
+                                . "$available slot(s) available ($totalPcieSlots total including any riser-provided slots, $usedPcie currently used)",
+                            'details' => [
+                                'total_slots' => $totalPcieSlots,
+                                'used_slots' => $usedPcie,
+                                'requesting' => $quantity,
+                                'available' => $available
+                            ]
+                        ];
                     }
                     break;
             }

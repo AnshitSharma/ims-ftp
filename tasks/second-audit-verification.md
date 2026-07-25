@@ -158,12 +158,34 @@ Adds into an already-full riser will begin to be rejected. Existing
 over-allocated configs become visible. This is the point of the fix, but it is a
 user-visible change to `get-compatible` output and must be called out in the PR.
 
-### Phase 2 — C residual: nic/hbacard capacity cases
+### Phase 2 — C residual: nic/hbacard capacity cases — **DONE, deviated from plan**
 
-Add `nic` and `hbacard` cases to the `validateComponentQuantity()` switch, both
-budgeting against total PCIe slots via `sumEntryQuantities()`, mirroring the
-existing `pciecard` case. Strictly defence-in-depth behind the C4 block —
-sequence it *after* Phase 1 so it budgets against corrected totals.
+The plan said "mirror the existing `pciecard` case." **Implementing that would
+have made compatibility worse**, so it was not done.
+
+Auditing the `pciecard` case before copying it found it already broken in three
+independent ways, all of which copying would have propagated to two more types:
+
+1. It read `$mbSpecs['expansion_slots']['pcie_slots']` directly, ignoring
+   riser-**provided** slots. A board with 2 slots plus a riser supplying 4 more
+   budgeted 2 — **rejecting adds that physically fit.** Reproduced: with one
+   riser installed, adding a 2nd pciecard is rejected against a real capacity
+   of 6.
+2. It counted the riser **card** against that budget, though a riser occupies a
+   riser *bay*, not a PCIe slot — so installing a riser, which *adds* capacity,
+   instead consumed it.
+3. It counted only `pciecard` entries, ignoring NICs and HBAs already holding
+   PCIe slots — under-counting usage across types.
+
+Implemented instead: `pciecard` / `nic` / `hbacard` share one case that
+delegates to `UnifiedSlotTracker::getSlotAvailability()` — the same authority
+`assignComponentSlot()` uses moments later, which merges riser-provided slots,
+excludes riser bays from the PCIe pool, and counts occupancy across all card
+types plus PCIe AIC storage. One authority, one answer.
+
+This is strictly more accurate in both directions (looser on riser configs,
+stricter across types), and cannot newly reject anything the C4 block at
+assignment time would not also reject.
 
 ### Phase 3 — E: removal dependency cascade
 
