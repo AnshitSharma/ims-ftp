@@ -10,7 +10,7 @@ in the handoff — don't let the two silently drift.
 None of `tests/` is deployed (SFTP ignore list, per `ims-ftp/CLAUDE.md`) — this
 manifest only matters for local/scratch runs.
 
-## 1. Canonical suite — 30 `*_test.php` files, five directories
+## 1. Canonical suite — 35 `*_test.php` files, five directories
 
 These are the files `scripts/verify/run_all.php`'s `regression`/`baseline`
 registry entries implicitly point at, and what every "N/30" sweep count in
@@ -18,12 +18,24 @@ prior handoffs refers to.
 
 | Directory | Count | Files |
 |---|---|---|
-| `tests/unit/` | 8 | `base_command_test.php`, `config_component_repository_test.php`, `engine_shadow_test.php`, `onboard_nic_engine_test.php`, `resource_catalog_test.php`, `target_state_test.php`, `verdict_shim_test.php`, `verdict_test.php` |
+| `tests/unit/` | 11 | `base_command_test.php`, `component_entry_identity_test.php`, `config_component_repository_test.php`, `engine_shadow_test.php`, `onboard_nic_engine_test.php`, `rate_limiter_concurrency_test.php`, `resource_catalog_test.php`, `slot_namespace_test.php`, `target_state_test.php`, `verdict_shim_test.php`, `verdict_test.php` |
 | `tests/unit/rules/` | 8 | `cpu_rules_test.php`, `dependency_rule_test.php`, `lane_rule_test.php`, `memory_rules_test.php`, `net_rules_test.php`, `slot_rules_test.php`, `storage_rules_test.php`, `system_rules_test.php` |
-| `tests/regression/` | 10 | `add_command_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `remove_command_test.php`, `replace_command_test.php`, `state_guard_test.php` |
+| `tests/regression/` | 12 | `add_command_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `remove_command_test.php`, `replace_command_test.php`, `require_paths_test.php`, `serial_less_unit_identity_test.php`, `state_guard_test.php` |
 | `tests/api/` | 2 | `add_remove_response_shape_test.php`, `new_actions_test.php` |
 | `tests/backfill/` | 2 | `extractor_test.php`, `ledger_backfill_test.php` |
-| **Total** | **30** | |
+| **Total** | **35** | |
+
+**Drift corrected 2026-07-25.** The table above previously read 8 / 10 / total
+30, which no longer matched the directories. Five files existed on disk but were
+unlisted, so any "38/38" sweep figure silently under-counted:
+
+| File | Added by |
+|---|---|
+| `tests/unit/component_entry_identity_test.php` | first engine-audit remediation pass |
+| `tests/unit/slot_namespace_test.php` | second-audit Phase 1 (the three slot-ID namespace discriminators) |
+| `tests/unit/rate_limiter_concurrency_test.php` | second-audit Phase 4 (forks real processes; a single-process test passes against the broken implementation, which is why the TOCTOU survived) |
+| `tests/regression/require_paths_test.php` | pre-existing, never listed |
+| `tests/regression/serial_less_unit_identity_test.php` | pre-existing, never listed |
 
 Non-test helpers in these same directories (not counted above, never run
 standalone): `tests/regression/_scratch_db.php` (shared `scratch_db_connect()`
@@ -53,10 +65,10 @@ files that are NOT part of the sweep at all (§3).
 | `tests/getDashboardDataShapeTest.php` | no (DB-free) |
 | `tests/fixture_scenarios_real.php` | **yes**, as of 2026-07-13 — env-gated `PROBE_DB_*` connection (default `imsbdcmsbharatda_Ims_Production` local mirror), prints `SKIPPED: ...` and exits 0 if that DB isn't reachable (mirrors `tests/regression/_scratch_db.php`'s convention). Previously hard-fataled (uncaught `PDOException`, exit 255) in any environment without that exact local DB mirror — this was the tenth-session verify finding's root cause, fixed this session. |
 
-**30 canonical + 8 named legacy = 38 files.** This is very likely what the
-tenth session's uncorroborated "38/38" figure meant, though that session did
-not enumerate it — treat this table as the retroactive enumeration, not
-confirmation of the session's own working.
+**35 canonical + 8 named legacy = 43 files.** (Was 30 + 8 = 38 before the
+2026-07-25 drift correction above.) The "38/38" figure in the tenth session's
+handoff was never enumerated; treat these tables as the enumeration, not as
+confirmation of that session's working.
 
 ## 3. Explicitly excluded from the sweep count
 
@@ -77,6 +89,54 @@ confirmation of the session's own working.
   inventory/performance/parity/deadcode) — gate reports, invoked via
   `scripts/verify/run_all.php`, reported as GREEN/RED per report name, never
   folded into the 38.
+
+## 4. Running the DB-backed files without the production dump
+
+`tests/golden/setup_scratch_db.sql` creates an EMPTY database and expects the
+caller to load `imsbdcmsbharatda_Ims_Production.sql` into it. That dump is
+production data and is deliberately not in the repo, so on a clean checkout every
+DB-backed file failed with "Base table or view not found" — indistinguishable, in
+a sweep summary, from a real regression.
+
+`tests/golden/base_schema.sql` (added 2026-07-25) closes that gap. It creates
+`server_configurations` + the ten `{type}inventory` tables, every column traced to
+a code reference or a seeder (provenance is in its header — nothing invented).
+Recipe, in order — `base_schema.sql` must precede the consolidated migration
+schema, because `config_components` has a FOREIGN KEY onto
+`server_configurations.config_uuid`:
+
+```bash
+mysql -u root < ims-ftp/tests/golden/setup_scratch_db.sql
+mysql -u root ims_compat_golden < ims-ftp/tests/golden/base_schema.sql
+mysql -u root ims_compat_golden < ims-ftp/database/consolidated/2026_07_13_000_consolidated-migration-schema.sql
+```
+
+This is enough for every file that brings its own fixture rows. It is **not**
+enough for `tests/characterize_compatibility.php`: the golden master
+characterises the engine against REAL production configurations, and an empty
+schema yields an empty baseline, which proves nothing. Load the real dump for
+that.
+
+### The `ims-data/` catalog is a hard prerequisite, not an optional extra
+
+Everything that resolves a hardware spec fails without the sibling `ims-data/`
+directory (or `IMS_DATA_PATH`), with
+`ComponentSpecPaths.php:36 — "Unable to resolve component JSON path"`. Measured
+2026-07-25 on a schema-complete scratch DB with no `ims-data/` present:
+
+| File(s) | Outcome without `ims-data/` |
+|---|---|
+| all 8 `tests/unit/rules/*` | fatal (7 on spec resolution; `dependency_rule_test` exits `FATAL: no real Riser Card fixture found in ims-data`) |
+| `lane_authority_unit.php`, `storage_bay_authority_unit.php` | fatal on spec resolution |
+| `regression/fail_closed_test.php` | fails — `scandir(ims-data)` |
+| `unit/engine_shadow_test.php` | 1 failure — every spec-dependent rule throws, so the engine fails closed (correctly) and `engine.blocked` is `true` where the test expects `false` |
+| `serverstate_equivalence.php` | reports OK **across 0 configs** — vacuous, not a pass |
+| `characterize_compatibility.php` | cannot produce a meaningful baseline |
+
+A sweep run in an `ims-data`-less environment must say so and name these files,
+rather than reporting them as regressions. Confirm any suspected regression by
+re-running the same file at the previous commit on the same database before
+attributing it to a change.
 
 ## Reporting convention going forward
 

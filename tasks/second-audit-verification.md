@@ -309,6 +309,24 @@ scoring duplication.
 Sequencing them after the correctness work is baselined is the right call, not a
 reason to rush them in now.
 
+**Re-confirmed 2026-07-25, after the database became available.** A DB alone does
+not change this decision. The stale-read class of bug these four risk is only
+visible when the engine runs against real configurations with real specs, and
+that is precisely what is still missing (no `ims-data/`, no dump — so
+`serverstate_equivalence` reports OK across *0 configs*, and every spec-dependent
+rule test is fatal). Landing them now would buy a green sweep that is vacuous on
+exactly the paths at risk, which is worse than leaving them open: it would read as
+proof where there is none. They stay deferred until the golden master runs.
+
+Note also that R is safer than it looks and should be cheap once unblocked:
+`extractComponentsFromJson()` is a pure function of `($configData,
+$minimalOutput, $this->strictJsonDecode)`, so a memo keyed on all three cannot go
+stale by construction — the input *is* the key. The one behaviour delta to accept
+deliberately is that a repeat call on a corrupt column would skip its
+`error_log()` on a cache hit (the strict-mode throw is unaffected: it propagates
+before anything is cached). `$this->strictJsonDecode` is mutated at 7 sites, so
+omitting it from the key would be the bug to avoid.
+
 ### Original plan text (phase 6)
 
 **O**, **P**, **R**, **Q**, **S** — thread the already-locked `$lockedConfigRow`
@@ -341,11 +359,84 @@ Requirements before merge:
    attribute to a single change.
 3. Phases 4–6 must show **zero** golden diff.
 
-**I still cannot run these here.** There is no MySQL/MariaDB binary in this
-environment, so every DB-backed suite — including the golden master — is
-unrunnable. That constraint carried over from the first pass and is unchanged.
-The DB-free suites (including `tests/unit/component_entry_identity_test.php`)
-remain runnable and must stay green.
+### Verification status — updated 2026-07-25 (DB now available)
+
+The "no MySQL binary" constraint that held through the first pass and the
+implementation of phases 1–6 is **gone**: MariaDB 10.11 is installed and running
+locally, and `tests/golden/base_schema.sql` (new) reconstructs the base tables
+the production dump normally supplies. What that bought, and what it did not:
+
+**Done — full differential sweep, baseline vs HEAD, on a real database.**
+Every runnable test file was executed twice against a freshly rebuilt schema:
+once from a worktree at `3749154` (the commit before this pass) and once at HEAD.
+The complete diff of the two result sets is:
+
+```
+> rate_limiter_concurrency_test.php    ALL 12 CHECKS PASS
+> slot_namespace_test.php              ALL 25 CHECKS PASS
+```
+
+Both are files added by this pass and absent at baseline. **Every pre-existing
+test produces an identical verdict at baseline and at HEAD** — no test that
+passed before fails now, and no failure changed shape. Newly runnable and green
+at HEAD: `config_component_repository_test` (ALL PASS), `target_state_test`
+(ALL PASS), `state_machine_unit` (ALL PASS, against its own
+`ims_scratch_smunit` DB per §3 of tests/MANIFEST.md — never `ims_compat_golden`),
+`serial_less_unit_identity_test` (19/19), `base_command_test`,
+`finalized_immutability_test`, `ledger_dual_write_test`,
+`nested_transaction_test`, `state_guard_test`, `extractor_test`,
+`ledger_backfill_test`, `getDashboardDataShapeTest` (62 assertions),
+`slot_storage_authority_unit`, `nic_sfp_authority_unit`.
+
+**Still blocked — and the blocker is `ims-data/`, not the database.** The spec
+catalog is not in this repo and is not present here, so everything that resolves
+a hardware spec dies at `ComponentSpecPaths.php:36`. That gates all 8
+`tests/unit/rules/*`, `lane_authority_unit`, `storage_bay_authority_unit`,
+`fail_closed_test`, the one `engine_shadow_test` failure (spec rules throw → the
+engine fails closed → `engine.blocked` is `true` where the test wants `false`;
+identical at baseline, verified), and the golden master itself. See §4 of
+tests/MANIFEST.md for the measured table.
+
+**So the golden-master requirement is NOT discharged.** It needs two things this
+environment cannot supply: the `ims-data/` catalog and the production dump. Note
+also that `serverstate_equivalence` reports OK *across 0 configs* here — vacuous,
+not a pass. The differential sweep above is real evidence of no regression in the
+covered surface, but it does **not** cover the compatibility engine on real
+configurations, which is exactly what phases 1–3 changed. To run it:
+
+```bash
+mysql -u root < ims-ftp/tests/golden/setup_scratch_db.sql
+mysql -u root ims_compat_golden < imsbdcmsbharatda_Ims_Production.sql
+IMS_DATA_PATH=/path/to/ims-data php ims-ftp/tests/characterize_compatibility.php
+```
+
+Run it at `3749154` first to capture the baseline, then per-phase, applying the
+acceptance criterion above: diffs only on riser-containing configs, all moving
+toward "fewer PCIe free / more riser bays free"; **any diff on a riser-less
+config is a regression.**
+
+## Remaining work — status as of 2026-07-25
+
+| Item | Status |
+|---|---|
+| Phases 1–6 (D, D2, C, E, H, I, J, K, L, M, N, P, T) | **Done**, pushed |
+| Seeder `2026_07_25_001_revoke-wildcard-user-role-write-grants.sql` | **Applied to the production DB by the user.** Verification query is in the seeder footer (expects ZERO rows); the second query there should still show the `users.view` / `roles.view` grants, which are intentionally untouched |
+| Differential test sweep, baseline vs HEAD | **Done** — no pre-existing verdict changed (see above) |
+| `tests/MANIFEST.md` drift | **Fixed** — was 30+8=38, actually 35+8=43; five files existed on disk unlisted, two of them added by this pass |
+| Golden master (`characterize_compatibility.php`) | **Still open — blocks merge.** Needs `ims-data/` + the production dump; neither exists in this environment |
+| O, Q, R, S (perf) | **Deferred deliberately** — see the Phase 6 note above for why a DB alone does not unblock them |
+| G (finalize weaker than add-time) | **Open by design** — in-migration, gated behind `COMMAND_LAYER_ENABLED=enforce` |
+| L20 / L26 (first pass) | Still deferred |
+
+Three behaviour changes need a decision from whoever owns the frontend and ops —
+none is a code defect, all are intended consequences:
+
+1. `get-compatible` returns different slot availability for riser configs (Phase 1).
+2. Motherboard and riser removals that previously succeeded by silently orphaning
+   dependents now return `motherboard_has_dependents` / `riser_has_dependents`
+   (Phase 3).
+3. Configurations with a corrupt JSON column now refuse mutations instead of
+   presenting the column as empty (M15, first pass).
 
 ## Risk notes
 
