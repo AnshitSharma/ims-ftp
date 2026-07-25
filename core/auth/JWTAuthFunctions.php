@@ -189,50 +189,24 @@ if (!function_exists('generateUserJWT')) {
 }
 
 /**
- * Extract user ID from JWT token
+ * REMOVED (audit K): getUserIdFromJWT(), refreshJWTToken() and logoutJWT().
+ *
+ * All three were unreachable -- zero callers fleet-wide -- and all three routed
+ * through JWTHelper methods that call verifyToken() WITHOUT a $pdo, which skips
+ * the revoked_tokens blacklist and the users.password_changed_at cutoff. Had
+ * anything started calling them, a logged-out or password-reset token would have
+ * been honoured.
+ *
+ * They are deleted rather than repaired because keeping them implies they are
+ * supported:
+ *   - Logout is handled by handleLogout() in api/handlers/auth/auth_api.php,
+ *     which revokes the refresh tokens AND blacklists the access token's jti.
+ *   - Token refresh is handled by handleTokenRefresh(), which goes through
+ *     JWTHelper::verifyRefreshToken($pdo, ...) -- DB-backed, expiry-checked and
+ *     scoped to active users.
+ *   - The authenticated request path resolves the user via authenticateWithJWT()
+ *     in core/helpers/BaseFunctions.php, which passes $pdo correctly.
  */
-if (!function_exists('getUserIdFromJWT')) {
-    function getUserIdFromJWT() {
-        return JWTHelper::getUserIdFromToken();
-    }
-}
-
-/**
- * Refresh JWT token - FIXED FUNCTION
- */
-if (!function_exists('refreshJWTToken')) {
-    function refreshJWTToken() {
-        $token = JWTHelper::getTokenFromHeader();
-        if (!$token) {
-            return false;
-        }
-        
-        return JWTHelper::refreshToken($token);
-    }
-}
-
-/**
- * Logout (for JWT, this just means invalidating on client side)
- * Optionally, you can implement a blacklist system
- */
-if (!function_exists('logoutJWT')) {
-    function logoutJWT() {
-        // For JWT, logout is typically handled client-side by removing the token
-        // You can implement a blacklist system here if needed
-        
-        // Log the logout action if ACL is available
-        $user_id = getUserIdFromJWT();
-        if ($user_id && class_exists('SimpleACL')) {
-            global $pdo;
-            if ($pdo) {
-                $acl = new SimpleACL($pdo, $user_id);
-                $acl->logAction("User logout", "auth", $user_id);
-            }
-        }
-        
-        return true;
-    }
-}
 
 /**
  * Validate JWT middleware function

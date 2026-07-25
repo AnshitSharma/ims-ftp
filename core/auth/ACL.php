@@ -316,6 +316,32 @@ class ACL {
                 if (strpos($permission, '*') !== false) {
                     // Wildcard permission
                     $pattern = str_replace('*', '%', $permission);
+
+                    // A leading-* wildcard such as '*.create' expands to LIKE '%.create',
+                    // which also matches users.create / users.edit / roles.* -- so
+                    // 'manager' and 'technician' were granted the ability to create and
+                    // edit USERS. That contradicts the same permission set, which goes on
+                    // to grant 'users.view'/'roles.view' explicitly: listing view access
+                    // by name only makes sense if the wildcards were not meant to convey
+                    // write access to those namespaces.
+                    //
+                    // User and role administration is granted by name or not at all.
+                    // Scoped to non-view operations so the existing reach of '*.view' is
+                    // untouched -- widening or narrowing read access is a policy decision,
+                    // not part of closing this escalation.
+                    $isViewWildcard = substr($permission, -5) === '.view';
+                    if (!$isViewWildcard) {
+                        $stmt = $this->pdo->prepare("
+                            INSERT IGNORE INTO role_permissions (role_id, permission_id, granted)
+                            SELECT ?, id, 1 FROM permissions
+                            WHERE name LIKE ?
+                              AND name NOT LIKE 'users.%'
+                              AND name NOT LIKE 'roles.%'
+                        ");
+                        $stmt->execute([$roleId, $pattern]);
+                        continue;
+                    }
+
                     $stmt = $this->pdo->prepare("
                         INSERT IGNORE INTO role_permissions (role_id, permission_id, granted)
                         SELECT ?, id, 1 FROM permissions WHERE name LIKE ?
