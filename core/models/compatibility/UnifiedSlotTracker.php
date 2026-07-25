@@ -1913,19 +1913,62 @@ class UnifiedSlotTracker {
             $configData = $config->getData();
             $cardsOnRiser = [];
 
-            // Get all PCIe cards in configuration
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
-                    foreach ($pcieConfigs as $pcie) {
-                        $slotPosition = $pcie['slot_position'] ?? '';
+            // Slot ids provided by THIS riser are namespace 3 with its own uuid baked in:
+            //   riser_{$riserUuid}_pcie_x16_slot_1
+            $riserSlotPrefix = "riser_{$riserUuid}_pcie_";
 
-                        // Check if this card is installed in a slot provided by the riser
-                        // Slot format: "riser_{$riserUuid}_pcie_x16_slot_1"
-                        if (strpos($slotPosition, "riser_{$riserUuid}_pcie_") === 0) {
+            // A riser's slots can hold any PCIe card type, and each type persists to its
+            // own column. Scanning only pciecard_configurations meant a NIC or HBA seated
+            // in a riser was not seen as a dependent, so validateRiserRemoval() would
+            // report the riser as safe to remove and strand that card in a slot that no
+            // longer exists.
+            $sources = [
+                ['column' => 'pciecard_configurations', 'type' => 'pciecard'],
+                ['column' => 'hbacard_config',          'type' => 'hbacard'],
+            ];
+
+            foreach ($sources as $source) {
+                if (empty($configData[$source['column']])) {
+                    continue;
+                }
+                $entries = $this->safeJsonDecode($configData[$source['column']], $source['column']);
+                if (!is_array($entries)) {
+                    continue;
+                }
+                // hbacard_config may be a single object rather than a list (migration shape).
+                if (isset($entries['uuid'])) {
+                    $entries = [$entries];
+                }
+                foreach ($entries as $entry) {
+                    if (!is_array($entry)) {
+                        continue;
+                    }
+                    $slotPosition = $entry['slot_position'] ?? '';
+                    if (strpos($slotPosition, $riserSlotPrefix) === 0) {
+                        $cardsOnRiser[] = [
+                            'uuid' => $entry['uuid'] ?? null,
+                            'slot_position' => $slotPosition,
+                            'component_type' => $source['type'],
+                            'is_riser' => false
+                        ];
+                    }
+                }
+            }
+
+            // NICs live under nic_config->nics. Onboard NICs never occupy a slot.
+            if (!empty($configData['nic_config'])) {
+                $nicConfig = $this->safeJsonDecode($configData['nic_config'], 'nic_config');
+                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
+                    foreach ($nicConfig['nics'] as $nic) {
+                        if (!is_array($nic) || ($nic['source_type'] ?? 'component') !== 'component') {
+                            continue;
+                        }
+                        $slotPosition = $nic['slot_position'] ?? '';
+                        if (strpos($slotPosition, $riserSlotPrefix) === 0) {
                             $cardsOnRiser[] = [
-                                'uuid' => $pcie['uuid'],
+                                'uuid' => $nic['uuid'] ?? null,
                                 'slot_position' => $slotPosition,
+                                'component_type' => 'nic',
                                 'is_riser' => false
                             ];
                         }
@@ -1964,9 +2007,14 @@ class UnifiedSlotTracker {
 
             $componentDetails = [];
             foreach ($dependentCards as $card) {
-                $specs = $this->componentDataService->getComponentSpecifications('pciecard', $card['uuid']);
+                // Dependents can be pciecard, nic or hbacard, so the spec lookup has to
+                // follow the entry's own type -- 'pciecard' was hardcoded here and would
+                // miss specs for the other two.
+                $cardType = $card['component_type'] ?? 'pciecard';
+                $specs = $this->componentDataService->getComponentSpecifications($cardType, $card['uuid']);
                 $componentDetails[] = [
                     'uuid' => $card['uuid'],
+                    'component_type' => $cardType,
                     'model' => $specs['model'] ?? 'Unknown',
                     'subtype' => $specs['component_subtype'] ?? 'PCIe Card',
                     'slot_position' => $card['slot_position']

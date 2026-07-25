@@ -1411,6 +1411,35 @@ class ServerBuilder {
                 }
             }
 
+            // Riser removal: a riser supplies the PCIe slots its dependents sit in, so
+            // pulling it strands every card in those slots at a slot id that no longer
+            // exists -- precisely the state validateRiserSlotIntegrity() reports as
+            // "references non-existent riser". That check existed and was correct;
+            // nothing ever called it. Block instead of creating the broken state.
+            if ($componentType === 'pciecard') {
+                $riserSpecs = $this->dataUtils->getPCIeCardByUUID($componentUuid);
+                $isRiser = ($riserSpecs['component_subtype'] ?? null) === 'Riser Card'
+                    || stripos((string)$componentUuid, 'riser-') === 0;
+
+                if ($isRiser) {
+                    $slotTracker = new UnifiedSlotTracker($this->pdo);
+                    $riserCheck = $slotTracker->validateRiserRemoval($configUuid, $componentUuid);
+
+                    if (empty($riserCheck['can_remove'])) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                        return [
+                            'success' => false,
+                            'error_type' => 'riser_has_dependents',
+                            'message' => $riserCheck['message']
+                                ?? 'Cannot remove riser while cards are installed in its slots',
+                            'riser_uuid' => $componentUuid,
+                            'dependent_components' => $riserCheck['dependent_components'] ?? [],
+                            'hint' => 'Remove the cards installed in this riser first'
+                        ];
+                    }
+                }
+            }
+
             // SPECIAL HANDLING: If removing a motherboard, also remove its onboard NICs.
             //
             // BUGFIX (A-E6): a failed detach used to be logged as a warning and the
@@ -1419,6 +1448,54 @@ class ServerBuilder {
             // config -- orphans no code path can reach. This method already rolls back on a
             // failed component release below; apply the same discipline here.
             if ($componentType === 'motherboard') {
+                // The board supplies every CPU socket, DIMM slot and PCIe slot in the
+                // configuration. Removing it while components still occupy those left
+                // them referencing sockets and slots that no longer exist -- an
+                // unreachable state the engine has no way to validate or repair.
+                // Only the onboard NICs were handled; everything else was orphaned.
+                //
+                // Blocking rather than cascading is deliberate: a cascade would release
+                // most of a build's inventory from a single call, which is the class of
+                // defect the model-vs-unit work spent its time removing. Swapping a
+                // board is what the replace path is for.
+                $dependentTypes = ['cpu', 'ram', 'pciecard', 'nic', 'hbacard', 'storage'];
+                // Full (non-minimal) form: minimalOutput drops 'quantity', which would
+                // report an 8-DIMM entry as "1 ram".
+                $remaining = $this->extractComponentsFromJson($config);
+
+                $blockers = [];
+                foreach ($remaining as $entry) {
+                    $entryType = $entry['component_type'] ?? null;
+                    if (empty($entry['component_uuid'])
+                        || !in_array($entryType, $dependentTypes, true)) {
+                        continue;
+                    }
+                    // Onboard NICs are detached automatically just below; they are a
+                    // property of the board, not an independent occupant.
+                    if ($entryType === 'nic'
+                        && strpos((string)$entry['component_uuid'], 'onboard-') === 0) {
+                        continue;
+                    }
+                    $blockers[$entryType] = ($blockers[$entryType] ?? 0)
+                        + max(1, (int)($entry['quantity'] ?? 1));
+                }
+
+                if (!empty($blockers)) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    $summary = [];
+                    foreach ($blockers as $type => $count) {
+                        $summary[] = "$count $type";
+                    }
+                    return [
+                        'success' => false,
+                        'error_type' => 'motherboard_has_dependents',
+                        'message' => 'Cannot remove motherboard while components occupy its sockets and slots: '
+                            . implode(', ', $summary) . '.',
+                        'dependent_counts' => $blockers,
+                        'hint' => 'Remove these components first, or replace the motherboard instead of removing it'
+                    ];
+                }
+
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $removeResult = $nicHandler->removeOnboardNICs($componentUuid, $configUuid);

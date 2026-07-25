@@ -187,7 +187,24 @@ This is strictly more accurate in both directions (looser on riser configs,
 stricter across types), and cannot newly reject anything the C4 block at
 assignment time would not also reject.
 
-### Phase 3 — E: removal dependency cascade
+### Phase 3 — E: removal dependency cascade — **DONE**
+
+Implemented as planned (block, don't cascade), plus one gap found while wiring:
+
+`getPCIeCardsOnRiser()` — which `validateRiserRemoval()` depends on — scanned
+only `pciecard_configurations`. A NIC or HBA seated in a riser-provided slot
+lives in `nic_config` / `hbacard_config` and was invisible, so the guard would
+have reported a riser as safe to remove while stranding those cards. Extended to
+all three columns before wiring it in; `validateRiserRemoval()` also hardcoded
+`'pciecard'` for its spec lookup, now keyed on the entry's own type.
+
+**Command layer needs no equivalent change.** `RemoveComponentCommand` does not
+route through `ServerBuilder::removeComponent()`, but it already has a more
+structural mechanism — `dependency.blocked_removal` (U-R.8) over the
+parent_id/resource closure. These guards close the same gap on the legacy path
+that is live at production flag defaults.
+
+Original plan text follows.
 
 - Call the existing `validateRiserRemoval()` in `removeComponent()` before
   removing a `pciecard` whose subtype is `Riser Card`; block on failure.
