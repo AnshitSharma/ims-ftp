@@ -1,6 +1,6 @@
 # IMS validation-engine migration — status for review
 
-Date: 2026-07-22. One-page honest status.
+Date: 2026-07-25 (supersedes the 2026-07-22 revision). One-page honest status.
 
 ## Bottom line
 
@@ -29,23 +29,28 @@ backfilled with zero unexplained quarantines.
 
 ## What remains — and why some of it takes wall-clock time
 
-**P8 cutover, P9 cleanup, P10 post-cutover are not started.** They gate on soaks:
+**P8 cutover, P9 cleanup, P10 post-cutover are not started.**
 
-- **The 7-day `STATE_MACHINE` shadow soak has never started** — the production flag
-  still reads `off`. This is the single biggest lever: every day it is not flipped is a
-  wasted day on the longest clock. **Flipping it to `shadow` is the top-priority action.**
-- `COMMAND_LAYER` enforce soak is **sequential after** that (cannot run in parallel).
-- P8 read cutover wants 14 days of green checks at `READ_FROM_ROWS=on`.
-- Migration's own floor estimate: **~3 weeks assuming zero findings** (full-soak path).
+**Correction to the 2026-07-22 revision: the shadow soak HAS started.** Live probe
+2026-07-25T10:06Z (`server-debug-migration-flags`) reads `STATE_MACHINE_ENABLED=shadow`,
+`ENGINE_MODE=shadow`, `COMMAND_LAYER_ENABLED=shadow`, `DUAL_WRITE=on`,
+`READ_FROM_ROWS=sample`, `.env` mtime `2026-07-22T15:40Z` and holding. The previous
+revision's "still reads `off`, has never started" is stale. Probe before repeating it.
 
-The soaks are the migration's safety mechanism, not padding: `shadow` mode is the only
-place the new engine runs against real production traffic while the legacy engine stays
-authoritative. This project's own history is a list of real bugs caught **only** because
-of that discipline (a delete-config FK break, a stale-inventory leak, a config's
-motherboard silently unassigned). Skipping straight to `enforce` makes the new engine
-authoritative over live hardware-inventory records with no evidence it agrees with the
-old one — the failure mode is *silent* data corruption, which a backup does not undo
-once real work has landed on top of it.
+**The calendar clock is not the real constraint here — traffic volume is.** The soak has
+accumulated 69 engine rows total, *all* from a single 70-minute burst on 07-22 23:38 →
+07-23 00:24, and 34 of those 69 are byte-identical duplicate records (finding F-8). On a
+fleet this idle, waiting out the remaining days of a 7-day soak buys very little
+additional evidence. The compressed-soak variant is the sensible posture here, and the
+honest reason is *this*, not schedule pressure.
+
+What the soak did buy was real: it surfaced 9 genuine divergences, 8 of which trace to
+one rule being harsher than the legacy code that actually runs (see below). That is the
+argument for the discipline — not the number of days. Skipping verification entirely
+would still make the new engine authoritative over live inventory with no evidence it
+agrees with the old one, and the failure mode is *silent* wrong data, which a backup does
+not undo once real work has landed on top of it. Downtime tolerance does not help with
+that failure mode; rollback is already instant and lossless (`FLAG=off`).
 
 ## Faster path, if the deadline requires accepting risk
 
@@ -57,6 +62,34 @@ risk accepted is the loss of a week of diverse real traffic. Primary rollback at
 step is `FLAG=off` (instant, lossless); the backup is the last resort. This is a
 **risk decision for the project owner to sign off on**, explicitly — the runbook does
 not skip any verification step.
+
+## Shadow-parity findings (2026-07-25)
+
+First real parity run scored **RED, 9 unexplained**. Root cause found for 8 of 9:
+
+- **7 rows — `storage.bay_capacity` was harsher than legacy.** The rule implemented
+  "strict 2.5/3.5, no adapter" on the authority of a *comment*
+  (`ComponentCompatibility.php:3193-3200`), but the legacy code that actually executes —
+  `ComponentValidator::validateChassisBayStorage():1024-1029` — accepts a 2.5" drive in a
+  3.5" bay via a caddy and treats it as a warning. Legacy's count/overflow branch is
+  documented dead code, so legacy never blocks on capacity either. **Flipping `enforce`
+  would have started rejecting 2.5" drives into 3.5" chassis that succeed today.** Fixed:
+  2.5" now falls back to 3.5" bays, blocking only when no eligible bay exists; overflow is
+  reported non-blocking for the post-cutover tightening pass.
+- **1 row** — engine allowed a 2.5"-into-no-bays add that legacy blocked.
+  `storage.caddy_pairing` is `VALIDATION_FAILURE`, which by design does not block at ADD
+  ([Verdict.php:44-48]) and re-blocks at finalize. Expected to resolve with the above.
+- **1 row still unexplained** (`a84cc492`, 07-23 00:19:42): legacy blocked
+  "Incompatible with existing components", engine passed all 16 rules. **Undiagnosable**
+  — `ShadowRunner::record()` never logged *which component* the operation was about. Fixed
+  going forward (optional `subject` field); needs fresh traffic to identify.
+
+**F-8, affects gate validity:** the engine shadow log contains adjacent byte-identical
+duplicate rows (39 lines → 18 distinct; 30 → 17). `parity_report.php` counts them as
+separate operations, so `operations_compared` is inflated ~2x. Not yet traced.
+
+**COMMAND_LAYER's shadow soak is entirely unverified** — `command-*.jsonl` has no gating
+report consuming it at all, despite being the log that *does* record component type.
 
 ## Open items before `enforce` (small, tracked)
 
@@ -72,13 +105,22 @@ not skip any verification step.
 
 ## Owner-only actions (cannot be done from the code environment)
 
-1. Flip `STATE_MACHINE_ENABLED=shadow` in production `.env` (VS Code SFTP save). **Do this first.**
-2. Confirm seeders `2026_07_21_002` and `2026_07_22_004` are applied.
-3. Export a fresh post-seeder production dump for the P2 gate re-run.
-4. Run the report battery against production at each gate (needs live DB access).
+1. ~~Flip `STATE_MACHINE_ENABLED=shadow`~~ — **done 2026-07-22, verified holding.**
+2. **Pull fresh `reports/shadow/engine-*.jsonl` + `command-*.jsonl` from production**
+   *after* the 2026-07-25 rule fix deploys. This is now the top-priority action: without
+   traffic that exercises the corrected rule, parity cannot go green. Do not rename the
+   files on download — `(1)`-suffixed duplicates get double-counted on a default run.
+3. Confirm seeders `2026_07_21_002` and `2026_07_22_004` are applied.
+4. Export a fresh post-seeder production dump for the P2 gate re-run.
+5. Run the report battery against production at each gate (needs live DB access).
 
 ## Recommendation
 
-The project is worth finishing — the hard part is built and proven. Pick the risk
-posture (full soak vs compressed), then **start the state-machine shadow clock today**.
-Either way the remaining work is a known checklist, not open-ended development.
+The project is worth finishing — the hard part is built and proven, and the shadow clock
+is already running. Take the **compressed-soak** path: on this fleet's traffic volume the
+extra calendar days add little evidence, so the honest trade is small.
+
+The gating work is no longer waiting — it is: get fresh shadow logs after the 07-25 rule
+fix, confirm the 7 bay-capacity rows go green, identify the last unexplained row, and
+build the missing command-layer parity report. That is a known checklist measured in
+sessions, not weeks.

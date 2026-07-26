@@ -109,7 +109,20 @@ function ruleFailedOnRow(string $ruleId, array $row): bool {
 }
 
 /**
- * @return array{operations_compared:int, identical:int, expected:array, unexplained:array, exceptions:int, rule_coverage:array}
+ * F-8: one add-component request emits TWO shadow rows — server_api.php's
+ * unlocked 'advisory' pre-check and addComponent()'s locked 'authoritative'
+ * re-check (see ShadowRunner::record()). Only the authoritative one is a real
+ * enforcement decision, so advisory rows are excluded from the comparison and
+ * counted separately; otherwise every metric derived from operations_compared
+ * is inflated ~2x.
+ *
+ * Rows written before the phase field existed (2026-07-26) carry no 'phase'
+ * key. They are still analyzed — dropping them would silently discard the whole
+ * pre-fix soak — but they are counted as 'unlabeled' and warned about loudly,
+ * because within that era a duplicate and a genuine second add are
+ * indistinguishable by construction.
+ *
+ * @return array{operations_compared:int, identical:int, expected:array, unexplained:array, exceptions:int, rule_coverage:array, advisory_excluded:int, unlabeled:int}
  */
 function analyze(array $rows, array $expectedDiffs): array {
     $identical = 0;
@@ -117,8 +130,21 @@ function analyze(array $rows, array $expectedDiffs): array {
     $unexplained = [];
     $exceptions = 0;
     $ruleCoverage = []; // rule_id => fired count
+    $advisoryExcluded = 0;
+    $unlabeled = 0;
+    $compared = 0;
 
     foreach ($rows as $row) {
+        $phase = $row['phase'] ?? null;
+        if ($phase === 'advisory') {
+            $advisoryExcluded++;
+            continue;
+        }
+        if ($phase === null) {
+            $unlabeled++;
+        }
+        $compared++;
+
         foreach ($row['results'] ?? [] as $r) {
             $ruleId = $r['rule_id'] ?? 'unknown';
             if ($ruleId === 'engine.rule_exception' || $ruleId === 'engine.build_exception') {

@@ -451,6 +451,13 @@ function handleAddComponent($serverBuilder, $user) {
                 }
 
                 // Advisory pre-check; authoritative check runs under FOR UPDATE inside addComponent()
+                //
+                // F-8 (2026-07-26): the trailing 'advisory' labels the shadow row
+                // this evaluation emits. Both this call and addComponent()'s locked
+                // re-invocation record to reports/shadow/engine-*.jsonl; unlabeled
+                // they were byte-identical, so parity_report.php counted ONE
+                // operation as two. Only the authoritative row is a real
+                // enforcement decision — see ShadowRunner::record().
                 $validationResult = $serverBuilder->validateComponentAddition(
                     $configUuid,
                     $componentType,
@@ -459,7 +466,8 @@ function handleAddComponent($serverBuilder, $user) {
                     $config->getData(),
                     $parentNicUuid,
                     $portIndex,
-                    $quantity
+                    $quantity,
+                    'advisory'
                 );
 
                 if (!$validationResult['success']) {

@@ -4793,8 +4793,17 @@ class ServerBuilder {
      * statements, so comparing engine-vs-legacy verdicts for the SAME
      * operation requires capturing legacy's actual return value, not just
      * the state at method entry.
+     *
+     * $shadowPhase (F-8, 2026-07-26) labels the shadow row this call emits.
+     * One add-component request reaches this method TWICE — server_api.php's
+     * pre-transaction pre-check ('advisory', unlocked snapshot) and the
+     * re-invocation from addComponent() below ('authoritative', under
+     * SELECT ... FOR UPDATE). Defaults to 'authoritative' because the call at
+     * :835 is the deciding one; only the advisory caller overrides it. See
+     * ShadowRunner::record() for why the unlabeled rows inflated the parity
+     * gate's operations_compared ~2x.
      */
-    public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1) {
+    public function validateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1, $shadowPhase = 'authoritative') {
         require_once __DIR__ . '/../validation/ValidationEngine.php';
 
         $mode = ValidationEngine::mode();
@@ -4846,7 +4855,10 @@ class ServerBuilder {
 
         $legacyBlocked = empty($legacyResult['success']);
         $legacyClass = $legacyBlocked ? ($legacyResult['message'] ?? 'unknown') : 'none';
-        ShadowRunner::record($configUuid, 'add', $legacyBlocked, $legacyClass, $verdict);
+        ShadowRunner::record($configUuid, 'add', $legacyBlocked, $legacyClass, $verdict, [
+            'component_type' => $componentType,
+            'component_uuid' => $componentUuid,
+        ], $shadowPhase);
 
         if ($mode === 'shadow') {
             return $legacyResult;

@@ -260,7 +260,17 @@ if ($pdo === null) {
             $chBayCmd = new ReplaceComponentCommand($pdo, $chBayConfigUuid, 'chassis', $chASpecUuid, null, $chB['UUID'], [], 0);
             $chBayVerdict = $chBayCmd->dryRun();
             $chBayFailedRules = array_map(function ($r) { return $r->ruleId(); }, $chBayVerdict->failures());
-            check('chassis A(16x 2.5" bays)->B(0x 2.5" bays) replace blocks on storage.bay_capacity [in-transaction fixture]', in_array('storage.bay_capacity', $chBayFailedRules, true));
+            $chBayEvaluated = array_map(function ($r) { return $r->ruleId(); }, $chBayVerdict->results());
+            // Corrected 2026-07-25 (shadow-parity finding). Chassis B carries 12x 3.5"
+            // bays, and legacy (ComponentValidator::validateChassisBayStorage():1024-1029)
+            // accepts a 2.5" drive in a 3.5" bay via a caddy adapter. Asserting a block
+            // here encoded the pre-correction "strict, no-adapter" reading of the rule and
+            // is the same divergence that showed up on 7 production shadow rows. The
+            // property this scenario actually exists to prove -- that replacing the chassis
+            // RE-EVALUATES bay capacity against the new chassis rather than the old one --
+            // is asserted directly below instead of via the (wrong) blocking outcome.
+            check('chassis A->B replace re-evaluates storage.bay_capacity against the NEW chassis [in-transaction fixture]', in_array('storage.bay_capacity', $chBayEvaluated, true));
+            check('chassis A(16x 2.5")->B(0x 2.5", 12x 3.5") replace is ALLOWED -- 2.5" drive fits a 3.5" bay with a caddy (legacy parity)', !in_array('storage.bay_capacity', $chBayFailedRules, true));
         }
     } finally {
         if ($pdo->inTransaction()) {

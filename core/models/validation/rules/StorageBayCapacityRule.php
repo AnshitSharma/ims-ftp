@@ -15,10 +15,22 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * concept). Unified into one row-count check against
  * ResourceCatalog::chassisDriveBayRows() (added this unit).
  *
- * "2.5/3.5 strict matching preserved exactly" (pack checklist): a 2.5"
- * drive can ONLY occupy a drive_bay_2_5 resource row, never drive_bay_3_5,
- * matching ComponentCompatibility.php:3193-3200's STRICT (no-adapter)
- * comment. M.2/U.2 storage bypasses bay validation entirely (both spellings
+ * CORRECTED 2026-07-25 (shadow-parity finding, 8 divergent rows): this rule
+ * previously implemented "2.5/3.5 strict matching" on the authority of
+ * ComponentCompatibility.php:3193-3200's STRICT (no-adapter) comment, and
+ * blocked whenever drive count exceeded bay capacity. Both were wrong against
+ * the legacy code that actually RUNS:
+ *   - ComponentValidator::validateChassisBayStorage():1024-1029 explicitly
+ *     ACCEPTS a 2.5" drive in a 3.5" bay (caddy adapter) and records it as a
+ *     WARNING, not an issue. 2.5" therefore falls back to drive_bay_3_5.
+ *   - Legacy blocks on bay TYPE availability only (":983-987" no bays at all,
+ *     ":1032-1035" no bay type supports this form factor). Its count-based
+ *     branch (ComponentCompatibility.php:4696-4715) is documented dead code --
+ *     $usedBays is never populated -- so legacy never blocks on overflow.
+ * Overflow is therefore reported as a passing result carrying details, so the
+ * signal survives for the post-cutover tightening pass without diverging from
+ * legacy at enforce. 3.5" drives get NO 2.5" fallback (legacy has no such
+ * branch). M.2/U.2 storage bypasses bay validation entirely (both spellings
  * of "2.5"/"3.5" are excluded by definition since neither substring matches).
  */
 final class StorageBayCapacityRule implements RuleInterface
@@ -69,19 +81,42 @@ final class StorageBayCapacityRule implements RuleInterface
             // M.2/U.2/unknown: bypasses bay validation (matches legacy exactly).
         }
 
+        // Eligible bay pools per form factor. A 2.5" drive may occupy a 3.5" bay
+        // via a caddy adapter (ComponentValidator.php:1024-1029); a 3.5" drive
+        // has no equivalent fallback.
+        $eligible = [
+            'drive_bay_2_5' => ['drive_bay_2_5', 'drive_bay_3_5'],
+            'drive_bay_3_5' => ['drive_bay_3_5'],
+        ];
+
+        $overflow = [];
         foreach ($counts as $resource => $count) {
             if ($count === 0) {
                 continue;
             }
             $capacity = 0;
-            foreach ($state->byResource($resource) as $row) {
-                $capacity += (int)$row['capacity'];
+            foreach ($eligible[$resource] as $pool) {
+                foreach ($state->byResource($pool) as $row) {
+                    $capacity += (int)$row['capacity'];
+                }
+            }
+            // Legacy's only blocking condition: no bay of any eligible type exists.
+            if ($capacity === 0) {
+                return new RuleResult($this->id(), $this->severity(), false,
+                    "No chassis bay supports $resource storage",
+                    ['resource' => $resource, 'count' => $count, 'capacity' => 0]);
             }
             if ($count > $capacity) {
-                return new RuleResult($this->id(), $this->severity(), false,
-                    "Insufficient $resource bays: $count drive(s) need accommodation, chassis has $capacity",
-                    ['resource' => $resource, 'count' => $count, 'capacity' => $capacity]);
+                $overflow[] = ['resource' => $resource, 'count' => $count, 'capacity' => $capacity];
             }
+        }
+
+        if (!empty($overflow)) {
+            // Non-blocking on purpose: legacy's count check is dead code. Retained
+            // as a passing result so the tightening pass has the data.
+            return new RuleResult($this->id(), $this->severity(), true,
+                'Bay type available for all 2.5"/3.5" storage; capacity oversubscribed (legacy does not block)',
+                ['overflow' => $overflow]);
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'Bay capacity sufficient for all 2.5"/3.5" storage');

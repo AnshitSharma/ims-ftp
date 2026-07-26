@@ -206,7 +206,7 @@ if (!function_exists('refreshJWTToken')) {
         if (!$token) {
             return false;
         }
-        
+
         return JWTHelper::refreshToken($token);
     }
 }

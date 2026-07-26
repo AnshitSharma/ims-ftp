@@ -22,7 +22,37 @@ final class ShadowRunner
      * calls this after running both sides so the row always carries a real
      * comparison, never a one-sided placeholder).
      */
-    public static function record(string $configUuid, string $op, bool $legacyBlocked, string $legacyClass, Verdict $verdict): void
+    /**
+     * $subject (optional, added 2026-07-25) identifies the component the
+     * operation was about: ['component_type' => ..., 'component_uuid' => ...].
+     * Without it a divergent row records only that legacy and the engine
+     * disagreed on some config, with no way to reproduce which add caused it —
+     * this cost a full parity investigation on row a84cc492/2026-07-23. Kept
+     * optional so this file can deploy ahead of its caller without a window
+     * where the old call signature fatals.
+     *
+     * $phase (optional, added 2026-07-26 — closes finding F-8) says WHICH of
+     * the two per-request evaluations produced this row. One add-component
+     * request evaluates validateComponentAddition() TWICE by design:
+     *   1. 'advisory'      — api/handlers/server/server_api.php's pre-transaction
+     *                        pre-check, against an UNLOCKED snapshot (its own
+     *                        comment calls the verdict advisory only).
+     *   2. 'authoritative' — re-invoked inside ServerBuilder::addComponent()
+     *                        AFTER lockAndLoadConfigRow() takes SELECT ... FOR
+     *                        UPDATE. This is the verdict that actually decides
+     *                        the operation, and the only one enforce would act on.
+     * Both are real evaluations and both are worth keeping (a difference between
+     * them IS the TOCTOU drift the lock exists to catch), but before this field
+     * existed they serialized byte-identically, so parity_report.php counted one
+     * operation as two and inflated operations_compared ~2x. Proven by
+     * cross-correlating reports/shadow/command-20260723.jsonl (written ONCE per
+     * request) against engine-20260723.jsonl: every command row's timestamp maps
+     * to exactly one byte-identical engine PAIR.
+     *
+     * Defaults to 'authoritative' so that this file may deploy ahead of its
+     * callers: the pre-existing 6-argument call site is the authoritative one.
+     */
+    public static function record(string $configUuid, string $op, bool $legacyBlocked, string $legacyClass, Verdict $verdict, array $subject = [], string $phase = 'authoritative'): void
     {
         $dir = self::reportsDir();
         if (!is_dir($dir)) {
@@ -34,6 +64,11 @@ final class ShadowRunner
             'ts' => date('c'),
             'config_uuid' => $configUuid,
             'op' => $op,
+            'phase' => $phase,
+            'subject' => [
+                'component_type' => $subject['component_type'] ?? null,
+                'component_uuid' => $subject['component_uuid'] ?? null,
+            ],
             'trigger' => $verdict->trigger(),
             'legacy' => [
                 'blocked' => $legacyBlocked,
