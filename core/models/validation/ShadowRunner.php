@@ -62,6 +62,23 @@ final class ShadowRunner
 
         $row = [
             'ts' => date('c'),
+            // Which SAPI produced this row. [F-23]
+            //
+            // These files accumulate rows from two completely different sources:
+            // real production requests (litespeed) and local harness replays --
+            // fleet_parity_sweep, characterize_compatibility, before/after probes --
+            // which run under cli. Nothing distinguished them, so a default
+            // parity_report run analysed both as production traffic: on 2026-07-27
+            // the shadow directory held ~432 local rows against ~132 production ones,
+            // i.e. a "GREEN over N operations" claim in which most of N was the test
+            // suite talking to itself. Same family as F-8 (double-counted rows) and
+            // the duplicate-input-file inflation: the verdicts were never wrong, the
+            // denominator was.
+            //
+            // PHP_SAPI is used rather than APP_ENV because it cannot be forgotten or
+            // misconfigured -- production serves under litespeed and never cli, and a
+            // harness run is always cli.
+            'sapi' => PHP_SAPI,
             'config_uuid' => $configUuid,
             'op' => $op,
             'phase' => $phase,

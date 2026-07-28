@@ -1,0 +1,60 @@
+{
+  "_comment": "Expected COMMAND-LAYER shadow-parity diffs, consumed by scripts/verify/command_parity_report.php (created 2026-07-27). Sibling of expected_diffs.json, which covers the ENGINE_MODE stream (reports/shadow/engine-*.jsonl); this file covers the COMMAND_LAYER stream (reports/shadow/command-*.jsonl). An entry matches a row when legacy_blocked/command_blocked equal the row's values, the cited rule_id is among the row's command_failures, and (if 'op' is present) the op matches. Every entry must cite an audit finding id. Scope is add+remove only: replace-component and transition-status are v2-only actions with no legacy counterpart.",
+  "_note_why_the_add_entries_mirror_expected_diffs": "AddComponentCommand evaluates the SAME ValidationEngine rule registry that ServerBuilder's ENGINE_MODE hook does, so every audit-approved engine-vs-legacy divergence reappears in the command stream. The six add-side entries below are therefore the same six classes as expected_diffs.json's entries, restated with command_blocked instead of engine_blocked -- NOT independent approvals. If an entry is ever added to or removed from expected_diffs.json, mirror it here. Confirmed against real production rows: command-20260723.jsonl contains cpu.requires_board (legacy blocked, command allowed) and pcie.lane_budget (legacy allowed, command blocked) exactly as these entries describe.",
+  "_note_storage_bay_capacity_deliberately_absent": "storage.bay_capacity is NOT an expected diff. The 2026-07-25 session found the rule was harsher than the legacy code that actually executes (ComponentValidator::validateChassisBayStorage():1024-1029 accepts a 2.5in drive in a 3.5in bay via a caddy and only warns) and corrected the rule to match. Any post-2026-07-25 bay_capacity divergence is a REGRESSION and must surface as unexplained -- do not add an entry to silence it.",
+  "entries": [
+    {
+      "rule_id": "dependency.blocked_removal",
+      "audit_finding": "R-1",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "op": "remove",
+      "_why": "U-R.8 (audit R-1). Legacy ServerBuilder::removeComponent()'s ONLY dependency check is nic->sfp, so removing a motherboard or chassis silently strands the cpu/ram/cards that depend on it -- the defect the owner reported. DependencyBlockedRemovalRule blocks that removal instead, offering cascade=true. This divergence is the intended fix, not a defect: at COMMAND_LAYER_ENABLED=enforce a removal that legacy silently allowed now returns a dependency_blocked error with a cascade hint. Observed live in command-20260722.jsonl (chassis removal, cascade=false)."
+    },
+    {
+      "rule_id": "cpu.socket_count",
+      "audit_finding": "A-2",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "_why": "Mirrors expected_diffs.json's cpu.socket_count entry -- same rule, same audit finding, evaluated through AddComponentCommand instead of the ENGINE_MODE hook."
+    },
+    {
+      "rule_id": "cpu.requires_board",
+      "audit_finding": "A-12",
+      "legacy_blocked": true,
+      "command_blocked": false,
+      "_why": "Mirrors expected_diffs.json's cpu.requires_board entry (the ERROR->VALIDATION_FAILURE relaxation, which by design does not block at ADD and re-blocks at finalize). Observed live in command-20260723.jsonl at 00:19:27."
+    },
+    {
+      "rule_id": "memory.slot_count",
+      "audit_finding": "D4",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "_why": "Mirrors expected_diffs.json's memory.slot_count entry."
+    },
+    {
+      "rule_id": "pcie.slot_placement",
+      "audit_finding": "A-8",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "_why": "Mirrors expected_diffs.json's pcie.slot_placement entry."
+    },
+    {
+      "rule_id": "pcie.lane_budget",
+      "audit_finding": "A-9",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "_why": "Mirrors expected_diffs.json's pcie.lane_budget entry. Observed live in command-20260723.jsonl on hbacard, pciecard and storage adds."
+    },
+    {
+      "rule_id": "storage.m2_capacity",
+      "audit_finding": "A-10",
+      "legacy_blocked": false,
+      "command_blocked": true,
+      "_why": "Mirrors expected_diffs.json's storage.m2_capacity entry."
+    }
+  ],
+  "_note_onboard_nic_fail_closed": "Deliberately NOT an entries row -- same posture as expected_diffs.json's identically-named note. AddComponentCommand::apply()'s fail-closed onboard-NIC materialization throws CommandFailed('onboard_nic_failed'), which is not a rule verdict and emits no rule_id, so a fabricated matcher could never match it. In the command shadow stream it would appear as dry_run_failed rather than as a diff. Approved deliberate behavior change; see migration/handoffs/U-B.4-SIGNOFF-20260721.md.",
+  "_note_storage_caddy_pairing_rides_along": "storage.caddy_pairing is VALIDATION_FAILURE severity, which per Verdict::blocking() does not block at ADD (only at VALIDATE/FINALIZE). It therefore appears inside command_failures on rows whose diff was actually caused by another rule (e.g. pcie.lane_budget) without being the cause itself. It needs no entry of its own: the matcher requires the CITED rule to be among the failures, and the co-occurring blocking rule is what earns the match.",
+  "_note_legacy_unknown_rows": "Every remove row written before 2026-07-27 carries no legacy_blocked at all -- the old inline writer logged from inside `if ($commandVerdict->blocking())`, i.e. BEFORE ServerBuilder::removeComponent() had run, so legacy's outcome was unknowable at write time and agreement was indistinguishable from divergence. command_parity_report.php counts those rows as legacy_unknown and excludes them from the comparison rather than guessing. They cannot be recovered retroactively; only post-fix traffic can."
+}

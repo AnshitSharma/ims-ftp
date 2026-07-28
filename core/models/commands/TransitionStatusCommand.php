@@ -83,7 +83,16 @@ final class TransitionStatusCommand extends BaseCommand
 
         foreach ($target->components() as $c) {
             if (($c['status_v2'] ?? null) === 'allocated' && $c['inventory_table'] !== null && $c['spec_uuid'] !== null) {
-                StateMachine::applyInventoryTransition($pdo, $c['inventory_table'], $c['spec_uuid'], 'installed', $c['serial_number']);
+                // inventory_id is the unit identity; spec_uuid alone is the MODEL and
+                // serial_number is legitimately NULL for a serial-less unit. [F-22]
+                StateMachine::applyInventoryTransition(
+                    $pdo,
+                    $c['inventory_table'],
+                    $c['spec_uuid'],
+                    'installed',
+                    $c['serial_number'],
+                    isset($c['inventory_id']) ? (int)$c['inventory_id'] : null
+                );
             }
         }
     }

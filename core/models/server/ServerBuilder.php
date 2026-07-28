@@ -5,6 +5,7 @@ require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
 require_once __DIR__ . '/../chassis/ChassisManager.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/ServerConfiguration.php';
+require_once __DIR__ . '/../config/ConfigReadRouter.php';
 
 class ServerBuilder {
 
@@ -25,6 +26,9 @@ class ServerBuilder {
      * read/display paths keep the graceful degradation.
      */
     private $strictJsonDecode = false;
+
+    /** F-17: null = not yet probed. See hasCompatibilityScoreColumn(). */
+    private $hasCompatibilityScoreColumn = null;
 
     const MAX_ADD_QUANTITY = 128;
 
@@ -483,13 +487,30 @@ class ServerBuilder {
             $rackPosition = $options['rack_position'] ?? '';
             $isVirtual = $options['is_virtual'] ?? 0;
 
+            // status_v2 is written in the SAME statement as configuration_status. [F-21]
+            //
+            // It was omitted here, so every configuration created since seeder
+            // 2026_07_10_001 added the column was born with status_v2 NULL -- 8 of the
+            // 12 configurations in production on 2026-07-27, INCLUDING ALL FIVE
+            // physical ones. StateMachine::assertConfigTransition() fails closed on
+            // NULL ("status_v2 not yet populated for this config"), so the entire real
+            // fleet was untransitionable through the state machine and would have
+            // stayed so through P3's soak and any enforce cutover.
+            //
+            // StatusMap::CONFIG_LEGACY_TO_V2[0] is the mapping for the literal 0 this
+            // INSERT writes into configuration_status; they must not be able to drift.
             $stmt = $this->pdo->prepare("
                 INSERT INTO server_configurations
-                (config_uuid, server_name, description, location, rack_position, created_by, created_at, updated_at, configuration_status, is_virtual)
-                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?)
+                (config_uuid, server_name, description, location, rack_position, created_by, created_at, updated_at, configuration_status, status_v2, is_virtual)
+                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, ?)
             ");
 
-            $stmt->execute([$configUuid, $serverName, $description, $location, $rackPosition, $createdBy, $isVirtual]);
+            require_once(__DIR__ . '/../state/StatusMap.php');
+            $stmt->execute([
+                $configUuid, $serverName, $description, $location, $rackPosition, $createdBy,
+                StatusMap::CONFIG_LEGACY_TO_V2[0],
+                $isVirtual
+            ]);
 
             return $configUuid;
 
@@ -1154,6 +1175,38 @@ class ServerBuilder {
 
                 if (($onboardNICResult['count'] ?? 0) > 0) {
                     $response['onboard_nics_added'] = $onboardNICResult;
+
+                    // F-13 (2026-07-27): onboard NICs were the dual-write's blind
+                    // spot. The afterLegacyAdd() call above mirrors the MOTHERBOARD;
+                    // autoAddOnboardNICs() then creates nicinventory rows and
+                    // rewrites the legacy nic_config JSON, but nothing ever told the
+                    // rows store, so config_components held ZERO nic rows while the
+                    // legacy blob listed them -- equivalence_report RED on every
+                    // config with an onboard NIC (a84cc492, cbd00521, e7e50504 as of
+                    // the 2026-07-26 dump). Mirroring here keeps both stores in the
+                    // motherboard's own transaction: a writer failure propagates and
+                    // rolls the whole motherboard add back, which is the same
+                    // fail-closed posture as the onboard-NIC error branch above.
+                    require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+                    foreach ($onboardNICResult['nics'] as $onboardNic) {
+                        if (empty($onboardNic['inventory_id'])) {
+                            // A 'replaced' port is skipped by the handler and never
+                            // carries identity; nothing to mirror.
+                            continue;
+                        }
+                        ConfigComponentWriter::afterLegacyAdd(
+                            $this->pdo,
+                            $configUuid,
+                            'nic',
+                            $onboardNic['uuid'],
+                            $onboardNic['serial_number'] ?? null,
+                            null, // onboard ports occupy no PCIe slot
+                            $onboardNic['inventory_table'] ?? 'nicinventory',
+                            $onboardNic['inventory_id'],
+                            0,
+                            null  // parent resolves via server_configurations.motherboard_uuid
+                        );
+                    }
                 }
             }
 
@@ -1433,6 +1486,27 @@ class ServerBuilder {
                         'message' => 'Could not detach this motherboard\'s onboard NICs. '
                                    . 'The component was not removed.'
                     ];
+                }
+
+                // F-13 (2026-07-27): mirror the detach into the rows store. The
+                // children are tombstoned BEFORE the motherboard's own hook below
+                // runs -- a soft tombstone does not cascade to parent_id children
+                // (see ConfigComponentWriter::cleanupLedgerForRemove's note on
+                // ON DELETE CASCADE not firing for the removed_at UPDATE), so
+                // without this the nic rows would outlive the board that hosted
+                // them. Same is_virtual guard and same transaction as that hook.
+                if (!(bool)($config['is_virtual'] ?? 0)) {
+                    require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+                    foreach (($removeResult['detached_rows'] ?? []) as $detachedNic) {
+                        ConfigComponentWriter::afterLegacyRemove(
+                            $this->pdo,
+                            $configUuid,
+                            'nic',
+                            $detachedNic['UUID'],
+                            $detachedNic['SerialNumber'],
+                            0
+                        );
+                    }
                 }
             }
 
@@ -2696,8 +2770,26 @@ class ServerBuilder {
                 ];
             }
 
-            // Extract components from JSON columns using helper method
-            $components = $this->extractComponentsFromJson($configData);
+            // U-X.1: the ONE routed read entrypoint. READ_FROM_ROWS decides the
+            // source (off = this JSON extraction verbatim, sample = compare both and
+            // still return legacy, on = config_components rows mapped to this shape).
+            // The cache check above short-circuits before this line, so a cached read
+            // never reaches the router and no mode can poison a cache entry.
+            //
+            // MUTATION-PATH CALLERS THAT STAY DIRECT (until U-D.3 drops the JSON
+            // columns) -- 13 in this file, verified by grep at the time of writing:
+            // 1313, 1665, 3892, 4438, 4608, 5092, 5110, 5123, 5305, 5663, 6133, 7605,
+            // 8900, plus api/handlers/server/server_api.php:1313,
+            // and the analysis-only readers (TargetStateBuilder, fleet_parity_sweep,
+            // characterize_compatibility, serverstate_equivalence, Extractor,
+            // audit-orphans). Those are add/remove/validate/finalize paths and
+            // harnesses; routing them is a separate unit's decision, not a side effect
+            // of this one. getConfigComponents() (5871) is deliberately NOT routed --
+            // U-X.1-PLAN-20260712.md §2 established it is a second, independent
+            // JSON decoder used only by the virtual-config import mutation, with a
+            // different output shape ('uuid' not 'component_uuid'), no name
+            // enrichment, and it silently drops onboard NICs and SFPs.
+            $components = ConfigReadRouter::components($this, $this->pdo, $configData);
 
             // Build simplified component information
             $componentDetails = [];
@@ -3193,7 +3285,11 @@ class ServerBuilder {
             $storageValidator = new StorageConnectionValidator($this->pdo);
             $existingComponents = $this->getExistingComponentsForValidation($configUuid);
 
-            $validation = $storageValidator->validate($configUuid, $storageUuid, $existingComponents);
+            $validation = $storageValidator->validate(
+                $configUuid,
+                $storageUuid,
+                $this->existingComponentsExcludingStorage($existingComponents, $storageUuid)
+            );
 
             if ($validation['valid'] && isset($validation['primary_path'])) {
                 $path = $validation['primary_path'];
@@ -3561,7 +3657,18 @@ class ServerBuilder {
             // A-L2: $compatibilityScore was silently dropped -- callers passed it but the
             // signature only accepted two parameters. Persist it when the caller computed
             // one; leave the stored value untouched when it could not be derived.
-            if ($compatibilityScore !== null) {
+            // F-17 (2026-07-27): A-L2 made $compatibilityScore effectively ALWAYS
+            // non-null, so this branch always ran -- but production's
+            // server_configurations has no compatibility_score column (it exists
+            // only on compatibility_log/component_compatibility). The UPDATE
+            // therefore failed with 1054 and, because power_consumption rides in
+            // the SAME statement, POWER STOPPED BEING WRITTEN TOO. The catch below
+            // logged "Error updating calculated fields" and the add/remove still
+            // reported success, so it was silent. Seeder
+            // 2026_07_27_002 adds the column; this probe keeps power correct
+            // whether or not that seeder has been applied yet, since seeders are
+            // run by hand.
+            if ($compatibilityScore !== null && $this->hasCompatibilityScoreColumn()) {
                 $sql = "UPDATE server_configurations
                         SET power_consumption = ?, compatibility_score = ?, updated_at = NOW()
                         WHERE config_uuid = ?";
@@ -3577,6 +3684,27 @@ class ServerBuilder {
         } catch (Exception $e) {
             error_log("Error updating calculated fields: " . $e->getMessage());
         }
+    }
+
+    /**
+     * F-17: does server_configurations carry a compatibility_score column?
+     * Probed once per request (same SHOW COLUMNS idiom this class already uses
+     * for server_configuration_history) so a missing column degrades to "write
+     * power only" instead of losing the whole UPDATE.
+     */
+    private function hasCompatibilityScoreColumn() {
+        if ($this->hasCompatibilityScoreColumn !== null) {
+            return $this->hasCompatibilityScoreColumn;
+        }
+
+        try {
+            $stmt = $this->pdo->query("SHOW COLUMNS FROM server_configurations LIKE 'compatibility_score'");
+            $this->hasCompatibilityScoreColumn = ($stmt !== false && $stmt->fetch() !== false);
+        } catch (Exception $e) {
+            $this->hasCompatibilityScoreColumn = false;
+        }
+
+        return $this->hasCompatibilityScoreColumn;
     }
     
     /**
@@ -7939,7 +8067,11 @@ class ServerBuilder {
                 $usedBays = (int)$bayModel['used'];
 
                 foreach ($componentsByType['storage'] as $storage) {
-                    $validation = $storageValidator->validate($configUuid, $storage['component_uuid'], $existingComponents);
+                    $validation = $storageValidator->validate(
+                        $configUuid,
+                        $storage['component_uuid'],
+                        $this->existingComponentsExcludingStorage($existingComponents, $storage['component_uuid'])
+                    );
                     if ($validation['valid'] && isset($validation['primary_path']) && $validation['primary_path']['type'] === 'chassis_bay') {
                         $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
                         $backplaneStorageList[] = [
@@ -8058,7 +8190,11 @@ class ServerBuilder {
             $caddiesNeeded = []; // Track which storage devices need caddies
 
             foreach ($componentsByType['storage'] as $storage) {
-                $validation = $storageValidator->validate($configUuid, $storage['component_uuid'], $existingComponents);
+                $validation = $storageValidator->validate(
+                    $configUuid,
+                    $storage['component_uuid'],
+                    $this->existingComponentsExcludingStorage($existingComponents, $storage['component_uuid'])
+                );
 
                 // Create simplified storage connection entry
                 $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
@@ -8712,6 +8848,49 @@ class ServerBuilder {
     /**
      * Get existing components formatted for validation
      */
+    /**
+     * Existing components as StorageConnectionValidator::validate() expects them when the
+     * drive in question is ALREADY installed: with one entry of that drive removed.
+     *
+     * validate() answers "can this drive be ADDED to this configuration?", so the candidate
+     * is by definition not part of $existing. Describe-time callers (the drive-bay display and
+     * the finalize-time connection report) ask that same question about a drive that IS already
+     * in the config, so passing the config unchanged made checkBayAvailability() count the
+     * candidate twice: an exactly-full chassis reported "N in use, cannot add 1 more",
+     * validate() returned valid=false, and computeStorageConnectionPath() degraded the drive to
+     * 'not_connected' — which is why installed drives never appeared in a bay. [F-19]
+     *
+     * Removes exactly ONE entry (or decrements one unit of a quantity-N entry), so a second
+     * identical drive still occupies its own bay.
+     *
+     * @param array  $existing    Output of getExistingComponentsForValidation()
+     * @param string $storageUuid The drive being described
+     * @return array
+     */
+    private function existingComponentsExcludingStorage(array $existing, $storageUuid) {
+        if (empty($existing['storage']) || !is_array($existing['storage'])) {
+            return $existing;
+        }
+
+        $kept = [];
+        $removed = false;
+        foreach ($existing['storage'] as $entry) {
+            if (!$removed && is_array($entry) && ($entry['component_uuid'] ?? null) === $storageUuid) {
+                $qty = max(1, (int)($entry['quantity'] ?? 1));
+                if ($qty > 1) {
+                    $entry['quantity'] = $qty - 1;
+                    $kept[] = $entry;
+                }
+                $removed = true;
+                continue;
+            }
+            $kept[] = $entry;
+        }
+
+        $existing['storage'] = $kept;
+        return $existing;
+    }
+
     private function getExistingComponentsForValidation($configUuid) {
         $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
         $stmt->execute([$configUuid]);

@@ -87,22 +87,86 @@ class StateMachine
     }
 
     /**
-     * Is $to legal from this unit's current status_v2? Read-only.
-     * inventory_status_transitions carries no permission column, so there's
-     * nothing to check beyond edge existence.
-     * @return array{allowed: bool, reason: string}
+     * Resolve the ONE inventory row a caller means, or refuse. [F-22]
+     *
+     * A component UUID names a MODEL in this system, not a unit: many rows of the
+     * same {type}inventory table share it. SerialNumber is the only other identity
+     * these two methods accepted, and it is legitimately NULL (worn label, white-box
+     * part, pull -- AssetTag is the unit identity, see BaseFunctions::addComponent).
+     * So for a serial-less unit the old `WHERE UUID = ?` addressed the whole MODEL:
+     * assertInventoryTransition answered about whichever sibling LIMIT 1 returned,
+     * and applyInventoryTransition's UPDATE (no LIMIT) rewrote status_v2 + Status on
+     * EVERY unit of that model. Measured on the 2026-07-27 production dump: 15 model
+     * UUIDs cover 83 serial-less units (71 ram, 9 pciecard, 3 storage), so finalizing
+     * one config through TransitionStatusCommand could mark dozens of unrelated units
+     * "installed" -- the F-1 bug (deleting one config freed every unit sharing a model
+     * UUID) reappearing in the state machine.
+     *
+     * It was unreachable only by accident: assertConfigTransition() refuses every
+     * config whose status_v2 is NULL (F-21), which was all five physical configs, so
+     * TransitionStatusCommand::buildTarget() threw before apply() ever ran. Fixing
+     * F-21 removes that shield, which is why this is fixed in the same pass.
+     *
+     * Preference order: explicit inventory row id (config_components carries it) >
+     * UUID + serial > UUID alone, and UUID alone is accepted ONLY when it resolves to
+     * exactly one row. Genuine ambiguity is refused, never resolved by guessing --
+     * the same fail-closed posture as the legacy release path's ambiguity refusal.
+     *
+     * @return array{id: ?int, reason: ?string}
      */
-    public static function assertInventoryTransition(PDO $pdo, string $table, string $componentUuid, string $to, ?string $serialNumber = null): array
+    private static function resolveUnit(PDO $pdo, string $table, string $componentUuid, ?string $serialNumber, ?int $inventoryId): array
     {
+        if ($inventoryId !== null) {
+            $stmt = $pdo->prepare("SELECT ID FROM `$table` WHERE ID = ?");
+            $stmt->execute([$inventoryId]);
+            $id = $stmt->fetchColumn();
+            if ($id === false) {
+                return ['id' => null, 'reason' => "no $table row with ID $inventoryId"];
+            }
+            return ['id' => (int)$id, 'reason' => null];
+        }
+
         $where = 'UUID = ?';
         $params = [$componentUuid];
         if ($serialNumber !== null) {
             $where .= ' AND SerialNumber = ?';
             $params[] = $serialNumber;
         }
-
-        $stmt = $pdo->prepare("SELECT status_v2 FROM `$table` WHERE $where LIMIT 1");
+        $stmt = $pdo->prepare("SELECT ID FROM `$table` WHERE $where");
         $stmt->execute($params);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        if (count($ids) === 0) {
+            return ['id' => null, 'reason' => "component not found in $table"];
+        }
+        if (count($ids) > 1) {
+            return [
+                'id' => null,
+                'reason' => count($ids) . " units in $table share spec UUID $componentUuid and no unit identity "
+                    . "(inventory id or serial) was supplied -- refusing to transition a model"
+            ];
+        }
+        return ['id' => (int)$ids[0], 'reason' => null];
+    }
+
+    /**
+     * Is $to legal from this unit's current status_v2? Read-only.
+     * inventory_status_transitions carries no permission column, so there's
+     * nothing to check beyond edge existence.
+     *
+     * $inventoryId is the unambiguous identity and is preferred when the caller has
+     * it; it is optional and last so this file can deploy ahead of its callers. [F-22]
+     * @return array{allowed: bool, reason: string}
+     */
+    public static function assertInventoryTransition(PDO $pdo, string $table, string $componentUuid, string $to, ?string $serialNumber = null, ?int $inventoryId = null): array
+    {
+        $unit = self::resolveUnit($pdo, $table, $componentUuid, $serialNumber, $inventoryId);
+        if ($unit['id'] === null) {
+            return ['allowed' => false, 'reason' => $unit['reason']];
+        }
+
+        $stmt = $pdo->prepare("SELECT status_v2 FROM `$table` WHERE ID = ?");
+        $stmt->execute([$unit['id']]);
         $from = $stmt->fetchColumn();
         if ($from === false) {
             return ['allowed' => false, 'reason' => "component not found in $table"];
@@ -129,7 +193,7 @@ class StateMachine
      * status_v2 into its own existing UPDATE instead (same statement, zero
      * risk of the two columns committing separately).
      */
-    public static function applyInventoryTransition(PDO $pdo, string $table, string $componentUuid, string $to, ?string $serialNumber = null): void
+    public static function applyInventoryTransition(PDO $pdo, string $table, string $componentUuid, string $to, ?string $serialNumber = null, ?int $inventoryId = null): void
     {
         if (!$pdo->inTransaction()) {
             throw new RuntimeException('StateMachine::applyInventoryTransition requires an active transaction');
@@ -138,14 +202,18 @@ class StateMachine
             throw new InvalidArgumentException("Unknown inventory status_v2 value: $to");
         }
 
-        $legacy = StatusMap::INVENTORY_V2_TO_LEGACY[$to];
-        $where = 'UUID = ?';
-        $params = [$to, $legacy, $componentUuid];
-        if ($serialNumber !== null) {
-            $where .= ' AND SerialNumber = ?';
-            $params[] = $serialNumber;
+        // Address ONE unit, or refuse. See resolveUnit()'s docblock: this UPDATE used
+        // to carry the caller's UUID straight into its WHERE clause with no LIMIT, so
+        // a serial-less unit's transition rewrote every unit of that model. Throwing
+        // rolls the caller's command back, which is the correct outcome for an
+        // ambiguous write -- the same posture as the release path's ambiguity refusal.
+        $unit = self::resolveUnit($pdo, $table, $componentUuid, $serialNumber, $inventoryId);
+        if ($unit['id'] === null) {
+            throw new RuntimeException("StateMachine::applyInventoryTransition: " . $unit['reason']);
         }
 
-        $pdo->prepare("UPDATE `$table` SET status_v2 = ?, Status = ? WHERE $where")->execute($params);
+        $legacy = StatusMap::INVENTORY_V2_TO_LEGACY[$to];
+        $pdo->prepare("UPDATE `$table` SET status_v2 = ?, Status = ? WHERE ID = ?")
+            ->execute([$to, $legacy, $unit['id']]);
     }
 }

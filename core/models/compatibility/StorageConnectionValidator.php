@@ -241,6 +241,24 @@ class StorageConnectionValidator {
     }
 
     /**
+     * Does the configuration's chassis backplane itself carry SAS? [F-20]
+     *
+     * Reads chassis.backplane.supports_sas from ims-data — the same field CHECK 1
+     * uses to grant the chassis_bay path. Used to decide whether a SAS HBA is
+     * genuinely MANDATORY or merely one of several possible paths.
+     */
+    private function chassisBackplaneSupportsSas($existing) {
+        if (empty($existing['chassis']) || !isset($existing['chassis']['component_uuid'])) {
+            return false;
+        }
+        $chassisSpecs = $this->getChassisSpecs($existing['chassis']['component_uuid']);
+        if (!$chassisSpecs) {
+            return false;
+        }
+        return !empty($chassisSpecs['backplane']['supports_sas']);
+    }
+
+    /**
      * CHECK 1: Chassis Backplane Capability Check
      * Reads: chassis.backplane.supports_* from JSON
      */
@@ -535,7 +553,26 @@ class StorageConnectionValidator {
                 }
             }
 
-            // SAS storage but no HBA found - MANDATORY error
+            // A SAS BACKPLANE IS ITSELF A SAS PATH (fixed 2026-07-27, F-20).
+            // This gate declared an HBA mandatory for every SAS drive without ever
+            // consulting the chassis, so a SAS drive in a chassis whose ims-data
+            // backplane declares supports_sas:true was hard-errored with "SAS storage
+            // requires SAS HBA card" -- CHECK 1 had already produced a valid chassis_bay
+            // path, but this error made validate() return valid=false, which
+            // computeStorageConnectionPath() turns into 'not_connected', so the drive
+            // never appeared in a drive bay. Providing the SAS data path to the bays is
+            // the entire purpose of a SAS backplane. When the chassis provides it, the
+            // HBA path is merely UNAVAILABLE, not mandatory; the drive rides CHECK 1.
+            // This is the legacy twin of F-11 in StorageInterfacePathRule.
+            if ($this->chassisBackplaneSupportsSas($existing)) {
+                return [
+                    'available' => false,
+                    'mandatory' => false,
+                    'reason' => 'sas_path_provided_by_chassis_backplane'
+                ];
+            }
+
+            // SAS storage, no HBA and no SAS backplane - MANDATORY error
             return [
                 'available' => false,
                 'mandatory' => true,
@@ -749,7 +786,11 @@ class StorageConnectionValidator {
 
         // P2.4 FIX: Detect form factor lock from existing storage
         $existingFormFactorLock = $this->detectFormFactorLock($existing);
-        $normalizedStorageFF = $this->normalizeFormFactor($storageFormFactor);
+        // PHYSICAL size, not normalizeFormFactor(): that helper is a literal string munge
+        // ("2.5-inch U.2" -> "2.5-inch-u.2"), so every compound form factor failed both the
+        // bay-type match and the 2.5"-in-3.5" caddy rule below and was reported as
+        // "not compatible with chassis bay types". [F-19]
+        $normalizedStorageFF = $this->extractPhysicalFormFactor($storageFormFactor);
 
         // If form factor lock exists, validate new storage matches it
         if ($existingFormFactorLock && $existingFormFactorLock !== $normalizedStorageFF) {
@@ -790,7 +831,7 @@ class StorageConnectionValidator {
 
         foreach ($bayConfiguration as $bayConfig) {
             $bayType = $bayConfig['bay_type'] ?? '';
-            $normalizedBayType = $this->normalizeFormFactor($bayType);
+            $normalizedBayType = $this->extractPhysicalFormFactor($bayType);
 
             // Direct match
             if ($normalizedStorageFF === $normalizedBayType) {
@@ -1322,7 +1363,7 @@ class StorageConnectionValidator {
                 $bayConfig = $chassisSpecs['drive_bays']['bay_configuration'] ?? [];
                 foreach ($bayConfig as $bay) {
                     $bayType = $bay['bay_type'] ?? '';
-                    $normalized = $this->normalizeFormFactor($bayType);
+                    $normalized = $this->extractPhysicalFormFactor($bayType);
                     if ($normalized === '2.5-inch' || $normalized === '3.5-inch') {
                         return [
                             'locked' => true,
@@ -1340,7 +1381,7 @@ class StorageConnectionValidator {
                 $caddySpecs = $this->componentDataService->getCaddyByUuid($caddy['component_uuid']);
                 if ($caddySpecs) {
                     $caddySize = $caddySpecs['compatibility']['size'] ?? $caddySpecs['type'] ?? '';
-                    $normalized = $this->normalizeFormFactor($caddySize);
+                    $normalized = $this->extractPhysicalFormFactor($caddySize);
                     if ($normalized === '2.5-inch' || $normalized === '3.5-inch') {
                         return [
                             'locked' => true,
@@ -1358,7 +1399,7 @@ class StorageConnectionValidator {
                 $storageSpecs = $this->getStorageSpecs($storage['component_uuid']);
                 if ($storageSpecs) {
                     $storageFF = $storageSpecs['form_factor'] ?? '';
-                    $normalized = $this->normalizeFormFactor($storageFF);
+                    $normalized = $this->extractPhysicalFormFactor($storageFF);
                     if ($normalized === '2.5-inch' || $normalized === '3.5-inch') {
                         return [
                             'locked' => true,
@@ -1386,7 +1427,10 @@ class StorageConnectionValidator {
      * @return array ['valid' => bool, 'error' => array|null, 'info' => array|null]
      */
     private function validateFormFactorConsistency($incomingFormFactor, $existingComponents) {
-        $normalized = $this->normalizeFormFactor($incomingFormFactor);
+        // Physical size — validate() already gates entry to this method on
+        // extractPhysicalFormFactor(), so using the string munge here silently skipped
+        // the whole check for every compound form factor. [F-19]
+        $normalized = $this->extractPhysicalFormFactor($incomingFormFactor);
 
         // Only validate 2.5" and 3.5" drives
         if ($normalized !== '2.5-inch' && $normalized !== '3.5-inch') {
@@ -1403,7 +1447,7 @@ class StorageConnectionValidator {
                 $bayConfig = $chassisSpecs['drive_bays']['bay_configuration'] ?? [];
                 $chassisSizes = [];
                 foreach ($bayConfig as $bay) {
-                    $bn = $this->normalizeFormFactor($bay['bay_type'] ?? '');
+                    $bn = $this->extractPhysicalFormFactor($bay['bay_type'] ?? '');
                     if ($bn === '2.5-inch' || $bn === '3.5-inch') {
                         $chassisSizes[] = $bn;
                     }
@@ -1411,6 +1455,22 @@ class StorageConnectionValidator {
                 if (!empty($chassisSizes)) {
                     if (in_array($normalized, $chassisSizes)) {
                         return ['valid' => true, 'error' => null, 'info' => null];
+                    }
+                    // A 2.5" drive DOES mount in a 3.5" bay — it is carried by a
+                    // 3.5"-to-2.5" caddy. checkBayAvailability() has always implemented
+                    // exactly that allowance; this gate contradicted it and, running first,
+                    // won — so every 2.5" drive in a 3.5"-bay chassis was rejected, its
+                    // connection degraded to 'not_connected', and the drive-bay display
+                    // rendered empty even though the drives were installed. [F-19]
+                    if ($normalized === '2.5-inch' && in_array('3.5-inch', $chassisSizes, true)) {
+                        return [
+                            'valid' => true,
+                            'error' => null,
+                            'info' => [
+                                'type' => 'caddy_required_for_bay',
+                                'message' => "2.5-inch storage mounts in this chassis' 3.5-inch bays using a 3.5-to-2.5 caddy"
+                            ]
+                        ];
                     }
                     $supported = implode(' and ', array_unique($chassisSizes));
                     return [
@@ -1518,7 +1578,7 @@ class StorageConnectionValidator {
         $chassisBaySize = null;
         foreach ($bayConfig as $bay) {
             $bayType = $bay['bay_type'] ?? '';
-            $normalized = $this->normalizeFormFactor($bayType);
+            $normalized = $this->extractPhysicalFormFactor($bayType);
             if ($normalized === '2.5-inch' || $normalized === '3.5-inch') {
                 $chassisBaySize = $normalized;
                 break;
@@ -1534,9 +1594,14 @@ class StorageConnectionValidator {
             foreach ($existingComponents['storage'] as $storage) {
                 $storageSpecs = $this->getStorageSpecs($storage['component_uuid']);
                 if ($storageSpecs) {
-                    $storageFF = $storageSpecs['form_factor'] ?? '';
-                    $normalized = $this->normalizeFormFactor($storageFF);
-                    if (($normalized === '2.5-inch' || $normalized === '3.5-inch') && $normalized !== $chassisBaySize) {
+                    $storageFF = $this->extractPhysicalFormFactor($storageSpecs['form_factor'] ?? '');
+                    $normalized = $storageFF;
+                    // Only the physically impossible direction is an error: a 3.5" drive
+                    // cannot go into a 2.5" bay. A 2.5" drive rides a caddy into a 3.5" bay,
+                    // which is the same allowance checkBayAvailability() makes. [F-19]
+                    $carriable = ($normalized === $chassisBaySize)
+                        || ($normalized === '2.5-inch' && $chassisBaySize === '3.5-inch');
+                    if (($normalized === '2.5-inch' || $normalized === '3.5-inch') && !$carriable) {
                         $errors[] = [
                             'type' => 'chassis_storage_mismatch',
                             'message' => "Cannot add chassis with $chassisBaySize bays - configuration has $normalized storage",
@@ -1670,7 +1735,9 @@ class StorageConnectionValidator {
         foreach ($existingComponents['storage'] as $storage) {
             $specs = $this->getStorageSpecs($storage['component_uuid']);
             if ($specs && isset($specs['form_factor'])) {
-                $normalized = $this->normalizeFormFactor($specs['form_factor']);
+                // Physical size: a "2.5-inch U.2" and a "2.5-inch" drive are the SAME bay
+                // size, so they must not count as two competing locks. [F-19]
+                $normalized = $this->extractPhysicalFormFactor($specs['form_factor']);
                 $formFactors[$normalized] = true;
             }
         }

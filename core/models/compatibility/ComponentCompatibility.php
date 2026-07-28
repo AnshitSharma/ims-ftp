@@ -1690,6 +1690,24 @@ class ComponentCompatibility {
             }
         }
 
+        // NO EVIDENCE IS NOT EVIDENCE OF INCOMPATIBILITY (fixed 2026-07-27).
+        // extractMotherboardStorageInterfaces() derives this list ENTIRELY from the
+        // board's `storage` block in ims-data. 3 of the 23 boards there have no such
+        // block at all (SA5212H5, S5B-MB 1U, S5B-MB 2U), so the list is empty and
+        // this gate rejected every drive with "motherboard only supports: " -- an
+        // empty supported-list, which is the tell. That is a verdict drawn from
+        // missing data, and always a false positive: the drive still reaches the
+        // board through the chassis backplane or an HBA. Those paths are validated
+        // by StorageConnectionValidator and enforced again at finalize, so defer.
+        if (empty($mbInterfaces)) {
+            return [
+                'compatible' => true,
+                'score' => 0.70,
+                'message' => "Motherboard spec declares no storage interfaces; deferring $storageInterface to backplane/HBA validation",
+                'recommendation' => 'Board storage interfaces are absent from ims-data - the connection path is enforced by chassis/HBA validation and at finalize'
+            ];
+        }
+
         // No compatible interface found
         return [
             'compatible' => false,
@@ -1714,8 +1732,11 @@ class ComponentCompatibility {
      */
     private function checkFormFactorCompatibility($storageSpecs, $motherboardSpecs, $existingStorage = []) {
         $storageFormFactor = $storageSpecs['form_factor'];
-        $mbBays = $motherboardSpecs['drive_bays'];
-        $supportedFormFactors = $mbBays['supported_form_factors'];
+        // Default to [] rather than reading blind: boards whose ims-data entry has no
+        // `storage` block produce no drive_bays content, and `in_array($ff, null)` is a
+        // warning on PHP 7.4 but a fatal TypeError on PHP 8.
+        $mbBays = $motherboardSpecs['drive_bays'] ?? [];
+        $supportedFormFactors = $mbBays['supported_form_factors'] ?? [];
 
         // Extract physical form factor from compound form factors for bay matching.
         // e.g. "2.5-inch U.2" → "2.5-inch": the physical size determines which chassis bay
@@ -1763,6 +1784,25 @@ class ComponentCompatibility {
             ];
         }
         
+        // NO EVIDENCE IS NOT EVIDENCE OF INCOMPATIBILITY (fixed 2026-07-27).
+        // Same root cause as the empty-list guard in checkStorageInterfaceCompatibility():
+        // extractDriveBays() derives supported_form_factors ENTIRELY from the board's
+        // `storage` block, so for the 3 boards in ims-data that lack one this gate
+        // rejected EVERY drive of EVERY form factor. That is the reported production
+        // failure: "Storage form factor 2.5-inch U.2 not compatible with motherboard
+        // bays" on S5B-MB 2U, with an empty "supported form factor:" list after it.
+        // A 2.5"/3.5" drive is mounted by a CHASSIS bay, not by the board, and bay
+        // availability is already enforced by StorageConnectionValidator and
+        // ComponentValidator::validateChassisBayStorage -- so defer to them.
+        if (empty($supportedFormFactors)) {
+            return [
+                'compatible' => true,
+                'score' => 0.70,
+                'message' => "Motherboard spec declares no drive bays; deferring $storageFormFactor to chassis bay validation",
+                'recommendation' => 'Board drive-bay data is absent from ims-data - the physical mount is enforced by chassis bay validation and at finalize'
+            ];
+        }
+
         // No compatible form factor
         return [
             'compatible' => false,

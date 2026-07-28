@@ -144,9 +144,32 @@ if ($pdo === null) {
         $mbA = $pdo->query("SELECT id, UUID FROM motherboardinventory WHERE UUID = 'd2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
         $mbB = $pdo->query("SELECT id, UUID FROM motherboardinventory WHERE UUID = '4c8f5e1b-2b4a-4c8d-b9e7-f6d2a3c1e9b8' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
         $cpuLga3647 = $pdo->query("SELECT id, UUID FROM cpuinventory WHERE UUID = '6def2015-bbf6-478d-8e48-4ae32d5443c1' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
-        $strandConfigUuid = $pdo->query("SELECT config_uuid FROM server_configurations LIMIT 1")->fetchColumn();
+        // This scenario needs a config with NO motherboard of its own: it inserts
+        // board A and then replaces it. It used to borrow `SELECT config_uuid ...
+        // LIMIT 1`, which assumed the arbitrary first config in the fleet was a
+        // blank slate. On the 2026-07-27 dump that config already had a board and a
+        // full component set, so inserting board A made TWO motherboards and
+        // system.singleton blocked before cpu.socket_match was ever reached -- the
+        // assertion failed against correct code (same stale-fixture class as F-6).
+        // Create a dedicated config instead, so the scenario is independent of what
+        // the fleet happens to contain. Everything here is inside the outer
+        // transaction that gets rolled back.
+        $strandUserId = $pdo->query("SELECT id FROM users ORDER BY id LIMIT 1")->fetchColumn();
+        $strandConfigUuid = null;
+        if ($strandUserId !== false) {
+            $strandConfigUuid = sprintf(
+                '%08x-%04x-4%03x-%04x-%012x',
+                mt_rand(0, 0xffffffff), mt_rand(0, 0xffff), mt_rand(0, 0xfff),
+                mt_rand(0x8000, 0xbfff), mt_rand(0, 0xffffffff)
+            );
+            $pdo->prepare(
+                "INSERT INTO server_configurations
+                 (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by)
+                 VALUES (?, 'STRAND-TEST (board A->B)', 0, 'draft', 0, 0, ?)"
+            )->execute([$strandConfigUuid, $strandUserId]);
+        }
 
-        if ($mbA === false || $mbB === false || $cpuLga3647 === false || $strandConfigUuid === false) {
+        if ($mbA === false || $mbB === false || $cpuLga3647 === false || $strandConfigUuid === null) {
             echo "  SKIPPED  board A->B stranding: fixture inventory rows (LGA3647 board+cpu, LGA2011-3 board) not present in this scratch DB\n";
         } else {
             $insMbA = $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, parent_id, added_by) VALUES (?, 'motherboard', 'motherboardinventory', ?, ?, NULL, 0)");

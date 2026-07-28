@@ -1070,6 +1070,37 @@ function addComponent($pdo, $type, $data, $userId) {
             $safeData['SerialNumber'] = null;
         }
 
+        // status_v2 must be BORN paired with Status. [F-21]
+        //
+        // This function builds its INSERT purely from caller-supplied, whitelisted
+        // columns, and no caller has ever supplied status_v2 -- so every unit added
+        // since seeder 2026_07_10_001 created the column landed with status_v2 NULL
+        // while Status took its own column default of 1. Production held 22 such
+        // rows on 2026-07-27 (21 cpuinventory, 1 pciecardinventory), one more per
+        // component the owner adds.
+        //
+        // It stayed invisible because inventory_report's status_v2/Status agreement
+        // check deliberately inspects only rows WHERE status_v2 IS NOT NULL, so an
+        // unmigrated row was excused rather than flagged; and NULL is not a member
+        // of StatusMap::INVENTORY_V2_TO_LEGACY, so the state machine cannot read
+        // such a unit's state at all once it stops deferring to legacy Status.
+        //
+        // Same defect class as F-14 (OnboardNICHandler wrote Status with raw UPDATEs
+        // and never touched status_v2) and the same fix: the pair rides in ONE
+        // statement, so no window exists in which a row has one without the other.
+        $statusV2Col = $allowedCols['status_v2'] ?? null;
+        $statusCol   = $allowedCols['status'] ?? null;
+        if ($statusV2Col !== null && !array_key_exists($statusV2Col, $safeData)) {
+            require_once(__DIR__ . '/../models/state/StatusMap.php');
+            // No Status in $safeData means the column default (1 = available) applies.
+            $effectiveStatus = ($statusCol !== null && array_key_exists($statusCol, $safeData))
+                ? (int)$safeData[$statusCol]
+                : 1;
+            if (array_key_exists($effectiveStatus, StatusMap::INVENTORY_LEGACY_TO_V2)) {
+                $safeData[$statusV2Col] = StatusMap::INVENTORY_LEGACY_TO_V2[$effectiveStatus];
+            }
+        }
+
         if (empty($safeData)) {
             throw new InvalidArgumentException("No valid fields provided for $type component");
         }

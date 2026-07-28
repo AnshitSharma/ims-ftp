@@ -70,7 +70,7 @@ class OnboardNICHandler {
             // Rows for THIS physical board, whatever config (if any) it was last
             // in -- an onboard NIC travels with the board between servers.
             $checkExistingStmt = $this->pdo->prepare("
-                SELECT UUID, OnboardNICIndex, ServerUUID, Status, Flag FROM nicinventory
+                SELECT ID, UUID, SerialNumber, OnboardNICIndex, ServerUUID, Status, Flag FROM nicinventory
                 WHERE ParentInventoryID = ?
                 AND SourceType = 'onboard'
             ");
@@ -111,9 +111,17 @@ class OnboardNICHandler {
 
                     // Re-attach this board's existing NIC row to the current config
                     if ($existingNIC['ServerUUID'] !== $configUuid || $existingNIC['Status'] != 2) {
+                        // F-14 (2026-07-27): status_v2 rides along in the SAME
+                        // UPDATE as legacy Status -- the sanctioned pattern for a
+                        // caller that already has its own UPDATE (see
+                        // StateMachine::applyInventoryTransition's docblock). It was
+                        // previously left untouched here, so a re-attached board's
+                        // NIC kept a stale status_v2 and inventory_report flagged
+                        // "status_v2='available' expects Status=1 but found 2".
+                        // 'installed' maps to legacy 2 in StatusMap.
                         $fixNICStmt = $this->pdo->prepare("
                             UPDATE nicinventory
-                            SET ServerUUID = ?, Status = 2, UpdatedAt = NOW()
+                            SET ServerUUID = ?, Status = 2, status_v2 = 'installed', UpdatedAt = NOW()
                             WHERE UUID = ?
                         ");
                         $fixNICStmt->execute([$configUuid, $existingNIC['UUID']]);
@@ -125,6 +133,11 @@ class OnboardNICHandler {
                         'parent_motherboard_uuid' => $motherboardUuid,
                         'parent_inventory_id' => $motherboardInventoryId,
                         'onboard_index' => $nicIndex,
+                        // F-13: the dual-write mirror needs the physical unit's
+                        // identity, not just the synthetic spec uuid.
+                        'inventory_table' => 'nicinventory',
+                        'inventory_id' => (int)$existingNIC['ID'],
+                        'serial_number' => $existingNIC['SerialNumber'],
                         'action' => 're-attached'
                     ];
                     continue;
@@ -133,10 +146,13 @@ class OnboardNICHandler {
                 // Insert into nicinventory with onboard tracking. No pre-INSERT
                 // cleanup DELETE: identity is stable per board now, so there are
                 // no orphans of a different shape to clear.
+                // F-14: status_v2 is set in the same INSERT as legacy Status=2.
+                // Omitting it left freshly-minted onboard rows with status_v2 NULL
+                // (nicinventory ID 258 is one such row, minted before this fix).
                 $stmt = $this->pdo->prepare("
                     INSERT INTO nicinventory
-                    (UUID, SourceType, ParentComponentUUID, ParentInventoryID, OnboardNICIndex, Status, ServerUUID, Notes, SerialNumber, Flag, CreatedAt, UpdatedAt)
-                    VALUES (?, 'onboard', ?, ?, ?, 2, ?, ?, ?, 'Onboard', NOW(), NOW())
+                    (UUID, SourceType, ParentComponentUUID, ParentInventoryID, OnboardNICIndex, Status, status_v2, ServerUUID, Notes, SerialNumber, Flag, CreatedAt, UpdatedAt)
+                    VALUES (?, 'onboard', ?, ?, ?, 2, 'installed', ?, ?, ?, 'Onboard', NOW(), NOW())
                 ");
 
                 $stmt->execute([
@@ -155,6 +171,10 @@ class OnboardNICHandler {
                     'parent_motherboard_uuid' => $motherboardUuid,
                     'parent_inventory_id' => $motherboardInventoryId,
                     'onboard_index' => $nicIndex,
+                    // F-13: identity for the dual-write mirror (see re-attach branch).
+                    'inventory_table' => 'nicinventory',
+                    'inventory_id' => (int)$this->pdo->lastInsertId(),
+                    'serial_number' => $serialNumber,
                     'action' => 'created'
                 ]);
             }
@@ -376,21 +396,29 @@ class OnboardNICHandler {
      */
     public function removeOnboardNICs($motherboardUuid, $configUuid) {
         try {
-            // Get onboard NIC UUIDs before detaching
+            // Get the onboard rows before detaching. ID/SerialNumber are needed by
+            // the caller's dual-write mirror (F-13); UUID alone cannot identify the
+            // physical unit's config_components row.
             $stmt = $this->pdo->prepare("
-                SELECT UUID FROM nicinventory
+                SELECT ID, UUID, SerialNumber FROM nicinventory
                 WHERE ParentComponentUUID = ? AND SourceType = 'onboard' AND ServerUUID = ?
             ");
             $stmt->execute([$motherboardUuid, $configUuid]);
-            $onboardNICs = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $detachedRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $onboardNICs = array_column($detachedRows, 'UUID');
 
             // Detach from this config. A row disabled by replaceOnboardNIC()
             // (Flag='replaced') keeps its Status=0 -- it leaves the server, but
             // it does not become an available port again.
+            // F-14: status_v2 mirrors the legacy Status CASE exactly, in the same
+            // UPDATE. Without it a detached NIC kept status_v2='installed' while
+            // Status went to 1, which is what inventory_report flagged on
+            // nicinventory IDs 233 and 257.
             $stmt = $this->pdo->prepare("
                 UPDATE nicinventory
                 SET ServerUUID = NULL,
                     Status = CASE WHEN Flag = 'replaced' THEN Status ELSE 1 END,
+                    status_v2 = CASE WHEN Flag = 'replaced' THEN status_v2 ELSE 'available' END,
                     UpdatedAt = NOW()
                 WHERE ParentComponentUUID = ? AND SourceType = 'onboard' AND ServerUUID = ?
             ");
@@ -404,6 +432,8 @@ class OnboardNICHandler {
                 'success' => true,
                 'detached_count' => $detachedCount,
                 'detached_uuids' => $onboardNICs,
+                // F-13: per-unit identity for the caller's dual-write mirror.
+                'detached_rows' => $detachedRows,
                 'message' => $detachedCount . ' onboard NIC(s) detached from configuration'
             ];
 

@@ -131,6 +131,14 @@ form factor, and enforce "needs a bay" at **finalize** — then constrain the *c
 drives already present (`validateChassisAgainstExistingConfig` `:1508` already does exactly this:
 *"Cannot add chassis with 3.5-inch bays - configuration has 2.5-inch storage"*).
 
+> **Correction 2026-07-27 (F-19):** that quoted example was itself wrong, and has been fixed.
+> A 2.5″ drive **does** mount in a 3.5″ bay — it rides a 3.5″-to-2.5″ caddy, which
+> `checkBayAvailability()` has always allowed. Only the reverse (a 3.5″ drive with 2.5″-only
+> bays) is physically impossible. Before wiring this method up per the advice above, note that
+> it is still **single-size**: it locks onto the *first* standard bay type it finds, so a hybrid
+> chassis (24× 2.5″ + 8× 3.5″) is mis-modelled. `validateFormFactorConsistency()` already
+> handles the hybrid case correctly and is the better model to copy.
+
 **Root cause:** the enforced add-time path
 (`ComponentValidator::validateChassisBayStorage` `:983` / `validateMotherboardM2Storage` `:1046` /
 `validateGenericStorage` `:1071`) only inspects `chassis_bays` / `motherboard_m2_slots`. **Fix:** route
@@ -150,6 +158,17 @@ even though the drive connects through the **chassis backplane / HBA**, not the 
 drive should be gated by the *backplane/HBA* protocol, not the motherboard. **Fix:** populate the
 Quanta board's storage interfaces, and skip the motherboard-interface gate when the drive's connection
 path is a chassis backplane or HBA.
+
+> **Status 2026-07-27 — problem (a) is FIXED, problem (b) is NOT (F-18).**
+> The empty-list half was hit in production on a *different* board and in its **form-factor** form:
+> *"Storage form factor 2.5-inch U.2 not compatible with motherboard bays"* on **S5B-MB 2U**. Root
+> cause confirmed: `extractDriveBays()` and `extractMotherboardStorageInterfaces()` derive their lists
+> **entirely** from a board's `storage` block, and **3 of 23 boards in `ims-data` have no such block**
+> (`SA5212H5`, `S5B-MB 1U`, `S5B-MB 2U`) — so those boards rejected *every* drive of *every* form
+> factor and interface. Both gates now **defer** when the derived list is empty instead of blocking.
+> Boards that *do* declare capability still gate exactly as before (proven at golden-master parity).
+> **Still open:** (b) rewiring the gate to consult the backplane/HBA protocol for boards that *do*
+> declare interfaces, and populating the 3 boards' `storage` blocks from vendor documentation.
 
 ---
 

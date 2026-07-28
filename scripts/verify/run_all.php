@@ -37,6 +37,12 @@ const REGISTRY = [
     'slot'        => ['script' => __DIR__ . '/slot_report.php',        'available' => true,  'lands_in' => null],
     'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => true,  'lands_in' => null],
     'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => true,  'lands_in' => null],
+    // command_parity (2026-07-27): gates the COMMAND_LAYER shadow stream
+    // (reports/shadow/command-*.jsonl). Until it existed nothing consumed that
+    // log at all, so COMMAND_LAYER's soak was unverified even with the flag at
+    // shadow in production -- and U-C.6's enforce soak is downstream of it.
+    // Takes --since like parity, for the same append-only-log reason.
+    'command_parity' => ['script' => __DIR__ . '/command_parity_report.php', 'available' => true, 'lands_in' => null],
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => false, 'lands_in' => 'U-D.1'],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
     'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],
@@ -51,7 +57,10 @@ const GATE_REPORTS = [
     'P3'  => ['schema', 'inventory', 'regression'],
     'P4'  => ['parity', 'regression'],
     'P5'  => ['parity', 'regression'],
-    'P6'  => ['parity', 'equivalence', 'regression', 'performance'],
+    // P6 gains 'command_parity' (2026-07-27): U-C.6 is P6's enforce-soak unit and
+    // its evidence lives in the command stream, which no gate report read before.
+    // Mirrored into migration/phase-status.json's P6 gate_reports.
+    'P6'  => ['parity', 'command_parity', 'equivalence', 'regression', 'performance'],
     'P7'  => ['regression', 'parity'],
     'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance'],
     'P9'  => ['deadcode', 'equivalence', 'regression'],
@@ -111,7 +120,7 @@ foreach ($selection as $name) {
     }
 
     $cmd = ['php', $entry['script']];
-    if ($name === 'parity') {
+    if ($name === 'parity' || $name === 'command_parity') {
         $since = getenv('PARITY_SINCE_CUTOFF') ?: PARITY_SINCE_DEFAULT;
         $cmd[] = '--since';
         $cmd[] = $since;

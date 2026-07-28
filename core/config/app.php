@@ -27,6 +27,35 @@ function loadEnvFile($path) {
         return false;
     }
 
+    // F-7: the REAL environment WINS over this file.
+    //
+    // .env is a defaults file, not an override. Until now every key here was
+    // putenv()'d unconditionally, so a value the caller had deliberately supplied
+    // -- `DB_NAME=... php scripts/...`, a proc_open() $env array, a CI job, a cron
+    // -- was silently replaced by whatever .env said. Two consequences, both real:
+    //
+    //   * tests/backfill/ledger_backfill_test.php hands its subprocess an explicit
+    //     DB_NAME for a scratch replica; .env overwrote it, so backfill.php reported
+    //     "Config not found (or is virtual)" about a config that is definitely
+    //     present in the replica it was told to use. That is the whole of that
+    //     file's 22 failures.
+    //   * every gate report that boots through this file (equivalence, inventory,
+    //     ledger, schema, slot, dual_write_soak_monitor) could NOT be pointed at a
+    //     replica by environment at all -- which is why previous sessions had to
+    //     clone the entire tree and edit the clone's .env. A report told to verify
+    //     replica X while actually reading database Y would report GREEN about the
+    //     wrong data: the same family as F-10, where reports exited 0 having run
+    //     nothing.
+    //
+    // Safe on production: none of the keys this file carries is a standard
+    // CGI/server variable (there is no PATH/SERVER_*/HTTP_*/DOCUMENT_ROOT among
+    // them), so under LiteSpeed nothing pre-sets them and the skip below never
+    // triggers there -- .env remains the sole source, exactly as before. If a host
+    // ever DOES pre-set one at the vhost level, the key name is written to the
+    // error log once per request rather than being resolved silently, so the
+    // surprise is visible instead of inferred. Values are never logged.
+    $overriddenByEnvironment = [];
+
     $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     foreach ($lines as $line) {
         // Skip comments and empty lines
@@ -45,12 +74,26 @@ function loadEnvFile($path) {
             $value = substr($value, 1, -1);
         }
 
+        // Already supplied by the real environment => the caller wins, leave it be.
+        // getenv() returning '' (rather than false) counts as supplied: setting a
+        // variable to empty is an explicit choice, e.g. a blank DB_PASS.
+        if (getenv($key) !== false || array_key_exists($key, $_ENV)) {
+            $overriddenByEnvironment[] = $key;
+            continue;
+        }
+
         // Set environment variable
         putenv("$key=$value");
         $_ENV[$key] = $value;
 
         // Do NOT define as constants here - let the main config define them
         // This prevents duplicate constant definition warnings
+    }
+
+    if ($overriddenByEnvironment) {
+        // Names only -- never values; several of these keys are secrets.
+        error_log('loadEnvFile: environment takes precedence over .env for: '
+            . implode(', ', $overriddenByEnvironment));
     }
 
     return true;
@@ -167,7 +210,17 @@ try {
         'message' => 'Database connection failed',
         'error' => 'Internal server error'
     ]);
-    exit;
+    // F-10 (2026-07-27): a bare `exit` is exit code 0. Under the web SAPI that is
+    // irrelevant (the 500 above is what the client sees), but under CLI it meant
+    // every scripts/verify/*_report.php exited 0 when the database was simply
+    // unreachable -- so run_all.php reported the report GREEN and a whole gate
+    // could pass having executed nothing. Caught live: `run_all.php --gate P2`
+    // printed "equivalence: GREEN / ledger: GREEN / inventory: GREEN" and exit 0
+    // against a replica the configured user had no rights on. Gate results are
+    // only meaningful if a connection failure is loud, hence the CLI branch.
+    // Web behavior is deliberately byte-identical (PHP_SAPI is 'litespeed' in
+    // production, never 'cli'), so this cannot change the API's responses.
+    exit(PHP_SAPI === 'cli' ? 1 : 0);
 }
 
 // =============================================================================

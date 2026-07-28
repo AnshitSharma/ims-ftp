@@ -184,5 +184,45 @@ $row = $row->fetch();
 check("9a. status_v2 written", $row['status_v2'] === 'reserved');
 check("9b. legacy Status mapped correctly (reserved->2)", (int)$row['Status'] === StatusMap::INVENTORY_V2_TO_LEGACY['reserved']);
 
+// ---------------------------------------------------------------------------
+// F-22: a component UUID names a MODEL. These two methods used to accept one
+// alone and address every unit sharing it -- assert answered about whichever
+// sibling LIMIT 1 returned, and apply's UPDATE (no LIMIT) rewrote them all.
+// Reachable through TransitionStatusCommand for any serial-less unit, of which
+// production held 83 under 15 model UUIDs.
+echo "--- F-22: model UUID must never stand in for a unit ---\n";
+$sharedUuid = 'cpu-0000-0000-0000-000000000003';
+$pdo->prepare("INSERT INTO cpuinventory (UUID, SerialNumber, Status, status_v2) VALUES (?, NULL, 1, 'available')")->execute([$sharedUuid]);
+$firstId = (int)$pdo->lastInsertId();
+$pdo->prepare("INSERT INTO cpuinventory (UUID, SerialNumber, Status, status_v2) VALUES (?, NULL, 1, 'available')")->execute([$sharedUuid]);
+$pdo->prepare("INSERT INTO cpuinventory (UUID, SerialNumber, Status, status_v2) VALUES (?, NULL, 1, 'available')")->execute([$sharedUuid]);
+
+$r = StateMachine::assertInventoryTransition($pdo, $table, $sharedUuid, 'reserved');
+check("10a. 3 serial-less siblings, UUID only -> refused", $r['allowed'] === false);
+check("10b. ...and the refusal says why", strpos($r['reason'], 'refusing to transition a model') !== false);
+
+$r = StateMachine::assertInventoryTransition($pdo, $table, $sharedUuid, 'reserved', null, $firstId);
+check("10c. same model, addressed by inventory id -> allowed", $r['allowed'] === true);
+
+$threw = false;
+$pdo->beginTransaction();
+try { StateMachine::applyInventoryTransition($pdo, $table, $sharedUuid, 'reserved'); }
+catch (RuntimeException $e) { $threw = true; }
+$pdo->rollback();
+check("11a. apply with UUID only -> RuntimeException, not a model-wide write", $threw);
+$swept = $pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE UUID = ? AND status_v2 <> 'available'");
+$swept->execute([$sharedUuid]);
+check("11b. ...and no sibling was touched", (int)$swept->fetchColumn() === 0);
+
+$pdo->beginTransaction();
+StateMachine::applyInventoryTransition($pdo, $table, $sharedUuid, 'reserved', null, $firstId);
+$pdo->commit();
+$moved = $pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE UUID = ? AND status_v2 = 'reserved'");
+$moved->execute([$sharedUuid]);
+check("11c. apply by inventory id moved exactly one of the three units", (int)$moved->fetchColumn() === 1);
+
+$r = StateMachine::assertInventoryTransition($pdo, $table, $sharedUuid, 'reserved', null, 999999);
+check("12. inventory id that does not exist -> refused, not silently widened", $r['allowed'] === false);
+
 echo "\n" . ($fails === 0 ? "ALL PASS" : "$fails FAILURE(S)") . "\n";
 exit($fails === 0 ? 0 : 1);

@@ -543,15 +543,20 @@ function handleAddComponent($serverBuilder, $user) {
             // is compared against, not a hardcoded precheck-passed assumption.
             $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
             $legacyBlocked = !$result['success'];
-            if (!$shadowDryRunFailed && $commandVerdict->blocking() !== $legacyBlocked) {
-                $shadowDir = __DIR__ . '/../../../reports/shadow';
-                if (!is_dir($shadowDir)) { @mkdir($shadowDir, 0777, true); }
-                @file_put_contents($shadowDir . '/command-' . date('Ymd') . '.jsonl', json_encode([
-                    'ts' => date('c'), 'config_uuid' => $configUuid, 'op' => 'add',
-                    'component_type' => $componentType, 'legacy_blocked' => $legacyBlocked,
-                    'command_blocked' => $commandVerdict->blocking(),
-                    'command_failures' => array_map(function ($r) { return $r->ruleId(); }, $commandVerdict->failures()),
-                ]) . "\n", FILE_APPEND | LOCK_EX);
+            // 2026-07-27: record EVERY shadow evaluation, not just divergences. The
+            // previous `if (... !== $legacyBlocked)` guard meant the log had no
+            // denominator, so "the command layer agreed on N operations" and "nothing
+            // ran" were indistinguishable -- see CommandShadowLog's header. The helper
+            // is required defensively so that if this file lands on the server before
+            // CommandShadowLog.php does, the request degrades to "no shadow row"
+            // instead of fataling on every add-component.
+            $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
+            if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
+            if (class_exists('CommandShadowLog')) {
+                CommandShadowLog::record('add', $configUuid, [
+                    'component_type' => $componentType,
+                    'component_uuid' => $componentUuid,
+                ], $legacyBlocked, $shadowDryRunFailed ? null : $commandVerdict, [], $shadowDryRunFailed);
             }
         } elseif ($commandLayerMode === 'enforce') {
             try {
@@ -876,22 +881,31 @@ function handleRemoveComponent($serverBuilder, $user) {
             $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision);
         }
         if ($commandLayerMode === 'shadow') {
+            // 2026-07-27: restructured to mirror handleAddComponent's shadow block.
+            // Previously this logged from INSIDE `if ($commandVerdict->blocking())`,
+            // i.e. BEFORE removeComponent() had run, so `legacy_blocked` was not just
+            // absent from the row -- it was unknowable at write time, and a row where
+            // legacy blocked too (agreement) could not be told apart from a real
+            // divergence. The dry run still happens first (it must: legacy mutates),
+            // but the row is now written AFTER legacy's real outcome is known and
+            // carries both sides. See CommandShadowLog's header.
+            $commandVerdict = null;
+            $shadowDryRunFailed = false;
             try {
                 $commandVerdict = $removeCommand->dryRun();
-                if ($commandVerdict->blocking()) {
-                    $shadowDir = __DIR__ . '/../../../reports/shadow';
-                    if (!is_dir($shadowDir)) { @mkdir($shadowDir, 0777, true); }
-                    @file_put_contents($shadowDir . '/command-' . date('Ymd') . '.jsonl', json_encode([
-                        'ts' => date('c'), 'config_uuid' => $configUuid, 'op' => 'remove',
-                        'component_type' => $componentType, 'cascade' => $cascade,
-                        'command_blocked' => true,
-                        'command_failures' => array_map(function ($r) { return $r->ruleId(); }, $commandVerdict->failures()),
-                    ]) . "\n", FILE_APPEND | LOCK_EX);
-                }
             } catch (CommandFailed $shadowFailure) {
+                $shadowDryRunFailed = true;
                 error_log('RemoveComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
             }
             $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
+            $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
+            if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
+            if (class_exists('CommandShadowLog')) {
+                CommandShadowLog::record('remove', $configUuid, [
+                    'component_type' => $componentType,
+                    'component_uuid' => $componentUuid,
+                ], !$result['success'], $commandVerdict, ['cascade' => $cascade], $shadowDryRunFailed);
+            }
         } elseif ($commandLayerMode === 'enforce') {
             try {
                 $commandResult = $removeCommand->execute();
@@ -1389,11 +1403,16 @@ function handleImportVirtual($serverBuilder, $user) {
         $pdo->beginTransaction();
 
         $realConfigUuid = generateUUID();
+        // status_v2 rides in the same statement as configuration_status -- this is the
+        // third config-creating INSERT and it had the same omission as
+        // ServerBuilder::createConfiguration(), leaving imported configs invisible to
+        // the state machine (it fails closed on NULL). [F-21]
+        require_once(__DIR__ . '/../../../core/models/state/StatusMap.php');
         $stmt = $pdo->prepare("
             INSERT INTO server_configurations (
                 config_uuid, server_name, description, location, rack_position,
-                created_by, created_at, updated_at, configuration_status, is_virtual
-            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, 0)
+                created_by, created_at, updated_at, configuration_status, status_v2, is_virtual
+            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, 0)
         ");
         $stmt->execute([
             $realConfigUuid,
@@ -1401,7 +1420,8 @@ function handleImportVirtual($serverBuilder, $user) {
             $description,
             $location,
             $rackPosition,
-            $user['id']
+            $user['id'],
+            StatusMap::CONFIG_LEGACY_TO_V2[0]
         ]);
 
         // Step 4: Attempt to add each component from virtual to real config

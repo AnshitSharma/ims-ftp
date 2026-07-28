@@ -34,14 +34,21 @@ final class TargetState
     private $resourceRows;
     /** @var ResourceCatalog */
     private $catalog;
+    /** @var int|string|null id of the component this operation is ABOUT, if any */
+    private $subjectId;
 
     /**
      * @param array[] $components normalized component row tuples (see class docblock)
+     * @param int|string|null $subjectId the component row this operation is about
+     *        (TargetStateBuilder::withAdd/withReplace set it). Null means "no single
+     *        subject": a fromCurrent() snapshot, a finalize-time VALIDATE, or a
+     *        removal, whose post-state no longer contains the row that changed.
      */
-    public function __construct(array $components, ?ResourceCatalog $catalog = null)
+    public function __construct(array $components, ?ResourceCatalog $catalog = null, $subjectId = null)
     {
         $this->components = array_values($components);
         $this->catalog = $catalog ?? new ResourceCatalog();
+        $this->subjectId = $subjectId;
     }
 
     /** @return array[] */
@@ -56,6 +63,33 @@ final class TargetState
         return array_values(array_filter($this->components, function ($c) use ($type) {
             return $c['component_type'] === $type;
         }));
+    }
+
+    /**
+     * The component this operation is ABOUT, or null when there is no single one. [F-24]
+     *
+     * A TargetState is the POST-operation snapshot, which deliberately says nothing
+     * about what changed -- and that is exactly what made every config-wide rule
+     * behave as if the whole configuration were being re-submitted on every add. For
+     * StorageInterfacePathRule that meant one drive with no data path failed EVERY
+     * subsequent add to that config (fleet sweep 2026-07-28: 9 of 9 unexplained diffs,
+     * config 05bcb95b, adds of ram/storage/nic alike), where legacy only ever judged
+     * the item being added. Under ENGINE_MODE=enforce such a config would have been
+     * uneditable.
+     *
+     * Deliberately NOT expressed through RuleInterface::scope(): that method is
+     * declared but never consumed by ValidationEngine, so making it meaningful would
+     * change the contract of all 16 rules at once. This is additive -- rules that want
+     * the subject ask for it, everything else is untouched.
+     *
+     * @return array|null
+     */
+    public function subject(): ?array
+    {
+        if ($this->subjectId === null) {
+            return null;
+        }
+        return $this->find($this->subjectId);
     }
 
     /** @return array|null the component row with the given id, or null */

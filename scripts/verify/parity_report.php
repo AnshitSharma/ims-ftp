@@ -132,9 +132,25 @@ function analyze(array $rows, array $expectedDiffs): array {
     $ruleCoverage = []; // rule_id => fired count
     $advisoryExcluded = 0;
     $unlabeled = 0;
+    $localExcluded = 0;
+    $unlabeledEnv = 0;
     $compared = 0;
 
     foreach ($rows as $row) {
+        // F-23: a cli row is local harness output (fleet_parity_sweep, a probe),
+        // not a production operation. Excluded from the comparison and counted,
+        // exactly as advisory rows are. Rows predating the 'sapi' field cannot be
+        // attributed either way; they are still analysed -- dropping them would
+        // discard the whole pre-2026-07-28 soak -- but counted and warned about.
+        $sapi = $row['sapi'] ?? null;
+        if ($sapi === 'cli') {
+            $localExcluded++;
+            continue;
+        }
+        if ($sapi === null) {
+            $unlabeledEnv++;
+        }
+
         $phase = $row['phase'] ?? null;
         if ($phase === 'advisory') {
             $advisoryExcluded++;
@@ -181,12 +197,16 @@ function analyze(array $rows, array $expectedDiffs): array {
     }
 
     return [
-        'operations_compared' => count($rows),
+        'operations_compared' => $compared,
         'identical' => $identical,
         'expected' => $expected,
         'unexplained' => $unexplained,
         'exceptions' => $exceptions,
         'rule_coverage' => $ruleCoverage,
+        'advisory_excluded' => $advisoryExcluded,
+        'unlabeled' => $unlabeled,
+        'local_excluded' => $localExcluded,
+        'unlabeled_env' => $unlabeledEnv,
     ];
 }
 
@@ -202,6 +222,10 @@ function writeReport(array $analysis, bool $selfTest): string {
         'generated_at' => date('c'),
         'self_test' => $selfTest,
         'operations_compared' => $analysis['operations_compared'],
+        'advisory_rows_excluded' => $analysis['advisory_excluded'],
+        'unlabeled_rows' => $analysis['unlabeled'],
+        'local_rows_excluded' => $analysis['local_excluded'],
+        'unlabeled_env_rows' => $analysis['unlabeled_env'],
         'identical_verdicts' => $analysis['identical'],
         'diffs_expected' => count($analysis['expected']),
         'diffs_unexplained' => count($analysis['unexplained']),
@@ -271,6 +295,26 @@ foreach ($argv as $i => $arg) {
 }
 $files = $fileArgs ?: glob(__DIR__ . '/../../reports/shadow/engine-*.jsonl') ?: [];
 
+// Browser/SFTP downloads of the same production log land as "engine-2026xxxx (1).jsonl",
+// "(2)", "(1) (1)" ... and the default glob matches every one of them, so a single day's
+// traffic gets counted 2-4x. This is content-hash de-duplication, not name parsing: two
+// files count once iff they are byte-identical, which is exactly what a re-download is.
+// A genuinely different file with a suffixed name is still counted.
+$seenHashes = [];
+$dedupedFiles = [];
+$duplicateFiles = [];
+foreach ($files as $candidate) {
+    if (!is_file($candidate)) { continue; }
+    $hash = md5_file($candidate);
+    if (isset($seenHashes[$hash])) {
+        $duplicateFiles[] = basename($candidate) . ' (identical to ' . basename($seenHashes[$hash]) . ')';
+        continue;
+    }
+    $seenHashes[$hash] = $candidate;
+    $dedupedFiles[] = $candidate;
+}
+$files = $dedupedFiles;
+
 $expectedDiffs = loadExpectedDiffs();
 $rows = readShadowRows($files, $sinceCutoff);
 $analysis = analyze($rows, $expectedDiffs);
@@ -281,6 +325,21 @@ $status = $green ? 'GREEN' : 'RED';
 
 if ($analysis['operations_compared'] === 0) {
     echo "parity_report: WARNING operations compared: 0 -- a zero-sample GREEN proves nothing was exercised\n";
+}
+if ($duplicateFiles !== []) {
+    echo "parity_report: " . count($duplicateFiles) . " duplicate input file(s) skipped: " . implode('; ', $duplicateFiles) . "\n";
+}
+if ($analysis['advisory_excluded'] > 0) {
+    echo "parity_report: {$analysis['advisory_excluded']} advisory row(s) excluded (F-8: unlocked pre-check, not an enforcement decision)\n";
+}
+if ($analysis['unlabeled'] > 0) {
+    echo "parity_report: WARNING {$analysis['unlabeled']} row(s) predate the phase field (F-8) -- operations_compared may be inflated up to ~2x for those rows\n";
+}
+if ($analysis['local_excluded'] > 0) {
+    echo "parity_report: {$analysis['local_excluded']} local cli row(s) excluded (F-23: harness replay output, not production traffic)\n";
+}
+if ($analysis['unlabeled_env'] > 0) {
+    echo "parity_report: WARNING {$analysis['unlabeled_env']} row(s) predate the sapi field (F-23) -- cannot be attributed to production or to a local harness run\n";
 }
 if ($sinceCutoff !== null) {
     echo "parity_report: --since $sinceCutoff applied (rows before this date excluded)\n";

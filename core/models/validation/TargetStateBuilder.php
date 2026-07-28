@@ -68,7 +68,13 @@ final class TargetStateBuilder
             'status_v2' => null,
         ], $row);
 
-        return new TargetState(array_merge($state->components(), [$normalized]));
+        // The appended row IS the subject of this operation. [F-24]
+        // withReplace() routes through here, so a replace's subject is its new row.
+        return new TargetState(
+            array_merge($state->components(), [$normalized]),
+            null,
+            $normalized['id']
+        );
     }
 
     /**

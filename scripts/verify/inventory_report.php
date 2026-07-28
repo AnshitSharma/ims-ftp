@@ -10,6 +10,12 @@
  *     row with status_v2 not present in that map at all is also a violation:
  *     it means something wrote a value the reverse map doesn't know, which
  *     can only happen via a bug since the ENUM itself constrains the column)
+ *   - no row (and no server_configurations row) has status_v2 NULL at all, on a
+ *     table that HAS the column — added 2026-07-28 for F-21. This tightens the
+ *     report: the previous three checks were all satisfiable by a row that had
+ *     never been migrated, which is how 22 inventory units and 8 configurations
+ *     stayed invisible while this report was GREEN. Applying seeder
+ *     2026_07_28_001 is now a precondition for green.
  *
  * Usage:
  *   php scripts/verify/inventory_report.php              # writes reports/inventory-<ts>.json
@@ -204,6 +210,49 @@ function runChecks(PDO $pdo): array {
                     'detail' => "status_v2='{$row['status_v2']}' expects Status=$expectedLegacy but found Status={$row['Status']}",
                 ];
             }
+        }
+    }
+
+    // Check 4: status_v2 populated at all. [F-21]
+    //
+    // Check 3 above inspects only rows WHERE status_v2 IS NOT NULL -- written that
+    // way so a DB predating seeder 2026_07_10_001 would skip the column rather than
+    // report every row as broken. But the three INSERT paths that create rows never
+    // named status_v2, so rows kept being BORN NULL long after that seeder, and this
+    // report excused every one of them: production held 21 cpu + 1 pciecard units and
+    // 8 of 12 configurations with status_v2 NULL on 2026-07-27 while this report was
+    // GREEN. NULL is not a member of StatusMap::INVENTORY_V2_TO_LEGACY, so
+    // StateMachine::assert*Transition() fails closed on such a row -- every physical
+    // configuration in the fleet was untransitionable and no gate said so.
+    //
+    // The skip condition is therefore per-COLUMN (does status_v2 exist here?), never
+    // per-row. A table that has the column must have it populated on every row.
+    // Seeder 2026_07_28_001 backfills the existing rows; the code fixes stop new ones.
+    foreach (COMPONENT_TABLES as $type => $table) {
+        if (!tableExists($pdo, $table) || !columnExists($pdo, $table, 'status_v2')) continue;
+        $stmt = $pdo->query("SELECT UUID, SerialNumber, Status FROM `$table` WHERE status_v2 IS NULL");
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $violations[] = [
+                'check' => 'status_v2_missing',
+                'type' => $type, 'table' => $table,
+                'uuid' => $row['UUID'], 'serial' => $row['SerialNumber'],
+                'detail' => "status_v2 IS NULL (legacy Status={$row['Status']}); the state machine cannot read this unit's state",
+            ];
+        }
+    }
+
+    if (tableExists($pdo, 'server_configurations') && columnExists($pdo, 'server_configurations', 'status_v2')) {
+        $stmt = $pdo->query(
+            'SELECT config_uuid, configuration_status, is_virtual FROM server_configurations WHERE status_v2 IS NULL'
+        );
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $violations[] = [
+                'check' => 'status_v2_missing',
+                'type' => 'configuration', 'table' => 'server_configurations',
+                'uuid' => $row['config_uuid'], 'serial' => null,
+                'detail' => "status_v2 IS NULL (configuration_status={$row['configuration_status']}, "
+                    . "is_virtual={$row['is_virtual']}); assertConfigTransition() refuses this config",
+            ];
         }
     }
 
