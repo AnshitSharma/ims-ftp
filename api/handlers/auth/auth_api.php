@@ -396,49 +396,75 @@ function handleResetPassword() {
         // presented token before lookup.
         $tokenHash = hash('sha256', $token);
 
-        // Look up token
+        // Read the token first, purely to tell the user WHY it failed. This read is
+        // advisory: it is not what authorises the reset. The consuming UPDATE below
+        // is the only thing that does.
         $stmt = $pdo->prepare(
             "SELECT user_id, expires_at, used_at FROM password_resets WHERE token = :token"
         );
         $stmt->execute(['token' => $tokenHash]);
         $resetRecord = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        // Validate token exists
         if (!$resetRecord) {
             send_json_response(0, 0, 400, "Invalid or expired reset token");
         }
-
-        // Check if already used
         if ($resetRecord['used_at'] !== null) {
             send_json_response(0, 0, 400, "This reset link has already been used");
         }
-
-        // Check if expired
         if (strtotime($resetRecord['expires_at']) < time()) {
             send_json_response(0, 0, 400, "This reset link has expired");
         }
 
-        // Hash new password
         $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
 
-        // Update user password AND stamp password_changed_at. That timestamp
-        // is the cutoff used by JWTHelper::verifyToken — every still-valid
-        // access token issued before this instant becomes unusable, which is
-        // what we want after a password reset.
-        $stmt = $pdo->prepare("UPDATE users SET password = :password, password_changed_at = NOW() WHERE id = :user_id");
-        $stmt->execute([
-            'password' => $hashedPassword,
-            'user_id' => $resetRecord['user_id']
-        ]);
+        // The whole consume-and-reset sequence is one transaction. Previously these
+        // four statements ran unwrapped after a check-then-act on used_at, which was
+        // wrong in two ways:
+        //
+        //   - Two concurrent requests bearing the same token both read used_at as
+        //     NULL and both proceeded, so a single-use link was usable more than once
+        //     inside the race window.
+        //   - A failure part-way through left the password already changed with the
+        //     token still marked unused, or the user's sessions deleted without the
+        //     password having changed.
+        $pdo->beginTransaction();
+        try {
+            // Consume the token FIRST, conditionally. This is the atomic gate: whoever
+            // flips used_at from NULL wins, and everyone else affects zero rows and is
+            // turned away. No lock or isolation-level assumption required -- the
+            // WHERE clause does the arbitration.
+            $consume = $pdo->prepare(
+                "UPDATE password_resets SET used_at = NOW() WHERE token = :token AND used_at IS NULL"
+            );
+            $consume->execute(['token' => $tokenHash]);
 
-        // Mark token as used
-        $stmt = $pdo->prepare("UPDATE password_resets SET used_at = NOW() WHERE token = :token");
-        $stmt->execute(['token' => $tokenHash]);
+            if ($consume->rowCount() !== 1) {
+                $pdo->rollBack();
+                send_json_response(0, 0, 400, "This reset link has already been used");
+            }
 
-        // Invalidate all user's refresh tokens (force logout everywhere).
-        // Access tokens are handled by the password_changed_at cutoff above.
-        $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = :user_id");
-        $stmt->execute(['user_id' => $resetRecord['user_id']]);
+            // Update password AND stamp password_changed_at. That timestamp is the
+            // cutoff used by JWTHelper::verifyToken — every still-valid access token
+            // issued before this instant becomes unusable, which is what we want
+            // after a password reset.
+            $stmt = $pdo->prepare("UPDATE users SET password = :password, password_changed_at = NOW() WHERE id = :user_id");
+            $stmt->execute([
+                'password' => $hashedPassword,
+                'user_id' => $resetRecord['user_id']
+            ]);
+
+            // Invalidate all user's refresh tokens (force logout everywhere).
+            // Access tokens are handled by the password_changed_at cutoff above.
+            $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = :user_id");
+            $stmt->execute(['user_id' => $resetRecord['user_id']]);
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
 
         error_log("[handleResetPassword] Password successfully reset for user_id {$resetRecord['user_id']}");
 

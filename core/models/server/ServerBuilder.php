@@ -1464,6 +1464,35 @@ class ServerBuilder {
                 }
             }
 
+            // Riser removal: a riser supplies the PCIe slots its dependents sit in, so
+            // pulling it strands every card in those slots at a slot id that no longer
+            // exists -- precisely the state validateRiserSlotIntegrity() reports as
+            // "references non-existent riser". That check existed and was correct;
+            // nothing ever called it. Block instead of creating the broken state.
+            if ($componentType === 'pciecard') {
+                $riserSpecs = $this->dataUtils->getPCIeCardByUUID($componentUuid);
+                $isRiser = ($riserSpecs['component_subtype'] ?? null) === 'Riser Card'
+                    || stripos((string)$componentUuid, 'riser-') === 0;
+
+                if ($isRiser) {
+                    $slotTracker = new UnifiedSlotTracker($this->pdo);
+                    $riserCheck = $slotTracker->validateRiserRemoval($configUuid, $componentUuid);
+
+                    if (empty($riserCheck['can_remove'])) {
+                        if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                        return [
+                            'success' => false,
+                            'error_type' => 'riser_has_dependents',
+                            'message' => $riserCheck['message']
+                                ?? 'Cannot remove riser while cards are installed in its slots',
+                            'riser_uuid' => $componentUuid,
+                            'dependent_components' => $riserCheck['dependent_components'] ?? [],
+                            'hint' => 'Remove the cards installed in this riser first'
+                        ];
+                    }
+                }
+            }
+
             // SPECIAL HANDLING: If removing a motherboard, also remove its onboard NICs.
             //
             // BUGFIX (A-E6): a failed detach used to be logged as a warning and the
@@ -1472,6 +1501,54 @@ class ServerBuilder {
             // config -- orphans no code path can reach. This method already rolls back on a
             // failed component release below; apply the same discipline here.
             if ($componentType === 'motherboard') {
+                // The board supplies every CPU socket, DIMM slot and PCIe slot in the
+                // configuration. Removing it while components still occupy those left
+                // them referencing sockets and slots that no longer exist -- an
+                // unreachable state the engine has no way to validate or repair.
+                // Only the onboard NICs were handled; everything else was orphaned.
+                //
+                // Blocking rather than cascading is deliberate: a cascade would release
+                // most of a build's inventory from a single call, which is the class of
+                // defect the model-vs-unit work spent its time removing. Swapping a
+                // board is what the replace path is for.
+                $dependentTypes = ['cpu', 'ram', 'pciecard', 'nic', 'hbacard', 'storage'];
+                // Full (non-minimal) form: minimalOutput drops 'quantity', which would
+                // report an 8-DIMM entry as "1 ram".
+                $remaining = $this->extractComponentsFromJson($config);
+
+                $blockers = [];
+                foreach ($remaining as $entry) {
+                    $entryType = $entry['component_type'] ?? null;
+                    if (empty($entry['component_uuid'])
+                        || !in_array($entryType, $dependentTypes, true)) {
+                        continue;
+                    }
+                    // Onboard NICs are detached automatically just below; they are a
+                    // property of the board, not an independent occupant.
+                    if ($entryType === 'nic'
+                        && strpos((string)$entry['component_uuid'], 'onboard-') === 0) {
+                        continue;
+                    }
+                    $blockers[$entryType] = ($blockers[$entryType] ?? 0)
+                        + max(1, (int)($entry['quantity'] ?? 1));
+                }
+
+                if (!empty($blockers)) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) { $this->pdo->rollback(); }
+                    $summary = [];
+                    foreach ($blockers as $type => $count) {
+                        $summary[] = "$count $type";
+                    }
+                    return [
+                        'success' => false,
+                        'error_type' => 'motherboard_has_dependents',
+                        'message' => 'Cannot remove motherboard while components occupy its sockets and slots: '
+                            . implode(', ', $summary) . '.',
+                        'dependent_counts' => $blockers,
+                        'hint' => 'Remove these components first, or replace the motherboard instead of removing it'
+                    ];
+                }
+
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $removeResult = $nicHandler->removeOnboardNICs($componentUuid, $configUuid);
@@ -4033,18 +4110,28 @@ class ServerBuilder {
             }
             
             // Phase 3: Generate detailed compatibility scores
+            // Each score is computed once and reused; both used to be evaluated twice,
+            // once for their own key and again inside the min().
+            $jsonExistenceScore = $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']);
+            $matrixScore = $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix']);
+
             $enhancedValidation['json_validation']['detailed_scores'] = [
-                'json_existence_score' => $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']),
-                'compatibility_matrix_score' => $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix']),
-                'overall_json_score' => min(
-                    $this->calculateJSONExistenceScore($enhancedValidation['json_validation']['component_checks']),
-                    $this->calculateCompatibilityMatrixScore($enhancedValidation['json_validation']['compatibility_matrix'])
-                )
+                'json_existence_score' => $jsonExistenceScore,
+                'compatibility_matrix_score' => $matrixScore,
+                'overall_json_score' => min($jsonExistenceScore, $matrixScore)
             ];
-            
-            // Adjust overall scores based on JSON validation
+
+            // Adjust overall scores based on JSON validation.
+            // Clamped to [0, 1]: the `-= 0.2` per component missing from ims-data above
+            // had no floor, and min() alone cannot restore one, so a config missing
+            // several components reported a NEGATIVE overall_score to the client. The
+            // same branch already sets is_valid = false, so the arithmetic never
+            // carried meaning past zero.
             $jsonScore = $enhancedValidation['json_validation']['detailed_scores']['overall_json_score'];
-            $enhancedValidation['overall_score'] = min($enhancedValidation['overall_score'], $jsonScore / 100.0);
+            $enhancedValidation['overall_score'] = max(
+                0.0,
+                min($enhancedValidation['overall_score'], $jsonScore / 100.0)
+            );
 
             if ($jsonScore < 70) {
                 $enhancedValidation['is_valid'] = false;
@@ -9139,39 +9226,64 @@ class ServerBuilder {
                     break;
 
                 case 'pciecard':
-                    // Count PCIe slots
-                    $pcieSlots = $mbSpecs['expansion_slots']['pcie_slots'] ?? [];
-                    $totalPcieSlots = 0;
-                    foreach ($pcieSlots as $slot) {
-                        $totalPcieSlots += $slot['count'] ?? 0;
+                case 'nic':
+                case 'hbacard':
+                    // These three share ONE physical pool of PCIe slots, so the budget
+                    // has to be computed over that pool -- not per type, and not from
+                    // the motherboard spec alone.
+                    //
+                    // The previous implementation handled only 'pciecard' and read
+                    // $mbSpecs['expansion_slots']['pcie_slots'] directly, which was wrong
+                    // in three independent ways:
+                    //
+                    //   1. It ignored riser-PROVIDED slots, so a board with 2 slots and a
+                    //      riser supplying 4 more budgeted 2. Adds that physically fit
+                    //      were rejected.
+                    //   2. It counted the riser CARD against that budget even though a
+                    //      riser occupies a riser bay, not a PCIe slot -- so installing a
+                    //      riser (which ADDS capacity) instead consumed it.
+                    //   3. It counted only pciecard entries, ignoring NICs and HBAs
+                    //      already holding PCIe slots, so the budget under-counted usage
+                    //      across types.
+                    //
+                    // 'nic' and 'hbacard' were listed in $slotBasedTypes but had no case
+                    // at all, falling through to valid. Mirroring the old pciecard
+                    // arithmetic onto them would have propagated (1) and (2) to all three
+                    // types rather than fixing anything.
+                    //
+                    // UnifiedSlotTracker::getSlotAvailability() is already the authority
+                    // assignComponentSlot() uses to place the card moments later. It
+                    // merges riser-provided slots, excludes riser bays from the PCIe
+                    // pool, and counts occupancy from pciecard + hbacard + nic + PCIe
+                    // AIC storage. Asking it here means one authority, one answer.
+                    $slotTracker = new UnifiedSlotTracker($this->pdo);
+                    $availability = $slotTracker->getSlotAvailability($configUuid);
+
+                    if (empty($availability['success'])) {
+                        // No motherboard, unreadable spec, etc. Not this guard's call to
+                        // make -- assignComponentSlot() fails closed on exhaustion.
+                        return ['valid' => true];
                     }
 
-                    if ($totalPcieSlots > 0) {
-                        // Count existing PCIe cards
-                        $existingPcie = [];
-                        if (!empty($config['pciecard_configurations'])) {
-                            $pcieConfigs = json_decode($config['pciecard_configurations'], true);
-                            if (is_array($pcieConfigs)) {
-                                $existingPcie = $pcieConfigs;
-                            }
-                        }
-                        // A-L8: sum quantities, not entry count.
-                        $usedPcie = $this->sumEntryQuantities($existingPcie);
-                        $totalPcie = $usedPcie + $quantity;
+                    $totalPcieSlots = 0;
+                    foreach (($availability['total_slots'] ?? []) as $slotIds) {
+                        $totalPcieSlots += count($slotIds);
+                    }
+                    $usedPcie = count($availability['used_slots'] ?? []);
 
-                        if ($totalPcie > $totalPcieSlots) {
-                            return [
-                                'valid' => false,
-                                'message' => "Insufficient PCIe slots: trying to add $quantity PCIe card(s) but only "
-                                    . ($totalPcieSlots - $usedPcie) . " slot(s) available (motherboard has $totalPcieSlots total, $usedPcie currently used)",
-                                'details' => [
-                                    'total_slots' => $totalPcieSlots,
-                                    'used_slots' => $usedPcie,
-                                    'requesting' => $quantity,
-                                    'available' => $totalPcieSlots - $usedPcie
-                                ]
-                            ];
-                        }
+                    if ($totalPcieSlots > 0 && ($usedPcie + $quantity) > $totalPcieSlots) {
+                        $available = $totalPcieSlots - $usedPcie;
+                        return [
+                            'valid' => false,
+                            'message' => "Insufficient PCIe slots: trying to add $quantity $componentType(s) but only "
+                                . "$available slot(s) available ($totalPcieSlots total including any riser-provided slots, $usedPcie currently used)",
+                            'details' => [
+                                'total_slots' => $totalPcieSlots,
+                                'used_slots' => $usedPcie,
+                                'requesting' => $quantity,
+                                'available' => $available
+                            ]
+                        ];
                     }
                     break;
             }
