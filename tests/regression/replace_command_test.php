@@ -62,6 +62,11 @@ check('the new action is flag-gated (CommandLayer::mode() !== off), not reachabl
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";
 require_once __DIR__ . '/_scratch_db.php';
 $pdo = scratch_db_connect();
+// See add_command_test.php: a reachable but pre-P2 replica must SKIP, not crash.
+if ($pdo !== null && ($schemaGap = scratch_db_schema_gap($pdo)) !== null) {
+    echo "  (scratch DB unusable: $schemaGap)\n";
+    $pdo = null;
+}
 if ($pdo === null) {
     echo "  SKIPPED  cpu A->B: RAM re-anchored + re-validated\n";
     echo "  SKIPPED  board A->B incompatible-B: blocks WITH A STILL IN PLACE (stranding scenario now impossible)\n";

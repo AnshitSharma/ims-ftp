@@ -14,7 +14,8 @@
  *
  * Exit: 0 iff every AVAILABLE selected report is GREEN. 1 if any is RED. 2 on usage/setup error.
  *
- * The `parity` report is always invoked here with `--since PARITY_SINCE_DEFAULT` (below;
+ * The three shadow-log reports (`parity`, `command_parity`, `read`) are always invoked
+ * here with `--since PARITY_SINCE_DEFAULT` (below;
  * overridable via the PARITY_SINCE_CUTOFF env var) -- owner-adopted standing gate invocation,
  * 2026-07-13 (see migration/11-verification/README.md #6 and the tenth-session handoff record).
  * This does NOT change parity_report.php's own default behavior: running it directly with no
@@ -43,6 +44,14 @@ const REGISTRY = [
     // shadow in production -- and U-C.6's enforce soak is downstream of it.
     // Takes --since like parity, for the same append-only-log reason.
     'command_parity' => ['script' => __DIR__ . '/command_parity_report.php', 'available' => true, 'lands_in' => null],
+    // read (2026-07-29): gates the READ_FROM_ROWS shadow stream
+    // (reports/shadow/read-*.jsonl). Same gap command_parity closed two days ago
+    // -- nothing consumed that log, and until F-27 nothing COULD, because the
+    // router recorded divergences only: "every read agreed" and "no read ever
+    // reached the router" produced the identical empty artifact. U-X.2's gate
+    // criterion was written against that artifact. Takes --since like the other
+    // two, for the same append-only-log reason.
+    'read'        => ['script' => __DIR__ . '/read_report.php',        'available' => true,  'lands_in' => null],
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => false, 'lands_in' => 'U-D.1'],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
     'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],
@@ -62,7 +71,12 @@ const GATE_REPORTS = [
     // Mirrored into migration/phase-status.json's P6 gate_reports.
     'P6'  => ['parity', 'command_parity', 'equivalence', 'regression', 'performance'],
     'P7'  => ['regression', 'parity'],
-    'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance'],
+    // P8 gains 'read' (2026-07-29): U-X.2 is P8's read-cutover unit and its
+    // checklist item 1 is a >=72h zero-divergence sample soak. That evidence lives
+    // in the read stream, which no gate report read before -- so the criterion was
+    // being checked by eye against a log whose emptiness meant nothing.
+    // Mirrored into migration/phase-status.json's P8 gate_reports.
+    'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
     'P9'  => ['deadcode', 'equivalence', 'regression'],
     'P10' => ['all'],
 ];
@@ -81,7 +95,30 @@ const QUICK_SET = ['schema', 'inventory', 'orphan', 'equivalence'];
  * run_all.php-only -- a bare `php scripts/verify/parity_report.php` (no
  * --since) is completely unaffected and keeps scanning every row, unchanged.
  */
-const PARITY_SINCE_DEFAULT = '2026-07-13';
+/**
+ * 2026-07-29: moved 2026-07-13 -> 2026-07-29. Three changes landed during the
+ * 2026-07-28 evening session and EVERY one of them alters what a shadow row
+ * means: F-26 (FINALIZE now subsumes VALIDATE, 4 rules -> 21),
+ * SERVER_BUILD_GUIDE Bug 2 (the raw memory-type compare that rejected every
+ * finalize in the fleet), and the finalize hook's own two corrections
+ * (legacy_blocked now reflects the REAL finalize outcome; dry_run_error
+ * separates a deliberate refusal from a crash).
+ *
+ * The cutoff is the whole day, not the last fix's timestamp, DELIBERATELY. Rows
+ * from that evening are development churn -- a mixture of pre- and post-fix
+ * behaviour under three different instrumentation contracts -- and picking a
+ * time that happens to leave only the agreeing rows would be choosing the
+ * answer. Excluding the day excludes the favourable rows too.
+ *
+ * Consequence, stated plainly: the command gate reads RED with "0 finalize
+ * operations" until real post-fix traffic arrives. That is the correct reading.
+ * The soak starts from the code as it now stands, not from evidence about code
+ * that no longer exists.
+ *
+ * (The reports accept a time part -- YYYY-MM-DDTHH:MM -- which is what made
+ * choosing between a day and a moment a real decision rather than a limitation.)
+ */
+const PARITY_SINCE_DEFAULT = '2026-07-29';
 
 function resolveSelection(array $argv): array {
     if (in_array('--quick', $argv, true)) {
@@ -120,7 +157,10 @@ foreach ($selection as $name) {
     }
 
     $cmd = ['php', $entry['script']];
-    if ($name === 'parity' || $name === 'command_parity') {
+    // 'read' takes the same standing cutoff (2026-07-29): F-27 changed what a row
+    // in that stream MEANS -- before it, agreement was unrecorded -- so pre-cutoff
+    // rows cannot contribute a denominator and must not contribute a numerator.
+    if ($name === 'parity' || $name === 'command_parity' || $name === 'read') {
         $since = getenv('PARITY_SINCE_CUTOFF') ?: PARITY_SINCE_DEFAULT;
         $cmd[] = '--since';
         $cmd[] = $since;

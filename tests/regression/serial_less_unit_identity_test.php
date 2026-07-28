@@ -53,9 +53,13 @@ if ($pass === false || $pass === '') {
 }
 
 if ($pass === false || $pass === '') {
+    // The refusal itself is unchanged -- this suite still will not connect
+    // passwordless. Only the REPORTING changes: exit(2) made a deliberate safety
+    // refusal indistinguishable from a genuine test failure to any runner.
     fwrite(STDERR, "No scratch credential. Set GOLDEN_DB_PASS_FILE to a file containing it,\n"
                  . "or GOLDEN_DB_PASS in the environment. Refusing to connect passwordless.\n");
-    exit(2);
+    require_once __DIR__ . '/_scratch_db.php';
+    scratch_db_or_skip(null, 'serial-less unit identity (no scratch credential; refusing to connect passwordless)');
 }
 if (!preg_match('/scratch|golden|test/i', $name)) {
     fwrite(STDERR, "Database '$name' does not look like a scratch DB. Refusing to run.\n");
@@ -67,8 +71,10 @@ try {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ]);
 } catch (PDOException $e) {
-    fwrite(STDERR, "Cannot connect to scratch DB: " . $e->getMessage() . "\n");
-    exit(2);
+    // exit(2) here read as a hard suite failure to any runner. "No scratch DB" is
+    // not a failure -- it is a suite that proved nothing, and must say so.
+    require_once __DIR__ . '/_scratch_db.php';
+    scratch_db_or_skip(null, 'serial-less unit identity');
 }
 
 $passed = 0;

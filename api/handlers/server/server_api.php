@@ -137,6 +137,11 @@ switch ($action) {
         handleDebugConfigDualWrite($user);
         break;
 
+    case 'debug-shadow-log':
+    case 'server-debug-shadow-log':
+        handleDebugShadowLog($user);
+        break;
+
     default:
         send_json_response(0, 1, 400, "Invalid action specified");
 }
@@ -1554,9 +1559,97 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         // this handler still calls finalizeConfiguration() either way, and
         // that method's own enforce branch, U-C.5, delegates to the command).
         require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
-        if (CommandLayer::mode() !== 'enforce') {
+        $commandLayerMode = CommandLayer::mode();
+        if ($commandLayerMode !== 'enforce') {
             $validation = $serverBuilder->validateConfigurationComprehensive($configUuid);
+
+            // U-A.2 (2026-07-29): the finalize shadow hook the U-C.5 comment above
+            // promised. Without it COMMAND_LAYER's soak was unfalsifiable rather
+            // than merely unproven: the FOUR rules that run at Trigger::FINALIZE
+            // (system.singleton, system.inventory_state, system.psu_capacity,
+            // system.required_set) had never executed in production, and enforce
+            // is exactly the flip that DROPS this legacy pre-check in their favour.
+            // No amount of traffic could have produced evidence for that swap.
+            //
+            // The DRY RUN happens here, before the early return and before
+            // finalizeConfiguration() mutates anything, so the command evaluates
+            // the same pre-finalize state legacy is judging. dryRun() locks,
+            // evaluates and ALWAYS rolls back (INV-8) -- a pure read; shadow does
+            // not fork behavior.
+            //
+            // The ROW, though, is written from two places, and that split is the
+            // point:
+            //   - legacy rejected  -> logged just below, because
+            //     send_json_response() exits and anything logged after the early
+            //     return would record only the configs legacy already approved
+            //     (the selection bias CommandShadowLog exists to prevent);
+            //   - legacy accepted  -> logged AFTER finalizeConfiguration() returns,
+            //     against its REAL outcome.
+            //
+            // That second case was wrong in this hook's first version (2026-07-29):
+            // it recorded legacy_blocked = !$validation['valid'], i.e. the
+            // PRE-CHECK's answer, which is exactly the "hardcoded precheck-passed
+            // assumption" handleAddComponent's own shadow hook warns against. The
+            // pre-check passing does not mean the finalize succeeded --
+            // finalizeConfiguration() can still refuse (e.g. an already-finalized
+            // config: comprehensive validation is happy, the status transition is
+            // not). Such a row was logged as legacy_blocked=false while legacy had
+            // in fact returned 400, which is a false agreement/divergence input.
+            if ($commandLayerMode === 'shadow') {
+                $finalizeVerdict = null;
+                $finalizeDryRunFailed = false;
+                $finalizeDryRunError = null;
+                try {
+                    require_once __DIR__ . '/../../../core/models/commands/TransitionStatusCommand.php';
+                    $finalizeVerdict = (new TransitionStatusCommand(
+                        $pdo, $configUuid, 'finalized', $finalNotes, (int)$user['id']
+                    ))->dryRun();
+                } catch (CommandFailed $finalizeFailure) {
+                    // A DECISION, not a missing answer. assertConfigTransition
+                    // (edge legality / server.finalize permission), StateGuard and
+                    // the revision check all reject before evaluate() is reached --
+                    // and at enforce that rejection IS what the caller would get.
+                    // Recorded as dry_run_error='command_failed' so the report can
+                    // compare it against legacy instead of discarding it; see
+                    // command_parity_report's own note on the distinction.
+                    $finalizeDryRunFailed = true;
+                    $finalizeDryRunError = 'command_failed:' . $finalizeFailure->errorType;
+                    error_log('TransitionStatusCommand shadow dry-run refused: ' . $finalizeFailure->getMessage());
+                } catch (\Throwable $finalizeFailure) {
+                    // A CRASH. There is no verdict here in any sense, and this must
+                    // stay gate-RED -- never let a broken dry run read as agreement.
+                    $finalizeDryRunFailed = true;
+                    $finalizeDryRunError = 'exception';
+                    error_log('TransitionStatusCommand shadow dry-run error: ' . $finalizeFailure->getMessage());
+                }
+                // Legacy's messages are free text and the command's are rule ids,
+                // so they can never string-match (the engine-log trap) -- but
+                // legacy's `type` slugs ARE stable identifiers, and they are the
+                // ONLY discriminator available on a legacy-blocked/command-allowed
+                // row: the command failed nothing there, so no rule id exists for
+                // an expected-diff entry to cite. Without them, exempting one such
+                // diff would silently exempt every diff in that direction.
+                $recordFinalizeShadow = function (bool $legacyBlocked) use (
+                    $configUuid, $validation, $finalizeVerdict, $finalizeDryRunFailed, $finalizeDryRunError
+                ) {
+                    $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
+                    if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
+                    if (!class_exists('CommandShadowLog')) { return; }
+                    CommandShadowLog::record('finalize', $configUuid, [
+                        'component_type' => null,
+                        'component_uuid' => null,
+                    ], $legacyBlocked, $finalizeDryRunFailed ? null : $finalizeVerdict, [
+                        'legacy_error_count' => count($validation['errors'] ?? []),
+                        'legacy_error_types' => array_values(array_unique(array_map(function ($e) {
+                            return is_array($e) ? ($e['type'] ?? 'unknown') : 'unknown';
+                        }, $validation['errors'] ?? []))),
+                        'dry_run_error' => $finalizeDryRunError,
+                    ], $finalizeDryRunFailed);
+                };
+            }
+
             if (!$validation['valid']) {
+                if (isset($recordFinalizeShadow)) { $recordFinalizeShadow(true); }
                 send_json_response(0, 1, 400, "Configuration is not valid for finalization", [
                     'validation_errors' => $validation['errors']
                 ]);
@@ -1564,6 +1657,9 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         }
 
         $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes, $user['id']);
+
+        // Legacy passed its pre-check and actually ran: record the REAL outcome.
+        if (isset($recordFinalizeShadow)) { $recordFinalizeShadow(empty($result['success'])); }
 
         if ($result['success']) {
             $configId = $config->get('id');
@@ -1760,6 +1856,70 @@ function handleDebugMigrationFlags($user) {
         'env_file' => $envInfo,
         'php_sapi' => PHP_SAPI,
         'server_time' => date('c'),
+    ]);
+}
+
+/**
+ * TEMPORARY diagnostic (shadow-soak verification): tail of ONE shadow stream's
+ * JSONL log.
+ *
+ * Every soak check to date required the owner to download reports/shadow/*.jsonl
+ * by hand before anyone could tell whether an instrumentation hook fired at all
+ * -- which is how the COMMAND_LAYER finalize path stayed unobserved for the whole
+ * soak. This closes that loop: same read-only, admin-gated shape as
+ * handleDebugConfigDualWrite(), and removed alongside it.
+ *
+ * Deliberately NOT a general file reader. The stream name is whitelisted to the
+ * three known writers, the date must be exactly 8 digits, and the path is
+ * assembled from those two validated tokens -- no caller-supplied path fragment
+ * ever reaches the filesystem, so there is no traversal to defend against. Files
+ * outside reports/shadow are unreachable by construction rather than by filter.
+ */
+function handleDebugShadowLog($user) {
+    global $pdo;
+
+    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+    }
+
+    $stream = strtolower(trim($_POST['stream'] ?? $_GET['stream'] ?? 'command'));
+    if (!in_array($stream, ['engine', 'command', 'read'], true)) {
+        send_json_response(0, 1, 400, "stream must be one of: engine, command, read");
+    }
+
+    $date = trim($_POST['date'] ?? $_GET['date'] ?? date('Ymd'));
+    if (preg_match('/^\d{8}$/', $date) !== 1) {
+        send_json_response(0, 1, 400, "date must be YYYYMMDD");
+    }
+
+    $limit = (int)($_POST['limit'] ?? $_GET['limit'] ?? 50);
+    if ($limit < 1) { $limit = 1; }
+    if ($limit > 500) { $limit = 500; }
+
+    $path = __DIR__ . '/../../../reports/shadow/' . $stream . '-' . $date . '.jsonl';
+    if (!is_file($path)) {
+        // Not an error: "the hook has not fired today" is exactly the answer a
+        // soak check is asking for, and it must be distinguishable from a failure.
+        send_json_response(1, 1, 200, "No log for this stream/date", [
+            'stream' => $stream, 'date' => $date, 'exists' => false,
+            'total_lines' => 0, 'returned' => 0, 'rows' => [],
+        ]);
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $rows = [];
+    foreach (array_slice($lines, -$limit) as $line) {
+        $decoded = json_decode($line, true);
+        if (is_array($decoded)) { $rows[] = $decoded; }
+    }
+
+    send_json_response(1, 1, 200, "Shadow log tail", [
+        'stream' => $stream,
+        'date' => $date,
+        'exists' => true,
+        'total_lines' => count($lines),
+        'returned' => count($rows),
+        'rows' => $rows,
     ]);
 }
 

@@ -28,10 +28,17 @@ $dsn = $dbSocket
     ? "mysql:unix_socket=$dbSocket;dbname=$dbName;charset=utf8mb4"
     : "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4";
 
-$pdo = new PDO(
-    $dsn, $dbUser, $dbPass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
-);
+require_once $ROOT . '/tests/regression/_scratch_db.php';
+$pdo = null;
+try {
+    $pdo = new PDO(
+        $dsn, $dbUser, $dbPass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+    );
+} catch (\Throwable $e) {
+    // Reported by scratch_db_or_skip() below, uniformly with a stale-schema replica.
+}
+$pdo = scratch_db_or_skip($pdo, 'ConfigComponentRepository against a live schema');
 
 require_once $ROOT . '/core/models/config/ConfigComponentRepository.php';
 

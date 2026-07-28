@@ -8,10 +8,17 @@ require_once __DIR__ . '/ConfigComponentRepository.php';
  * One question, three answers: "what components does this config contain?"
  *   off    => ServerBuilder::extractComponentsFromJson() verbatim (identity; the
  *             router is a pass-through and adds one function call, nothing else).
- *   sample => run BOTH sides, compare canonical tuples, append any divergence to
- *             reports/shadow/read-<Ymd>.jsonl, and return the LEGACY result
- *             UNCONDITIONALLY. Nothing a caller sees depends on the rows side.
+ *   sample => run BOTH sides, compare canonical tuples, append the OUTCOME --
+ *             agreement included -- to reports/shadow/read-<Ymd>.jsonl, and
+ *             return the LEGACY result UNCONDITIONALLY. Nothing a caller sees
+ *             depends on the rows side.
  *   on     => rows become the answer, mapped back to the legacy output shape.
+ *
+ * F-27: sample mode logged divergences ONLY until 2026-07-29, which made an
+ * empty log unreadable -- "every read agreed" and "no read ever reached this
+ * router" produce the identical artifact. Every row now carries a 'kind'
+ * (compared | divergence | skipped_virtual) so the log has a denominator and
+ * scripts/verify/read_report.php can distinguish silence from success.
  *
  * The configuration cache in ServerBuilder::getConfigurationDetails() sits ABOVE
  * this router (it short-circuits before the row is even fetched), so a cached
@@ -81,6 +88,18 @@ final class ConfigReadRouter
 
     /** Legacy hardcodes added_at = null for components that come from scalar columns. */
     private const SCALAR_COLUMN_TYPES = ['motherboard', 'chassis'];
+
+    /**
+     * Row kinds in reports/shadow/read-<Ymd>.jsonl (F-27).
+     *
+     * BACKWARD COMPATIBILITY: rows written before 2026-07-29 carry no 'kind' at
+     * all, and the only rows that existed then were divergences. A reader MUST
+     * treat a missing 'kind' as KIND_DIVERGENCE -- never as a comparison, which
+     * would let historical rows manufacture a denominator they never measured.
+     */
+    public const KIND_COMPARED        = 'compared';
+    public const KIND_DIVERGENCE      = 'divergence';
+    public const KIND_SKIPPED_VIRTUAL = 'skipped_virtual';
 
     /**
      * @return string one of "off", "sample", "on"
@@ -153,7 +172,15 @@ final class ConfigReadRouter
         // them by their own guard (ServerBuilder's is_virtual checks), which is
         // also why every migration report scans is_virtual = 0. Comparing them
         // would manufacture a divergence for every virtual config on every read.
+        //
+        // The skip is RECORDED rather than silent (F-27): a window containing
+        // nothing but virtual reads has performed no comparison, and must not be
+        // read as "sample mode found nothing wrong". Same row, different kind.
         if ((int)($configRow['is_virtual'] ?? 0) === 1) {
+            self::logRead([
+                'kind'        => self::KIND_SKIPPED_VIRTUAL,
+                'config_uuid' => $configUuid,
+            ]);
             return;
         }
 
@@ -166,6 +193,25 @@ final class ConfigReadRouter
         $onlyInRows = array_values(array_diff($rowTuples, $jsonTuples));
 
         if (empty($onlyInJson) && empty($onlyInRows)) {
+            // THE DENOMINATOR (F-27). Before this, agreement was silent and the
+            // log held divergences only -- so an empty log meant either "every
+            // read agreed" or "no read ever reached the router", and nothing
+            // could tell them apart. U-X.2's acceptance criterion is literally
+            // "divergence log must stay empty over >=72h", which a router that
+            // never executes satisfies perfectly. That is the same fail-open
+            // shape as F-10 (reports exiting 0 having run nothing) and F-8/F-23
+            // (a ratio whose denominator was never established).
+            //
+            // Recording agreement costs one appended line per config-detail read
+            // -- getConfigurationDetails() has exactly two callers and neither
+            // loops -- against a comparison that already ran a liveRows() query
+            // and canonicalized both sides. The write is the cheap part.
+            self::logRead([
+                'kind'         => self::KIND_COMPARED,
+                'config_uuid'  => $configUuid,
+                'legacy_count' => count($legacy),
+                'rows_count'   => count($rows),
+            ]);
             return;
         }
 
@@ -175,7 +221,8 @@ final class ConfigReadRouter
         // backfilled, so zero rows on a real config means the backfill missed it
         // or dual-write is off; either way the operator needs to see it, and
         // excusing it is the fail-open mistake F-21 was.
-        self::logDivergence([
+        self::logRead([
+            'kind'           => self::KIND_DIVERGENCE,
             'config_uuid'    => $configUuid,
             'rows_side_empty' => empty($rows),
             'legacy_count'   => count($legacy),
@@ -185,7 +232,7 @@ final class ConfigReadRouter
         ]);
     }
 
-    private static function logDivergence(array $record): void
+    private static function logRead(array $record): void
     {
         $dir = __DIR__ . '/../../../reports/shadow';
         if (!is_dir($dir)) {
@@ -197,8 +244,17 @@ final class ConfigReadRouter
             // local harness replay is always cli. Same field, same reason, as
             // ShadowRunner and CommandShadowLog (finding F-23): without it a reader
             // cannot tell real traffic from the test suite talking to itself, and
-            // U-X.2's "72h with an EMPTY divergence log" criterion is only
-            // meaningful if a local test run cannot dirty that log.
+            // U-X.2's soak criterion is only meaningful if a local test run cannot
+            // dirty that log.
+            //
+            // This was not hypothetical. On 2026-07-29 the production copy of
+            // read-20260728.jsonl held 6 rows, ALL sapi=cli and ALL stamped
+            // +02:00 -- production runs UTC, so they were written by a local tree
+            // and carried up by SFTP (reports/ is not in the ignore list). Under
+            // U-X.2's original wording those rows alone would have restarted a
+            // 72h clock for a reason that had nothing to do with production.
+            // read_report.php therefore filters on this field, exactly as the
+            // other two parity reports do.
             'sapi' => PHP_SAPI,
         ], $record);
         @file_put_contents(

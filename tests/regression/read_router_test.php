@@ -94,6 +94,39 @@ check('=on does NOT swallow exceptions (fail-closed: it must not silently serve 
     preg_match('/rowsToLegacyShape.*?catch/s', substr($routerSrc, strpos($routerSrc, '// =on.'))) !== 1);
 check('divergence rows carry the sapi discriminator (F-23)', strpos($routerSrc, "'sapi' => PHP_SAPI") !== false);
 
+// ---- F-27: the read log must have a denominator -------------------------
+// These are asserted STRUCTURALLY as well as behaviourally, because the
+// behavioural proof lives in the DB-backed section below and that section skips
+// whenever the scratch DB is unreachable -- which is the normal case on a dev
+// box. A guarantee that only holds when an optional fixture is present is the
+// same kind of un-evidenced claim F-27 itself was.
+check('the router records agreement, not only disagreement (F-27 denominator)',
+    strpos($routerSrc, 'KIND_COMPARED') !== false
+    && preg_match('/if \(empty\(\$onlyInJson\) && empty\(\$onlyInRows\)\) \{.*?KIND_COMPARED/s', $routerSrc) === 1);
+check('a virtual-config skip is recorded, so a virtual-only window cannot read as a clean comparison',
+    strpos($routerSrc, 'KIND_SKIPPED_VIRTUAL') !== false);
+check('all three row kinds are public constants a reader can bind to',
+    ConfigReadRouter::KIND_COMPARED === 'compared'
+    && ConfigReadRouter::KIND_DIVERGENCE === 'divergence'
+    && ConfigReadRouter::KIND_SKIPPED_VIRTUAL === 'skipped_virtual');
+
+// The stream is only useful if something consumes it. This is the gap
+// command_parity closed for the command stream on 2026-07-27.
+$readReportPath = "$ROOT/scripts/verify/read_report.php";
+check('a gate report consumes the read stream (scripts/verify/read_report.php exists)', is_file($readReportPath));
+if (is_file($readReportPath)) {
+    $reportSrc = file_get_contents($readReportPath);
+    check('read_report treats a row with NO kind as a divergence, never as a comparison',
+        strpos($reportSrc, "\$row['kind'] ?? KIND_DIVERGENCE") !== false);
+    check('read_report is RED on zero production comparisons (emptiness must not pass)',
+        preg_match('/function readReportGreen.*?comparisons.*?>\s*0/s', $reportSrc) === 1);
+    check('read_report excludes cli rows (F-23)', strpos($reportSrc, "\$sapi === 'cli'") !== false);
+}
+$runAllSrc = file_get_contents("$ROOT/scripts/verify/run_all.php");
+check("the read report is registered and wired into P8's gate",
+    strpos($runAllSrc, "'read'        => ['script'") !== false
+    && preg_match("/'P8'\s*=>\s*\[[^\]]*'read'/", $runAllSrc) === 1);
+
 // U-X.1 checklist item 3: the cache sits ABOVE the router.
 $cachePos  = strpos($sbSrc, '$this->configCache->getConfiguration($configUuid)');
 $routerPos = strpos($sbSrc, 'ConfigReadRouter::components(');
@@ -105,10 +138,18 @@ check('the configuration cache is checked BEFORE the router is reached (cache ca
 // until U-D.3. Asserted EXACTLY (not ">=") on purpose: routing one more caller,
 // or letting one drift back to direct extraction, must fail here and be a
 // deliberate decision rather than a silent side effect. 14 in-file call sites
-// existed before this unit; 13 remain after getConfigurationDetails was routed.
+// existed before this unit; 13 remained after getConfigurationDetails was routed.
+//
+// 2026-07-29: raised 13 -> 14. The BUGFIX (TP-5A) batching change on the add path
+// added a fourteenth direct call ("batch ONE query per component TYPE instead of
+// one query per existing component"). It is a MUTATION-path caller, so it falls
+// squarely inside the carve-out this check exists to fence -- the pin was stale,
+// not violated, and had been failing the gate on a count rather than on drift.
+// Raised deliberately and recorded here; routing it belongs to U-D.3 with the
+// other thirteen.
 $directCalls = substr_count($sbSrc, '$this->extractComponentsFromJson(');
-check("exactly 13 mutation/validation-path callers still extract directly (found $directCalls) and the carve-out is documented",
-    $directCalls === 13 && strpos($sbSrc, 'MUTATION-PATH CALLERS THAT STAY DIRECT') !== false);
+check("exactly 14 mutation/validation-path callers still extract directly (found $directCalls) and the carve-out is documented",
+    $directCalls === 14 && strpos($sbSrc, 'MUTATION-PATH CALLERS THAT STAY DIRECT') !== false);
 
 // portIndexFromSlotRef is the inverse of the writer's slot_ref format.
 foreach ([['port_0', 0], ['port_3', 3], ['port_12', 12], [null, null], ['', null],
@@ -146,15 +187,79 @@ if ($pdo === null) {
 require_once $ROOT . '/core/models/server/ServerBuilder.php';
 $builder = new ServerBuilder($pdo);
 
+$logFile = $ROOT . '/reports/shadow/read-' . date('Ymd') . '.jsonl';
+$logLines = function () use ($logFile): int {
+    return is_file($logFile) ? count(file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)) : 0;
+};
+/**
+ * Counts by 'kind' (F-27). A raw line delta stopped being a divergence count on
+ * 2026-07-29, when the router began recording agreement too -- and a test that
+ * kept counting lines would have read the new denominator as new divergences.
+ * A row with no 'kind' is a pre-F-27 divergence, matching read_report.php.
+ *
+ * @return array<string,int>
+ */
+$logKinds = function () use ($logFile): array {
+    $counts = ['compared' => 0, 'divergence' => 0, 'skipped_virtual' => 0];
+    if (!is_file($logFile)) { return $counts; }
+    foreach (file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $rec = json_decode($line, true);
+        if (!is_array($rec)) { continue; }
+        $kind = $rec['kind'] ?? 'divergence';
+        $counts[$kind] = ($counts[$kind] ?? 0) + 1;
+    }
+    return $counts;
+};
+
+// ---- F-27 end-to-end, with NO fixture requirement ------------------------
+// The virtual-config branch returns before config_components is ever queried,
+// so this proves the writer works end to end -- file append, sapi tag, kind
+// field -- on any reachable DB, including a replica too old for the assertions
+// below. It is also the exact path that was previously silent: a window of
+// nothing but virtual reads produced no rows at all and was indistinguishable
+// from a router that never ran.
+putenv('READ_FROM_ROWS=sample');
+unset($_ENV['READ_FROM_ROWS']);
+$beforeVirtual = $logKinds();
+ConfigReadRouter::components($builder, $pdo, [
+    'config_uuid' => 'READ-ROUTER-TEST-VIRTUAL',
+    'is_virtual'  => 1,
+]);
+$afterVirtual = $logKinds();
+check('=sample RECORDS a virtual-config skip end to end (F-27: the skip used to be silent)',
+    $afterVirtual['skipped_virtual'] === $beforeVirtual['skipped_virtual'] + 1);
+if ($afterVirtual['skipped_virtual'] > $beforeVirtual['skipped_virtual']) {
+    $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    $rec = json_decode(end($lines), true);
+    check('the skip row is tagged kind=skipped_virtual and identifies the config',
+        ($rec['kind'] ?? null) === ConfigReadRouter::KIND_SKIPPED_VIRTUAL
+        && ($rec['config_uuid'] ?? null) === 'READ-ROUTER-TEST-VIRTUAL');
+    check('the skip row carries sapi=cli, so read_report excludes it from the soak (F-23)',
+        ($rec['sapi'] ?? null) === 'cli');
+    check('the skip row carries an instant-comparable ts', isset($rec['ts']) && strtotime((string)$rec['ts']) !== false);
+}
+
 /** Configs that actually have BOTH sides — the only ones these assertions mean anything on. */
-$fixtures = $pdo->query("
-    SELECT sc.*
-      FROM server_configurations sc
-     WHERE sc.is_virtual = 0
-       AND EXISTS (SELECT 1 FROM config_components cc
-                    WHERE cc.config_uuid = sc.config_uuid AND cc.removed_at IS NULL)
-     ORDER BY sc.config_uuid
-")->fetchAll();
+//
+// Wrapped (2026-07-29): a replica without the P2 tables used to take this file
+// out with an uncaught PDOException, losing every result printed above it and
+// exiting 255. "The fixture is too old for this test" must SKIP, exactly as an
+// unreachable DB does -- a crash and a finding are not the same thing, and a
+// suite that cannot tell them apart cannot be trusted to report either.
+try {
+    $fixtures = $pdo->query("
+        SELECT sc.*
+          FROM server_configurations sc
+         WHERE sc.is_virtual = 0
+           AND EXISTS (SELECT 1 FROM config_components cc
+                        WHERE cc.config_uuid = sc.config_uuid AND cc.removed_at IS NULL)
+         ORDER BY sc.config_uuid
+    ")->fetchAll();
+} catch (PDOException $e) {
+    skip("fixture '$dbName' predates the P2 schema (" . $e->getCode() . ") — all three-mode assertions");
+    echo "\n" . ($fails === 0 ? "OK" : "FAILURES") . ": $fails fail(s), $skips skipped\n";
+    exit($fails === 0 ? 0 : 1);
+}
 
 if (!$fixtures) {
     skip('no dual-written config in the fixture (is_virtual=0 with live config_components rows)');
@@ -162,11 +267,6 @@ if (!$fixtures) {
     exit($fails === 0 ? 0 : 1);
 }
 echo "  (fixture: " . count($fixtures) . " dual-written config(s) in '$dbName')\n";
-
-$logFile = $ROOT . '/reports/shadow/read-' . date('Ymd') . '.jsonl';
-$logLines = function () use ($logFile): int {
-    return is_file($logFile) ? count(file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)) : 0;
-};
 
 // ---- =off is the identity ------------------------------------------------
 putenv('READ_FROM_ROWS=off');
@@ -187,7 +287,7 @@ check('=off writes nothing to the divergence log', $logLines() === $before);
 // ---- =sample returns legacy, and stays quiet on a healthy fixture --------
 putenv('READ_FROM_ROWS=sample');
 unset($_ENV['READ_FROM_ROWS']);
-$before = $logLines();
+$beforeKinds = $logKinds();
 $sampleIdentical = 0;
 foreach ($fixtures as $row) {
     $legacy = $builder->extractComponentsFromJson($row);
@@ -196,12 +296,21 @@ foreach ($fixtures as $row) {
 check("=sample returns the legacy answer unchanged on all " . count($fixtures) . " configs",
     $sampleIdentical === count($fixtures));
 
-$sampleDivergences = $logLines() - $before;
+$afterKinds = $logKinds();
+$sampleDivergences = $afterKinds['divergence'] - $beforeKinds['divergence'];
+$sampleCompared    = $afterKinds['compared'] - $beforeKinds['compared'];
+
+// F-27, THE DENOMINATOR. Before 2026-07-29 an agreeing read wrote nothing, so the
+// only evidence a healthy fixture could produce was an absence -- indistinguishable
+// from the router never having run. Every non-virtual read must now leave a row.
+check('=sample records EVERY comparison, not only disagreements (F-27 denominator)',
+    ($sampleDivergences + $sampleCompared) === count($fixtures));
+
 // NOT asserted as "must be 0": whether this fixture is equivalent is a property of
 // the DUMP, not of the router. A non-empty log here is real information (it is
 // exactly what U-X.2's 72h criterion measures) and is reported, not hidden.
 if ($sampleDivergences === 0) {
-    check('=sample log stays EMPTY on a healthy (equivalent) fixture', true);
+    check("=sample logs no divergence on a healthy (equivalent) fixture, and $sampleCompared comparison(s)", true);
 } else {
     echo "  INFO   =sample logged $sampleDivergences divergence(s) on this fixture — the fixture is\n";
     echo "         not equivalent. That is an equivalence_report finding, not a router bug;\n";
@@ -245,6 +354,8 @@ if ($corruptTarget === null) {
         if ($after > $before) {
             $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             $rec = json_decode(end($lines), true);
+            check('divergence row is tagged kind=divergence, so a reader need not infer it (F-27)',
+                ($rec['kind'] ?? null) === ConfigReadRouter::KIND_DIVERGENCE);
             check('divergence row identifies the config', ($rec['config_uuid'] ?? null) === $row['config_uuid']);
             check('divergence row names what is missing from the rows side', !empty($rec['only_in_json']));
             check('divergence row is tagged sapi=cli when written by this harness (F-23)', ($rec['sapi'] ?? null) === 'cli');

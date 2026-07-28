@@ -67,14 +67,20 @@ function loadExpectedDiffs(): array {
  *         across the given files, dropped to rows with ts >= $sinceCutoff
  *         when a cutoff is given (null = no filtering, the original behavior).
  */
-function readShadowRows(array $files, ?string $sinceCutoff = null): array {
+function readShadowRows(array $files, ?string $sinceCutoff = null, ?int &$undecodable = null): array {
     $rows = [];
+    // Counted, not silently dropped (2026-07-29). A BOM-prefixed first line made
+    // json_decode return null and this loop discarded the row without a word.
+    // Out-param rather than a changed return shape, so both call sites and the
+    // self-test keep working unchanged. See read_report.php's note.
+    $undecodable = 0;
     foreach ($files as $file) {
         if (!is_file($file)) continue;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-            $decoded = json_decode($line, true);
+            $decoded = json_decode(preg_replace('/^\xEF\xBB\xBF/', '', $line), true);
+            if (!is_array($decoded)) { $undecodable++; }
             if (is_array($decoded)) {
-                if ($sinceCutoff !== null && (!isset($decoded['ts']) || substr($decoded['ts'], 0, 10) < $sinceCutoff)) {
+                if ($sinceCutoff !== null && (!isset($decoded['ts']) || substr($decoded['ts'], 0, strlen($sinceCutoff)) < $sinceCutoff)) {
                     continue;
                 }
                 $rows[] = $decoded;
@@ -286,11 +292,17 @@ foreach ($argv as $i => $arg) {
         $fileArgs[] = $argv[$i + 1];
     }
     if ($arg === '--since' && isset($argv[$i + 1])) {
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $argv[$i + 1]) !== 1) {
-            fwrite(STDERR, "parity_report: --since expects YYYY-MM-DD, got '{$argv[$i + 1]}'\n");
+        // Optional time part (2026-07-29): a fix that deploys mid-day leaves
+        // pre-fix and post-fix rows in the SAME file, and a date-only cutoff can
+        // exclude neither without also excluding the evidence. Rows are compared
+        // on the matching ISO prefix, which is well-ordered as long as every ts
+        // carries the same UTC offset -- both writers use date('c') on the
+        // server, so they do.
+        if (preg_match('/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/', $argv[$i + 1]) !== 1) {
+            fwrite(STDERR, "parity_report: --since expects YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS], got '{$argv[$i + 1]}'\n");
             exit(1);
         }
-        $sinceCutoff = $argv[$i + 1];
+        $sinceCutoff = str_replace(' ', 'T', $argv[$i + 1]);
     }
 }
 $files = $fileArgs ?: glob(__DIR__ . '/../../reports/shadow/engine-*.jsonl') ?: [];
@@ -316,7 +328,7 @@ foreach ($files as $candidate) {
 $files = $dedupedFiles;
 
 $expectedDiffs = loadExpectedDiffs();
-$rows = readShadowRows($files, $sinceCutoff);
+$rows = readShadowRows($files, $sinceCutoff, $undecodableLines);
 $analysis = analyze($rows, $expectedDiffs);
 $file = writeReport($analysis, false);
 
@@ -328,6 +340,10 @@ if ($analysis['operations_compared'] === 0) {
 }
 if ($duplicateFiles !== []) {
     echo "parity_report: " . count($duplicateFiles) . " duplicate input file(s) skipped: " . implode('; ', $duplicateFiles) . "\n";
+}
+if ($undecodableLines > 0) {
+    echo "parity_report: WARNING $undecodableLines input line(s) could not be decoded and were dropped -- "
+        . "this window is measured over FEWER rows than the log contains\n";
 }
 if ($analysis['advisory_excluded'] > 0) {
     echo "parity_report: {$analysis['advisory_excluded']} advisory row(s) excluded (F-8: unlocked pre-check, not an enforcement decision)\n";

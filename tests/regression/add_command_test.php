@@ -71,6 +71,14 @@ check('validateComponentAddition\'s shadow hook resolves slot_ref from port_inde
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";
 require_once __DIR__ . '/_scratch_db.php';
 $pdo = scratch_db_connect();
+// A REACHABLE replica that predates P2 used to sail past the null check and then
+// crash mid-fixture with an uncaught PDOException (exit 255, all prior results
+// lost). Downgrade it to the same honest skip an unreachable DB gets, naming the
+// reason so "cannot run" is never mistaken for "ran and agreed".
+if ($pdo !== null && ($schemaGap = scratch_db_schema_gap($pdo)) !== null) {
+    echo "  (scratch DB unusable: $schemaGap)\n";
+    $pdo = null;
+}
 if ($pdo === null) {
     echo "  SKIPPED  enforce: add a compatibility-pre-checked component, verify one revision bump + a config_components row\n";
     echo "  SKIPPED  enforce: blocked add raises CommandFailed(validation_blocked) pre-apply (no row, no revision bump)\n";

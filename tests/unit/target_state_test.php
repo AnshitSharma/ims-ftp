@@ -23,12 +23,19 @@ function check($label, $cond) {
     if (!$cond) { $fails++; }
 }
 
-$pdo = new PDO(
-    'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
-    getenv('GOLDEN_DB_USER') ?: 'root',
-    getenv('GOLDEN_DB_PASS') ?: '',
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-);
+require_once $ROOT . '/tests/regression/_scratch_db.php';
+$pdo = null;
+try {
+    $pdo = new PDO(
+        'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
+        getenv('GOLDEN_DB_USER') ?: 'root',
+        getenv('GOLDEN_DB_PASS') ?: '',
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+} catch (\Throwable $e) {
+    // Reported by scratch_db_or_skip() below, uniformly with a stale-schema replica.
+}
+$pdo = scratch_db_or_skip($pdo, 'TargetStateBuilder against a live schema');
 
 // -----------------------------------------------------------------------
 echo "-- fromCurrent(): JSON fallback path (real fixture, rows cleared inside the tx) --\n";

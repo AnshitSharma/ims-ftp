@@ -58,13 +58,49 @@ check('legacy finalize body is untouched below the enforce delegation (U-D.2 del
 // =========================================================================
 echo "-- server_api.php: unlocked comprehensive pre-check dropped at enforce --\n";
 $apiSrc = file_get_contents("$ROOT/api/handlers/server/server_api.php");
-check('handleFinalizeConfiguration only runs the unlocked validateConfigurationComprehensive pre-check when NOT enforce', preg_match('/CommandLayer::mode\(\) !== .enforce.[\s\S]{0,200}validateConfigurationComprehensive/', $apiSrc) === 1);
+// The handler hoists CommandLayer::mode() into $commandLayerMode (the finalize
+// shadow hook, U-A.2, needs to test it twice), so accept either the inline call
+// or that variable -- the guarantee under test is "the pre-check sits inside a
+// NOT-enforce branch", not which spelling reads the flag.
+check('handleFinalizeConfiguration only runs the unlocked validateConfigurationComprehensive pre-check when NOT enforce', preg_match('/(CommandLayer::mode\(\)|\$commandLayerMode) !== .enforce.[\s\S]{0,200}validateConfigurationComprehensive/', $apiSrc) === 1);
+
+// U-A.2 (2026-07-29): the finalize shadow hook itself. Without it the four
+// Trigger::FINALIZE rules never ran in production and COMMAND_LAYER's soak could
+// not produce evidence at all -- see CommandShadowLog's SCOPE note.
+check('handleFinalizeConfiguration dry-runs TransitionStatusCommand at shadow',
+    preg_match('/\$commandLayerMode === .shadow.[\s\S]{0,600}TransitionStatusCommand[\s\S]{0,300}->dryRun\(\)/', $apiSrc) === 1);
+// Ordering, asserted by position rather than proximity: a distance-bounded regex
+// would start failing on a comment edit, which is not what this protects.
+$recordAt = strpos($apiSrc, "CommandShadowLog::record('finalize'");
+$earlyReturnAt = strpos($apiSrc, "Configuration is not valid for finalization");
+check('the finalize shadow row is recorded BEFORE the invalid-config early return (else only legacy-approved configs are ever logged)',
+    $recordAt !== false && $earlyReturnAt !== false && $recordAt < $earlyReturnAt);
+
+// The legacy-accepted branch must compare against what finalizeConfiguration()
+// ACTUALLY returned, not against the pre-check. A passing pre-check does not mean
+// the finalize succeeded (an already-finalized config passes comprehensive
+// validation and is still refused by the status transition), and recording the
+// pre-check's answer there feeds a false verdict into the parity report -- the
+// same "hardcoded precheck-passed assumption" handleAddComponent warns about.
+$finalizeCallAt = strpos($apiSrc, '$serverBuilder->finalizeConfiguration($configUuid');
+$realOutcomeAt = strpos($apiSrc, "\$recordFinalizeShadow(empty(\$result['success']))");
+check('the legacy-accepted finalize row is recorded from the REAL finalizeConfiguration() outcome, after it runs',
+    $finalizeCallAt !== false && $realOutcomeAt !== false && $finalizeCallAt < $realOutcomeAt);
+check('legacy_blocked is never taken from the pre-check on the accepted path',
+    strpos($apiSrc, "], !\$validation['valid'], \$finalizeDryRunFailed") === false);
 
 // =========================================================================
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";
 require_once __DIR__ . '/_scratch_db.php';
 require_once "$ROOT/core/models/state/StateMachine.php";
 $pdo = scratch_db_connect();
+// See add_command_test.php: a reachable but pre-P2 replica must SKIP, not crash.
+// This file was the one that proved it -- against a stale replica it died on
+// `Unknown column 'server_name'` at the first fixture INSERT, exit 255.
+if ($pdo !== null && ($schemaGap = scratch_db_schema_gap($pdo)) !== null) {
+    echo "  (scratch DB unusable: $schemaGap)\n";
+    $pdo = null;
+}
 
 // server_configurations.created_by is FK-constrained to users.id
 // (fk_server_config_user). This test used to hardcode id 5, which no longer
@@ -283,6 +319,12 @@ if ($pdo === null) {
 echo "-- two-connection concurrency scenarios (real scratch DB, SKIPPED otherwise) --\n";
 $conn1 = scratch_db_connect();
 $conn2 = scratch_db_connect();
+// Second connect site, same guard: these scenarios open their own connections
+// and so bypass the check above entirely.
+if ($conn1 !== null && ($schemaGap = scratch_db_schema_gap($conn1)) !== null) {
+    echo "  (scratch DB unusable: $schemaGap)\n";
+    $conn1 = null;
+}
 if ($conn1 === null || $conn2 === null) {
     echo "  SKIPPED  409 real-revision after concurrent mutation\n";
     echo "  SKIPPED  finalize race: blocks under lock while another connection holds it\n";

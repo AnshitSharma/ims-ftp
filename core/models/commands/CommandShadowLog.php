@@ -22,12 +22,22 @@
  *      blocked too (agreement) was therefore indistinguishable from a genuine
  *      divergence. The call site now dry-runs, runs legacy, and records both.
  *
- * SCOPE — add and remove only, deliberately. replace-component and
- * transition-status are v2-only actions with NO legacy counterpart
- * (08-api-adapters/DEPRECATION.md; RULE_MAP.md documents replace as
+ * SCOPE — add, remove, and (2026-07-29) finalize. replace-component and the
+ * standalone server-transition-status action are v2-only with NO legacy
+ * counterpart (08-api-adapters/DEPRECATION.md; RULE_MAP.md documents replace as
  * zero-diffs-by-construction), so there is no legacy verdict to compare them
  * against and a parity row for them would be meaningless. Their absence from
  * this log is correct, not a gap.
+ *
+ * FINALIZE is the exception to that rule and was the log's real blind spot: it
+ * DOES have a legacy counterpart — handleFinalizeConfiguration()'s
+ * validateConfigurationComprehensive() pre-check, the exact check
+ * COMMAND_LAYER=enforce deletes in TransitionStatusCommand's favour. It is also
+ * the only op reaching the four Trigger::FINALIZE rules (system.singleton,
+ * system.inventory_state, system.psu_capacity, system.required_set), none of
+ * which had ever executed in production before the U-A.2 hook landed. A finalize
+ * row carries no component (both subject fields null) — the subject is the
+ * configuration itself.
  *
  * ROW SHAPE is an additive EXTENSION of what the two inline writers already
  * emitted — `legacy_blocked` / `command_blocked` / `command_failures` keep

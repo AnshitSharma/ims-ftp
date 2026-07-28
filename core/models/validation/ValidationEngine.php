@@ -4,6 +4,9 @@ require_once __DIR__ . '/RuleInterface.php';
 require_once __DIR__ . '/RuleResult.php';
 require_once __DIR__ . '/Verdict.php';
 require_once __DIR__ . '/Severity.php';
+// Referenced directly by rulesFor()'s FINALIZE-subsumes-VALIDATE check (F-26),
+// not just transitively through the rule files.
+require_once __DIR__ . '/Trigger.php';
 require_once __DIR__ . '/rules/CpuSocketMatchRule.php';
 require_once __DIR__ . '/rules/CpuSocketCountRule.php';
 require_once __DIR__ . '/rules/CpuMixedModelsRule.php';
@@ -93,8 +96,48 @@ class ValidationEngine
     }
 
     /**
-     * Evaluate every registered rule whose triggers() include $trigger against
-     * $state. A rule that throws is NEVER swallowed (INV-5, fail-closed): its
+     * F-26 (2026-07-29): FINALIZE SUBSUMES VALIDATE.
+     *
+     * Only 4 of the 22 registered rules declare Trigger::FINALIZE. Legacy's
+     * finalize gate is validateConfigurationComprehensive() — the WHOLE
+     * compatibility suite — and COMMAND_LAYER_ENABLED=enforce deletes that gate
+     * in TransitionStatusCommand's favour (server_api.php's U-C.5 block). Under
+     * strict trigger membership that swap silently dropped 18 rules from
+     * finalize.
+     *
+     * Caught the first time a complete build was finalized under the new
+     * finalize shadow hook: 2026-07-28T20:03:44Z, config a3177ce9 — legacy
+     * blocked on missing_caddy + ram_type_incompatible, the command layer
+     * allowed it with ZERO failures. Not a rule bug; a registry-coverage hole.
+     *
+     * Adding FINALIZE to 18 rule files would say the same thing 18 times and
+     * invite the next rule to forget it. The relationship is structural instead:
+     * VALIDATE means "assess this whole configuration", FINALIZE means "assess
+     * it and then commit" — so anything that runs at VALIDATE must run at
+     * FINALIZE, by construction, and a new rule inherits that automatically.
+     *
+     * NOT symmetric: ADD/REPLACE/REMOVE stay strict. Those are per-operation
+     * triggers where a config-scope rule (e.g. system.required_set on a
+     * half-built draft) would block a legitimate edit — the A-12 reasoning.
+     *
+     * Severity is untouched: VALIDATION_FAILURE blocks under VALIDATE/FINALIZE
+     * and not under ADD (Verdict::blocking()), which is precisely why
+     * storage.caddy_pairing — ADD,VALIDATE, VALIDATION_FAILURE — could not block
+     * anywhere finalize actually reached before this.
+     */
+    private static function rulesFor(RuleInterface $rule, string $trigger): bool
+    {
+        $triggers = $rule->triggers();
+        if (in_array($trigger, $triggers, true)) {
+            return true;
+        }
+        return $trigger === Trigger::FINALIZE && in_array(Trigger::VALIDATE, $triggers, true);
+    }
+
+    /**
+     * Evaluate every registered rule that applies to $trigger against $state
+     * (see rulesFor() — FINALIZE additionally picks up every VALIDATE rule).
+     * A rule that throws is NEVER swallowed (INV-5, fail-closed): its
      * exception is synthesized into a failed ERROR RuleResult
      * 'engine.rule_exception' so one broken rule cannot silently pass a
      * config through.
@@ -105,7 +148,7 @@ class ValidationEngine
         foreach (static::RULES as $ruleClass) {
             /** @var RuleInterface $rule */
             $rule = new $ruleClass();
-            if (!in_array($trigger, $rule->triggers(), true)) {
+            if (!self::rulesFor($rule, $trigger)) {
                 continue;
             }
             try {

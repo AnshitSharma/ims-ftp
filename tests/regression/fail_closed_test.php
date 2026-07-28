@@ -67,6 +67,12 @@ putenv("IMS_DATA_PATH=$tmpImsData");
 $configUuid = null;
 $pdo = null;
 
+// Pre-flight, BEFORE the fixture try/finally below. Reaching that finally with an
+// unusable DB made the CLEANUP throw (raminventory absent), so this suite exited
+// 255 instead of skipping — in every environment without a provisioned replica.
+require_once __DIR__ . '/_scratch_db.php';
+scratch_db_or_skip(scratch_db_connect(), 'fail-closed spec-gate probes');
+
 try {
     putenv("DB_HOST=$dbHost"); putenv("DB_NAME=$dbName");
     putenv("DB_USER=$dbUser"); putenv("DB_PASS=$dbPass");

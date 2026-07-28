@@ -152,7 +152,7 @@
                 "U-C.3": "implemented",
                 "U-C.4": "verified",
                 "U-C.5": "implemented",
-                "U-C.6": "blocked"
+                "U-C.6": "in_progress"
             }
         },
         {
@@ -179,7 +179,8 @@
                 "slot",
                 "ledger",
                 "inventory",
-                "performance"
+                "performance",
+                "read"
             ],
             "units": {
                 "U-X.1": "implemented",
@@ -215,6 +216,73 @@
             }
         }
     ],
+    "twenty_fourth_session_2026_07_29": {
+        "date": "2026-07-29",
+        "note": "NEWEST SESSION -- supersedes twenty_third_session_2026_07_29. Scope: root-cause READ_FROM_ROWS=sample's zero production rows. All flags UNCHANGED (DUAL_WRITE=on, STATE_MACHINE=enforce, ENGINE_MODE=enforce, COMMAND_LAYER=shadow, READ_FROM_ROWS=sample). No DB change, therefore no seeder. Legacy code untouched.",
+        "F-27_the_read_log_had_no_denominator": {
+            "symptom": "READ_FROM_ROWS has sat at sample with ZERO production rows for its entire soak.",
+            "finding": "ConfigReadRouter logged DIVERGENCES ONLY. 'every read agreed' and 'no read ever reached the router' therefore produced the identical artifact -- an absent file. U-X.2's acceptance criterion is literally 'divergence log must stay empty over >=72h', which a router that never executes satisfies perfectly. Third instance of this shape: F-10 (reports exiting 0 having run nothing), F-8/F-23 (a ratio whose denominator was never established), and now this.",
+            "fix": "Every outcome now carries a 'kind': compared | divergence | skipped_virtual. A reader treats a MISSING kind as a divergence (pre-2026-07-29 rows) so history cannot manufacture a denominator it never measured. Virtual-config skips are recorded too -- a window of nothing but virtual reads has performed no comparison and must not read as clean.",
+            "proof": "FIRST production rows the read stream has ever held, 2026-07-28T22:21:17Z: two kind=compared, sapi=litespeed, legacy_count 7 == rows_count 7 on both live configs. The two stores agree; that fact was previously unrecordable."
+        },
+        "what_landed": [
+            "scripts/verify/read_report.php (NEW): gates reports/shadow/read-*.jsonl. GREEN requires ALL of -- 0 divergences, 0 unrecognised kinds, >0 production comparisons, observed window >= --min-hours (default 72). Excludes sapi=cli. NO expected-diffs file by design: two stores disagreeing about configuration MEMBERSHIP is never a legitimate verdict difference, it means one is wrong about the hardware. 13-check --self-test PASS.",
+            "run_all.php: 'read' registered and added to P8's gate_reports (mirrored into this file). It takes the same standing --since cutoff as the other two shadow reports, because F-27 changed what a row in that stream MEANS.",
+            "U-X.2 execution pack, criterion 1 AMENDED: 'divergence log must stay empty' -> read_report.php GREEN. The old wording could not fail.",
+            "SFTP ignore list: 'reports' + 'reports/**' added. THIS WAS THE ROOT CAUSE of a contaminated production log -- read-20260728.jsonl held 6 rows, all sapi=cli and all stamped +02:00 (production runs UTC), written by a local tree and carried up on save. Under U-X.2's original wording those rows alone would have restarted the 72h clock.",
+            "All three shadow-log readers: undecodable input lines are COUNTED and warned about instead of silently skipped, and a leading UTF-8 BOM is recovered. Found live -- a log pulled through PowerShell 5.1 gained a BOM, line 1 failed json_decode, and the row count went 6 -> 5 with nothing said.",
+            "tests/run_tests.php (NEW): runs the suites by DISCOVERY. 37 suites exist; every prior session's sweep was a hand-typed list of 11, two of which named files that do not exist."
+        ],
+        "test_suite_was_red_and_the_sweep_could_not_see_it": {
+            "symptom": "The hand-maintained sweep reported 'all 11 tests pass'. A glob found 37 suites, 10 of which exited 255 with an uncaught PDOException.",
+            "finding": "Two independent defects. (1) A REACHABLE but stale replica sailed past every connection guard and then died mid-fixture -- 'Unknown column server_name', 'Table config_components doesn't exist'. (2) The inverse: with mysqld simply absent, four suites printed 'ALL CHECKS PASS' and exited 0 having executed no DB assertion at all. Cannot-run and ran-and-agreed produced the same output.",
+            "fix": "scratch_db_schema_gap() + scratch_db_or_skip() in tests/regression/_scratch_db.php, wired into all 12 DB-backed suites. A suite that proves nothing now prints 'SKIPPED: 0 check(s) run -- this suite proved NOTHING in this environment' and the runner counts it apart from a pass. serial_less_unit_identity's passwordless-connection REFUSAL is unchanged; only its exit code is, so a safety guard is no longer indistinguishable from a failure.",
+            "note": "This is the same wrong-denominator shape as F-8/F-23/F-27, committed in the VERIFICATION step itself. A glob cannot drift from the directory it globs; a typed list can, and did."
+        },
+        "verification": "37 suites discovered, 28 passed, 0 failed, 9 ran nothing (no provisioned scratch DB) -- identical result with the scratch DB reachable and unreachable, which is the point. All 3 report self-tests PASS. All changed PHP lints clean; all 4 JSON files valid. Production: both live configs read successfully through the routed path after deploy.",
+        "open": [
+            "READ_FROM_ROWS soak has now STARTED (first 2 production comparisons, 2026-07-28T22:21Z) where before it had not. U-X.2 needs >=72h and >0 comparisons; read_report.php can now certify it.",
+            "The scratch replica ims_compat_golden predates P2 (10 tables, no config_components). 9 suites can only skip until it is rebuilt from the schema dump + seeders. Rebuilding it is the single highest-value unblock for local verification.",
+            "U-C.6 unchanged: COMMAND_LAYER=enforce still needs post-cutoff finalize traffic. Note the cutoff 2026-07-29 is in UTC and the server clock was still 2026-07-28T22:21Z at the end of this session.",
+            "Seeder 2026_07_28_001 (status_v2 backfill) STILL awaits manual application -- the whole of P2's remaining precondition, and P3's shadow soak cannot start until it lands.",
+            "server-debug-shadow-log remains TEMPORARY -- retire with the other debug-* soak actions."
+        ]
+    },
+    "twenty_third_session_2026_07_29": {
+        "date": "2026-07-29",
+        "note": "SUPERSEDED by twenty_fourth_session_2026_07_29 (was NEWEST). Supersedes twenty_second_session_2026_07_28. Scope: wire the finalize dry-run logging that COMMAND_LAYER's shadow soak had always been missing, then follow the evidence it produced. All work against PRODUCTION (flags unchanged: DUAL_WRITE=on, STATE_MACHINE=enforce, ENGINE_MODE=enforce, COMMAND_LAYER=shadow, READ_FROM_ROWS=sample). No flag was flipped, no seeder was needed, legacy code untouched.",
+        "what_landed": [
+            "U-A.2 finalize shadow hook (server_api.php handleFinalizeConfiguration): dry-runs TransitionStatusCommand and records a CommandShadowLog row BEFORE the invalid-config early return, so configs legacy REJECTS are logged too (logging after the return would have sampled only legacy-approved configs).",
+            "command_parity_report.php: 'finalize' added to IN_SCOPE_OPS; finalize_ops + finalize_rule_coverage reported; finalize_ops === 0 is now gate-RED, because a window with no finalize op says nothing about the enforce swap.",
+            "expected-diff matching extended: a legacy-blocked/command-allowed row has NO command rule to cite, so entries may name a legacy_error_type instead (rows now log legacy_error_types). An entry naming neither is rejected at load.",
+            "--since accepts YYYY-MM-DDTHH:MM on both parity reports: a mid-day fix leaves pre- and post-fix rows in one file.",
+            "read_router_test direct-caller pin raised 13 -> 14 (stale, not drift: the TP-5A add-path batching fix added the 14th; it is a mutation-path caller and inside the documented carve-out).",
+            "SERVER_BUILD_GUIDE Bug 2 FIXED in legacy (ComponentValidator::validateRAMTypeCompatibility now normalizes both operands via DataNormalizationUtils::normalizeMemoryType). Regression test: tests/unit/validation/ram_type_normalization_test.php.",
+            "Finalize hook corrected TWICE after its own evidence exposed it: (a) legacy_blocked on the accepted path now comes from finalizeConfiguration()'s REAL return, not from the pre-check -- the exact 'hardcoded precheck-passed assumption' handleAddComponent warns against; (b) dry_run_error separates a deliberate CommandFailed refusal from a crash.",
+            "command_parity_report: a dryRun() that threw CommandFailed is now compared as command_blocked=true instead of being discarded. Folding refusals into the crash bucket meant every legitimate refusal was permanently gate-RED (the gate could never go green on real traffic) AND it HID the dangerous case where the command refuses what legacy allows."
+        ],
+        "F-26_finalize_ran_only_4_of_22_rules": {
+            "symptom": "First complete build the new hook ever saw: legacy blocked (missing_caddy + ram_type_incompatible), the command layer allowed it with ZERO failures. 2026-07-28T20:03:44Z, config a3177ce9.",
+            "finding": "Only 4 rules declared Trigger::FINALIZE. Legacy's finalize gate is validateConfigurationComprehensive() -- the whole compatibility suite -- and COMMAND_LAYER=enforce DELETES that gate in TransitionStatusCommand's favour. Strict trigger membership therefore dropped 18 rules from finalize at the exact moment the legacy check went away.",
+            "fix": "ValidationEngine::rulesFor(): FINALIZE subsumes VALIDATE (structural, not 18 edits -- a new rule inherits it). ADD/REPLACE/REMOVE stay strict per A-12. Finalize went 4 -> 21 rules. Test: tests/unit/validation/finalize_trigger_coverage_test.php.",
+            "note": "storage.caddy_pairing is the sharp edge: VALIDATION_FAILURE with triggers [ADD, VALIDATE], so pre-fix it blocked NOWHERE finalize reached. Verified re-blocking live at 2026-07-28T20:11:27Z."
+        },
+        "legacy_bug_2_is_fleet_wide": "The one surviving finalize divergence is legacy contradicting ITSELF, not the engine contradicting legacy. ComponentValidator::validateRAMTypeCompatibility():471 does a raw in_array('DDR4', ['DDR4 ECC']) with no normalization, so validateConfigurationComprehensive() rejects at finalize the RAM legacy's own add-time path just accepted. Measured against ims-data: NO ram entry is typed 'DDR4 ECC' while 13 of 23 motherboards demand exactly that string -- so those 13 boards can never finalize with any DDR4 RAM under legacy. Registered as an expected diff citing SERVER_BUILD_GUIDE Bug 2; the entry expires when Bug 2 is fixed.",
+        "command_parity_state": "Standing cutoff moved to 2026-07-29 (whole day, not a timestamp). Three changes on 2026-07-28 evening each alter what a shadow row MEANS -- F-26, Bug 2, and the finalize hook's two corrections -- so that day's rows are development churn under three instrumentation contracts. Picking a time that left only the agreeing rows would be choosing the answer; excluding the day excludes the favourable rows too. CONSEQUENCE, STATED PLAINLY: the command gate reads RED with '0 finalize operations' until real post-fix traffic arrives, and that is the correct reading. For the record, the pre-cutoff evidence at --since 2026-07-28T20:12 was 22 compared / 20 identical / 2 unexplained (both pre-Bug-2-fix) / 2 dry-run rows predating dry_run_error. Engine parity is GREEN at that same cutoff.",
+        "open": [
+            "U-C.6 in_progress. COMMAND_LAYER=enforce needs post-2026-07-29 finalize traffic; the instrumentation and the gate are now capable of certifying it, which they were not this morning.",
+            "READ_FROM_ROWS=sample still has ZERO production rows; the router sits below the config cache in getConfigurationDetails, so a cache hit skips it. Untouched this session.",
+            "server-debug-shadow-log is TEMPORARY -- retire with the other debug-* soak actions.",
+            "The both-allow finalize direction is now sampleable at all (it was structurally impossible under Bug 2), but only 1 such row exists so far."
+        ],
+        "bug_2_was_a_total_finalize_outage": {
+            "symptom": "Surfaced as a single expected-diff candidate; turned out to be a fleet-wide outage. No configuration in the system had EVER reached status 3.",
+            "finding": "ComponentValidator::validateRAMTypeCompatibility():471 compared memory types RAW: in_array('DDR4', ['DDR4 ECC']) === false. Measured against production: ALL 7 available motherboard models declare memory.type 'DDR4 ECC' with no supported_types, and NO ram entry in ims-data is typed 'DDR4 ECC'. validateConfigurationComprehensive() therefore rejected every finalize that could be attempted. Legacy also contradicted itself -- its own ADD-time path (validateMemoryTypeCompatibility) normalizes and accepted the same RAM.",
+            "fix": "Normalize both operands using the codebase's existing DataNormalizationUtils::normalizeMemoryType, whose own comment already says 'ECC is a feature flag, not a memory generation identifier'. The ECC dimension keeps its separate, deliberately non-blocking check (memory.ecc).",
+            "proof": "First successful finalize in this system's history: 2026-07-28T21:15:20Z. Inventory moved exactly +1 per type (no model-wide spillover), and after force-delete a unit-by-unit diff across all 10 inventory tables against a pre-test snapshot showed 0 differences.",
+            "note": "The engine was right all along -- MemoryTypeRule normalizes. The expected-diff entry excusing this was added and RETIRED the same day, in favour of fixing legacy."
+        }
+    },
     "twenty_second_session_2026_07_28": {
         "date": "2026-07-28",
         "note": "NEWEST SESSION -- supersedes twenty_first_session_2026_07_27 and everything below it. Substrate: the production dump the owner exported 2026-07-27 22:24 UTC (phpMyAdmin, 12 configs / 64 config_components / 86 config_resources / 69 config_events), loaded into throwaway replicas and driven from a DISPOSABLE TREE at C:/tmp/ims-p2-verify-20260728 with its own .env, so no edit in that tree could auto-upload. Production DB never written, production .env never read or written, no flag flipped.",

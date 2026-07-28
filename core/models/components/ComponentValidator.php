@@ -468,7 +468,33 @@ class ComponentValidator {
             ];
         }
 
-        $compatible = in_array($ramType, $supportedTypes);
+        // SERVER_BUILD_GUIDE Bug 2 (fixed 2026-07-29). This was a RAW
+        // `in_array($ramType, $supportedTypes)`, so a "DDR4" DIMM against a board
+        // declaring memory.type "DDR4 ECC" compared false and the configuration
+        // was rejected -- while validateMemoryTypeCompatibility() (:744, the
+        // ADD-time path) normalized the same pair and accepted it. Legacy
+        // contradicted itself: the RAM you were allowed to install could never be
+        // finalized.
+        //
+        // Not a cosmetic diff. Measured 2026-07-29 against production: ALL SEVEN
+        // available motherboard models declare memory.type "DDR4 ECC" with no
+        // supported_types, and NO ram entry in ims-data is typed "DDR4 ECC" -- so
+        // validateConfigurationComprehensive() rejected EVERY finalize in the
+        // fleet, and zero configurations had ever reached status 3.
+        //
+        // normalizeMemoryType() is the codebase's existing answer and says so in
+        // its own comment: "ECC is a feature flag, not a memory generation
+        // identifier". The ECC dimension keeps its own separate check
+        // (validateECCCompatibility / memory.ecc), which warns rather than blocks
+        // -- deliberately, and unchanged here.
+        $normalizedRamType = DataNormalizationUtils::normalizeMemoryType($ramType);
+        $compatible = false;
+        foreach ($supportedTypes as $supportedType) {
+            if (DataNormalizationUtils::normalizeMemoryType($supportedType) === $normalizedRamType) {
+                $compatible = true;
+                break;
+            }
+        }
 
         return [
             'compatible' => $compatible,

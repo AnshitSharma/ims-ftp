@@ -59,6 +59,11 @@ check('cascade defaults to false (matches legacy single-component removal)', str
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";
 require_once __DIR__ . '/_scratch_db.php';
 $pdo = scratch_db_connect();
+// See add_command_test.php: a reachable but pre-P2 replica must SKIP, not crash.
+if ($pdo !== null && ($schemaGap = scratch_db_schema_gap($pdo)) !== null) {
+    echo "  (scratch DB unusable: $schemaGap)\n";
+    $pdo = null;
+}
 if ($pdo === null) {
     echo "  SKIPPED  board-with-cpus / hba-with-drives / riser-with-cards / chassis-with-bays: blocked without cascade\n";
     echo "  SKIPPED  full-subtree cascade: JSON, rows, ledger, inventory all consistent post-op\n";
