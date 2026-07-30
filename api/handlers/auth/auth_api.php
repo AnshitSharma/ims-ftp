@@ -1,11 +1,12 @@
 <?php
 /**
  * Authentication handler — login, logout, token refresh/verify,
- * forgot/reset password.
+ * forgot/reset password, change own password.
  *
  * Included by api/api.php for the `auth` module. Auth operations do not
- * require a JWT. User creation is handled by the `users` module
- * (`users-create`), gated by the `users.create` permission.
+ * require a JWT — `change_password` is the exception and authenticates the
+ * caller itself (see handleChangePassword). User creation is handled by the
+ * `users` module (`users-create`), gated by the `users.create` permission.
  */
 
 /**
@@ -16,8 +17,8 @@ function handleAuthOperations($operation) {
 
     global $pdo;
 
-    // Rate limit login, forgot_password, and reset_password
-    if (in_array($operation, ['login', 'forgot_password', 'reset_password'])) {
+    // Rate limit the password-bearing operations
+    if (in_array($operation, ['login', 'forgot_password', 'reset_password', 'change_password'])) {
         require_once(__DIR__ . '/../../../core/helpers/RateLimiter.php');
         $rateLimiter = new RateLimiter();
         $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
@@ -26,6 +27,7 @@ function handleAuthOperations($operation) {
             'login' => [10, 60],            // 10 attempts per minute
             'forgot_password' => [3, 3600], // 3 attempts per hour
             'reset_password' => [5, 3600],  // 5 attempts per hour
+            'change_password' => [5, 900],  // 5 attempts per 15 minutes
         ];
         [$maxAttempts, $window] = $limits[$operation];
 
@@ -57,6 +59,10 @@ function handleAuthOperations($operation) {
 
         case 'reset_password':
             handleResetPassword();
+            break;
+
+        case 'change_password':
+            handleChangePassword();
             break;
 
         default:
@@ -360,6 +366,26 @@ function handleForgotPassword() {
 }
 
 /**
+ * Enforce password strength (minimum 8 characters + uppercase + number +
+ * special char). Shared by reset_password and change_password so the two
+ * paths can never drift apart. Responds and exits on the first violation.
+ */
+function assertPasswordStrength($password) {
+    if (strlen($password) < 8) {
+        send_json_response(0, 0, 400, "Password must be at least 8 characters long");
+    }
+    if (!preg_match('/[A-Z]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one uppercase letter");
+    }
+    if (!preg_match('/[0-9]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one number");
+    }
+    if (!preg_match('/[^A-Za-z0-9]/', $password)) {
+        send_json_response(0, 0, 400, "Password must contain at least one special character");
+    }
+}
+
+/**
  * Handle password reset
  */
 function handleResetPassword() {
@@ -377,19 +403,7 @@ function handleResetPassword() {
         send_json_response(0, 0, 400, "New password is required");
     }
 
-    // Enforce password strength (minimum 8 characters + uppercase + number + special char)
-    if (strlen($newPassword) < 8) {
-        send_json_response(0, 0, 400, "Password must be at least 8 characters long");
-    }
-    if (!preg_match('/[A-Z]/', $newPassword)) {
-        send_json_response(0, 0, 400, "Password must contain at least one uppercase letter");
-    }
-    if (!preg_match('/[0-9]/', $newPassword)) {
-        send_json_response(0, 0, 400, "Password must contain at least one number");
-    }
-    if (!preg_match('/[^A-Za-z0-9]/', $newPassword)) {
-        send_json_response(0, 0, 400, "Password must contain at least one special character");
-    }
+    assertPasswordStrength($newPassword);
 
     try {
         // Tokens are stored hashed (see handleForgotPassword), so hash the
@@ -472,6 +486,105 @@ function handleResetPassword() {
 
     } catch (PDOException $e) {
         error_log("[handleResetPassword] Database error: " . $e->getMessage());
+        send_json_response(0, 0, 500, "An error occurred. Please try again later");
+    }
+}
+
+/**
+ * Handle a logged-in user changing their own password.
+ *
+ * Unlike the rest of the `auth` module this operation requires a session, but
+ * api.php routes the whole module before its JWT gate — so the token is
+ * verified here. Knowledge of the current password is the authorisation; no
+ * ACL check is applied, since a user who cannot change their own password
+ * would have no way to recover from a leaked one.
+ */
+function handleChangePassword() {
+    global $pdo;
+
+    $token = JWTHelper::getTokenFromHeader();
+    if (!$token) {
+        send_json_response(0, 0, 401, "Valid JWT token required - please login");
+    }
+
+    try {
+        // Pass $pdo so the revocation checks (blacklist + password cutoff) run.
+        $payload = JWTHelper::verifyToken($token, $pdo);
+    } catch (Exception $e) {
+        send_json_response(0, 0, 401, "Valid JWT token required - please login");
+    }
+
+    $userId = $payload['user_id'] ?? null;
+    if (empty($userId)) {
+        send_json_response(0, 0, 401, "Valid JWT token required - please login");
+    }
+
+    $currentPassword = $_POST['current_password'] ?? '';
+    $newPassword = $_POST['new_password'] ?? '';
+    $confirmPassword = $_POST['confirm_password'] ?? '';
+
+    if ($currentPassword === '') {
+        send_json_response(0, 0, 400, "Current password is required");
+    }
+    if ($newPassword === '') {
+        send_json_response(0, 0, 400, "New password is required");
+    }
+    if ($confirmPassword !== '' && $newPassword !== $confirmPassword) {
+        send_json_response(0, 0, 400, "New passwords do not match");
+    }
+    if ($newPassword === $currentPassword) {
+        send_json_response(0, 0, 400, "New password must be different from the current password");
+    }
+
+    assertPasswordStrength($newPassword);
+
+    try {
+        $stmt = $pdo->prepare("SELECT password FROM users WHERE id = :user_id");
+        $stmt->execute(['user_id' => $userId]);
+        $storedHash = $stmt->fetchColumn();
+
+        if ($storedHash === false) {
+            send_json_response(0, 0, 401, "Valid JWT token required - please login");
+        }
+
+        if (!password_verify($currentPassword, $storedHash)) {
+            error_log("[handleChangePassword] Incorrect current password for user_id {$userId}");
+            send_json_response(0, 0, 400, "Current password is incorrect");
+        }
+
+        $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+
+        // Same invariant as handleResetPassword: the password change and the
+        // session teardown either both happen or neither does.
+        $pdo->beginTransaction();
+        try {
+            // password_changed_at is the cutoff JWTHelper::verifyToken() compares
+            // against, so every access token issued before now — including the one
+            // that authorised this request — stops working.
+            $stmt = $pdo->prepare("UPDATE users SET password = :password, password_changed_at = NOW() WHERE id = :user_id");
+            $stmt->execute([
+                'password' => $hashedPassword,
+                'user_id' => $userId
+            ]);
+
+            // Drop every refresh token so no other device can mint a new session.
+            $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE user_id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        error_log("[handleChangePassword] Password changed for user_id {$userId}");
+
+        send_json_response(1, 1, 200, "Password changed successfully. Please login again with your new password.");
+
+    } catch (PDOException $e) {
+        error_log("[handleChangePassword] Database error: " . $e->getMessage());
         send_json_response(0, 0, 500, "An error occurred. Please try again later");
     }
 }
