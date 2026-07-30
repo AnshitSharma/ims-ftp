@@ -216,6 +216,41 @@
             }
         }
     ],
+    "twenty_fifth_session_2026_07_30": {
+        "date": "2026-07-30",
+        "note": "NEWEST SESSION -- supersedes twenty_fourth_session_2026_07_29. Scope: land the FIRST successful production finalize so the command gate has finalize evidence at all. All flags UNCHANGED (DUAL_WRITE=on, STATE_MACHINE=enforce, ENGINE_MODE=enforce, COMMAND_LAYER=shadow, READ_FROM_ROWS=sample). No DB change, therefore no seeder.",
+        "achieved": "finalize_ops went 0 -> 4 and a finalize SUCCEEDED on both sides: config 830abe79 (finalize-evidence-1), 2026-07-29T19:47:01Z, legacy_blocked=false / command_blocked=false / zero failures. First time legacy and the command layer have ever agreed on a COMPLETED finalize in production. Report now: 56 compared, 51 identical, 5 expected, 0 UNEXPLAINED.",
+        "F-29_caddy_bay_contradiction_NOT_FIXED": {
+            "symptom": "cmd-layer-traffic-2 could not be finalized: ERR missing_caddy demanded a 2.5-inch caddy, but adding that caddy was rejected with -- Cannot add 2.5-inch caddy, chassis only has 3.5-inch bays (strict matching required).",
+            "finding": "Two legacy layers impose mutually unsatisfiable requirements on the SAME caddy. The ADD path matches caddy size to the CHASSIS BAY (correct -- the caddy is what slots into the bay). ServerBuilder::validateConfigurationComprehensive (~8320) matches caddy size to the DRIVE form factor. A 2.5-inch drive in a 3.5-inch bay -- routine hardware, via an adapter tray, and the storage validator ACCEPTS the placement (primary_path=chassis_bay, backward_compatible) -- therefore can never be finalized: a 3.5 caddy fails the finalize check, a 2.5 caddy fails the add gate. Dead-end config reachable through the normal UI. Aggravating data fact: the chassis (Gigabyte R180-F34) really is 3.5-only (bay_configuration is populated, so NOT the F-11/F-18 empty-list class), while ALL 51 available storage units are 2.5-inch/U.2/M.2 and ZERO are 3.5-inch -- so that chassis cannot host any drive in inventory via the backplane.",
+            "why_not_fixed": "UNLIKE F-28 this is not legacy being the odd one out: StorageCaddyPairingRule (the engine) pairs by DRIVE form factor too, so correcting legacy to bay-size semantics would CREATE divergence rather than remove it, mid-parity. Neither side models the adapter-tray case, though ServerBuilder:8342 already has the vocabulary for it (connection_type=size_adapter, caddy_recommended) on the non-backplane branch only. Needs an owner decision on the domain model + a matching engine-rule change, in one unit.",
+            "workaround_used": "Built a coherent config instead: DL360 Gen9 chassis (8x 2.5-inch bays) + 2.5-inch drive + 2.5-inch caddy, where the add gate and the pairing rule agree."
+        },
+        "F-30_add_remove_hooks_discarded_the_refusal_reason": {
+            "symptom": "Command gate RED on -- 7 dry-run failure(s), no command verdict to compare -- all 7 being adds of a unit another draft already held.",
+            "finding": "command_parity_report was upgraded 2026-07-29 to split a thrown dryRun() into a DECISION (dry_run_error=command_failed:<type>, comparable, counts as command_blocked=true) and a CRASH (exception, gate-RED). Only the FINALIZE hook was upgraded to WRITE the field. handleAddComponent/handleRemoveComponent still recorded a bare dry_run_failed=true, so every legitimate refusal (component_unavailable, component_not_found, ...) fell into the crash bucket and hard-RED the gate EVEN WHEN LEGACY REFUSED TOO -- i.e. perfect agreement scored as no evidence. Reader upgraded, writers not: the same shape as F-10/F-27.",
+            "second_defect_same_block": "Both hooks caught only CommandFailed. BaseCommand::dryRun() uses finally, not a catch-all, so a raw Throwable (PDOException, TypeError) escaped a SHADOW-only code path into the real add/remove request and would 500 it -- shadow forking behaviour, which INV-8 forbids. Now caught and labelled exception (still gate-RED).",
+            "fix": "New shared classifier shadowDryRunErrorLabel() used by all three hooks. It also demotes CommandFailed(command_exception) -- BaseCommand wrapping a genuine Throwable as a 500 -- to exception, because command_failed:command_exception would satisfy the report prefix test and promote a CRASH into a verdict. That mis-promotion was latent in the finalize hook and is now fixed there too.",
+            "proof": "Live 2026-07-29T23:12:43Z: add of an in-use CPU unit now logs dry_run_error=command_failed:component_unavailable with legacy_blocked=true -- countable agreement. operations_compared 39 -> 56."
+        },
+        "what_landed": [
+            "api/handlers/server/server_api.php: shadowDryRunErrorLabel() added; add + remove shadow hooks capture dry_run_error and catch \\Throwable; finalize hook switched to the shared classifier.",
+            "core/models/commands/CommandShadowLog.php: record() docblock now states the dry_run_error contract -- a row WITHOUT it is treated as a crash, so omitting it silently discards the operation as evidence.",
+            "tests/regression/shadow_dry_run_error_test.php (NEW): 21 structural pins over the three hooks, the classifier, and the report side of the contract. Caught 4 real gaps on first run.",
+            "Production data: config 830abe79 finalize-evidence-1 created and FINALIZED (a real, coherent DL360 Gen9 build)."
+        ],
+        "verification": [
+            "command_parity_report --self-test: PASS (13 row classes).",
+            "shadow_dry_run_error_test.php: ALL CHECKS PASS (exit 0).",
+            "php -l clean on both edited files.",
+            "Live: finalize 200/status=3; refusal row correctly labelled."
+        ],
+        "open": [
+            "COMMAND_LAYER gate still RED for the 2026-07-29 window: the 7 PRE-fix rows carry no dry_run_error and are permanently uncomparable (unknown provenance must not be promoted into evidence). A clean window needs --since 2026-07-30 PLUS at least one finalize inside it -- the fix cannot be applied retroactively to logged rows.",
+            "F-29 awaits an owner decision (domain model for a smaller drive in a larger bay), legacy + engine rule together.",
+            "Unchanged: READ_FROM_ROWS 72h soak (earliest green ~2026-08-01T08:46Z), U-C.6 7-day enforce soak, U-D.3 P8-signoff age, rebuild of ims_compat_golden, retire server-debug-shadow-log."
+        ]
+    },
     "twenty_fourth_session_2026_07_29": {
         "date": "2026-07-29",
         "note": "NEWEST SESSION -- supersedes twenty_third_session_2026_07_29. Scope: root-cause READ_FROM_ROWS=sample's zero production rows. All flags UNCHANGED (DUAL_WRITE=on, STATE_MACHINE=enforce, ENGINE_MODE=enforce, COMMAND_LAYER=shadow, READ_FROM_ROWS=sample). No DB change, therefore no seeder. Legacy code untouched.",

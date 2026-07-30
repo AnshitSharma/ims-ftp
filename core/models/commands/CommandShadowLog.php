@@ -65,7 +65,14 @@ final class CommandShadowLog
      * @param object|null $verdict       the command's dry-run Verdict; null iff
      *                                   the dry run itself failed.
      * @param array       $extra         op-specific context, e.g. ['cascade' => bool]
-     * @param bool        $dryRunFailed  true iff dryRun() threw CommandFailed
+     * @param bool        $dryRunFailed  true iff dryRun() threw. WHY it threw belongs
+     *                                   in $extra['dry_run_error'] -- 'command_failed:<type>'
+     *                                   for a refusal (comparable: that is the answer
+     *                                   enforce gives the caller) vs 'exception' for a
+     *                                   crash (gate-RED). All three hooks pass it via
+     *                                   shadowDryRunErrorLabel(); a row without it is
+     *                                   treated as a crash, so omitting it silently
+     *                                   discards the operation as evidence. [F-30]
      */
     public static function record(
         string $op,

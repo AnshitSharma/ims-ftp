@@ -445,8 +445,22 @@ class UnifiedSlotTracker {
             if ($config) {
                 $components = $config->getComponents();
                 foreach ($components as $comp) {
-                    // Count pciecard (non-riser), hbacard, and component NICs
-                    if (in_array($comp['component_type'], ['pciecard', 'hbacard', 'nic'])) {
+                    // Count pciecard (non-riser), hbacard, and component NICs.
+                    //
+                    // Onboard NICs are NOT counted. They are runtime-materialized
+                    // from the board's networking.onboard_nics and sit on the
+                    // embedded LOM connector, so they consume no discrete PCIe
+                    // slot. The sibling legacy validator (PcieLaneBudgetValidator
+                    // .php:186) and the engine rule (PcieSlotPlacementRule.php:71)
+                    // both already skip them on this same "onboard-" prefix; this
+                    // count was the only place that did not. The effect was a
+                    // finalize outage for every config on a riser-only board
+                    // (all DL360 Gen9 slots are riser_card_required): the lone
+                    // onboard NIC scored as a slot consumer against zero
+                    // available slots -- "has 1 PCIe components but motherboard
+                    // has no PCIe slots" with no expansion card present at all.
+                    if (in_array($comp['component_type'], ['pciecard', 'hbacard', 'nic'])
+                        && strpos((string)$comp['component_uuid'], 'onboard-') !== 0) {
                         $pcieCount++;
                     }
                 }

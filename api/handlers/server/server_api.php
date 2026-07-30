@@ -345,6 +345,37 @@ function handleCreateStart($serverBuilder, $user) {
 
 
 /**
+ * F-30 (2026-07-30): classify a shadow dry-run throw for CommandShadowLog's
+ * `dry_run_error`, so every shadow hook labels it the same way.
+ *
+ * command_parity_report distinguishes two things a thrown dryRun() can mean:
+ *   - a DECISION -- 'command_failed:<type>'. component_unavailable /
+ *     component_not_found / transition_denied / config_immutable /
+ *     revision_mismatch / config_not_found / invalid_component_type are the
+ *     answer the caller actually gets at enforce, so the row is comparable and
+ *     counts as command_blocked=true.
+ *   - a CRASH -- 'exception'. No verdict in any sense; stays gate-RED.
+ *
+ * The report has read that distinction since 2026-07-29, but only the finalize
+ * hook ever wrote the field: add/remove recorded a bare dry_run_failed=true, so
+ * every legitimate refusal fell into the crash bucket and hard-RED the command
+ * gate even when BOTH sides refused (perfect agreement). Found live 2026-07-29
+ * -- 7 rows, all adds of a unit another draft already held, legacy_blocked=true
+ * with command_blocked=null.
+ *
+ * 'command_exception' is special: BaseCommand wraps a genuine Throwable in a
+ * CommandFailed carrying that type (500). Labelling it 'command_failed:...'
+ * would let the report's prefix test promote a crash into a verdict, which is
+ * the green-wash the report exists to prevent -- so it maps to 'exception'.
+ */
+function shadowDryRunErrorLabel(CommandFailed $failure): string
+{
+    return $failure->errorType === 'command_exception'
+        ? 'exception'
+        : 'command_failed:' . $failure->errorType;
+}
+
+/**
  * FIXED: Add component to server configuration with proper ServerUUID handling
  */
 function handleAddComponent($serverBuilder, $user) {
@@ -537,11 +568,22 @@ function handleAddComponent($serverBuilder, $user) {
         if ($commandLayerMode === 'shadow') {
             $commandVerdict = null;
             $shadowDryRunFailed = false;
+            $shadowDryRunError = null;
             try {
                 $commandVerdict = $addCommand->dryRun();
             } catch (CommandFailed $shadowFailure) {
+                // A REFUSAL, not necessarily a crash -- see shadowDryRunErrorLabel (F-30).
                 $shadowDryRunFailed = true;
-                error_log('AddComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
+                $shadowDryRunError = shadowDryRunErrorLabel($shadowFailure);
+                error_log('AddComponentCommand shadow dry-run refused: ' . $shadowFailure->getMessage());
+            } catch (\Throwable $shadowFailure) {
+                // dryRun() uses finally, not a catch-all, so a raw Throwable (PDOException,
+                // TypeError) escapes it. Catching only CommandFailed here meant a fault in
+                // SHADOW-only code propagated out of a real add-component request and 500'd
+                // it -- shadow forking behavior is exactly what INV-8 forbids. Gate-RED.
+                $shadowDryRunFailed = true;
+                $shadowDryRunError = 'exception';
+                error_log('AddComponentCommand shadow dry-run error: ' . $shadowFailure->getMessage());
             }
             // The legacy call is the ONLY mutation path in shadow mode (INV-8: shadow
             // must never fork behavior) -- its real outcome is what the command verdict
@@ -561,7 +603,9 @@ function handleAddComponent($serverBuilder, $user) {
                 CommandShadowLog::record('add', $configUuid, [
                     'component_type' => $componentType,
                     'component_uuid' => $componentUuid,
-                ], $legacyBlocked, $shadowDryRunFailed ? null : $commandVerdict, [], $shadowDryRunFailed);
+                ], $legacyBlocked, $shadowDryRunFailed ? null : $commandVerdict, [
+                    'dry_run_error' => $shadowDryRunError,
+                ], $shadowDryRunFailed);
             }
         } elseif ($commandLayerMode === 'enforce') {
             try {
@@ -896,11 +940,20 @@ function handleRemoveComponent($serverBuilder, $user) {
             // carries both sides. See CommandShadowLog's header.
             $commandVerdict = null;
             $shadowDryRunFailed = false;
+            $shadowDryRunError = null;
             try {
                 $commandVerdict = $removeCommand->dryRun();
             } catch (CommandFailed $shadowFailure) {
+                // A REFUSAL, not necessarily a crash -- see shadowDryRunErrorLabel (F-30).
                 $shadowDryRunFailed = true;
-                error_log('RemoveComponentCommand shadow dry-run failed: ' . $shadowFailure->getMessage());
+                $shadowDryRunError = shadowDryRunErrorLabel($shadowFailure);
+                error_log('RemoveComponentCommand shadow dry-run refused: ' . $shadowFailure->getMessage());
+            } catch (\Throwable $shadowFailure) {
+                // See handleAddComponent's twin catch: a shadow-only fault must not
+                // escape into the real remove-component request (INV-8). Gate-RED.
+                $shadowDryRunFailed = true;
+                $shadowDryRunError = 'exception';
+                error_log('RemoveComponentCommand shadow dry-run error: ' . $shadowFailure->getMessage());
             }
             $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
             $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
@@ -909,7 +962,10 @@ function handleRemoveComponent($serverBuilder, $user) {
                 CommandShadowLog::record('remove', $configUuid, [
                     'component_type' => $componentType,
                     'component_uuid' => $componentUuid,
-                ], !$result['success'], $commandVerdict, ['cascade' => $cascade], $shadowDryRunFailed);
+                ], !$result['success'], $shadowDryRunFailed ? null : $commandVerdict, [
+                    'cascade' => $cascade,
+                    'dry_run_error' => $shadowDryRunError,
+                ], $shadowDryRunFailed);
             }
         } elseif ($commandLayerMode === 'enforce') {
             try {
@@ -1613,7 +1669,11 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
                     // compare it against legacy instead of discarding it; see
                     // command_parity_report's own note on the distinction.
                     $finalizeDryRunFailed = true;
-                    $finalizeDryRunError = 'command_failed:' . $finalizeFailure->errorType;
+                    // Via the shared classifier (F-30): a CommandFailed carrying
+                    // 'command_exception' is a WRAPPED CRASH, and spelling it
+                    // 'command_failed:command_exception' here would let the report's
+                    // prefix test read it as a decision.
+                    $finalizeDryRunError = shadowDryRunErrorLabel($finalizeFailure);
                     error_log('TransitionStatusCommand shadow dry-run refused: ' . $finalizeFailure->getMessage());
                 } catch (\Throwable $finalizeFailure) {
                     // A CRASH. There is no verdict here in any sense, and this must

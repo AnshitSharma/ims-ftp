@@ -201,6 +201,7 @@ function analyzeCommandRows(array $rows, array $expectedDiffs): array {
     $ruleCoverage = [];
     $opsSeen = [];
     $compared = 0;
+    $finalizeLegacyAllowed = 0;
 
     foreach ($rows as $row) {
         // F-23: cli rows are local harness output, not production operations.
@@ -255,6 +256,15 @@ function analyzeCommandRows(array $rows, array $expectedDiffs): array {
             continue;
         }
 
+        // A finalize legacy BLOCKED says nothing about COMMAND_LAYER=enforce.
+        // Enforce deletes the legacy finalize pre-check; when that pre-check
+        // already refused, the four Trigger::FINALIZE rules were never the
+        // deciding authority, so the row carries no evidence about the swap.
+        // Only a finalize legacy ALLOWED puts them in charge. [F-32]
+        if ($op === 'finalize' && $row['legacy_blocked'] === false) {
+            $finalizeLegacyAllowed++;
+        }
+
         $compared++;
         if ($row['legacy_blocked'] === $commandBlocked) {
             $identical++;
@@ -291,6 +301,7 @@ function analyzeCommandRows(array $rows, array $expectedDiffs): array {
     return [
         'operations_compared' => $compared,
         'finalize_ops' => $opsSeen['finalize'] ?? 0,
+        'finalize_ops_legacy_allowed' => $finalizeLegacyAllowed,
         'finalize_rule_coverage' => $finalizeCoverage,
         'identical' => $identical,
         'expected' => $expected,
@@ -315,11 +326,20 @@ function analyzeCommandRows(array $rows, array $expectedDiffs): array {
  * rules; a window containing zero finalize operations has produced exactly zero
  * evidence about that swap, and passing it would be the same zero-sample
  * green-wash this report was built to prevent.
+ *
+ * finalize_ops > 0 alone is NOT enough, and on 2026-07-30 that gap let a window
+ * go GREEN on a single finalize the LEGACY pre-check rejected. [F-32] When
+ * legacy blocks first, the four rules never get to decide, so the row proves
+ * nothing about deleting the pre-check -- the exact zero-evidence green-wash
+ * one line up says this report exists to prevent, in a shape the counter
+ * could not see. The denominator that matters is finalize ops legacy ALLOWED.
+ * Read via ?? 0 so a caller that omits the key fails closed, never green.
  */
 function commandParityGreen(array $analysis): bool {
     return count($analysis['unexplained']) === 0
         && $analysis['dry_run_failed'] === 0
-        && $analysis['finalize_ops'] > 0;
+        && $analysis['finalize_ops'] > 0
+        && ($analysis['finalize_ops_legacy_allowed'] ?? 0) > 0;
 }
 
 function writeCommandReport(array $analysis, bool $selfTest): string {
@@ -335,6 +355,7 @@ function writeCommandReport(array $analysis, bool $selfTest): string {
         'self_test' => $selfTest,
         'operations_compared' => $analysis['operations_compared'],
         'finalize_ops' => $analysis['finalize_ops'],
+        'finalize_ops_legacy_allowed' => $analysis['finalize_ops_legacy_allowed'],
         'finalize_rule_coverage' => $analysis['finalize_rule_coverage'],
         'identical_verdicts' => $analysis['identical'],
         'diffs_expected' => count($analysis['expected']),
@@ -448,6 +469,19 @@ if (in_array('--self-test', $argv, true)) {
             && $analysis['finalize_rule_coverage']['system.required_set'] === 0,
         'zero-finalize windows are RED'              => commandParityGreen(
             ['unexplained' => [], 'dry_run_failed' => 0, 'finalize_ops' => 0]) === false,
+        // F-32: only SELFTEST-13 is a finalize legacy ALLOWED (its command verdict
+        // arrives as a refusal, which still counts -- the rules DID decide).
+        'finalize ops legacy ALLOWED counted separately'
+                                                     => $analysis['finalize_ops_legacy_allowed'] === 1,
+        'finalize ops legacy BLOCKED are not evidence about the swap'
+                                                     => commandParityGreen(['unexplained' => [], 'dry_run_failed' => 0,
+                                                         'finalize_ops' => 5, 'finalize_ops_legacy_allowed' => 0]) === false,
+        'a window with a legacy-ALLOWED finalize can be green'
+                                                     => commandParityGreen(['unexplained' => [], 'dry_run_failed' => 0,
+                                                         'finalize_ops' => 1, 'finalize_ops_legacy_allowed' => 1]) === true,
+        'an omitted finalize_ops_legacy_allowed fails CLOSED'
+                                                     => commandParityGreen(
+                                                         ['unexplained' => [], 'dry_run_failed' => 0, 'finalize_ops' => 5]) === false,
     ];
     $failed = array_keys(array_filter($checks, function ($ok) { return !$ok; }));
     if ($failed === []) {
@@ -517,12 +551,17 @@ if ($analysis['finalize_ops'] === 0) {
     echo "command_parity_report: RED 0 finalize operations -- the four Trigger::FINALIZE rules ("
         . implode(', ', FINALIZE_RULES) . ") have not run, so this window says NOTHING about "
         . "COMMAND_LAYER=enforce dropping the legacy finalize pre-check\n";
+} elseif ($analysis['finalize_ops_legacy_allowed'] === 0) {
+    echo "command_parity_report: RED {$analysis['finalize_ops']} finalize op(s) but 0 that legacy ALLOWED -- "
+        . "the legacy pre-check refused every one, so the four Trigger::FINALIZE rules never decided "
+        . "and this window still says NOTHING about COMMAND_LAYER=enforce dropping that pre-check (F-32)\n";
 } else {
     $fired = [];
     foreach ($analysis['finalize_rule_coverage'] as $ruleId => $count) {
         $fired[] = "$ruleId=$count";
     }
-    echo "command_parity_report: {$analysis['finalize_ops']} finalize op(s); FINALIZE-rule blocks: "
+    echo "command_parity_report: {$analysis['finalize_ops']} finalize op(s), "
+        . "{$analysis['finalize_ops_legacy_allowed']} legacy-allowed; FINALIZE-rule blocks: "
         . implode(' ', $fired) . "\n";
 }
 if ($sinceCutoff !== null) {
