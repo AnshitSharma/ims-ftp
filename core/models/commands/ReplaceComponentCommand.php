@@ -201,6 +201,16 @@ final class ReplaceComponentCommand extends BaseCommand
         $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, (int)$newInventoryData['ID']);
 
         $sb->recalculateFormFactorLock($this->configUuid);
+
+        // Swapping to a taller chassis has to grow the rack placement (or refuse) —
+        // same rule the legacy add path applies.
+        if ($this->componentType === 'chassis') {
+            require_once __DIR__ . '/../rack/RackPlacement.php';
+            $placementSync = RackPlacement::syncHeightFromChassis($pdo, $this->configUuid);
+            if (!$placementSync['success']) {
+                throw new CommandFailed('rack_placement_conflict', $placementSync['message'], 409);
+            }
+        }
     }
 
     /** Own copy of the inventory lock helper (matches AddComponentCommand's own, per-unit — commands must not share state via ServerBuilder). */

@@ -198,5 +198,12 @@ final class RemoveComponentCommand extends BaseCommand
         }
 
         $sb->recalculateFormFactorLock($this->configUuid);
+
+        // Chassis gone -> a racked server falls back to the 1U default. Shrinking
+        // never collides, so there is nothing to refuse here.
+        if (($row['component_type'] ?? null) === 'chassis') {
+            require_once __DIR__ . '/../rack/RackPlacement.php';
+            RackPlacement::syncHeightFromChassis($pdo, $this->configUuid);
+        }
     }
 }

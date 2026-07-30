@@ -306,8 +306,12 @@ function handleCreateStart($serverBuilder, $user) {
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $location = trim($_POST['location'] ?? '');
-    $rackPosition = trim($_POST['rack_position'] ?? '');
     $isVirtual = filter_var($_POST['is_virtual'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+
+    // rack_position is DERIVED from the real placement in rack_servers
+    // (RackPlacement::syncPositionText, called by rack-assign-server / rack-unassign-server).
+    // A new config is created unracked; the client places it with rack-assign-server.
+    $rackPosition = null;
 
     if (empty($serverName)) {
         send_json_response(0, 1, 400, "Server name is required");
@@ -1427,7 +1431,10 @@ function handleImportVirtual($serverBuilder, $user) {
     $serverName = trim($_POST['server_name'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $location = trim($_POST['location'] ?? '');
-    $rackPosition = trim($_POST['rack_position'] ?? '');
+
+    // Derived from rack_servers, never accepted from the client — see handleCreateStart.
+    // An imported config starts unracked; place it with rack-assign-server.
+    $rackPosition = null;
 
     // Validate required parameters
     if (empty($virtualConfigUuid)) {

@@ -1216,6 +1216,24 @@ class ServerBuilder {
                 $nicHandler->updateNICConfigJSON($configUuid);
             }
 
+            // A server is usually racked before its chassis is chosen, so the placement
+            // starts at the 1U default. Grow it to the real chassis height now, and abort
+            // the chassis add when that would collide -- a sled drawn at the wrong size in
+            // Rack View is a lie about the datacenter.
+            if ($componentType === 'chassis') {
+                require_once __DIR__ . '/../rack/RackPlacement.php';
+                $placementSync = RackPlacement::syncHeightFromChassis($this->pdo, $configUuid);
+                if (!$placementSync['success']) {
+                    if ($ownTransaction && $this->pdo->inTransaction()) {
+                        $this->pdo->rollback();
+                    }
+                    return [
+                        'success' => false,
+                        'message' => $placementSync['message']
+                    ];
+                }
+            }
+
             // Update calculated fields (power, compatibility, etc.) AFTER the side effects,
             // so onboard NIC power is counted.
             $this->updateConfigurationMetrics($configUuid);
@@ -1668,6 +1686,13 @@ class ServerBuilder {
             // P3.4 FIX: Recalculate form factor lock on chassis/storage removal
             if ($componentType === 'chassis' || $componentType === 'storage') {
                 $this->recalculateFormFactorLock($configUuid);
+            }
+
+            // Chassis gone -> the placement falls back to 1U. Shrinking can never
+            // collide, so this only ever succeeds.
+            if ($componentType === 'chassis') {
+                require_once __DIR__ . '/../rack/RackPlacement.php';
+                RackPlacement::syncHeightFromChassis($this->pdo, $configUuid);
             }
 
             // Post-removal side effect. BUGFIX (A-L6): this ran AFTER commit(), so its

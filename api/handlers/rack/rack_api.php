@@ -17,6 +17,7 @@
 require_once __DIR__ . '/../../../core/config/app.php';
 require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
 require_once __DIR__ . '/../../../core/models/chassis/ChassisManager.php';
+require_once __DIR__ . '/../../../core/models/rack/RackPlacement.php';
 
 header('Content-Type: application/json');
 
@@ -83,48 +84,19 @@ function rackFetchByUuid($pdo, $rackUuid) {
  * Derive the U-height a server occupies from its chassis spec.
  * Falls back to 1U when no chassis is set or the spec can't be resolved.
  * Blades / fractional U round up to a minimum of 1U.
+ *
+ * Lives in RackPlacement so ServerBuilder can re-derive the same height when a
+ * chassis is added to an already-racked server.
  */
 function rackDeriveUHeight($chassisUuid) {
-    if (empty($chassisUuid)) {
-        return 1;
-    }
-    try {
-        static $chassisManager = null;
-        if ($chassisManager === null) {
-            $chassisManager = new ChassisManager();
-        }
-        $specs = $chassisManager->loadChassisSpecsByUUID($chassisUuid);
-        if (!empty($specs['found']) && isset($specs['specifications']['u_size'])) {
-            $u = (float)$specs['specifications']['u_size'];
-            $u = (int)ceil($u);
-            return $u >= 1 ? $u : 1;
-        }
-    } catch (Throwable $e) {
-        error_log("rackDeriveUHeight error: " . $e->getMessage());
-    }
-    return 1;
+    return RackPlacement::deriveUHeight($chassisUuid);
 }
 
 /**
  * Resolve a chassis display name for a server (best effort, for labels).
  */
 function rackChassisName($chassisUuid) {
-    if (empty($chassisUuid)) {
-        return null;
-    }
-    try {
-        static $chassisManager = null;
-        if ($chassisManager === null) {
-            $chassisManager = new ChassisManager();
-        }
-        $specs = $chassisManager->loadChassisSpecsByUUID($chassisUuid);
-        if (!empty($specs['found'])) {
-            return $specs['specifications']['model'] ?? null;
-        }
-    } catch (Throwable $e) {
-        // best effort only
-    }
-    return null;
+    return RackPlacement::chassisName($chassisUuid);
 }
 
 /* ============================================================
@@ -466,6 +438,9 @@ function handleRackAssignServer($pdo, $user) {
             $stmt->execute([$rackUuid, $configUuid, $startU, $height, $user['id']]);
         }
 
+        // Keep the server's own rack_position text derived from this placement.
+        RackPlacement::syncPositionText($pdo, $configUuid);
+
         logActivity($pdo, $user['id'], $moved ? 'Server moved in rack' : 'Server placed in rack', 'rack', null,
             "{$server['server_name']} -> {$rack['name']} U{$startU} ({$height}U)");
 
@@ -502,6 +477,9 @@ function handleRackUnassignServer($pdo, $user) {
         if ($stmt->rowCount() === 0) {
             send_json_response(0, 1, 404, "Server is not currently installed in any rack");
         }
+
+        // No placement any more — clear the derived rack_position text.
+        RackPlacement::syncPositionText($pdo, $configUuid);
 
         logActivity($pdo, $user['id'], 'Server removed from rack', 'rack', null, "Removed server $configUuid from rack");
 

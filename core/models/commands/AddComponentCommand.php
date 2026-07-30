@@ -133,6 +133,17 @@ final class AddComponentCommand extends BaseCommand
             $this->configUuid, $this->componentType, $this->componentUuid, 1, 'add', $serialNumber, $legacyOptions
         );
 
+        // Mirrors the legacy add path: a racked server's placement was snapshotted at
+        // the 1U default before it had a chassis, so re-derive it here. A collision is
+        // a real decision (both engines refuse), not a crash.
+        if ($this->componentType === 'chassis') {
+            require_once __DIR__ . '/../rack/RackPlacement.php';
+            $placementSync = RackPlacement::syncHeightFromChassis($pdo, $this->configUuid);
+            if (!$placementSync['success']) {
+                throw new CommandFailed('rack_placement_conflict', $placementSync['message'], 409);
+            }
+        }
+
         // A-11's first half: onboard NICs. This used to be delegated to
         // updateServerConfigurationTable() on the belief that it materialized
         // them internally via createOnboardNICsFromMotherboard() — that method
