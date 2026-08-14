@@ -70,6 +70,7 @@ class DataExtractionUtilities {
             case 'ram':
                 return $this->findInBrandModels($data, $uuid);
             case 'pciecard':
+            case 'risercard':
             case 'hbacard':
                 return $this->findInCategoryModels($data, $uuid);
             case 'nic':
@@ -610,6 +611,16 @@ class DataExtractionUtilities {
      */
     public function getPCIeCardByUUID($uuid) {
         return $this->findComponentByUuid('pciecard', $uuid);
+    }
+
+    /**
+     * Get riser card by UUID (wrapper for findComponentByUuid)
+     *
+     * Risers were split out of the 'pciecard' type on 2026-08-14; their specs
+     * now live in ims-data/risercard/riser-level-3.json.
+     */
+    public function getRiserCardByUUID($uuid) {
+        return $this->findComponentByUuid('risercard', $uuid);
     }
 
     /**

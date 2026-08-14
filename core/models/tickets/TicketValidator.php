@@ -441,13 +441,21 @@ class TicketValidator
             $components[] = ['type' => 'hbacard', 'uuid' => $server['hbacard_uuid']];
         }
 
-        // 9. PCIe Cards (JSON array)
+        // 9. PCIe Cards (JSON array).
+        // The legacy column holds risers too (see ServerBuilder::updatePcieCardConfiguration()),
+        // so each entry is typed by catalog membership — otherwise a riser would be
+        // compat-checked against the pciecard spec file, which stops containing risers
+        // once step 7 of the 2026-08-14 split lands.
         if (!empty($server['pciecard_configurations'])) {
             $pcieConfig = json_decode($server['pciecard_configurations'], true);
             if (is_array($pcieConfig)) {
                 foreach ($pcieConfig as $card) {
                     if (!empty($card['uuid'])) {
-                        $components[] = ['type' => 'pciecard', 'uuid' => $card['uuid']];
+                        $isRiser = $this->componentDataService->validateComponentUuid('risercard', $card['uuid']);
+                        $components[] = [
+                            'type' => $isRiser ? 'risercard' : 'pciecard',
+                            'uuid' => $card['uuid'],
+                        ];
                     }
                 }
             }

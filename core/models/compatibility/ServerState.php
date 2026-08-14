@@ -154,6 +154,7 @@ class ServerState
     public function getNics(): array        { return $this->ofType('nic'); }
     public function getHbas(): array        { return $this->ofType('hbacard'); }
     public function getPcieCards(): array   { return $this->ofType('pciecard'); }
+    public function getRiserCards(): array  { return $this->ofType('risercard'); }
     public function getSfps(): array        { return $this->ofType('sfp'); }
 
     /**

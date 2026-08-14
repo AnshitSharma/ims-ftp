@@ -92,7 +92,7 @@ class ConfigComponentWriter
      * structural parent in this schema (storage, caddy) are excluded, matching
      * the backfill. sfp is excluded because it parents to its NIC, not the board.
      */
-    const BOARD_HOSTED_TYPES = ['cpu', 'ram', 'pciecard', 'hbacard', 'nic'];
+    const BOARD_HOSTED_TYPES = ['cpu', 'ram', 'pciecard', 'risercard', 'hbacard', 'nic'];
 
     /**
      * Current rollout mode. Reads env; falls back to "off" per FLAGS.md.
@@ -253,9 +253,12 @@ class ConfigComponentWriter
     /**
      * After a component providing $resources is inserted, attach every live
      * component in the config whose catalog consumption of one of those
-     * resources was previously deferred (has no consumption row yet). 'riser'
-     * rows are queried against the catalog as 'pciecard', same normalization
-     * as backfill.php's backfillLedgerForConfig().
+     * resources was previously deferred (has no consumption row yet).
+     *
+     * The old 'riser' -> 'pciecard' normalization is GONE (2026-08-14): risers are
+     * their own component type now and ResourceCatalog answers for 'risercard'
+     * directly, so component_type is passed through unchanged. The legacy 'riser'
+     * ENUM value is migrated to 'risercard' by seeder 2026_08_14_001.
      */
     private static function attachDeferredConsumers(PDO $pdo, ResourceCatalog $catalog, $configUuid, array $resources, $newComponentId)
     {
@@ -266,8 +269,7 @@ class ConfigComponentWriter
         $stmt->execute([$configUuid, $newComponentId]);
 
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $cc) {
-            $physicalType = $cc['component_type'] === 'riser' ? 'pciecard' : $cc['component_type'];
-            foreach ($catalog->consumes($physicalType, $cc['spec_uuid']) as $consumed) {
+            foreach ($catalog->consumes($cc['component_type'], $cc['spec_uuid']) as $consumed) {
                 if (!in_array($consumed['resource'], $resources, true)) {
                     continue;
                 }

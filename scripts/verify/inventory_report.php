@@ -53,7 +53,8 @@ function columnExists(PDO $pdo, string $table, string $column): bool {
 const COMPONENT_TABLES = [
     'cpu' => 'cpuinventory', 'ram' => 'raminventory', 'storage' => 'storageinventory',
     'motherboard' => 'motherboardinventory', 'chassis' => 'chassisinventory', 'nic' => 'nicinventory',
-    'caddy' => 'caddyinventory', 'pciecard' => 'pciecardinventory', 'hbacard' => 'hbacardinventory',
+    'caddy' => 'caddyinventory', 'pciecard' => 'pciecardinventory', 'risercard' => 'risercardinventory',
+    'hbacard' => 'hbacardinventory',
     'sfp' => 'sfpinventory',
 ];
 

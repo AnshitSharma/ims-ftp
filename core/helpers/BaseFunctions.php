@@ -23,7 +23,7 @@ JWTHelper::init($jwtSecret);
 $GLOBALS['_permission_cache'] = [];
 
 // Whitelist of valid component types (defense-in-depth for dynamic table names)
-define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'hbacard', 'sfp']);
+define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp']);
 
 function validateComponentType($type) {
     if (!in_array($type, VALID_COMPONENT_TYPES, true)) {
@@ -616,17 +616,22 @@ function getDashboardData($pdo, $user) {
     foreach (VALID_COMPONENT_TYPES as $type) {
         $tableName = getComponentTableName($type);
 
-        // This query is more efficient as it gets all counts in one go.
-        $stmt = $pdo->prepare("
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available,
-                SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use,
-                SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed
-            FROM $tableName
-        ");
-        $stmt->execute();
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        // A type registered in code but not yet migrated reports zeros rather
+        // than 500-ing this whole aggregate -- see inventoryTableExists().
+        $result = null;
+        if (inventoryTableExists($pdo, $type)) {
+            // This query is more efficient as it gets all counts in one go.
+            $stmt = $pdo->prepare("
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available,
+                    SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use,
+                    SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed
+                FROM $tableName
+            ");
+            $stmt->execute();
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
 
         $stats = [
             'total' => (int)($result['total'] ?? 0),
@@ -682,6 +687,13 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
     $results = [];
 
     foreach (VALID_COMPONENT_TYPES as $type) {
+        // Skip a type whose table has not been migrated yet -- see
+        // inventoryTableExists(). A fleet-wide search must not 500 because one
+        // type is mid-rollout.
+        if (!inventoryTableExists($pdo, $type)) {
+            continue;
+        }
+
         $tableName = getComponentTableName($type);
         $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE
                 AssetTag LIKE ? OR
@@ -729,6 +741,41 @@ function getComponentTableName($type) {
 }
 
 /**
+ * Does this component type's inventory table exist yet?
+ *
+ * Needed because code and schema deploy on DIFFERENT clocks in this project:
+ * saving a PHP file auto-uploads it to production in ~20s, while seeders are
+ * applied by hand. A type can therefore be live in VALID_COMPONENT_TYPES for a
+ * while before its {type}inventory table exists (this is exactly what happened
+ * when 'risercard' was registered on 2026-08-14, before seeder 2026_08_14_001
+ * had been run).
+ *
+ * Single-type endpoints don't need this — they already fail per type. It is the
+ * FLEET-WIDE loops (dashboard counts, global search, vendor rollups) that do:
+ * without a guard, one not-yet-migrated type takes down an aggregate covering
+ * every other type. Those loops skip missing tables; everything else still
+ * throws, so a real DB outage stays a 500.
+ *
+ * Result is cached per request — one INFORMATION_SCHEMA query, not one per type.
+ */
+function inventoryTableExists($pdo, $type) {
+    static $existing = null;
+
+    if ($existing === null) {
+        $existing = [];
+        $stmt = $pdo->query(
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE '%inventory'"
+        );
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $tableName) {
+            $existing[strtolower($tableName)] = true;
+        }
+    }
+
+    return isset($existing[strtolower($type . 'inventory')]);
+}
+
+/**
  * Three-letter asset-tag code for a component type.
  *
  * MUST stay in lock-step with seeder 2026_07_22_001, which backfilled every
@@ -747,6 +794,7 @@ function getComponentAssetTagCode($type) {
         'caddy'       => 'CAD',
         'chassis'     => 'CHS',
         'pciecard'    => 'PCI',
+        'risercard'   => 'RSR',
         'hbacard'     => 'HBA',
         'sfp'         => 'SFP',
     ];

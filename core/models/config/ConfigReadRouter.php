@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/ConfigComponentRepository.php';
+require_once __DIR__ . '/../components/ComponentSpecPaths.php';
 
 /**
  * ConfigReadRouter — U-X.1. The read-path seam for READ_FROM_ROWS (off|sample|on).
@@ -81,9 +82,19 @@ final class ConfigReadRouter
      * position ($bayNumber = count(...) + 1) and de-duplicates serials in
      * iteration order.
      */
+    /*
+     * 'risercard' sits immediately before 'pciecard': legacy emits both from the
+     * SINGLE pciecard_configurations array in array order, so the rows side cannot
+     * reproduce an interleaving exactly once the two are separate types. Riser-first
+     * is the closest match — it is the order Extractor::extractPciecards() writes
+     * (risers resolve first so plain cards can parent to them), and the order adds
+     * naturally happen in (a riser must exist before a card can sit on it).
+     * A config that genuinely interleaves them will show as an ORDER divergence in
+     * sample mode; that is a reporting artifact of the split, not a data problem.
+     */
     private const LEGACY_TYPE_ORDER = [
         'cpu', 'ram', 'storage', 'caddy', 'nic', 'hbacard',
-        'motherboard', 'chassis', 'pciecard', 'sfp',
+        'motherboard', 'chassis', 'risercard', 'pciecard', 'sfp',
     ];
 
     /** Legacy hardcodes added_at = null for components that come from scalar columns. */
@@ -269,9 +280,62 @@ final class ConfigReadRouter
     // class docblock, correction 3. Change both or neither.
     // ------------------------------------------------------------------
 
+    /**
+     * Is this LEGACY-JSON pciecard entry actually a riser?
+     *
+     * The legacy pciecard_configurations column still holds risers after the
+     * 2026-08-14 type split (see ServerBuilder::updatePcieCardConfiguration()'s
+     * case comment for why no 11th JSON column was added), while the ROWS side
+     * types them 'risercard'. Without this bridge every riser would read as a
+     * divergence in sample mode and as the wrong type in =on mode.
+     *
+     * The historical 'riser-' UUID-prefix test only ever caught SYNTHETIC uuids —
+     * none of the 20 real riser spec UUIDs carry that prefix — so catalog
+     * membership is the test that actually works. Both are kept.
+     *
+     * Dies together with the *_configuration(s) columns at U-D.3.
+     */
     private static function isRiserPciecard(string $type, ?string $uuid): bool
     {
-        return $type === 'pciecard' && $uuid !== null && strpos($uuid, 'riser-') === 0;
+        if ($type !== 'pciecard' || $uuid === null) {
+            return false;
+        }
+        if (strpos($uuid, 'riser-') === 0) {
+            return true;
+        }
+        return self::isKnownRiserSpecUuid($uuid);
+    }
+
+    /**
+     * Membership test against the risercard catalog, memoized per request.
+     * Never throws: an unreadable/absent spec file means "not a riser", which
+     * degrades to the pre-split behaviour rather than breaking every read.
+     */
+    private static function isKnownRiserSpecUuid(string $uuid): bool
+    {
+        static $riserUuids = null;
+
+        if ($riserUuids === null) {
+            $riserUuids = [];
+            try {
+                $path = ComponentSpecPaths::getPath('risercard');
+                $groups = is_file($path) ? json_decode((string)file_get_contents($path), true) : null;
+                if (is_array($groups)) {
+                    foreach ($groups as $group) {
+                        foreach (($group['models'] ?? []) as $model) {
+                            $specUuid = $model['UUID'] ?? ($model['uuid'] ?? null);
+                            if (is_string($specUuid) && $specUuid !== '') {
+                                $riserUuids[$specUuid] = true;
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $riserUuids = [];
+            }
+        }
+
+        return isset($riserUuids[$uuid]);
     }
 
     /**
@@ -286,7 +350,7 @@ final class ConfigReadRouter
     private static function canonicalTuple(string $type, ?string $specUuid, ?string $serial, ?string $slotRef): array
     {
         if (self::isRiserPciecard($type, $specUuid)) {
-            $type = 'riser';
+            $type = 'risercard';
         }
         return [
             $type,

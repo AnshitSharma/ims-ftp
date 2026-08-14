@@ -66,7 +66,7 @@ class ValidationPipeline
      * When VALIDATION_PIPELINE_ENABLED=off (default), returns null immediately so
      * per-authority delegate blocks in ServerBuilder remain in control.
      *
-     * When enforce: calls SlotAuthority (for nic/pciecard/hbacard) and
+     * When enforce: calls SlotAuthority (for nic/pciecard/risercard/hbacard) and
      * StorageConnectionAuthority (for storage) in sequence, returning the first
      * non-null override. Each authority still respects its own flag (SLOT_AUTHORITY_ENABLED,
      * STORAGE_CONNECTION_AUTHORITY_ENABLED) — if an authority is off, it returns null
@@ -116,7 +116,7 @@ class ValidationPipeline
         $override = null;
 
         // SlotAuthority — PCIe slot consumers only
-        if (in_array($componentType, ['nic', 'pciecard', 'hbacard'], true)) {
+        if (in_array($componentType, ['nic', 'pciecard', 'risercard', 'hbacard'], true)) {
             $slotResult = (new SlotAuthority($this->pdo))->evaluate(
                 $configUuid, $componentType, $componentUuid, $override
             );

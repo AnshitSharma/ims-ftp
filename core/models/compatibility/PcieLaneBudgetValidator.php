@@ -70,7 +70,7 @@ class PcieLaneBudgetValidator
      * budget of the existing configuration.
      *
      * @param array  $configData     Row from server_configurations (the locked snapshot)
-     * @param string $componentType  'nic' | 'hbacard' | 'pciecard' | 'storage'
+     * @param string $componentType  'nic' | 'hbacard' | 'pciecard' | 'risercard' | 'storage'
      * @param string $componentUuid  UUID of the component being added
      * @param array|null $componentSpec Optional pre-loaded spec to avoid a second disk read
      * @return array {
@@ -87,7 +87,7 @@ class PcieLaneBudgetValidator
     {
         $mode = self::currentMode();
 
-        if ($mode === 'off' || !in_array($componentType, ['nic', 'hbacard', 'pciecard', 'storage'], true)) {
+        if ($mode === 'off' || !in_array($componentType, ['nic', 'hbacard', 'pciecard', 'risercard', 'storage'], true)) {
             return [
                 'ok' => true, 'allowed' => true, 'mode' => $mode,
                 'budget' => 0, 'used' => 0, 'requested' => 0,
@@ -189,7 +189,7 @@ class PcieLaneBudgetValidator
                 $used += $this->extractLaneCount($specs) * $q;
             }
         }
-        foreach (['hbacard' => 'hbacard', 'pciecard' => 'pciecard'] as $key => $type) {
+        foreach (['hbacard' => 'hbacard', 'pciecard' => 'pciecard', 'risercard' => 'risercard'] as $key => $type) {
             if (!empty($existing[$key]) && is_array($existing[$key])) {
                 foreach ($existing[$key] as $card) {
                     $uuid = $card['component_uuid'] ?? '';

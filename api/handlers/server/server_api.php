@@ -37,6 +37,7 @@ $GLOBALS['_serverComponentTableMap'] = [
     'caddy' => 'caddyinventory',
     'chassis' => 'chassisinventory',
     'pciecard' => 'pciecardinventory',
+    'risercard' => 'risercardinventory',
     'hbacard' => 'hbacardinventory',
     'sfp' => 'sfpinventory'
 ];
@@ -412,7 +413,7 @@ function handleAddComponent($serverBuilder, $user) {
     }
 
     // Basic component type validation
-    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'hbacard', 'sfp'];
+    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'risercard', 'hbacard', 'sfp'];
     if (!in_array($componentType, $validComponentTypes)) {
         send_json_response(0, 1, 400, "Invalid component type. Valid types: " . implode(', ', $validComponentTypes));
     }
@@ -1777,11 +1778,14 @@ function handleDeleteConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Cannot delete finalized configurations");
         }
         
-        // Deleting a server that still holds components is refused (the user has
-        // to remove them first). Only server.delete_finalized holders can force
-        // past that, since forcing is a bulk inventory release.
-        $force = filter_var($_POST['force'] ?? false, FILTER_VALIDATE_BOOLEAN)
-            && hasPermission($pdo, 'server.delete_finalized', $user['id']);
+        // Deleting a server that still holds components is refused by default
+        // (409), so the release is never a silent side effect. `force` is the
+        // caller's explicit "yes, release them too" — the UI sends it only after
+        // a second confirmation that names what will be freed. It needs no extra
+        // permission: whoever is allowed to delete this configuration is allowed
+        // to release the components it holds, and the two ownership/finalized
+        // gates above already ran.
+        $force = filter_var($_POST['force'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         $result = $serverBuilder->deleteConfiguration($configUuid, $force);
 
@@ -2158,7 +2162,7 @@ function handleGetCompatible($serverBuilder, $user) {
     }
 
     // Validate component type
-    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'hbacard', 'sfp'];
+    $validComponentTypes = ['chassis', 'cpu', 'motherboard', 'ram', 'storage', 'nic', 'caddy', 'pciecard', 'risercard', 'hbacard', 'sfp'];
     if (!in_array($componentType, $validComponentTypes)) {
         send_json_response(0, 1, 400, "Invalid component type. Must be one of: " . implode(', ', $validComponentTypes));
     }

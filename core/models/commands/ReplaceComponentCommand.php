@@ -249,6 +249,9 @@ final class ReplaceComponentCommand extends BaseCommand
             case 'pciecard':
                 $spec = $dataUtils->getPCIeCardByUUID($this->newComponentUuid);
                 break;
+            case 'risercard':
+                $spec = $dataUtils->getRiserCardByUUID($this->newComponentUuid);
+                break;
             default:
                 return null;
         }
@@ -256,7 +259,10 @@ final class ReplaceComponentCommand extends BaseCommand
             return null;
         }
 
-        $isRiser = ($spec['component_subtype'] ?? null) === 'Riser Card';
+        // Type is the riser test since the 2026-08-14 split; the subtype test stays
+        // as a fallback for any pciecard row still labelled 'Riser Card'.
+        $isRiser = $this->componentType === 'risercard'
+            || ($spec['component_subtype'] ?? null) === 'Riser Card';
         $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
         $width = SlotPlanner::extractCardWidth($spec);
 

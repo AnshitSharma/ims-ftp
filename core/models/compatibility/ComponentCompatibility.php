@@ -777,7 +777,12 @@ class ComponentCompatibility {
     }
     
     /**
-     * Check if card is a riser card
+     * Check if card is a riser card.
+     *
+     * Spec-shape test only — callers that know the component TYPE should prefer
+     * `$type === 'risercard'` (2026-08-14 split). This stays because the riser
+     * spec file retains its component_subtype label, so the test is still true
+     * for risercard specs as well as legacy pciecard rows.
      */
     private function isPCIeRiserCard($pcieCardData) {
         $subtype = $pcieCardData['component_subtype'] ?? '';
@@ -2249,8 +2254,10 @@ class ComponentCompatibility {
 
 
             // SPECIAL HANDLING FOR RISER CARDS
-            // Riser cards use riser slots, not PCIe slots
-            $isRiserCard = ($cardSubtype === 'Riser Card');
+            // Riser cards use riser slots, not PCIe slots.
+            // The component TYPE decides this since the 2026-08-14 split; the subtype
+            // test remains for any pciecard row still labelled 'Riser Card'.
+            $isRiserCard = ($componentType === 'risercard') || ($cardSubtype === 'Riser Card');
 
 
             if ($isRiserCard) {

@@ -41,6 +41,7 @@ class ComponentSpecificationAdapter {
             case 'caddy':
                 return $this->extractCaddySpecifications($jsonComponent, $metadata);
             case 'pciecard':
+            case 'risercard':
                 return $this->extractPcieCardSpecifications($jsonComponent, $metadata);
             case 'hbacard':
                 return $this->extractHbaCardSpecifications($jsonComponent, $metadata);

@@ -10,6 +10,7 @@ class ComponentSpecPaths {
         'nic' => 'nic/nic-level-3.json',
         'caddy' => 'caddy/caddy_details.json',
         'pciecard' => 'pciecard/pci-level-3.json',
+        'risercard' => 'risercard/riser-level-3.json',
         'hbacard' => 'hbacard/hbacard-level-3.json',
         'sfp' => 'sfp/sfp-level-3.json',
         'chassis' => 'chassis/chasis-level-3.json',

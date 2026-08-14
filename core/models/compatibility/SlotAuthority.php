@@ -55,7 +55,7 @@ class SlotAuthority
      * slot data AND reports zero available slots.
      *
      * @param string     $configUuid     Server configuration UUID
-     * @param string     $componentType  One of: nic | pciecard | hbacard (caller must gate)
+     * @param string     $componentType  One of: nic | pciecard | risercard | hbacard (caller must gate)
      * @param string     $componentUuid  UUID of the component being added
      * @param array|null $legacyResult   Current $compatibilityResult from the legacy check
      * @return array|null  Override compatibility result on enforce+no-slots; null otherwise

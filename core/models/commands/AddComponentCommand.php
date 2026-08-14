@@ -236,6 +236,9 @@ final class AddComponentCommand extends BaseCommand
             case 'pciecard':
                 $spec = $dataUtils->getPCIeCardByUUID($this->componentUuid);
                 break;
+            case 'risercard':
+                $spec = $dataUtils->getRiserCardByUUID($this->componentUuid);
+                break;
             default:
                 return ['ok' => false, 'slot_ref' => null, 'error' => 'not a slotted type', 'error_code' => 'not_slotted'];
         }
@@ -243,7 +246,10 @@ final class AddComponentCommand extends BaseCommand
             return ['ok' => false, 'slot_ref' => null, 'error' => 'spec not found', 'error_code' => 'spec_not_found'];
         }
 
-        $isRiser = ($spec['component_subtype'] ?? null) === 'Riser Card';
+        // Type is the riser test since the 2026-08-14 split; the subtype test stays
+        // as a fallback for any pciecard row still labelled 'Riser Card'.
+        $isRiser = $this->componentType === 'risercard'
+            || ($spec['component_subtype'] ?? null) === 'Riser Card';
         $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
         $width = SlotPlanner::extractCardWidth($spec);
         $manual = $this->options['slot_position'] ?? null;

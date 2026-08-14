@@ -882,7 +882,7 @@ class UnifiedSlotTracker {
 
     /**
      * Get component subtype from JSON specifications
-     * Searches across pciecard, hbacard, and nic types
+     * Searches across pciecard, risercard, hbacard, and nic types
      *
      * @param string $componentUuid Component UUID
      * @return string|null Component subtype
@@ -891,6 +891,13 @@ class UnifiedSlotTracker {
         try {
             // Try pciecard first
             $specs = $this->componentDataService->getComponentSpecifications('pciecard', $componentUuid);
+            if ($specs && isset($specs['component_subtype'])) {
+                return $specs['component_subtype'];
+            }
+
+            // Try risercard (split out of pciecard 2026-08-14 — its specs still
+            // carry component_subtype "Riser Card" for display purposes)
+            $specs = $this->componentDataService->getComponentSpecifications('risercard', $componentUuid);
             if ($specs && isset($specs['component_subtype'])) {
                 return $specs['component_subtype'];
             }
@@ -1407,8 +1414,12 @@ class UnifiedSlotTracker {
                 ];
             }
 
-            // Check if this is a riser in a PCIe slot (invalid)
-            if (isset($componentSpecs['component_subtype']) && $componentSpecs['component_subtype'] === 'Riser Card') {
+            // Check if this is a riser in a PCIe slot (invalid).
+            // Keyed off the component TYPE since the 2026-08-14 split; the
+            // component_subtype test is retained as a belt-and-braces fallback for
+            // any spec row still carrying the old label.
+            if ($componentType === 'risercard'
+                || (isset($componentSpecs['component_subtype']) && $componentSpecs['component_subtype'] === 'Riser Card')) {
                 return [
                     'valid' => false,
                     'error' => "Riser card $componentUuid cannot be installed in PCIe slot $slotId. Use riser slots instead."
@@ -1461,6 +1472,7 @@ class UnifiedSlotTracker {
     private function getComponentTypeByUuid($uuid) {
         $tables = [
             'pciecard' => 'pciecardinventory',
+            'risercard' => 'risercardinventory',
             'hbacard' => 'hbacardinventory',
             'nic' => 'nicinventory'
         ];

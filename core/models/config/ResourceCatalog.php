@@ -28,12 +28,15 @@ class CatalogException extends \RuntimeException
  *   - motherboard -> pcie_slot, m2_slot, riser_slot
  *     (expansion_slots.pcie_slots / expansion_slots.riser_slots|riser_compatibility.max_risers /
  *      storage.nvme.m2_slots, summed across ALL entries per the P3.1 lesson)
- *   - pciecard (component_subtype === 'Riser Card') -> pcie_slot rows the riser itself provides
- *     (pcie_slots count + slot_type, mirroring UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots())
+ *   - risercard -> pcie_slot rows the riser itself provides
+ *     (pcie_slots count + slot_type, mirroring UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots()).
+ *     NOTE (2026-08-14): risers used to be pciecard rows selected by
+ *     component_subtype === 'Riser Card'; they are now their own component type, so
+ *     'pciecard' provides nothing at all and 'risercard' always provides.
  *   - cpu -> pcie_lane (spec's `pcie_lanes` field, one row per physical CPU; mirrors
  *     PcieLaneBudgetValidator::evaluateAssembledStorageLaneBudget()'s field read — see U-L.4)
  *   - nic -> sfp_port (spec's `ports` field, mirrors NICPortTracker::getPortAssignmentInfo() — U-L.5)
- *   - nic/hbacard/pciecard CONSUME pcie_lane (mirrors PcieLaneBudgetValidator::extractLaneCount()'s
+ *   - nic/hbacard/pciecard/risercard CONSUME pcie_lane (mirrors PcieLaneBudgetValidator::extractLaneCount()'s
  *     `interface`/`pcie_interface`/`bus_interface` regex, falling back to a numeric `pcie_lanes`
  *     field — U-L.5). NOTE: this is the ONE deliberate exception to this file's fail-closed posture:
  *     an absent/unparseable width returns 0 lanes (empty row set), NOT a CatalogException, because
@@ -50,7 +53,8 @@ class CatalogException extends \RuntimeException
  *     authorized to read). u2 bays remain unimplemented — see chassisDriveBayRows() docblock
  *   - cpu/storage/nic/hbacard/pciecard CONSUME psu_watt (added U-R.7, migration/04-validation-engine):
  *     each type's OWN structured ims-data power field (cpu.tdp_W, storage.power_consumption_W.active,
- *     nic.power (a "<N>W" string, numeric part parsed), hbacard/pciecard.power_consumption.typical_W).
+ *     nic.power (a "<N>W" string, numeric part parsed), hbacard/pciecard.power_consumption.typical_W;
+ *     risercard has no power field in ims-data, so it contributes 0 — same as before the split).
  *     DOCUMENTED DEVIATION from legacy: ServerBuilder::checkPowerCompatibilityDetailed()'s own power
  *     estimate (was ~5698-5730) reads free-text per-PHYSICAL-UNIT `Notes` via regex (2.5W/core for
  *     cpu, 1W/4GB for ram, flat 8W/12W SSD/HDD for storage) — instance-level data ResourceCatalog
@@ -156,8 +160,8 @@ class ResourceCatalog
                 return $this->providesChassis($specUuid);
             case 'motherboard':
                 return $this->providesMotherboard($specUuid);
-            case 'pciecard':
-                return $this->providesPciecard($specUuid);
+            case 'risercard':
+                return $this->providesRisercard($specUuid);
             case 'cpu':
                 return $this->providesCpu($specUuid);
             case 'nic':
@@ -165,6 +169,7 @@ class ResourceCatalog
             case 'ram':
             case 'storage':
             case 'caddy':
+            case 'pciecard':
             case 'hbacard':
             case 'sfp':
                 return []; // confirmed: these types provide no resources today
@@ -193,6 +198,7 @@ class ResourceCatalog
             case 'nic':
             case 'hbacard':
             case 'pciecard':
+            case 'risercard':
                 return array_merge($this->consumesPcieLanes($type, $specUuid), $this->consumesPsuWatt($type, $specUuid));
             case 'cpu':
                 return $this->consumesPsuWatt($type, $specUuid);
@@ -240,6 +246,14 @@ class ResourceCatalog
                 break;
             case 'pciecard':
                 $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+                $watts = is_array($spec) ? ($spec['power_consumption']['typical_W'] ?? null) : null;
+                break;
+            case 'risercard':
+                // Riser specs carry no power_consumption field today (confirmed by
+                // reading riser-level-3.json in full) -> null -> []. Same posture as
+                // ram's confirmed data gap, and identical to the behaviour risers had
+                // while they were still typed 'pciecard'.
+                $spec = $this->dataUtils->getRiserCardByUUID($specUuid);
                 $watts = is_array($spec) ? ($spec['power_consumption']['typical_W'] ?? null) : null;
                 break;
             default:
@@ -348,6 +362,9 @@ class ResourceCatalog
                 break;
             case 'pciecard':
                 $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+                break;
+            case 'risercard':
+                $spec = $this->dataUtils->getRiserCardByUUID($specUuid);
                 break;
             default:
                 throw new CatalogException("consumesPcieLanes(): unsupported type '$type'");
@@ -612,19 +629,19 @@ class ResourceCatalog
     }
 
     /**
-     * A riser card (a pciecard whose component_subtype is 'Riser Card', per
-     * UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots()) provides the PCIe
-     * slots downstream of it. A plain (non-riser) pciecard provides nothing.
+     * A riser card provides the PCIe slots downstream of it (mirrors
+     * UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots()).
+     *
+     * Until 2026-08-14 risers were pciecard rows identified by
+     * component_subtype === 'Riser Card'; they are now their own component type,
+     * so the subtype test is gone — reaching this method IS the riser test.
+     * A plain (non-riser) pciecard provides nothing, as before.
      */
-    private function providesPciecard(string $specUuid): array
+    private function providesRisercard(string $specUuid): array
     {
-        $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+        $spec = $this->dataUtils->getRiserCardByUUID($specUuid);
         if (!is_array($spec)) {
-            throw new CatalogException("PCIe card spec not found for UUID $specUuid");
-        }
-
-        if (($spec['component_subtype'] ?? '') !== 'Riser Card') {
-            return [];
+            throw new CatalogException("Riser card spec not found for UUID $specUuid");
         }
 
         $pcieSlots = $spec['pcie_slots'] ?? 0;

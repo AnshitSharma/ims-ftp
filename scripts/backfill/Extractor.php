@@ -24,6 +24,7 @@ class Extractor
         'chassis' => 'chassisinventory', 'cpu' => 'cpuinventory', 'ram' => 'raminventory',
         'storage' => 'storageinventory', 'motherboard' => 'motherboardinventory',
         'nic' => 'nicinventory', 'caddy' => 'caddyinventory', 'pciecard' => 'pciecardinventory',
+        'risercard' => 'risercardinventory',
         'hbacard' => 'hbacardinventory', 'sfp' => 'sfpinventory',
     ];
 
@@ -92,9 +93,11 @@ class Extractor
     }
 
     /**
-     * pciecard_configurations: each entry is retyped 'riser' when its spec is
-     * a Riser Card (component_subtype, per ResourceCatalog::providesPciecard())
-     * or its uuid carries the 'riser-' prefix. Riser entries resolve first (so
+     * pciecard_configurations: each entry is retyped 'risercard' when its uuid is
+     * in the risercard catalog (or carries the legacy 'riser-' prefix, or — during
+     * the transition window — still reads as component_subtype 'Riser Card' in the
+     * pciecard file). The legacy JSON column keeps holding both kinds; only the ROW
+     * store separates them. Riser entries resolve first (so
      * a plain card can reference the single riser present, if unambiguous);
      * risers themselves parent to the motherboard, like cpu/ram.
      */
@@ -117,7 +120,7 @@ class Extractor
 
         foreach ($riserEntries as $pcie) {
             $slotRef = $pcie['slot_position'] ?? null;
-            $this->resolveEntry($pdo, $configUuid, 'riser', 'pciecard', $pcie, 'motherboard', $plans, $quarantine, $slotRef);
+            $this->resolveEntry($pdo, $configUuid, 'risercard', 'risercard', $pcie, 'motherboard', $plans, $quarantine, $slotRef);
         }
 
         // Only link a plain card to 'riser' when exactly one riser is present in
@@ -222,7 +225,15 @@ class Extractor
         if (strpos($uuid, 'riser-') === 0) {
             return true;
         }
+        // Since the 2026-08-14 split the authoritative test is "does this uuid exist
+        // in the risercard catalog". The pciecard subtype test is retained as a
+        // fallback for the transition window in which pci-level-3.json still carries
+        // the Riser Card groups (removed in step 7 of tasks/riser-card-separation.md).
         try {
+            $riserSpec = $this->dataUtils->getRiserCardByUUID($uuid);
+            if (is_array($riserSpec)) {
+                return true;
+            }
             $spec = $this->dataUtils->getPCIeCardByUUID($uuid);
         } catch (\Throwable $e) {
             return false; // spec lookup failure -> not confidently a riser; the plain pciecard path resolves/quarantines this entry on its own terms
@@ -275,9 +286,11 @@ class Extractor
      * resolve to exactly one inventory row for (UUID, ServerUUID = this
      * config) — 0 or >1 candidates is 'ambiguous-serial', never guessed.
      *
-     * $componentType is the config_components.component_type to record
-     * (e.g. 'riser'); $physicalType picks the inventory table to query
-     * (e.g. 'pciecard' for a riser, since the physical unit is still a card).
+     * $componentType is the config_components.component_type to record;
+     * $physicalType picks the inventory table to query. The two diverged only
+     * while risers were config-typed 'riser' but stocked in pciecardinventory —
+     * since the 2026-08-14 split they are both 'risercard'. The parameter pair is
+     * kept because the indirection is still the honest description of the contract.
      */
     private function resolveEntry(
         PDO $pdo, string $configUuid, string $componentType, string $physicalType,

@@ -592,7 +592,11 @@ class ComponentDataExtractor {
     }
 
     /**
-     * Extract additional slots provided by riser card
+     * Extract additional slots provided by riser card.
+     *
+     * Spec-shape test: the risercard spec file (2026-08-14 split) keeps its
+     * component_subtype label, so this stays true for risercard specs and for any
+     * legacy pciecard row still labelled 'Riser Card'.
      */
     public function extractRiserCardSlots($pcieCardData) {
         $subtype = $pcieCardData['component_subtype'] ?? '';

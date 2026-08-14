@@ -40,6 +40,7 @@ if (!file_exists($bootstrap)) {
 require_once $bootstrap;
 require_once $ROOT . '/core/models/server/ServerBuilder.php';
 require_once $ROOT . '/core/models/config/ConfigComponentRepository.php';
+require_once $ROOT . '/core/models/components/ComponentSpecPaths.php';
 
 global $pdo;
 if (!isset($pdo) || !($pdo instanceof PDO)) {
@@ -57,24 +58,53 @@ if (!isset($pdo) || !($pdo instanceof PDO)) {
 // with a real parent_id (the config's motherboard row).
 const TODO_UB2 = true;
 
-// BEST-EFFORT, PARTIAL: U-B.2's pack confirms the real rule is "pciecard
-// subtype Riser Card (ims-data component_subtype, per
-// ResourceCatalog::providesPciecard()) OR uuid prefix 'riser-'" -- Extractor.php
-// implements both. The component_subtype half is NOT implemented here: it
-// would require loading DataExtractionUtilities/ims-data specs into a report
-// that scans the whole fleet, which is a bigger, perf-sensitive change this
-// unit's file box doesn't cover. Only the uuid-prefix half is checked below;
-// a config whose only riser signal is component_subtype (no 'riser-' prefix)
-// will show as a false diff here even though Extractor.php resolves it
-// correctly -- tracked as a known gap for a follow-up unit (also folds in the
-// pre-existing RISER_SUBTYPE_KEYS observation: the decoded entry shape from
-// extractComponentsFromJson never actually carries 'subtype'/'card_type'/
-// 'type', so that list never matched anything either).
+// GAP CLOSED (2026-08-14, riser type split). This block previously implemented
+// only the "uuid prefix 'riser-'" half of the rule and documented the
+// component_subtype half as too perf-sensitive to add, because deciding it meant
+// loading DataExtractionUtilities/ims-data specs into a fleet-wide report.
+// The split removed that cost: risers now have their OWN spec file, so the test
+// is membership in one small UUID set, loaded once per run. Both halves are
+// implemented below, matching ConfigReadRouter::isRiserPciecard() (this file and
+// that method are the "change both or neither" pair named in its class docblock).
+//
+// RISER_SUBTYPE_KEYS is retained but is still expected to match nothing: the
+// decoded entry shape from extractComponentsFromJson() never carries
+// 'subtype'/'card_type'/'type'. Kept as a harmless belt-and-braces check.
 const RISER_SUBTYPE_KEYS = ['subtype', 'card_type', 'type'];
 
 function isOnboardNic(string $type, ?string $specUuid): bool
 {
     return $type === 'nic' && $specUuid !== null && strpos($specUuid, 'onboard-') === 0;
+}
+
+/**
+ * Riser spec UUIDs, loaded once. Never throws — an unreadable spec file means
+ * "no catalog signal", i.e. exactly the pre-2026-08-14 behaviour.
+ */
+function knownRiserSpecUuids(): array
+{
+    static $uuids = null;
+    if ($uuids !== null) {
+        return $uuids;
+    }
+    $uuids = [];
+    try {
+        $path = ComponentSpecPaths::getPath('risercard');
+        $groups = is_file($path) ? json_decode((string)file_get_contents($path), true) : null;
+        if (is_array($groups)) {
+            foreach ($groups as $group) {
+                foreach (($group['models'] ?? []) as $model) {
+                    $specUuid = $model['UUID'] ?? ($model['uuid'] ?? null);
+                    if (is_string($specUuid) && $specUuid !== '') {
+                        $uuids[$specUuid] = true;
+                    }
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        $uuids = [];
+    }
+    return $uuids;
 }
 
 function isRiserPciecard(string $type, array $entry): bool
@@ -84,6 +114,9 @@ function isRiserPciecard(string $type, array $entry): bool
     }
     $uuid = $entry['component_uuid'] ?? $entry['uuid'] ?? null;
     if ($uuid !== null && strpos((string)$uuid, 'riser-') === 0) {
+        return true;
+    }
+    if ($uuid !== null && isset(knownRiserSpecUuids()[(string)$uuid])) {
         return true;
     }
     foreach (RISER_SUBTYPE_KEYS as $key) {
@@ -97,7 +130,7 @@ function isRiserPciecard(string $type, array $entry): bool
 function canonicalTuple(string $type, array $entry): array
 {
     if (isRiserPciecard($type, $entry)) {
-        $type = 'riser';
+        $type = 'risercard';
     }
     $specUuid = $entry['component_uuid'] ?? $entry['spec_uuid'] ?? null;
     // ServerBuilder::extractComponentsFromJson() -- the authoritative legacy

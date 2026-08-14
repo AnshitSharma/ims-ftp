@@ -38,6 +38,9 @@ class ConfigurationReverseLookup
             ['kind' => 'scalar', 'column' => 'hbacard_uuid'],
         ],
         'pciecard'    => [['kind' => 'json',   'column' => 'pciecard_configurations', 'path' => null]],
+        // Risers became their own type on 2026-08-14 but still live in the LEGACY
+        // pciecard_configurations column (see ServerBuilder::updatePcieCardConfiguration()).
+        'risercard'   => [['kind' => 'json',   'column' => 'pciecard_configurations', 'path' => null]],
         'sfp'         => [['kind' => 'json',   'column' => 'sfp_configuration',       'path' => null]],
     ];
 

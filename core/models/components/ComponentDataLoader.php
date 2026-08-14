@@ -64,6 +64,7 @@ class ComponentDataLoader {
             'nic' => 'nicinventory',
             'caddy' => 'caddyinventory',
             'pciecard' => 'pciecardinventory',
+            'risercard' => 'risercardinventory',
             'chassis' => 'chassisinventory',
             'hbacard' => 'hbacardinventory',
             'sfp' => 'sfpinventory'

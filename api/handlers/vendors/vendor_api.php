@@ -155,8 +155,13 @@ function handleVendorOperations($operation, $user) {
             try {
                 $pdo->beginTransaction();
 
-                // Nullify VendorID references in all inventory tables
+                // Nullify VendorID references in all inventory tables.
+                // A type whose table is not migrated yet has no rows to nullify --
+                // see inventoryTableExists().
                 foreach (VALID_COMPONENT_TYPES as $type) {
+                    if (!inventoryTableExists($pdo, $type)) {
+                        continue;
+                    }
                     $table = getComponentTableName($type);
                     $pdo->prepare("UPDATE $table SET VendorID = NULL WHERE VendorID = ?")->execute([(int)$vendorId]);
                 }
@@ -188,6 +193,9 @@ function handleVendorOperations($operation, $user) {
             try {
                 $allComponents = [];
                 foreach (VALID_COMPONENT_TYPES as $type) {
+                    if (!inventoryTableExists($pdo, $type)) {
+                        continue; // not migrated yet -- see inventoryTableExists()
+                    }
                     $table = getComponentTableName($type);
                     $stmt = $pdo->prepare("SELECT *, ? AS component_type FROM $table WHERE VendorID = ?");
                     $stmt->execute([$type, (int)$vendorId]);

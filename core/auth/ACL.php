@@ -142,6 +142,12 @@ class ACL {
             ['name' => 'pciecard.edit', 'display_name' => 'Edit PCIe Card Components', 'category' => 'inventory', 'is_basic' => false],
             ['name' => 'pciecard.delete', 'display_name' => 'Delete PCIe Card Components', 'category' => 'inventory', 'is_basic' => false],
 
+            // Riser Card permissions (split out of pciecard, 2026-08-14)
+            ['name' => 'risercard.view', 'display_name' => 'View Riser Card Components', 'category' => 'inventory', 'is_basic' => true],
+            ['name' => 'risercard.create', 'display_name' => 'Create Riser Card Components', 'category' => 'inventory', 'is_basic' => false],
+            ['name' => 'risercard.edit', 'display_name' => 'Edit Riser Card Components', 'category' => 'inventory', 'is_basic' => false],
+            ['name' => 'risercard.delete', 'display_name' => 'Delete Riser Card Components', 'category' => 'inventory', 'is_basic' => false],
+
             // HBA Card permissions
             ['name' => 'hbacard.view', 'display_name' => 'View HBA Card Components', 'category' => 'inventory', 'is_basic' => true],
             ['name' => 'hbacard.create', 'display_name' => 'Create HBA Card Components', 'category' => 'inventory', 'is_basic' => false],

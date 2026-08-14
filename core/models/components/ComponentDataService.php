@@ -137,7 +137,7 @@ class ComponentDataService {
                 break;
 
             default:
-                // Standard: brand -> models (CPU, RAM, storage, motherboard, pciecard, hbacard)
+                // Standard: brand -> models (CPU, RAM, storage, motherboard, pciecard, risercard, hbacard)
                 foreach ($jsonData as $brandIdx => $brand) {
                     foreach ($brand['models'] ?? [] as $modelIdx => $model) {
                         $uuid = $model['uuid'] ?? $model['UUID'] ?? null;
@@ -1177,7 +1177,7 @@ class ComponentDataService {
         $typeCount = 0;
         $specCount = 0;
 
-        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'hbacard'];
+        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'risercard', 'hbacard'];
 
         foreach ($componentTypes as $type) {
             try {

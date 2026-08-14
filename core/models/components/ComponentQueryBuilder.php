@@ -422,6 +422,7 @@ class ComponentQueryBuilder {
             'nic' => 'nicinventory',
             'caddy' => 'caddyinventory',
             'pciecard' => 'pciecardinventory',
+            'risercard' => 'risercardinventory',
             'hbacard' => 'hbacardinventory',
             'chassis' => 'chassisinventory'
         ];

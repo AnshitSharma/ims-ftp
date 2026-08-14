@@ -1396,7 +1396,7 @@ class ComponentValidator {
                                 }
                             }
                         }
-                    } elseif (in_array($component['component_type'], ['hbacard', 'pciecard'])) {
+                    } elseif (in_array($component['component_type'], ['hbacard', 'pciecard', 'risercard'])) {
                         // BUGFIX (TP-1F): derive the card's actual lane requirement from
                         // its spec instead of hardcoding x8 (which forced x4 cards onto
                         // x8+ slots and under-checked x16 cards). Parse the slot width

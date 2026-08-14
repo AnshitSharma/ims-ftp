@@ -86,6 +86,7 @@ class StorageConnectionAuthority
                 'storage'     => [],
                 'nic'         => [],
                 'pciecard'    => [],
+                'risercard'   => [],
                 'hbacard'     => [],
                 'caddy'       => [],
             ];

@@ -49,6 +49,7 @@ class ServerBuilder {
             'nic' => 'nicinventory',
             'caddy' => 'caddyinventory',
             'pciecard' => 'pciecardinventory',
+            'risercard' => 'risercardinventory',
             'hbacard' => 'hbacardinventory',
             'sfp' => 'sfpinventory'
         ];
@@ -925,9 +926,9 @@ class ServerBuilder {
             }
             $slotPosition = $options['slot_position'] ?? null;
 
-            // Phase 10.5: Expansion slot assignment for PCIe cards, NICs, HBA cards
+            // Phase 10.5: Expansion slot assignment for PCIe cards, risers, NICs, HBA cards
             // Moved from handleAddComponent() lines 503-600
-            if (in_array($componentType, ['pciecard', 'nic', 'hbacard'])) {
+            if (in_array($componentType, ['pciecard', 'risercard', 'nic', 'hbacard'])) {
                 try {
                     // Load component specs for slot assignment
                     $componentDataService = ComponentDataService::getInstance();
@@ -1014,7 +1015,7 @@ class ServerBuilder {
             // would make it worse by claiming hardware for cards with nowhere to sit.
             // Callers that genuinely need N cards issue N adds -- which is what the
             // command layer already does (server_api.php's quantity>1 loop).
-            if ($quantity > 1 && in_array($componentType, ['nic', 'pciecard', 'hbacard'], true)) {
+            if ($quantity > 1 && in_array($componentType, ['nic', 'pciecard', 'risercard', 'hbacard'], true)) {
                 if ($ownTransaction && $this->pdo->inTransaction()) {
                     $this->pdo->rollback();
                 }
@@ -1487,10 +1488,15 @@ class ServerBuilder {
             // exists -- precisely the state validateRiserSlotIntegrity() reports as
             // "references non-existent riser". That check existed and was correct;
             // nothing ever called it. Block instead of creating the broken state.
-            if ($componentType === 'pciecard') {
-                $riserSpecs = $this->dataUtils->getPCIeCardByUUID($componentUuid);
-                $isRiser = ($riserSpecs['component_subtype'] ?? null) === 'Riser Card'
-                    || stripos((string)$componentUuid, 'riser-') === 0;
+            if ($componentType === 'risercard' || $componentType === 'pciecard') {
+                // Type is authoritative since the 2026-08-14 split; the spec/UUID tests
+                // stay so a pciecard row still labelled 'Riser Card' is caught too.
+                $isRiser = ($componentType === 'risercard');
+                if (!$isRiser) {
+                    $riserSpecs = $this->dataUtils->getPCIeCardByUUID($componentUuid);
+                    $isRiser = ($riserSpecs['component_subtype'] ?? null) === 'Riser Card'
+                        || stripos((string)$componentUuid, 'riser-') === 0;
+                }
 
                 if ($isRiser) {
                     $slotTracker = new UnifiedSlotTracker($this->pdo);
@@ -1529,7 +1535,7 @@ class ServerBuilder {
                 // most of a build's inventory from a single call, which is the class of
                 // defect the model-vs-unit work spent its time removing. Swapping a
                 // board is what the replace path is for.
-                $dependentTypes = ['cpu', 'ram', 'pciecard', 'nic', 'hbacard', 'storage'];
+                $dependentTypes = ['cpu', 'ram', 'pciecard', 'risercard', 'nic', 'hbacard', 'storage'];
                 // Full (non-minimal) form: minimalOutput drops 'quantity', which would
                 // report an 8-DIMM entry as "1 ram".
                 $remaining = $this->extractComponentsFromJson($config);
@@ -3078,7 +3084,15 @@ class ServerBuilder {
                     break;
 
                 case 'pciecard':
-                    // Extract slot position from options if provided
+                case 'risercard':
+                    // Risers became their own component type on 2026-08-14 but keep
+                    // sharing the LEGACY pciecard_configurations JSON column: that column
+                    // (and every other *_configuration column) is deleted at U-D.3, so
+                    // adding an 11th doomed column — plus a decoder branch in every legacy
+                    // reader — buys nothing. The row store (config_components) is where the
+                    // types are genuinely separate; ConfigReadRouter::isRiserPciecard()
+                    // bridges the legacy side back to 'risercard' for parity and dies with
+                    // the JSON columns.
                     $slotPosition = $options['slot_position'] ?? null;
                     $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition, $serialNumber, $options);
                     break;
@@ -4560,7 +4574,7 @@ class ServerBuilder {
         $labels = [
             'cpu' => 'CPU', 'ram' => 'RAM', 'storage' => 'storage', 'motherboard' => 'motherboard',
             'nic' => 'network card', 'caddy' => 'caddy', 'chassis' => 'chassis',
-            'pciecard' => 'PCIe card', 'hbacard' => 'HBA card', 'sfp' => 'SFP module'
+            'pciecard' => 'PCIe card', 'risercard' => 'riser card', 'hbacard' => 'HBA card', 'sfp' => 'SFP module'
         ];
 
         $byType = [];
@@ -5181,7 +5195,7 @@ class ServerBuilder {
             }
 
             // ===== RISER CARD VALIDATION =====
-            if ($componentType === 'pciecard') {
+            if ($componentType === 'risercard' || $componentType === 'pciecard') {
                 // Check if this is actually a Riser Card (not NVMe Adaptor or other PCIe device)
                 require_once __DIR__ . '/../components/ComponentDataService.php';
                 $componentDataService = ComponentDataService::getInstance();
@@ -5193,9 +5207,11 @@ class ServerBuilder {
                 $componentDetails = $stmt->fetch(PDO::FETCH_ASSOC);
 
                 if ($componentDetails) {
-                    $pcieCardSpecs = $componentDataService->getComponentSpecifications('pciecard', $componentUuid, $componentDetails);
+                    $pcieCardSpecs = $componentDataService->getComponentSpecifications($componentType, $componentUuid, $componentDetails);
                     $pcieComponentSubtype = $pcieCardSpecs['component_subtype'] ?? null;
-                    $isActualRiserCard = ($pcieComponentSubtype === 'Riser Card') || (stripos($componentUuid, 'riser-') === 0);
+                    $isActualRiserCard = ($componentType === 'risercard')
+                        || ($pcieComponentSubtype === 'Riser Card')
+                        || (stripos($componentUuid, 'riser-') === 0);
 
                     // Only validate riser card ordering for actual riser cards
                     if ($isActualRiserCard) {
@@ -5299,6 +5315,9 @@ class ServerBuilder {
                         break;
                     case 'nic':
                     case 'pciecard':
+                    case 'risercard':
+                        // checkPCIeDecentralizedCompatibility() branches internally on
+                        // riser-vs-card (riser bay availability vs PCIe slot availability).
                         $compatibilityResult = $compatibility->checkPCIeDecentralizedCompatibility($newComponent, $existingComponentsData, $componentType);
                         break;
                     case 'hbacard':
@@ -5550,7 +5569,7 @@ class ServerBuilder {
      * - Fallback to legacy assignment
      *
      * @param string $configUuid
-     * @param string $componentType One of: 'pciecard', 'nic', 'hbacard'
+     * @param string $componentType One of: 'pciecard', 'risercard', 'nic', 'hbacard'
      * @param string $componentUuid
      * @param array $componentSpecs Specs from ComponentDataService
      * @param string|null $manualSlotPosition User-provided slot (optional override)
@@ -5565,7 +5584,7 @@ class ServerBuilder {
     ) {
         try {
             // Only relevant for PCIe-capable components
-            if (!in_array($componentType, ['pciecard', 'nic', 'hbacard'])) {
+            if (!in_array($componentType, ['pciecard', 'risercard', 'nic', 'hbacard'])) {
                 return [
                     'success' => true,
                     'slot_id' => null,
@@ -5599,11 +5618,16 @@ class ServerBuilder {
                 ];
             }
 
-            // Check component subtype to determine if riser or regular PCIe card
+            // Determine if this is a riser or a regular PCIe card.
+            // Since the 2026-08-14 split the component TYPE is authoritative; the
+            // subtype and UUID-prefix tests are kept as fallbacks for any spec row
+            // still carrying the old labelling.
             $componentSubtype = $componentSpecs['component_subtype'] ?? null;
             $isRiserCard = false;
 
-            if ($componentSubtype === 'Riser Card') {
+            if ($componentType === 'risercard') {
+                $isRiserCard = true;
+            } elseif ($componentSubtype === 'Riser Card') {
                 $isRiserCard = true;
             } elseif (stripos($componentUuid, 'riser-') === 0) {
                 // Fallback: UUID starts with "riser-"
@@ -6579,6 +6603,7 @@ class ServerBuilder {
             'nic' => 25,
             'caddy' => 5,
             'pciecard' => 30,
+            'risercard' => 30, // unchanged from what risers got as pciecards -- see calculateComponentPowerFromJSON()'s risercard case
             'hbacard' => 20,
             'chassis' => 0,  // Chassis doesn't consume power directly
             'sfp' => 2  // SFP modules: typically 1-3W
@@ -6677,6 +6702,18 @@ class ServerBuilder {
                         return 25; // RAID controllers
                     }
                     return 30; // Default PCIe card
+
+                case 'risercard':
+                    // Same arithmetic risers already got while they were typed
+                    // 'pciecard' (no power_consumption field in ims-data, no 'type'
+                    // field -> the 30W default). Kept identical on purpose: this split
+                    // must not move any power number. Revisit only as a deliberate
+                    // change, with the golden baseline re-blessed.
+                    $specs = $this->dataUtils->getRiserCardByUUID($componentUuid);
+                    if ($specs && isset($specs['power_consumption']['typical_W'])) {
+                        return (int)$specs['power_consumption']['typical_W'];
+                    }
+                    return 30;
 
                 case 'hbacard':
                     $specs = $this->dataUtils->getHBACardByUUID($componentUuid);
@@ -8063,6 +8100,23 @@ class ServerBuilder {
                 }
             }
 
+            // Risers draw their lanes from the board too. No-op against today's specs
+            // (riser `interface` values are "PCIe 3.0"/"PCIe 4.0" with no xN width, so
+            // the regex matches nothing and 0 lanes are added — exactly what risers
+            // contributed while they were typed 'pciecard'), but correct if a riser spec
+            // ever gains a width.
+            if (isset($componentsByType['risercard'])) {
+                foreach ($componentsByType['risercard'] as $card) {
+                    $cardSpecs = $this->dataUtils->getRiserCardByUUID($card['component_uuid']);
+                    if ($cardSpecs) {
+                        $interface = $cardSpecs['interface'] ?? '';
+                        if (preg_match('/x(\d+)/i', $interface, $matches)) {
+                            $usedLanes += (int)$matches[1];
+                        }
+                    }
+                }
+            }
+
             if (isset($componentsByType['hbacard'])) {
                 foreach ($componentsByType['hbacard'] as $card) {
                     $cardSpecs = $this->dataUtils->getHBACardByUUID($card['component_uuid']);
@@ -8856,6 +8910,36 @@ class ServerBuilder {
                 ];
             }
 
+            // 4a. RISER CARDS COMPATIBILITY (own matrix row since the 2026-08-14 split;
+            // risers occupy riser bays, so the check is bay availability, not PCIe slots)
+            if ($motherboard && isset($componentsByType['risercard'])) {
+                $riserList = [];
+                $allCompatible = true;
+                foreach ($componentsByType['risercard'] as $card) {
+                    $cardSpecs = $this->dataUtils->getRiserCardByUUID($card['component_uuid']);
+                    $cardType = $cardSpecs['component_subtype'] ?? 'Riser Card';
+
+                    $compatible = isset($mbSpecs['expansion_slots']) && !empty($mbSpecs['expansion_slots']);
+
+                    if (!$compatible) {
+                        $allCompatible = false;
+                    }
+
+                    $riserList[] = [
+                        'type' => $cardType,
+                        'compatible' => $compatible
+                    ];
+                }
+
+                $matrix[] = [
+                    'pair' => 'riser_cards',
+                    'check' => 'Riser bay availability',
+                    'count' => count($riserList),
+                    'items' => $riserList,
+                    'compatible' => $allCompatible
+                ];
+            }
+
             // 4b. HBA CARDS COMPATIBILITY
             if ($motherboard && isset($componentsByType['hbacard'])) {
                 $hbaList = [];
@@ -9021,6 +9105,7 @@ class ServerBuilder {
             'storage' => [],
             'nic' => [],
             'pciecard' => [],
+            'risercard' => [],
             'hbacard' => [],
             'caddy' => []
         ];
@@ -9142,7 +9227,12 @@ class ServerBuilder {
      * @return array Validation result
      */
     private function validateComponentQuantity($componentType, $componentUuid, $quantity, $configUuid) {
-        // P5.1: Only validate slot-based components
+        // P5.1: Only validate slot-based components.
+        // 'risercard' is deliberately ABSENT: a riser occupies a riser bay, not a
+        // PCIe slot, so it must not be measured against the PCIe pool below (that is
+        // defect (2) in the case comment further down, which the 2026-08-14 type split
+        // now makes structurally impossible). Riser bay capacity is enforced by
+        // UnifiedSlotTracker::canFitRiser()/assignRiserSlot() instead. Do not add it here.
         $slotBasedTypes = ['ram', 'storage', 'pciecard', 'hbacard', 'nic'];
 
         if (!in_array($componentType, $slotBasedTypes)) {

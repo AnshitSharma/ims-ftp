@@ -44,6 +44,7 @@ $componentTables = [
     'nic'         => 'nicinventory',
     'caddy'       => 'caddyinventory',
     'pciecard'    => 'pciecardinventory',
+    'risercard'   => 'risercardinventory',
     'hbacard'     => 'hbacardinventory',
     'sfp'         => 'sfpinventory',
 ];

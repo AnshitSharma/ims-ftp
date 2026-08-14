@@ -47,14 +47,15 @@ require_once $ROOT . '/core/models/config/ConfigComponentRepository.php';
 require_once $ROOT . '/core/models/config/ResourceCatalog.php';
 require_once __DIR__ . '/Extractor.php';
 
-// ResourceCatalog::provides()/consumes() now implement all 10 real component
-// types (cpu -> U-L.4, nic/hbacard/pciecard -> U-L.5) — see ResourceCatalog.php's
-// own class docblock. No skip list is needed any more: backfillLedgerForConfig()
-// always normalizes 'riser' rows to $physicalType = 'pciecard' before this check
-// runs (a riser's spec has no interface/pcie_lanes field, so it naturally
-// consumes 0 lanes via consumesPcieLanes() -- consistent with
+// ResourceCatalog::provides()/consumes() now implement all 11 real component
+// types (cpu -> U-L.4, nic/hbacard/pciecard -> U-L.5, risercard -> the 2026-08-14
+// type split) — see ResourceCatalog.php's own class docblock. No skip list is
+// needed, and no type relabeling either: the old 'riser' -> 'pciecard'
+// normalization is gone because the catalog answers for 'risercard' natively.
+// (A riser's spec still has no interface/pcie_lanes field, so it consumes 0 lanes
+// via consumesPcieLanes() -- consistent with
 // PcieLaneBudgetValidator::computeLanesUsed(), which walks riser entries the
-// same un-excluded way).
+// same un-excluded way.)
 const LEDGER_SKIP_PROVIDES = [];
 const LEDGER_SKIP_CONSUMES = [];
 
@@ -109,7 +110,10 @@ function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extr
 
         if ($plan['component_type'] === 'motherboard') {
             $motherboardId = $id;
-        } elseif ($plan['component_type'] === 'riser') {
+        } elseif ($plan['component_type'] === 'risercard') {
+            // NB: the 'riser' PARENT_REF marker above is a link label, not a type,
+            // and deliberately keeps its short name. Only the component_type moved
+            // to 'risercard' in the 2026-08-14 split.
             $riserId = $id;
         } elseif ($plan['component_type'] === 'nic') {
             $nicIdsBySpec[$plan['spec_uuid']] = $id;
@@ -122,9 +126,9 @@ function persistPlans(PDO $pdo, ConfigComponentRepository $repo, Extractor $extr
 /**
  * Second pass, same transaction as persistPlans(): ledger rows for the
  * config's now-inserted components. Providers via ResourceCatalog::provides()
- * for every non-skipped type ('riser' rows are queried as 'pciecard' —
- * ResourceCatalog doesn't know the config_components-level relabeling,
- * providesPciecard() itself detects Riser Card via component_subtype).
+ * for every non-skipped type (component_type is passed through as-is since the
+ * 2026-08-14 split — 'risercard' is a first-class catalog type now, so there is
+ * no config_components-level relabeling left to undo).
  * Discrete slot consumer-linking is a plain slot_ref string match — per RV-2
  * (ConfigComponentWriter.php docblock), ResourceCatalog's slot_ref naming
  * rarely if ever matches the legacy slot-assignment system's, so this mostly
@@ -146,7 +150,7 @@ function backfillLedgerForConfig(PDO $pdo, string $configUuid, array $insertedRo
     $catalog = new ResourceCatalog();
 
     foreach ($insertedRows as $row) {
-        $physicalType = $row['component_type'] === 'riser' ? 'pciecard' : $row['component_type'];
+        $physicalType = $row['component_type'];
 
         if (!in_array($physicalType, LEDGER_SKIP_PROVIDES, true)) {
             $providerStmt = $pdo->prepare(

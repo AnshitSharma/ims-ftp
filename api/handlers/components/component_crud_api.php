@@ -2,7 +2,7 @@
 /**
  * Component CRUD handler — list/get/add/update/delete for all 10 inventory
  * component types (cpu, ram, storage, motherboard, nic, caddy, chassis,
- * pciecard, hbacard, sfp).
+ * pciecard, risercard, hbacard, sfp).
  *
  * Included by api/api.php, which has already verified the ACL permission for
  * the operation via the central permission map (api/permission_map.php).

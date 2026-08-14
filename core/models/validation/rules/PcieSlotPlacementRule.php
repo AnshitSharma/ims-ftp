@@ -13,7 +13,7 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * core/models/validation/SlotPlanner.php for the ported placement algorithm
  * and intentional diffs (A-7 manual slot honored, A-8 unknown width blocks).
  *
- * Only evaluates components that still need placement: nic/pciecard/hbacard
+ * Only evaluates components that still need placement: nic/pciecard/risercard/hbacard
  * rows with slot_ref === null, excluding onboard NICs (spec_uuid prefix
  * "onboard-", which legitimately never get a discrete slot — mirrors
  * slot_report.php's slotless_card check exclusion). Rows that already carry
@@ -63,7 +63,7 @@ final class PcieSlotPlacementRule implements RuleInterface
             return new RuleResult($this->id(), $this->severity(), true, 'No motherboard -- slot assignment skipped');
         }
 
-        foreach (['nic', 'pciecard', 'hbacard'] as $type) {
+        foreach (['nic', 'pciecard', 'risercard', 'hbacard'] as $type) {
             foreach ($state->byType($type) as $component) {
                 if ($component['slot_ref'] !== null) {
                     continue; // already placed
@@ -77,7 +77,10 @@ final class PcieSlotPlacementRule implements RuleInterface
                     continue; // spec not found -- not this rule's concern (UUID validity is enforced elsewhere)
                 }
 
-                $isRiser = ($spec['component_subtype'] ?? null) === 'Riser Card'
+                // Type is authoritative since the 2026-08-14 split; spec/UUID tests
+                // remain for legacy pciecard rows still labelled as risers.
+                $isRiser = $type === 'risercard'
+                    || ($spec['component_subtype'] ?? null) === 'Riser Card'
                     || strpos((string)$component['spec_uuid'], 'riser-') === 0;
                 $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
                 $width = SlotPlanner::extractCardWidth($spec);
@@ -105,6 +108,9 @@ final class PcieSlotPlacementRule implements RuleInterface
                 break;
             case 'pciecard':
                 $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+                break;
+            case 'risercard':
+                $spec = $this->dataUtils->getRiserCardByUUID($specUuid);
                 break;
             default:
                 return null;

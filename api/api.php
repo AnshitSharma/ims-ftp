@@ -198,6 +198,7 @@ try {
         case 'caddy':
         case 'chassis':
         case 'pciecard':
+        case 'risercard':
         case 'hbacard':
         case 'sfp':
             requireModulePermission($module, $operation, $user);

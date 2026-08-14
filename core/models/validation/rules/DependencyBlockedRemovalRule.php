@@ -64,10 +64,10 @@ final class DependencyBlockedRemovalRule implements RuleInterface
     const DEPENDS_ON = [
         'cpu' => ['motherboard'],
         'ram' => ['motherboard'],
-        'riser' => ['motherboard'],
-        'pciecard' => ['motherboard', 'riser'],
-        'hbacard' => ['motherboard', 'riser'],
-        'nic' => ['motherboard', 'riser'],
+        'risercard' => ['motherboard'],
+        'pciecard' => ['motherboard', 'risercard'],
+        'hbacard' => ['motherboard', 'risercard'],
+        'nic' => ['motherboard', 'risercard'],
         'caddy' => ['chassis'],
         'storage' => ['hbacard', 'chassis', 'motherboard'], // chassis stands in for "backplane"; motherboard for onboard m2/u2
         'motherboard' => ['chassis'],
@@ -106,7 +106,7 @@ final class DependencyBlockedRemovalRule implements RuleInterface
 
         // Mechanism 2: structural orphan (no provider type left at all).
         foreach (self::DEPENDS_ON as $dependentType => $providerTypes) {
-            $rows = $dependentType === 'riser' ? $this->riserRows($state) : $state->byType($dependentType);
+            $rows = $dependentType === 'risercard' ? $this->riserRows($state) : $state->byType($dependentType);
             if (empty($rows)) {
                 continue;
             }
@@ -146,31 +146,31 @@ final class DependencyBlockedRemovalRule implements RuleInterface
     }
 
     /**
-     * "riser" is a distinct component_type in config_components' ENUM, but
-     * NO code path in this migration actually produces rows with that type
-     * today — real riser cards are stored as component_type='pciecard' with
-     * spec-level component_subtype='Riser Card' (confirmed: ResourceCatalog::
-     * providesPciecard()'s own subtype check). This helper resolves "is a
-     * riser present" against that reality rather than against an ENUM value
-     * nothing populates, by asking each live pciecard row's own spec.
-     * Every other provider type is a direct byType() presence check.
+     * Provider presence. 'risercard' became a real, populated component_type in
+     * the 2026-08-14 split, so it is now an ordinary byType() check like every
+     * other provider — riserRows() only exists to also catch legacy rows still
+     * typed 'pciecard' with spec-level component_subtype 'Riser Card', which
+     * remain possible until the row store is fully migrated.
      */
     private function providerTypePresent(TargetState $state, string $providerType): bool
     {
-        if ($providerType !== 'riser') {
+        if ($providerType !== 'risercard') {
             return !empty($state->byType($providerType));
         }
         return !empty($this->riserRows($state));
     }
 
-    /** @return array[] live pciecard rows whose spec is a riser card */
+    /**
+     * @return array[] live riser rows: every 'risercard' row, plus any legacy
+     *                 'pciecard' row whose spec still says it is a riser.
+     */
     private function riserRows(TargetState $state): array
     {
         require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
         static $dataUtils = null;
         $dataUtils = $dataUtils ?? new DataExtractionUtilities();
 
-        $risers = [];
+        $risers = $state->byType('risercard');
         foreach ($state->byType('pciecard') as $card) {
             $spec = $dataUtils->getPCIeCardByUUID($card['spec_uuid']);
             if (is_array($spec) && ($spec['component_subtype'] ?? '') === 'Riser Card') {

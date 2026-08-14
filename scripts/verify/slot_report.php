@@ -22,7 +22,7 @@
  *      today at all — this check exists for when a follow-up unit
  *      implements discrete slot-consumer linking (and must keep RV-3 in
  *      mind when it does).
- *   4. No live config_components row of type nic/pciecard/hbacard has a NULL
+ *   4. No live config_components row of type nic/pciecard/risercard/hbacard has a NULL
  *      slot_ref (the "slotless card" class, audit A-8) — excluding onboard
  *      NICs (spec_uuid prefix "onboard-"), which legitimately have no
  *      discrete PCIe slot (mirrors equivalence_report.php's TODO_UB2 stance).
@@ -111,7 +111,7 @@ function checkConfigSlots(PDO $pdo, string $configUuid): array
     $stmt = $pdo->prepare(
         "SELECT id, component_type, spec_uuid FROM config_components
          WHERE config_uuid = ? AND removed_at IS NULL AND slot_ref IS NULL
-         AND component_type IN ('nic', 'pciecard', 'hbacard')"
+         AND component_type IN ('nic', 'pciecard', 'risercard', 'hbacard')"
     );
     $stmt->execute([$configUuid]);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
