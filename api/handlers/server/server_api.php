@@ -811,6 +811,12 @@ function handleAddComponent($serverBuilder, $user) {
                 $responseData['onboard_nic_warning'] = $result['onboard_nic_warning'];
             }
 
+            // CPU SKU-variant pairing warnings: the CPU was pairable enough to install
+            // (same base SKU) but differs from the installed CPU by processor line suffix.
+            if ($componentType === 'cpu' && !empty($result['warnings'])) {
+                $responseData['warnings'] = $result['warnings'];
+            }
+
             // Log the component addition
             logActivity($pdo, $user['id'], 'Component added', 'server', $config->get('id'),
                 "Added $componentType ($componentUuid) to server config $configUuid");
@@ -1267,6 +1273,17 @@ function handleGetConfiguration($serverBuilder, $user) {
         // Get storage connectivity tracking
         $storageConnectivity = $serverBuilder->getStorageConnectivity($configUuid, $details['components'] ?? []);
 
+        // Which component types this build can currently accept, so the builder
+        // offers a type only where the hardware actually has a place for it.
+        // Reuses the structures computed above rather than recomputing them.
+        require_once __DIR__ . '/../../../core/models/server/BuildAffordances.php';
+        $componentOptions = (new BuildAffordances($pdo))->forConfiguration(
+            $configUuid,
+            $details['components'] ?? [],
+            $slotTracking,
+            $networkConfig
+        );
+
         send_json_response(1, 1, 200, "Configuration retrieved successfully", [
             'configuration' => [
                 'config_uuid' => $configuration['config_uuid'],
@@ -1295,6 +1312,7 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'network' => $networkConfig,
                 'storage_connectivity' => $storageConnectivity
             ],
+            'component_options' => $componentOptions,
             'validation' => [
                 'is_valid' => !empty($validationResults),
                 'last_validated' => $configuration['updated_at'] ?? $configuration['created_at'],

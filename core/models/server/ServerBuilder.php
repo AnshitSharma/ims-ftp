@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../components/ComponentSpecPaths.php';
 require_once __DIR__ . '/../compatibility/UnifiedSlotTracker.php';
+require_once __DIR__ . '/../compatibility/CpuIdentityMatcher.php';
 require_once __DIR__ . '/../chassis/ChassisManager.php';
 require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/ServerConfiguration.php';
@@ -806,6 +807,7 @@ class ServerBuilder {
             // Validation already done in Phase 3 for chassis, skip here
 
             // Phase 5.1: CPU-specific validations BEFORE adding
+            $cpuValidationResults = null;
             if ($componentType === 'cpu' && isset($compatibility)) {
                 try {
                     $cpuValidation = $this->validateCPUAddition($configUuid, $componentUuid, $compatibility);
@@ -815,6 +817,9 @@ class ServerBuilder {
                         }
                         return $cpuValidation;
                     }
+                    // SKU-variant pairing warnings travel back on the response (same
+                    // pattern as $ramValidationResults below).
+                    $cpuValidationResults = $cpuValidation;
                 } catch (Exception $cpuError) {
                     error_log("Error in CPU validation: " . $cpuError->getMessage());
                     if ($ownTransaction && $this->pdo->inTransaction()) {
@@ -1258,6 +1263,12 @@ class ServerBuilder {
             if ($ramValidationResults !== null && $componentType === 'ram') {
                 $response['warnings'] = $ramValidationResults['warnings'] ?? [];
                 $response['compatibility_details'] = $ramValidationResults['compatibility_details'] ?? [];
+            }
+
+            // Include CPU SKU-pairing warnings (mixed suffix variants) if any
+            if ($cpuValidationResults !== null && $componentType === 'cpu'
+                && !empty($cpuValidationResults['warnings'])) {
+                $response['warnings'] = $cpuValidationResults['warnings'];
             }
 
             return $response;
@@ -2093,6 +2104,29 @@ class ServerBuilder {
                         }
                     }
 
+                    // CPU-to-CPU SKU pairing. The generic pair check above resolves through
+                    // checkComponentPairCompatibility(), which has no cpu-cpu handler -- so an
+                    // unpairable second CPU would be offered here and only rejected later at
+                    // add-time. Decide it up front, using the same authority as the add path.
+                    $cpuPairingWarnings = [];
+                    if ($componentType === 'cpu' && $isCompatible) {
+                        $cpuMatcher = new CpuIdentityMatcher($this->dataUtils);
+                        foreach ($existingComponentsData as $existingComp) {
+                            if (($existingComp['type'] ?? '') !== 'cpu') {
+                                continue;
+                            }
+                            $pairing = $cpuMatcher->compareByUuid($existingComp['uuid'], $component['UUID']);
+                            if (!$pairing['compatible']) {
+                                $isCompatible = false;
+                                $compatibilityReasons[] = $pairing['error'];
+                                break;
+                            }
+                            if (!empty($pairing['warning'])) {
+                                $cpuPairingWarnings[] = $pairing['warning'];
+                            }
+                        }
+                    }
+
                     // Build component result
                     $componentStatus = (int)$component['Status'];
                     $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
@@ -2117,6 +2151,11 @@ class ServerBuilder {
                     }
                     if ($componentType === 'chassis' && isset($fullChassisResult['warnings']) && !empty($fullChassisResult['warnings'])) {
                         $compatibleComponent['warnings'] = $fullChassisResult['warnings'];
+                    }
+
+                    // SKU-variant pairing warnings, so the operator sees them before the add
+                    if ($componentType === 'cpu' && !empty($cpuPairingWarnings)) {
+                        $compatibleComponent['warnings'] = array_values(array_unique($cpuPairingWarnings));
                     }
 
                     $compatibleComponents[] = $compatibleComponent;
@@ -2347,6 +2386,11 @@ class ServerBuilder {
             $result = [
                 'pcie' => [
                     'success' => $pcieAvailability['success'],
+                    // Why the tracker failed, not just that it did: "no PCIe slots
+                    // defined on this board" is a legitimate zero, while "specs not
+                    // found" is a real fault. BuildAffordances has to tell them apart
+                    // to decide between hiding the option and failing open.
+                    'error' => $pcieAvailability['error'] ?? null,
                     'total_slots' => $pcieAvailability['total_slots'] ?? [],
                     'used_slots' => $pcieAvailability['used_slots'] ?? [],
                     'available_slots' => $pcieAvailability['available_slots'] ?? [],
@@ -2356,6 +2400,7 @@ class ServerBuilder {
                 ],
                 'riser' => [
                     'success' => $riserAvailability['success'],
+                    'error' => $riserAvailability['error'] ?? null,
                     'total_slots' => $riserAvailability['total_slots'] ?? [],
                     'used_slots' => $riserAvailability['used_slots'] ?? [],
                     'available_slots' => $riserAvailability['available_slots'] ?? [],
@@ -4814,11 +4859,18 @@ class ServerBuilder {
             $cpuData = $stmt->fetch(PDO::FETCH_ASSOC);
 
             $currentCPUCount = 0;
+            $existingCpuUuids = [];
             if ($cpuData && !empty($cpuData['cpu_configuration'])) {
                 try {
                     $cpuConfig = json_decode($cpuData['cpu_configuration'], true);
                     if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
                         $currentCPUCount = count($cpuConfig['cpus']);
+                        foreach ($cpuConfig['cpus'] as $installedCpu) {
+                            if (is_array($installedCpu) && !empty($installedCpu['uuid'])) {
+                                $existingCpuUuids[] = $installedCpu['uuid'];
+                            }
+                        }
+                        $existingCpuUuids = array_values(array_unique($existingCpuUuids));
                     }
                 } catch (Exception $e) {
                     error_log("Error parsing CPU configuration: " . $e->getMessage());
@@ -4843,9 +4895,34 @@ class ServerBuilder {
                     'message' => $socketResult['error']
                 ];
             }
-            
-            return ['success' => true];
-            
+
+            // SKU pairing against the CPUs already installed. The board-level checks above
+            // are not sufficient on their own: once socket 1 is populated, CPU #1 becomes
+            // the constraint for every remaining socket. Gold 6338 and Gold 6342 are both
+            // LGA4189 Ice Lake-SP and still cannot run together.
+            $warnings = [];
+            if (!empty($existingCpuUuids)) {
+                $matcher = new CpuIdentityMatcher($this->dataUtils);
+                foreach ($existingCpuUuids as $existingCpuUuid) {
+                    $pairing = $matcher->compareByUuid($existingCpuUuid, $cpuUuid);
+                    if (!$pairing['compatible']) {
+                        return [
+                            'success' => false,
+                            'message' => $pairing['error'],
+                            'details' => $pairing['details']
+                        ];
+                    }
+                    if (!empty($pairing['warning'])) {
+                        $warnings[] = $pairing['warning'];
+                    }
+                }
+            }
+
+            return [
+                'success'  => true,
+                'warnings' => array_values(array_unique($warnings))
+            ];
+
         } catch (Exception $e) {
             error_log("Error validating CPU addition: " . $e->getMessage());
             return [

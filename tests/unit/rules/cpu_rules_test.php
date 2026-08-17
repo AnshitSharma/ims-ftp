@@ -28,6 +28,11 @@ function check($label, $cond) {
 const MB_3647 = 'd8e9f0a1-b2c3-4d4e-bf6a-7b8c9d0e1f2a';   // LGA3647, socket.count=2
 const CPU_3647 = '980bd035-0b5c-40aa-9329-d5088a036ae0';  // LGA3647 -- matches MB_3647
 const CPU_4189 = '3001f095-9a50-44e5-92c5-b46310160e90';  // LGA4189 -- mismatches MB_3647
+// SKU-pairing fixtures: all three are LGA4189 Ice Lake-SP Gold, so socket
+// agreement cannot be what separates them (added 2026-08-14).
+const CPU_6338  = '3001f095-9a50-44e5-92c5-b46310160e90'; // Gold 6338  (== CPU_4189)
+const CPU_6338N = 'f14105ee-6121-4c5b-b4b1-e158cc4d7289'; // Gold 6338N -- suffix variant
+const CPU_6342  = '9049c782-2663-4f5b-b248-1d283b1c0e49'; // Gold 6342  -- different SKU
 
 function mbRow($id, $uuid) {
     return ['id' => $id, 'component_type' => 'motherboard', 'spec_uuid' => $uuid, 'inventory_table' => null, 'inventory_id' => null, 'serial_number' => null, 'parent_id' => null, 'slot_ref' => null, 'source' => 'rows'];
@@ -80,15 +85,34 @@ foreach (['CpuSocketMatchRule', 'CpuSocketCountRule', 'CpuMixedModelsRule', 'Cpu
 }
 
 // -----------------------------------------------------------------------
-echo "-- cpu.mixed_models (W, VALIDATE only, previously orphaned) --\n";
+// 2026-08-14: this rule no longer compares sockets (that duplicated
+// cpu.socket_match). It owns CPU-to-CPU SKU pairing and delegates to
+// CpuIdentityMatcher. See migration/04-validation-engine/RULE_MAP.md.
+echo "-- cpu.mixed_models (E/W, ADD+VALIDATE, previously orphaned) --\n";
 $sameModel = new TargetState([cpuRow(1, CPU_3647), cpuRow(2, CPU_3647)]);
-check('same-socket CPUs: no mixed-model warning', (new CpuMixedModelsRule())->evaluate($sameModel)->passed() === true);
+check('same model twice: passes (the normal matched-pair 2S build)',
+    (new CpuMixedModelsRule())->evaluate($sameModel)->passed() === true);
 
 $mixedModel = new TargetState([cpuRow(1, CPU_3647), cpuRow(2, CPU_4189)]);
 $r = (new CpuMixedModelsRule())->evaluate($mixedModel);
 check('mixed-socket CPUs: fires (new firing vs. orphaned legacy -- expected diff)', $r->passed() === false);
-check('mixed_models severity is WARNING (never blocks)', $r->severity() === Severity::WARNING);
-check('mixed_models triggers only VALIDATE', (new CpuMixedModelsRule())->triggers() === [Trigger::VALIDATE]);
+check('mismatch severity is ERROR (blocks under every trigger, matching legacy add-time block)',
+    $r->severity() === Severity::ERROR);
+check('mixed_models triggers ADD and VALIDATE',
+    (new CpuMixedModelsRule())->triggers() === [Trigger::ADD, Trigger::VALIDATE]);
+
+// Three-tier pairing on real Ice Lake-SP parts, all LGA4189 -- so socket
+// agreement can never be what decides these.
+$r = (new CpuMixedModelsRule())->evaluate(new TargetState([cpuRow(1, CPU_6338), cpuRow(2, CPU_6342)]));
+check('6338 + 6342: same socket, different SKU -> blocks',
+    $r->passed() === false && $r->severity() === Severity::ERROR);
+
+$r = (new CpuMixedModelsRule())->evaluate(new TargetState([cpuRow(1, CPU_6338), cpuRow(2, CPU_6338N)]));
+check('6338 + 6338N: suffix variant -> fires as WARNING, never blocks',
+    $r->passed() === false && $r->severity() === Severity::WARNING);
+
+$r = (new CpuMixedModelsRule())->evaluate(new TargetState([cpuRow(1, CPU_6338), cpuRow(2, CPU_6338)]));
+check('6338 + 6338: identical -> passes', $r->passed() === true);
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

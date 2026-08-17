@@ -18,6 +18,14 @@
       "note": "E->VF: engine allows a board-less CPU add in draft where legacy hard-blocked at every trigger"
     },
     {
+      "rule_id": "cpu.mixed_models",
+      "audit_finding": "M11",
+      "legacy_blocked": false,
+      "engine_blocked": true,
+      "engine_error_class": "cpu.mixed_models",
+      "note": "CPU-to-CPU SKU pairing. Legacy validateMixedCPUCompatibility was orphaned (never called) AND socket-only, so any two CPUs sharing a socket passed -- Gold 6338 + 6342 are both LGA4189 Ice Lake-SP and cannot run together. Rule now delegates to CpuIdentityMatcher, the same authority the live legacy add path calls. Suffix variants (6338 + 6338N) stay non-blocking WARNING and so are NOT part of this diff class."
+    },
+    {
       "rule_id": "memory.slot_count",
       "audit_finding": "D4",
       "legacy_blocked": false,

@@ -61,9 +61,24 @@ final class PcieLaneBudgetRule implements RuleInterface
                 $capacity += (int)$row['capacity'];
             }
             $used = $capacity - $balance;
-            return new RuleResult($this->id(), $this->severity(), false,
-                "PCIe lane budget exceeded: $capacity total, $used allocated",
-                ['budget' => $capacity, 'used' => $used, 'over_by' => -$balance]);
+
+            // A zero budget is almost never "the cards are too big" — it is a missing
+            // or lane-less CPU, since the CPU is the only provider of pcie_lane
+            // (ResourceCatalog::providesCpu(); motherboard chipset lanes are absent
+            // from every ims-data spec). Saying "0 total" alone sends people hunting
+            // for a slot problem that isn't there.
+            $cause = null;
+            if ($capacity === 0) {
+                $cause = empty($state->byType('cpu'))
+                    ? 'no CPU in this configuration — the CPU provides the PCIe lanes, so add one before adding lane-consuming cards'
+                    : 'the installed CPU spec declares no PCIe lanes';
+            }
+
+            $message = "PCIe lane budget exceeded: $capacity total, $used allocated"
+                . ($cause !== null ? " — $cause" : '');
+
+            return new RuleResult($this->id(), $this->severity(), false, $message,
+                ['budget' => $capacity, 'used' => $used, 'over_by' => -$balance, 'cause' => $cause]);
         }
 
         return new RuleResult($this->id(), $this->severity(), true, "PCIe lane budget OK (balance $balance)");
