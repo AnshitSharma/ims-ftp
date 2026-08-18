@@ -489,6 +489,25 @@ class ServerBuilder {
             $rackPosition = $options['rack_position'] ?? '';
             $isVirtual = $options['is_virtual'] ?? 0;
 
+            // A compatibility-bench build is ALWAYS virtual. is_sandbox only keeps it out
+            // of the places that legitimately list virtual configs (the Import Template
+            // picker); is_virtual is what actually makes it reserve nothing -- see the
+            // $isVirtual guards in addComponent(). Deriving it here rather than trusting
+            // the caller means no path can create a sandbox that reserves real stock.
+            $isSandbox = !empty($options['is_sandbox']) ? 1 : 0;
+            if ($isSandbox) {
+                $isVirtual = 1;
+            }
+
+            // is_sandbox arrives with seeder 2026_08_18_003, but code reaches production
+            // ~20s after save while seeders are applied BY HAND -- so there is always a
+            // window where the column does not exist yet. Naming it unconditionally here
+            // took server creation (and the Servers list) down for that entire window.
+            // Build the statement around the schema that is actually present.
+            // handleCreateStart() refuses a sandbox request outright when the column is
+            // missing, so a bench build can never silently downgrade into a real config.
+            $hasSandboxColumn = self::sandboxColumnExists($this->pdo);
+
             // status_v2 is written in the SAME statement as configuration_status. [F-21]
             //
             // It was omitted here, so every configuration created since seeder
@@ -501,18 +520,29 @@ class ServerBuilder {
             //
             // StatusMap::CONFIG_LEGACY_TO_V2[0] is the mapping for the literal 0 this
             // INSERT writes into configuration_status; they must not be able to drift.
-            $stmt = $this->pdo->prepare("
-                INSERT INTO server_configurations
-                (config_uuid, server_name, description, location, rack_position, created_by, created_at, updated_at, configuration_status, status_v2, is_virtual)
-                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, ?)
-            ");
-
             require_once(__DIR__ . '/../state/StatusMap.php');
-            $stmt->execute([
+
+            $columns = "config_uuid, server_name, description, location, rack_position, created_by, created_at, updated_at, configuration_status, status_v2, is_virtual";
+            $placeholders = "?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, ?";
+            $params = [
                 $configUuid, $serverName, $description, $location, $rackPosition, $createdBy,
                 StatusMap::CONFIG_LEGACY_TO_V2[0],
                 $isVirtual
-            ]);
+            ];
+
+            if ($hasSandboxColumn) {
+                $columns .= ", is_sandbox";
+                $placeholders .= ", ?";
+                $params[] = $isSandbox;
+            }
+
+            $stmt = $this->pdo->prepare("
+                INSERT INTO server_configurations
+                ($columns)
+                VALUES ($placeholders)
+            ");
+
+            $stmt->execute($params);
 
             return $configUuid;
 
@@ -3090,6 +3120,11 @@ class ServerBuilder {
                         // inventory row this table-update method does not.
                     } elseif ($action === 'remove') {
                         $updateFields[] = "motherboard_uuid = NULL";
+                        // The compute platform is a property of the installed system
+                        // board, so it cannot outlive it — otherwise a boardless config
+                        // keeps reporting a platform it no longer has.
+                        $updateFields[] = "platform_uuid = NULL";
+                        $updateFields[] = "platform_name = NULL";
                     }
                     break;
 
@@ -4290,6 +4325,19 @@ class ServerBuilder {
      * Finalize configuration
      */
     public function finalizeConfiguration($configUuid, $notes = '', $userId = 0) {
+        // A compatibility bench build is an experiment, not a server. Finalizing marks
+        // components in_use and locks the config as a real deployment, which is exactly
+        // what the bench promises never to do -- refuse ahead of BOTH the command-layer
+        // and legacy paths below so no flag state can route around it.
+        if ($this->isSandboxConfig($configUuid)) {
+            return [
+                'success' => false,
+                'error_type' => 'sandbox_config',
+                'message' => 'This is a compatibility bench build and cannot be finalized. '
+                    . 'Bench builds reserve no hardware by design — rebuild it as a real server to deploy it.'
+            ];
+        }
+
         // U-C.5: COMMAND_LAYER_ENABLED=enforce delegates entirely to
         // TransitionStatusCommand (full validation under the SAME lock as the
         // status write, closing V-1 structurally). off/shadow fall through to
@@ -6060,6 +6108,64 @@ class ServerBuilder {
         } catch (Exception $e) {
             error_log("Error in getComponentByUuidAndSerial: " . $e->getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Does server_configurations.is_sandbox exist yet?
+     *
+     * Seeders are applied by hand on this deployment, while code auto-uploads in ~20s,
+     * so every schema-adding feature has a live window where the new column is absent.
+     * Callers use this to degrade to pre-seeder behaviour instead of 500ing.
+     *
+     * Cached per request: one SHOW COLUMNS, not one per config row. information_schema
+     * is deliberately not used -- the application DB user cannot read it on this host.
+     *
+     * Fails to FALSE (column absent) so an unreadable schema degrades to the old,
+     * known-good behaviour rather than to a broken query.
+     */
+    public static function sandboxColumnExists(PDO $pdo) {
+        static $exists = null;
+
+        if ($exists === null) {
+            try {
+                $stmt = $pdo->query("SHOW COLUMNS FROM `server_configurations` LIKE 'is_sandbox'");
+                $exists = ($stmt && $stmt->fetch(PDO::FETCH_ASSOC)) ? true : false;
+            } catch (Exception $e) {
+                error_log("sandboxColumnExists check failed: " . $e->getMessage());
+                $exists = false;
+            }
+        }
+
+        return $exists;
+    }
+
+    /**
+     * Check if a server configuration is a compatibility bench build.
+     *
+     * Sandbox implies virtual (createConfiguration() forces it), so this is a strictly
+     * narrower question than isVirtualConfig(): saved templates are virtual but NOT
+     * sandboxes, and must keep behaving exactly as they always have.
+     *
+     * Fails CLOSED on error -- an unreadable flag must not be read as "safe to finalize".
+     */
+    private function isSandboxConfig($configUuid) {
+        // No column means seeder 2026_08_18_003 has not been applied, which means no
+        // sandbox has ever been created -- so "not a sandbox" is the accurate answer,
+        // not a guess. Failing closed here would have blocked finalizing EVERY real
+        // server for as long as the seeder went unapplied.
+        if (!self::sandboxColumnExists($this->pdo)) {
+            return false;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare("SELECT is_sandbox FROM server_configurations WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $result ? (bool)$result['is_sandbox'] : false;
+        } catch (Exception $e) {
+            error_log("Error checking is_sandbox: " . $e->getMessage());
+            return true;
         }
     }
 

@@ -41,6 +41,8 @@ return [
         'get-available-components' => 'server.view',
         'import-virtual' => 'server.create',
         'search-by-serial' => 'server.view',
+        'list-platforms' => 'server.view',
+        'set-platform' => 'server.edit',
         'update-location' => 'server.edit',
         'fix-onboard-nics' => 'server.edit',
         'debug-motherboard-nics' => 'server.view',

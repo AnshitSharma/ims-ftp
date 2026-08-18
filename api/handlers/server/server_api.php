@@ -128,6 +128,16 @@ switch ($action) {
         handleGetServerLogs($serverBuilder, $user);
         break;
 
+    case 'list-platforms':
+    case 'server-list-platforms':
+        handleListPlatforms($user);
+        break;
+
+    case 'set-platform':
+    case 'server-set-platform':
+        handleSetPlatform($user);
+        break;
+
     case 'debug-migration-flags':
     case 'server-debug-migration-flags':
         handleDebugMigrationFlags($user);
@@ -309,6 +319,22 @@ function handleCreateStart($serverBuilder, $user) {
     $location = trim($_POST['location'] ?? '');
     $isVirtual = filter_var($_POST['is_virtual'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 
+    // Compatibility bench build (Server Compatibility section). Implies is_virtual --
+    // createConfiguration() forces it too, so a sandbox can never reserve real stock.
+    $isSandbox = filter_var($_POST['is_sandbox'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+    if ($isSandbox) {
+        $isVirtual = 1;
+
+        // Refuse rather than quietly create a normal virtual config that the Server
+        // Compatibility section could never find again -- and that WOULD show up in the
+        // Import Template picker. A clear 503 tells the operator exactly what is missing.
+        if (!ServerBuilder::sandboxColumnExists($pdo)) {
+            send_json_response(0, 1, 503,
+                "Compatibility bench builds are unavailable: database migration " .
+                "2026_08_18_003 (server_configurations.is_sandbox) has not been applied yet.");
+        }
+    }
+
     // rack_position is DERIVED from the real placement in rack_servers
     // (RackPlacement::syncPositionText, called by rack-assign-server / rack-unassign-server).
     // A new config is created unracked; the client places it with rack-assign-server.
@@ -325,6 +351,7 @@ function handleCreateStart($serverBuilder, $user) {
             'location' => $location,
             'rack_position' => $rackPosition,
             'is_virtual' => $isVirtual,
+            'is_sandbox' => $isSandbox,
         ]);
 
         // Log server creation start, linked to the new config's numeric id so
@@ -340,6 +367,7 @@ function handleCreateStart($serverBuilder, $user) {
             'location' => $location,
             'rack_position' => $rackPosition,
             'is_virtual' => $isVirtual,
+            'is_sandbox' => $isSandbox,
         ]);
         
     } catch (Exception $e) {
@@ -1284,6 +1312,24 @@ function handleGetConfiguration($serverBuilder, $user) {
             $networkConfig
         );
 
+        // Compute platform. A config built before this feature existed — or one whose
+        // board was added through the normal component picker rather than the platform
+        // flow — carries no stamp, so the platform is inferred from the installed board
+        // for display. Inference is never written back; only server-set-platform writes.
+        require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+        $platformUuid = $config->get('platform_uuid');
+        $platformName = $config->get('platform_name');
+        $platformInferred = false;
+        if (empty($platformUuid)) {
+            $installedBoard = (string)($config->get('motherboard_uuid') ?? '');
+            $inferred = (new ServerPlatformCatalog($pdo))->platformForBoard($installedBoard);
+            if ($inferred !== null) {
+                $platformUuid = $inferred['platform_uuid'];
+                $platformName = $inferred['platform_name'];
+                $platformInferred = true;
+            }
+        }
+
         send_json_response(1, 1, 200, "Configuration retrieved successfully", [
             'configuration' => [
                 'config_uuid' => $configuration['config_uuid'],
@@ -1291,6 +1337,9 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'description' => $configuration['description'] ?? '',
                 'status' => $configuration['configuration_status'],
                 'location' => $configuration['location'] ?? '',
+                'platform_uuid' => $platformUuid,
+                'platform_name' => $platformName,
+                'platform_inferred' => $platformInferred,
                 'created_at' => $configuration['created_at'],
                 'updated_at' => $configuration['updated_at'] ?? $configuration['created_at']
             ],
@@ -1345,6 +1394,14 @@ function handleListConfigurations($serverBuilder, $user) {
 
     $includeVirtual = strtolower(trim((string)($request['include_virtual'] ?? 'all'))); // all, true/1, false/0
 
+    // Compatibility bench builds (is_sandbox = 1) are throwaway experiments, not
+    // inventory. They DEFAULT TO HIDDEN so every existing caller stays correct with no
+    // change at its call site -- notably the Servers list, the dashboard, and the
+    // Import Template picker, which asks for include_virtual=true and would otherwise
+    // offer a bench build named "test cpu socket" as a template on every server.
+    // Only the Server Compatibility section passes sandbox=true.
+    $sandboxFilter = strtolower(trim((string)($request['sandbox'] ?? 'false'))); // false/0 (default), true/1, all
+
     try {
         $whereParts = ["1=1"];
         $filterParams = [];
@@ -1369,6 +1426,24 @@ function handleListConfigurations($serverBuilder, $user) {
         }
         // If 'all' or any other value, no filtering on is_virtual
 
+        // Filter by is_sandbox flag. Unlike include_virtual, an unrecognised value falls
+        // through to the default (hide bench builds) rather than 'show everything' --
+        // a typo here must not leak experiments into the Servers list.
+        //
+        // Skipped entirely until seeder 2026_08_18_003 lands: with no column there are no
+        // bench builds, so "hide bench builds" is already true of every row and the
+        // Servers list must not 500 over a filter that has nothing to filter.
+        if (ServerBuilder::sandboxColumnExists($pdo)) {
+            if (in_array($sandboxFilter, ['true', '1', 'yes'], true)) {
+                $whereParts[] = "sc.is_sandbox = 1";
+            } elseif ($sandboxFilter !== 'all') {
+                $whereParts[] = "sc.is_sandbox = 0";
+            }
+        } elseif (in_array($sandboxFilter, ['true', '1', 'yes'], true)) {
+            // Asking specifically FOR bench builds pre-seeder: none can exist.
+            $whereParts[] = "1=0";
+        }
+
         $whereClause = "WHERE " . implode(' AND ', $whereParts);
 
         $stmt = $pdo->prepare("
@@ -1392,6 +1467,7 @@ function handleListConfigurations($serverBuilder, $user) {
         foreach ($configurations as &$config) {
             $config['configuration_status_text'] = getConfigurationStatusText($config['configuration_status']);
             $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0);
+            $config['is_sandbox'] = (bool)($config['is_sandbox'] ?? 0);
 
             try {
                 $components = $serverBuilder->extractComponentsFromJson(is_array($config) ? $config : [], true);
@@ -2832,6 +2908,106 @@ function handleSearchBySerial($serverBuilder, $user) {
     } catch (Exception $e) {
         error_log("Error in handleSearchBySerial: " . $e->getMessage());
         send_json_response(0, 1, 500, "Search failed");
+    }
+}
+
+/**
+ * Server compute platforms and the system boards each one accepts, with live
+ * availability. Feeds the builder's platform picker; no configuration context needed.
+ */
+function handleListPlatforms($user) {
+    global $pdo;
+
+    try {
+        require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+        $catalog = new ServerPlatformCatalog($pdo);
+        $platforms = $catalog->listPlatforms();
+
+        send_json_response(1, 1, 200, "Server platforms retrieved successfully", [
+            'platforms' => $platforms,
+            'total_platforms' => count($platforms)
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Error listing server platforms: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve server platforms");
+    }
+}
+
+/**
+ * Record which compute platform a configuration is built on.
+ *
+ * Deliberately NOT an "apply platform that also adds the board": adding a component
+ * has exactly one path (server-add-component), which routes through the command layer
+ * whenever COMMAND_LAYER_ENABLED is shadow/enforce. A second entry point calling
+ * ServerBuilder::addComponent() directly would bypass that layer the day the flag is
+ * turned on. So the client adds the board through the normal action first, then stamps
+ * the platform here — and this handler refuses to stamp a platform whose board is not
+ * actually the one installed, which is what keeps the label honest.
+ */
+function handleSetPlatform($user) {
+    global $pdo;
+
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    $platformUuid = $_POST['platform_uuid'] ?? $_GET['platform_uuid'] ?? '';
+
+    if (empty($configUuid) || empty($platformUuid)) {
+        send_json_response(0, 1, 400, "Configuration UUID and platform UUID are required");
+    }
+
+    try {
+        require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        // Same ownership clause as handleAddComponent — stamping the platform is an edit.
+        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+        }
+
+        $catalog = new ServerPlatformCatalog($pdo);
+        $platform = $catalog->getPlatform($platformUuid);
+        if ($platform === null) {
+            send_json_response(0, 1, 404, "Server platform not found");
+        }
+
+        $installedBoard = (string)($config->get('motherboard_uuid') ?? '');
+        if ($installedBoard === '') {
+            send_json_response(0, 1, 400, "Add the system board before setting the platform", [
+                'platform_uuid' => $platformUuid
+            ]);
+        }
+
+        if (!$catalog->isBoardInPlatform($platformUuid, $installedBoard)) {
+            send_json_response(0, 1, 400, "The installed system board does not belong to this platform", [
+                'platform_uuid' => $platformUuid,
+                'motherboard_uuid' => $installedBoard
+            ]);
+        }
+
+        $platformName = $catalog->displayName($platform);
+        $updated = $config->update([
+            'platform_uuid' => $platformUuid,
+            'platform_name' => $platformName
+        ]);
+
+        if (!$updated) {
+            send_json_response(0, 1, 500, "Failed to record the server platform");
+        }
+
+        send_json_response(1, 1, 200, "Server platform recorded successfully", [
+            'config_uuid' => $configUuid,
+            'platform_uuid' => $platformUuid,
+            'platform_name' => $platformName,
+            'motherboard_uuid' => $installedBoard
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Error setting server platform: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to record the server platform");
     }
 }
 

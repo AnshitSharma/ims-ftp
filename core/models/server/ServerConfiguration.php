@@ -98,7 +98,8 @@ class ServerConfiguration {
         try {
             $allowedFields = [
                 'server_name', 'description', 'configuration_status',
-                'validation_errors', 'notes', 'updated_at'
+                'validation_errors', 'notes', 'updated_at',
+                'platform_uuid', 'platform_name'
             ];
             
             $updateFields = [];
