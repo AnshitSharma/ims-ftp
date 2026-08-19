@@ -1246,7 +1246,17 @@ class ServerBuilder {
                 }
             }
 
-            if ($componentType === 'nic') {
+            //
+            // Virtual configs are excluded, exactly like the motherboard branch above.
+            // updateNICConfigJSON() rebuilds nic_config from
+            // `nicinventory WHERE ServerUUID = <config>` -- i.e. from the RESERVATION.
+            // A virtual config reserves nothing, so that query matches zero rows and the
+            // rebuild overwrote nic_config with an empty list, erasing the NIC that
+            // updateServerConfigurationTable() had just written a few lines earlier.
+            // The add genuinely succeeded, so it reported success, and then the component
+            // was gone from every read. Nothing needs rebuilding here for a virtual
+            // config: the JSON write above is already the complete, correct state.
+            if ($componentType === 'nic' && !$isVirtual) {
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $nicHandler->updateNICConfigJSON($configUuid);
@@ -1745,7 +1755,11 @@ class ServerBuilder {
             // Post-removal side effect. BUGFIX (A-L6): this ran AFTER commit(), so its
             // read-modify-write of nic_config was unlocked and raced concurrent flows, and
             // the cache had already been invalidated from the pre-side-effect state.
-            if ($componentType === 'nic') {
+            // Skipped for virtual configs for the same reason as the add path: the
+            // rebuild reads reservations, a virtual config has none, so it would blank
+            // nic_config and take every REMAINING NIC with it -- turning "remove one" into
+            // "remove all". The JSON write above already removed exactly the one asked for.
+            if ($componentType === 'nic' && !(bool)($config['is_virtual'] ?? 0)) {
                 require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
                 $nicHandler = new OnboardNICHandler($this->pdo);
                 $nicHandler->updateNICConfigJSON($configUuid);
