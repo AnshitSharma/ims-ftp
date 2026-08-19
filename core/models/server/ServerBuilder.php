@@ -8582,44 +8582,42 @@ class ServerBuilder {
 
                 $storageResults[] = $simplifiedEntry;
 
-                // CRITICAL: Check if storage connects via chassis backplane
-                $usesBackplane = false;
-                if ($validation['valid'] && isset($validation['primary_path'])) {
-                    if ($validation['primary_path']['type'] === 'chassis_bay') {
-                        $usesBackplane = true;
-                        $caddyRequired++;
-
-                        // Get storage specs to determine caddy form factor requirement
-                        $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
-                        $formFactor = $storageSpecs['form_factor'] ?? 'Unknown';
-
-                        $caddiesNeeded[] = [
-                            'storage_uuid' => $storage['component_uuid'],
-                            'form_factor' => $formFactor,
-                            'connection_type' => 'chassis_backplane'
-                        ];
-                    }
-                }
-
-                // Also check for caddy warnings from validator (2.5" in 3.5" bay scenarios)
+                // Caddy accounting [F-19]. This used to demand a caddy for EVERY drive
+                // whose primary path was chassis_bay, and to match that caddy against the
+                // DRIVE's form factor. Both halves disagreed with the add-time authority
+                // (StorageConnectionValidator::checkBayAvailability/checkCaddyRequirement),
+                // which requires a caddy ONLY for the adapter case -- a 2.5" drive seated in
+                // a 3.5" bay -- and sizes it to the BAY, because the caddy is what slots into
+                // the bay. The two rules were mutually unsatisfiable: a 3.5" caddy cleared the
+                // add gate and failed here, a 2.5" caddy did the reverse, so a routine
+                // 2.5"-in-3.5" build was a dead end reachable through the normal UI.
+                //
+                // The `caddy_recommended` warning IS the add-time authority's own signal that
+                // an adapter is needed, so drive the requirement off that and nothing else.
+                // A drive sitting in a natively-matching bay needs no caddy at either gate.
+                $needsAdapterCaddy = false;
                 if (!empty($validation['warnings'])) {
                     foreach ($validation['warnings'] as $warning) {
                         if (isset($warning['type']) && $warning['type'] === 'caddy_recommended') {
-                            // Only increment if not already counted above
-                            if (!$usesBackplane) {
-                                $caddyRequired++;
-
-                                $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
-                                $formFactor = $storageSpecs['form_factor'] ?? 'Unknown';
-
-                                $caddiesNeeded[] = [
-                                    'storage_uuid' => $storage['component_uuid'],
-                                    'form_factor' => $formFactor,
-                                    'connection_type' => 'size_adapter'
-                                ];
-                            }
+                            $needsAdapterCaddy = true;
+                            break;
                         }
                     }
+                }
+
+                if ($needsAdapterCaddy) {
+                    $caddyRequired++;
+
+                    $storageSpecs = $this->dataUtils->getStorageByUUID($storage['component_uuid']);
+                    $formFactor = $storageSpecs['form_factor'] ?? 'Unknown';
+
+                    $caddiesNeeded[] = [
+                        'storage_uuid' => $storage['component_uuid'],
+                        'form_factor' => $formFactor,
+                        // Size the caddy to the bay it seats in, not to the drive it carries.
+                        'required_caddy_size' => '3.5',
+                        'connection_type' => 'size_adapter'
+                    ];
                 }
 
                 if (!$validation['valid']) {
@@ -8649,7 +8647,6 @@ class ServerBuilder {
             $result['detailed_checks']['storage_connections'] = $storageResults;
 
             // Validate caddy availability and form factor matching
-            $caddyErrors = [];
             $caddyWarnings = [];
 
             if ($caddyRequired > 0) {
@@ -8700,18 +8697,16 @@ class ServerBuilder {
                     }
                 }
 
-                // Match caddies to storage devices
+                // Match caddies to storage devices, one caddy per drive [F-19]. The add-time
+                // authority stops at the first caddy it finds and lets that one satisfy every
+                // drive in the config, which is wrong the moment a build has two adapted
+                // drives and one tray. Consuming a caddy per drive here is the physically
+                // correct accounting; it is reported non-blocking (below) so that tightening
+                // it cannot strand a configuration that the add gate already accepted.
                 foreach ($caddiesNeeded as $need) {
                     $matchFound = false;
                     $storageFormFactor = $need['form_factor'];
-
-                    // Normalize form factor to caddy size format
-                    $requiredCaddySize = null;
-                    if (stripos($storageFormFactor, '2.5') !== false || stripos($storageFormFactor, '2.5"') !== false) {
-                        $requiredCaddySize = '2.5';
-                    } elseif (stripos($storageFormFactor, '3.5') !== false || stripos($storageFormFactor, '3.5"') !== false) {
-                        $requiredCaddySize = '3.5';
-                    }
+                    $requiredCaddySize = $need['required_caddy_size'] ?? null;
 
                     foreach ($availableCaddies as $idx => $caddy) {
                         if ($requiredCaddySize && stripos($caddy['size'], $requiredCaddySize) !== false) {
@@ -8722,20 +8717,26 @@ class ServerBuilder {
                     }
 
                     if (!$matchFound) {
-                        $caddyErrors[] = [
+                        $caddyWarnings[] = [
                             'type' => 'missing_caddy',
                             'storage_uuid' => $need['storage_uuid'],
                             'required_form_factor' => $storageFormFactor,
-                            'message' => "Storage device ({$need['storage_uuid']}) requires {$storageFormFactor} caddy for {$need['connection_type']} connection"
+                            'required_caddy_size' => $requiredCaddySize,
+                            'message' => "Storage device ({$need['storage_uuid']}) is a {$storageFormFactor} drive in a 3.5-inch bay and needs a {$requiredCaddySize}-inch caddy adapter for proper mounting"
                         ];
                     }
                 }
 
-                // Add errors to result
-                if (!empty($caddyErrors)) {
-                    $result['valid'] = false;
-                    $result['errors'] = array_merge($result['errors'], $caddyErrors);
-                    $result['category_scores']['storage'] = max(0, $result['category_scores']['storage'] - 20);
+                // Report as warnings, not errors [F-19]. The add-time authority raises
+                // `caddy_recommended` as a WARNING and admits the drive; blocking the same
+                // condition at finalize is what made these configurations unfinishable. A
+                // missing tray is a real assembly gap worth surfacing, but it is a picking
+                // problem, not a compatibility failure, so it must not veto the build.
+                // Mirrors the F-20 storage.bay_capacity posture: report non-blocking now,
+                // revisit for tightening in the post-cutover pass.
+                if (!empty($caddyWarnings)) {
+                    $result['warnings'] = array_merge($result['warnings'], $caddyWarnings);
+                    $result['category_scores']['storage'] = max(0, $result['category_scores']['storage'] - 5);
                 }
             }
 
