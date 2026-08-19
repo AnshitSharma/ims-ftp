@@ -85,17 +85,50 @@ check('5x M.2 on a 4-slot board: fails (A-10)', $rM2->passed() === false);
 check('m2_capacity severity is ERROR', $rM2->severity() === Severity::ERROR);
 
 // -----------------------------------------------------------------------
-echo "-- storage.caddy_pairing (VF) -- read-time W promoted to VF --\n";
-$paired = new TargetState([stRow(1, ST_SSD25), caddyRow(2, CADDY_25)]);
-check('1 drive, 1 matching caddy: passes', (new StorageCaddyPairingRule())->evaluate($paired)->passed() === true);
+echo "-- storage.caddy_pairing (VF) -- bay-sized, non-blocking (F-29) --\n";
+// REWRITTEN for F-29. The previous block asserted "2 drives, 0 caddies: fails" and
+// paired caddies against the DRIVE form factor. Both encoded the defect F-29 recorded:
+// the add gate sizes a caddy to the BAY it slots into and requires one only for the
+// adapter case (smaller drive, larger bay), so pairing by drive size demanded the
+// opposite part and made a routine 2.5"-in-3.5" build unfinishable. Legacy
+// (ServerBuilder::validateStorageConnections) was corrected in the same unit; these
+// assertions are the engine half of that correction, not a test relaxed to fit code.
 
-$shortage = new TargetState([stRow(1, ST_SSD25), stRow(2, ST_SSD25)]); // 2 drives, 0 caddies
-$rCaddy = (new StorageCaddyPairingRule())->evaluate($shortage);
-check('2 drives, 0 caddies: fails (shortage)', $rCaddy->passed() === false);
-check('caddy_pairing severity is VALIDATION_FAILURE', $rCaddy->severity() === Severity::VALIDATION_FAILURE);
+// No chassis => no bays => nothing seats in a bay => no adapter tray implied.
+$noChassis = new TargetState([stRow(1, ST_SSD25), stRow(2, ST_SSD25)]);
+check('no chassis: passes -- caddy pairing does not apply without bays',
+    (new StorageCaddyPairingRule())->evaluate($noChassis)->passed() === true);
 
-$excess = new TargetState([stRow(1, ST_SSD25), caddyRow(2, CADDY_25), caddyRow(3, CADDY_25)]);
-check('1 drive, 2 caddies (excess): still passes -- excess is informational only, never blocks', (new StorageCaddyPairingRule())->evaluate($excess)->passed() === true);
+// Native fit: a 2.5" drive in a 2.5" bay needs no adapter, with or without a caddy.
+$native = new TargetState([chsRow(1, CHS_2BAY), stRow(2, ST_SSD25)]);
+check('2.5" drive in a 2.5" bay: passes, and no caddy is demanded',
+    (new StorageCaddyPairingRule())->evaluate($native)->passed() === true);
+
+// The F-29 case itself: 2.5" drive, 3.5"-only chassis, no 3.5" caddy present.
+// Must NOT block -- legacy raises missing_caddy as a warning and admits the build.
+$adapted = new TargetState([chsRow(1, CHS_35ONLY), stRow(2, ST_SSD25)]);
+$rCaddy = (new StorageCaddyPairingRule())->evaluate($adapted);
+check('2.5" drive into a 3.5"-only chassis with no caddy: PASSES -- shortage never blocks (legacy parity)',
+    $rCaddy->passed() === true);
+check('...and the shortage is reported in details for the tightening pass',
+    ($rCaddy->details()['missing'] ?? null) === 1);
+check('...sized to the BAY (3.5"), not to the drive (2.5") -- the F-29 correction',
+    ($rCaddy->details()['required_caddy_size'] ?? null) === '3.5');
+check('caddy_pairing severity is still VALIDATION_FAILURE', $rCaddy->severity() === Severity::VALIDATION_FAILURE);
+
+// A 2.5" caddy cannot carry a drive into a 3.5" bay -- it is the wrong body size.
+// This is the exact part the OLD rule demanded, so it is the sharpest regression guard.
+$wrongSizeCaddy = new TargetState([chsRow(1, CHS_35ONLY), stRow(2, ST_SSD25), caddyRow(3, CADDY_25)]);
+$rWrong = (new StorageCaddyPairingRule())->evaluate($wrongSizeCaddy);
+check('a 2.5" caddy does not satisfy a 3.5" bay adapter need', ($rWrong->details()['missing'] ?? null) === 1);
+
+// COVERAGE GAP, stated rather than faked: the positive adapter path (enough 3.5"
+// caddies => no shortage details) needs a real 3.5" caddy UUID from ims-data. No such
+// fixture constant exists in this file and ims-data is not present in a bare checkout,
+// so inventing a UUID would assert nothing. Add it when a 3.5" caddy fixture is picked.
+
+$excess = new TargetState([chsRow(1, CHS_2BAY), stRow(2, ST_SSD25), caddyRow(3, CADDY_25), caddyRow(4, CADDY_25)]);
+check('caddy excess: still passes -- excess is informational only, never blocks', (new StorageCaddyPairingRule())->evaluate($excess)->passed() === true);
 
 // -----------------------------------------------------------------------
 echo "-- storage.interface_path (E) -- SAS needs a SAS HBA *or* a SAS backplane --\n";
