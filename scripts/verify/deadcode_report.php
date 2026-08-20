@@ -157,6 +157,60 @@ function anchorPattern(string $kind, string $name): ?string
 }
 
 /**
+ * The [firstLine, lastLine] (1-indexed) of a symbol's own body in its declaring
+ * file, by brace matching from the declaration.
+ *
+ * CORRECTION (2026-08-20, same day as this report landed): the contract phrase
+ * is "zero call sites outside tests + the symbol's own file", and this report
+ * first implemented that by skipping the declaring file wholesale. That is
+ * correct for a public symbol and CATASTROPHICALLY WRONG for a private one: a
+ * private method's only legal callers ARE in its own file, so skipping the file
+ * guaranteed a DEAD verdict for every private method in the manifest, reachable
+ * or not. Three of the four "DEAD" symbols in the first run had live callers
+ * (ServerBuilder lines 730, 951, 3848/4043) and would have been deleted on this
+ * report's word.
+ *
+ * The exclusion the contract actually means is the symbol's own DECLARATION AND
+ * BODY -- so a declaration line, and a recursive self-call, are not mistaken for
+ * external use. The rest of the declaring file is scanned like any other.
+ *
+ * @return array{0:int,1:int}|null null if the declaration cannot be located
+ */
+function bodySpan(string $path, string $name): ?array
+{
+    $lines = @file($path, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        return null;
+    }
+    $declIdx = null;
+    foreach ($lines as $i => $line) {
+        if (preg_match('/function\s+' . preg_quote($name, '/') . '\s*\(/', $line)) {
+            $declIdx = $i;
+            break;
+        }
+    }
+    if ($declIdx === null) {
+        return null;
+    }
+    $depth = 0;
+    $started = false;
+    for ($i = $declIdx; $i < count($lines); $i++) {
+        // Brace counting is naive about braces inside strings and comments. A
+        // miscount ends the span early, which SHRINKS the excluded region and can
+        // only ever count MORE lines as callers -- it fails closed.
+        $depth += substr_count($lines[$i], '{');
+        if (substr_count($lines[$i], '{') > 0) {
+            $started = true;
+        }
+        $depth -= substr_count($lines[$i], '}');
+        if ($started && $depth <= 0) {
+            return [$declIdx + 1, $i + 1];
+        }
+    }
+    return [$declIdx + 1, count($lines)];
+}
+
+/**
  * Strip the comment portion of a line so a MENTION can be told from a CALL.
  *
  * A comment cannot call anything, so counting docblock references as call sites
@@ -206,12 +260,19 @@ function scanTarget(array $target, array $corpus, string $root, string $selfPath
     $mentions = [];
     $otherDecls = [];
 
+    // For a method or function, exclude only its own declaration and body -- NOT
+    // its whole file (see bodySpan()). For a class, the class body IS the file,
+    // so the file is skipped wholesale.
+    $skipWholeOwnFile = ($kind === 'class');
+    $ownSpan = (!$skipWholeOwnFile && $ownFile !== null && ($kind === 'method' || $kind === 'function'))
+        ? bodySpan($ownFile, $name)
+        : null;
+
     foreach ($corpus as $path) {
-        // The symbol's own file is excluded by the contract, and this report
-        // names every target in its own manifest -- neither is a call site.
-        if ($ownFile !== null && $path === $ownFile) {
+        if ($skipWholeOwnFile && $ownFile !== null && $path === $ownFile) {
             continue;
         }
+        // This report names every target in its own manifest; it is not a caller.
         if ($path === $selfPath) {
             continue;
         }
@@ -219,7 +280,14 @@ function scanTarget(array $target, array $corpus, string $root, string $selfPath
         if ($lines === false) {
             continue;
         }
+        $isOwnFile = ($ownFile !== null && $path === $ownFile);
         foreach ($lines as $n => $line) {
+            // Inside the target's own declaration and body: its own signature and
+            // any recursive self-call. Neither keeps it alive.
+            if ($isOwnFile && $ownSpan !== null
+                && ($n + 1) >= $ownSpan[0] && ($n + 1) <= $ownSpan[1]) {
+                continue;
+            }
             if ($declPattern !== null && preg_match($declPattern, $line)) {
                 // A same-named declaration in another file: not a call site, but
                 // it is why this target's caller count may be an over-count.
@@ -352,6 +420,13 @@ if ($selfTest) {
          'file' => 'core/models/server/ServerBuilder.php', 'expect' => 'BROKEN'],
         // Provably LIVE class.
         ['unit' => 'SELFTEST', 'kind' => 'class', 'name' => 'ServerBuilder',
+         'file' => 'core/models/server/ServerBuilder.php', 'expect' => 'LIVE'],
+        // REGRESSION FIXTURE for the 2026-08-20 defect (see bodySpan()): a
+        // PRIVATE method whose only callers are in its own declaring file. The
+        // first cut of this report skipped the declaring file and called this
+        // DEAD. If it ever reports DEAD again, the report is once more
+        // authorising the deletion of reachable code.
+        ['unit' => 'SELFTEST', 'kind' => 'method', 'name' => 'validateCPUAddition',
          'file' => 'core/models/server/ServerBuilder.php', 'expect' => 'LIVE'],
     ];
     $ok = true;
