@@ -10,6 +10,9 @@
  * @subpackage Pipelines
  */
 
+require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
+require_once(__DIR__ . '/../../config/PipelineConfig.php');
+
 class PipelineTemplateManager
 {
     private $pdo;
@@ -128,11 +131,16 @@ class PipelineTemplateManager
      */
     public function getStages($templateId)
     {
+        // effect_* arrive with seeder 2026_08_20_002; select them only once the
+        // migration has landed, so the code is safe to deploy ahead of it.
+        $hasEffects = $this->supportsStageEffects();
+        $effectSelect = $hasEffects ? ', s.effect_type, s.effect_config' : '';
+
         $stmt = $this->pdo->prepare("
             SELECT
                 s.id, s.name, s.position, s.instructions,
                 s.default_assignee_user_id, u.username AS default_user_username,
-                s.default_assignee_role_id, r.display_name AS default_role_name
+                s.default_assignee_role_id, r.display_name AS default_role_name{$effectSelect}
             FROM pipeline_stages s
             LEFT JOIN users u ON s.default_assignee_user_id = u.id
             LEFT JOIN roles r ON s.default_assignee_role_id = r.id
@@ -148,6 +156,8 @@ class PipelineTemplateManager
                 'name' => $row['name'],
                 'position' => (int)$row['position'],
                 'instructions' => $row['instructions'],
+                'effect_type' => $row['effect_type'] ?? null,
+                'effect_config' => $row['effect_config'] ?? null,
                 'default_assignee' => $this->formatOwner(
                     $row['default_assignee_user_id'],
                     $row['default_user_username'],
@@ -156,6 +166,14 @@ class PipelineTemplateManager
                 )
             ];
         }, $rows);
+    }
+
+    /**
+     * Has 2026_08_20_002 been applied? Steps carry a side effect only once it has.
+     */
+    public function supportsStageEffects()
+    {
+        return TemporaryAccessManager::hasColumn($this->pdo, 'pipeline_stages', 'effect_type');
     }
 
     /**
@@ -338,11 +356,19 @@ class PipelineTemplateManager
      */
     private function insertStages($templateId, $stages)
     {
-        $stmt = $this->pdo->prepare("
-            INSERT INTO pipeline_stages
-                (pipeline_template_id, name, position, default_assignee_user_id, default_assignee_role_id, instructions, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
-        ");
+        $hasEffects = $this->supportsStageEffects();
+
+        $stmt = $hasEffects
+            ? $this->pdo->prepare("
+                INSERT INTO pipeline_stages
+                    (pipeline_template_id, name, position, default_assignee_user_id, default_assignee_role_id, instructions, effect_type, effect_config, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+              ")
+            : $this->pdo->prepare("
+                INSERT INTO pipeline_stages
+                    (pipeline_template_id, name, position, default_assignee_user_id, default_assignee_role_id, instructions, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
+              ");
 
         $position = 1;
         foreach ($stages as $stage) {
@@ -354,16 +380,45 @@ class PipelineTemplateManager
                 $roleId = (int)$stage['assignee_id'];
             }
 
-            $stmt->execute([
+            $params = [
                 $templateId,
                 trim($stage['name']),
                 $position,
                 $userId,
                 $roleId,
                 isset($stage['instructions']) && $stage['instructions'] !== '' ? trim($stage['instructions']) : null
-            ]);
+            ];
+
+            if ($hasEffects) {
+                $effectType = !empty($stage['effect_type']) ? trim($stage['effect_type']) : null;
+                $params[] = $effectType;
+                // effect_config is meaningless without a type, and is normalised
+                // back to compact JSON so what's stored is always parseable.
+                $params[] = $effectType === null
+                    ? null
+                    : json_encode($this->normaliseEffectConfig($stage['effect_config'] ?? null));
+            }
+
+            $stmt->execute($params);
             $position++;
         }
+    }
+
+    /**
+     * Accept effect_config as either a JSON string or an already-decoded array.
+     */
+    private function normaliseEffectConfig($raw)
+    {
+        if (is_array($raw)) {
+            return $raw;
+        }
+        if (is_string($raw) && trim($raw) !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        return [];
     }
 
     /**
@@ -410,9 +465,66 @@ class PipelineTemplateManager
             } elseif ($type === 'role' && !$this->roleExists((int)$id)) {
                 $errors[] = "$label: assigned role not found";
             }
+
+            $errors = array_merge($errors, $this->validateStageEffect($stage, $label));
         }
 
         return ['valid' => empty($errors), 'errors' => $errors];
+    }
+
+    /**
+     * Validate a step's optional side effect.
+     *
+     * The permission list is re-checked against TemporaryAccessManager's hard
+     * whitelist at grant time as well — this is the early, friendly failure, not
+     * the security boundary.
+     */
+    private function validateStageEffect($stage, $label)
+    {
+        $errors = [];
+
+        if (empty($stage['effect_type'])) {
+            return $errors;
+        }
+
+        $effectType = trim($stage['effect_type']);
+
+        if (!in_array($effectType, PipelineConfig::getStageEffectTypes(), true)) {
+            $errors[] = "$label: unknown effect type '$effectType'";
+            return $errors;
+        }
+
+        if (!$this->supportsStageEffects()) {
+            $errors[] = "$label: step effects are unavailable until the "
+                . "pipeline-stage-effects migration has been applied";
+            return $errors;
+        }
+
+        if ($effectType === PipelineConfig::EFFECT_GRANT_TEMPORARY_PERMISSION) {
+            $config = $this->normaliseEffectConfig($stage['effect_config'] ?? null);
+
+            $permissions = $config['permissions'] ?? null;
+            if (!is_array($permissions) || empty($permissions)) {
+                $errors[] = "$label: this effect needs a non-empty 'permissions' list";
+            } else {
+                foreach ($permissions as $permission) {
+                    if (!in_array($permission, TemporaryAccessManager::GRANTABLE_PERMISSIONS, true)) {
+                        $errors[] = "$label: '$permission' cannot be granted as temporary access";
+                    }
+                }
+            }
+
+            $hours = $config['duration_hours'] ?? null;
+            if (!is_numeric($hours)
+                || (int)$hours < TemporaryAccessManager::MIN_DURATION_HOURS
+                || (int)$hours > TemporaryAccessManager::MAX_DURATION_HOURS) {
+                $errors[] = "$label: duration_hours must be between "
+                    . TemporaryAccessManager::MIN_DURATION_HOURS . ' and '
+                    . TemporaryAccessManager::MAX_DURATION_HOURS;
+            }
+        }
+
+        return $errors;
     }
 
     private function formatOwner($userId, $username, $roleId, $roleName)

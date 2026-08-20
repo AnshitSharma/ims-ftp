@@ -23,11 +23,13 @@ try {
     }
 
     $scope = $_POST['scope'] ?? $_GET['scope'] ?? 'all';
-    $scope = in_array($scope, ['my_queue', 'created', 'all'], true) ? $scope : 'all';
+    $scope = in_array($scope, ['my_queue', 'mine', 'created', 'all'], true) ? $scope : 'all';
 
     // Non-privileged users cannot browse everything — clamp to their own view.
+    // 'mine', not 'my_queue': a request you raised is normally waiting on someone
+    // else's step, so my_queue would hide it from you the moment you submitted it.
     if ($scope === 'all' && !$canViewAll && !$canManage) {
-        $scope = 'my_queue';
+        $scope = 'mine';
     }
 
     // Resolve the caller's role ids for the my_queue (team) scope.

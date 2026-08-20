@@ -23,6 +23,7 @@ require_once(__DIR__ . '/../tickets/TicketValidator.php');
 require_once(__DIR__ . '/../tickets/TicketItemService.php');
 require_once(__DIR__ . '/../tickets/TicketHistoryService.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
+require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
 
 class PipelineManager
 {
@@ -85,6 +86,21 @@ class PipelineManager
 
         $targetServer = !empty($data['target_server_uuid']) ? $data['target_server_uuid'] : null;
 
+        // What access is this request asking for? Validated here so the requester
+        // gets a clear error at submit time rather than a silent no-op at
+        // approval. This is only ever a REQUEST — it is intersected with the
+        // approval step's ceiling and with the hard whitelist before anything is
+        // granted, so nothing here can widen a grant.
+        $requestedAccess = $this->normaliseRequestedAccess($data['requested_access'] ?? null);
+        foreach ($requestedAccess as $permission) {
+            if (!in_array($permission, TemporaryAccessManager::GRANTABLE_PERMISSIONS, true)) {
+                $errors[] = "'$permission' cannot be requested as temporary access";
+            }
+        }
+        if (count($requestedAccess) > 40) {
+            $errors[] = 'Too many permissions requested';
+        }
+
         // Validate items (reuse ticket item validation + UUID/compatibility checks)
         $items = isset($data['items']) && is_array($data['items']) ? $data['items'] : [];
         $itemsValidation = $this->validator->validateTicketItems($items, $targetServer);
@@ -127,6 +143,12 @@ class PipelineManager
                 'position' => $stage['position'],
                 'assigned_to_user_id' => $assigneeUserId,
                 'assigned_to_role_id' => $assigneeRoleId,
+                // Snapshotted, not joined live: editing a type does a full
+                // DELETE + re-INSERT of pipeline_stages, so a live join would
+                // dangle — and worse, it would let a type edit change what an
+                // already-submitted request is about to grant.
+                'effect_type' => $stage['effect_type'] ?? null,
+                'effect_config' => $stage['effect_config'] ?? null,
             ];
         }
 
@@ -135,13 +157,19 @@ class PipelineManager
 
             $ticketNumber = $this->generateTicketNumber();
 
+            // requested_access arrives with 2026_08_21_002; write it only once
+            // the column exists so the code is safe to deploy ahead of the seeder.
+            $storeRequested = TemporaryAccessManager::hasColumn($this->pdo, 'tickets', 'requested_access');
+
             $stmt = $this->pdo->prepare("
                 INSERT INTO tickets
                     (ticket_number, title, description, status, priority, target_server_uuid,
-                     pipeline_template_id, created_by, created_at, submitted_at)
-                VALUES (?, ?, ?, 'in_progress', ?, ?, ?, ?, NOW(), NOW())
+                     pipeline_template_id, created_by, created_at, submitted_at"
+                     . ($storeRequested ? ", requested_access" : "") . ")
+                VALUES (?, ?, ?, 'in_progress', ?, ?, ?, ?, NOW(), NOW()"
+                     . ($storeRequested ? ", ?" : "") . ")
             ");
-            $stmt->execute([
+            $insertParams = [
                 $ticketNumber,
                 htmlspecialchars($title, ENT_QUOTES, 'UTF-8'),
                 htmlspecialchars($description, ENT_QUOTES, 'UTF-8'),
@@ -149,7 +177,11 @@ class PipelineManager
                 $targetServer,
                 $templateId,
                 $userId
-            ]);
+            ];
+            if ($storeRequested) {
+                $insertParams[] = empty($requestedAccess) ? null : json_encode($requestedAccess);
+            }
+            $stmt->execute($insertParams);
             $ticketId = (int)$this->pdo->lastInsertId();
 
             // Items
@@ -158,17 +190,26 @@ class PipelineManager
             }
 
             // Snapshot stages
-            $insertStage = $this->pdo->prepare("
-                INSERT INTO ticket_stage_progress
-                    (ticket_id, stage_template_id, name, position, status,
-                     assigned_to_user_id, assigned_to_role_id, started_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
+            $snapshotEffects = $this->supportsStageEffects();
+            $insertStage = $snapshotEffects
+                ? $this->pdo->prepare("
+                    INSERT INTO ticket_stage_progress
+                        (ticket_id, stage_template_id, name, position, status,
+                         assigned_to_user_id, assigned_to_role_id, started_at,
+                         effect_type, effect_config, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                  ")
+                : $this->pdo->prepare("
+                    INSERT INTO ticket_stage_progress
+                        (ticket_id, stage_template_id, name, position, status,
+                         assigned_to_user_id, assigned_to_role_id, started_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                  ");
 
             $firstStageProgressId = null;
             foreach ($resolvedStages as $idx => $rs) {
                 $isFirst = ($idx === 0);
-                $insertStage->execute([
+                $params = [
                     $ticketId,
                     $rs['stage_template_id'],
                     $rs['name'],
@@ -177,7 +218,12 @@ class PipelineManager
                     $rs['assigned_to_user_id'],
                     $rs['assigned_to_role_id'],
                     $isFirst ? date('Y-m-d H:i:s') : null
-                ]);
+                ];
+                if ($snapshotEffects) {
+                    $params[] = $rs['effect_type'];
+                    $params[] = $rs['effect_type'] === null ? null : $rs['effect_config'];
+                }
+                $insertStage->execute($params);
                 if ($isFirst) {
                     $firstStageProgressId = (int)$this->pdo->lastInsertId();
                 }
@@ -295,6 +341,15 @@ class PipelineManager
 
             $this->historyService->logHistory($ticketId, 'stage_completed', $stage['name'], null, $userId, "Completed stage '{$stage['name']}'" . ($notes ? ": $notes" : ''));
 
+            // Side effect, if this stage carries one. Deliberately inside the open
+            // transaction: if the effect fails, the completion rolls back with it,
+            // so a stage can never read "approved" without its grant existing.
+            $effect = $this->applyStageEffect($ticketId, $stage, $userId);
+            if (!$effect['success']) {
+                $this->pdo->rollBack();
+                return ['success' => false, 'errors' => $effect['errors']];
+            }
+
             // Find the next pending stage by position
             $next = $this->getNextStage($ticketId, (int)$stage['position']);
 
@@ -311,7 +366,13 @@ class PipelineManager
                 $this->historyService->logHistory($ticketId, 'stage_activated', null, $next['name'], $userId, "Stage '{$next['name']}' activated");
 
                 $this->pdo->commit();
-                return ['success' => true, 'completed' => false, 'next_stage' => $next['name'], 'errors' => []];
+                return [
+                    'success' => true,
+                    'completed' => false,
+                    'next_stage' => $next['name'],
+                    'effect' => $effect['applied'],
+                    'errors' => []
+                ];
             }
 
             // No more stages — pipeline complete
@@ -324,7 +385,7 @@ class PipelineManager
             $this->historyService->logHistory($ticketId, 'pipeline_completed', null, 'completed', $userId, 'All stages completed — pipeline closed');
 
             $this->pdo->commit();
-            return ['success' => true, 'completed' => true, 'errors' => []];
+            return ['success' => true, 'completed' => true, 'effect' => $effect['applied'], 'errors' => []];
         } catch (Exception $e) {
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
@@ -445,13 +506,18 @@ class PipelineManager
     public function getPipeline($ticketId, $includeHistory = true)
     {
         try {
+            // requested_access arrives with 2026_08_21_002.
+            $requestedSelect = TemporaryAccessManager::hasColumn($this->pdo, 'tickets', 'requested_access')
+                ? ', t.requested_access'
+                : '';
+
             $stmt = $this->pdo->prepare("
                 SELECT
                     t.id, t.ticket_number, t.title, t.description, t.status, t.priority,
                     t.target_server_uuid, t.rejection_reason, t.pipeline_template_id,
                     t.current_stage_progress_id, t.created_at, t.updated_at, t.completed_at,
                     t.created_by, creator.username AS created_by_username,
-                    pt.name AS pipeline_type_name
+                    pt.name AS pipeline_type_name{$requestedSelect}
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN pipeline_templates pt ON t.pipeline_template_id = pt.id
@@ -471,6 +537,11 @@ class PipelineManager
                 'status' => $row['status'],
                 'priority' => $row['priority'],
                 'target_server_uuid' => $row['target_server_uuid'],
+                // What the requester asked for. Not an authorisation — the
+                // approval intersects it with the step ceiling and the whitelist.
+                'requested_access' => !empty($row['requested_access'])
+                    ? (json_decode($row['requested_access'], true) ?: [])
+                    : [],
                 'pipeline_type' => [
                     'id' => (int)$row['pipeline_template_id'],
                     'name' => $row['pipeline_type_name']
@@ -519,8 +590,14 @@ class PipelineManager
             if ($scope === 'created' && $userId) {
                 $where[] = 't.created_by = ?';
                 $params[] = $userId;
-            } elseif ($scope === 'my_queue' && $userId) {
-                // Pipelines whose ACTIVE stage is owned by me or my team (or I claimed it)
+            } elseif (($scope === 'my_queue' || $scope === 'mine') && $userId) {
+                // my_queue: pipelines whose ACTIVE stage is owned by me or my team
+                //           (or I claimed it) — the "what needs my action" view.
+                // mine:     that, PLUS everything I created. This is what a
+                //           non-privileged user is clamped to, because a request
+                //           they raised is typically waiting on somebody ELSE's
+                //           stage — under my_queue alone they would watch their
+                //           own request disappear the moment they submitted it.
                 $clause = '(cur.assigned_to_user_id = ? OR cur.claimed_by_user_id = ?';
                 $params[] = $userId;
                 $params[] = $userId;
@@ -528,6 +605,10 @@ class PipelineManager
                     $placeholders = implode(',', array_fill(0, count($roleIds), '?'));
                     $clause .= " OR cur.assigned_to_role_id IN ($placeholders)";
                     $params = array_merge($params, $roleIds);
+                }
+                if ($scope === 'mine') {
+                    $clause .= ' OR t.created_by = ?';
+                    $params[] = $userId;
                 }
                 $clause .= ')';
                 $where[] = $clause;
@@ -637,6 +718,191 @@ class PipelineManager
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
+
+    /**
+     * Coerce a requested-access payload into a clean list of permission names.
+     * Accepts a JSON string or an array, since the API layer may hand over either.
+     */
+    private function normaliseRequestedAccess($raw)
+    {
+        if (is_string($raw)) {
+            $raw = json_decode($raw, true);
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $clean = [];
+        foreach ($raw as $entry) {
+            if (is_string($entry) && trim($entry) !== '') {
+                $clean[] = trim($entry);
+            }
+        }
+
+        return array_values(array_unique($clean));
+    }
+
+    /**
+     * Has 2026_08_20_002 been applied? Stages carry a side effect only once it has.
+     */
+    private function supportsStageEffects()
+    {
+        return TemporaryAccessManager::hasColumn($this->pdo, 'ticket_stage_progress', 'effect_type');
+    }
+
+    /**
+     * Run the side effect attached to a stage that has just been completed.
+     *
+     * Called from inside completeStage()'s open transaction, so returning
+     * success=false rolls the completion back too. A stage with no effect is the
+     * overwhelmingly common case and returns immediately.
+     *
+     * @param array $stage the locked ticket_stage_progress row (SELECT *)
+     * @param int   $userId the actor completing the stage
+     * @return array ['success' => bool, 'errors' => [], 'applied' => array|null]
+     */
+    private function applyStageEffect($ticketId, $stage, $userId)
+    {
+        $none = ['success' => true, 'errors' => [], 'applied' => null];
+
+        $effectType = $stage['effect_type'] ?? null;
+        if (empty($effectType)) {
+            return $none;
+        }
+
+        if ($effectType !== PipelineConfig::EFFECT_GRANT_TEMPORARY_PERMISSION) {
+            // An unknown effect must not silently succeed — a step that promises
+            // to do something and doesn't is worse than a failed approval.
+            error_log("PipelineManager: unknown stage effect '$effectType' on stage {$stage['id']}");
+            return ['success' => false, 'errors' => ["Unknown step effect '$effectType'"], 'applied' => null];
+        }
+
+        $config = json_decode($stage['effect_config'] ?? '', true);
+        if (!is_array($config)) {
+            return ['success' => false, 'errors' => ['This step\'s effect is misconfigured'], 'applied' => null];
+        }
+
+        // Guard 1 — only an admin or super_admin may hand out access, whoever
+        // happens to own the stage. Belt-and-braces on top of assertCanAct().
+        //
+        // userHasRole() lives in BaseFunctions, which api.php always loads before
+        // any handler reaches this class. If that ever stops being true, refuse
+        // rather than fatal: an approval that cannot verify the approver's role
+        // must not grant anything.
+        if (!function_exists('userHasRole')) {
+            error_log('PipelineManager: userHasRole() unavailable — refusing to grant access');
+            return ['success' => false, 'errors' => ['Cannot verify approver role'], 'applied' => null];
+        }
+
+        if (!userHasRole($this->pdo, $userId, 'admin') && !userHasRole($this->pdo, $userId, 'super_admin')) {
+            return [
+                'success' => false,
+                'errors' => ['Only an admin or super admin can approve an access request'],
+                'applied' => null
+            ];
+        }
+
+        // Guard 2 — the recipient is always the request's creator, never anything
+        // taken from the request body. The same row carries what was asked for
+        // and which server (if any) it was asked for.
+        $hasRequestedAccess = TemporaryAccessManager::hasColumn($this->pdo, 'tickets', 'requested_access');
+        $stmt = $this->pdo->prepare(
+            "SELECT created_by, target_server_uuid"
+            . ($hasRequestedAccess ? ", requested_access" : "")
+            . " FROM tickets WHERE id = ?"
+        );
+        $stmt->execute([$ticketId]);
+        $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
+        $createdBy = $ticket['created_by'] ?? null;
+        if (!$createdBy) {
+            return ['success' => false, 'errors' => ['Cannot determine who this request belongs to'], 'applied' => null];
+        }
+
+        // Guard 3 — nobody approves their own access request. TicketValidator has
+        // carried this rule all along; the pipeline path never called it, which is
+        // why a pipeline.manage holder could approve their own request.
+        // (returns ['valid' => bool, 'error' => string|null] — singular)
+        $sod = $this->validator->validateSeparationOfDuties((int)$createdBy, (int)$userId);
+        if (!$sod['valid']) {
+            return [
+                'success' => false,
+                'errors' => ['Cannot approve your own access request (separation of duties)'],
+                'applied' => null
+            ];
+        }
+
+        // The step's effect_config is the CEILING of what this request type may
+        // ever grant. What the requester actually ASKED for narrows it further.
+        // An empty/absent request means "the whole ceiling", which is the
+        // pre-2026_08_21 behaviour and keeps the older single-purpose request
+        // types working unchanged.
+        $ceiling = isset($config['permissions']) && is_array($config['permissions'])
+            ? $config['permissions']
+            : [];
+
+        $requested = json_decode($ticket['requested_access'] ?? '', true);
+        if (is_array($requested) && !empty($requested)) {
+            $permissions = array_values(array_intersect($ceiling, $requested));
+            if (empty($permissions)) {
+                return [
+                    'success' => false,
+                    'errors' => ['Nothing this request asked for can be granted by this request type'],
+                    'applied' => null
+                ];
+            }
+        } else {
+            $permissions = $ceiling;
+        }
+
+        $hours = isset($config['duration_hours']) ? (int)$config['duration_hours'] : 0;
+
+        // A request that names a target server is SCOPED to it: every server
+        // permission granted applies to that configuration alone, and to no other.
+        // TemporaryAccessManager decides which of them can carry a scope
+        // (SCOPABLE_PERMISSIONS); inventory permissions cannot, and are granted
+        // normally, because inventory is not owned by a server.
+        $targetServer = trim((string)($ticket['target_server_uuid'] ?? ''));
+
+        $access = new TemporaryAccessManager($this->pdo);
+        $grant = $access->grant(
+            (int)$createdBy,
+            $permissions,
+            $hours,
+            (int)$userId,
+            $ticketId,
+            $targetServer !== '' ? $targetServer : TemporaryAccessManager::SCOPE_GLOBAL
+        );
+
+        if (!$grant['success']) {
+            return ['success' => false, 'errors' => $grant['errors'], 'applied' => null];
+        }
+
+        $granted = !empty($grant['granted']) ? implode(', ', $grant['granted']) : 'no new permissions (already held)';
+        $where = !empty($grant['scope_id'])
+            ? " on server {$grant['scope_id']} only"
+            : '';
+        $this->historyService->logHistory(
+            $ticketId,
+            'access_granted',
+            null,
+            $grant['expires_at'],
+            $userId,
+            "Temporary access granted: {$granted}{$where} — expires {$grant['expires_at']}"
+        );
+
+        return [
+            'success' => true,
+            'errors' => [],
+            'applied' => [
+                'type' => $effectType,
+                'permissions' => $grant['granted'],
+                'scoped' => $grant['scoped'],
+                'scope_id' => $grant['scope_id'],
+                'expires_at' => $grant['expires_at'],
+                'user_id' => (int)$createdBy
+            ]
+        ];
+    }
 
     /**
      * Stage rows for a pipeline with owner/claimer names resolved.

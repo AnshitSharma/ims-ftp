@@ -281,13 +281,33 @@ function handleTokenVerification() {
             send_json_response(0, 0, 401, "Invalid token");
         }
 
+        // Roles and permissions are returned here as well as at login because a
+        // user's effective permissions can change WITHOUT a new login: a temporary
+        // grant starts and later lapses mid-session. The frontend calls this on
+        // every dashboard page load, so this response is what keeps its cached
+        // bdc_user in step with reality. Enforcement is always server-side.
+        $roleStmt = $pdo->prepare("
+            SELECT r.name FROM roles r
+            JOIN user_roles ur ON r.id = ur.role_id
+            WHERE ur.user_id = ?
+        ");
+        $roleStmt->execute([$user['id']]);
+        $userRoleNames = $roleStmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $temporaryAccess = (new TemporaryAccessManager($pdo))->listActive($user['id']);
+
         send_json_response(1, 1, 200, "Token is valid", [
             'user' => [
                 'id' => (int)$user['id'],
                 'username' => $user['username'],
                 'email' => $user['email'],
                 'firstname' => $user['firstname'],
-                'lastname' => $user['lastname']
+                'lastname' => $user['lastname'],
+                'roles' => $userRoleNames,
+                'permissions' => getUserPermissions($pdo, $user['id']),
+                // [{permission, expires_at, source_ticket_id}, ...] — drives the
+                // "temporary access · expires in Xh" note in the UI.
+                'temporary_access' => $temporaryAccess
             ]
         ]);
 

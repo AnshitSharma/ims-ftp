@@ -8,7 +8,8 @@
  * - pipeline_template_id (required)
  * - title (required), description (required)
  * - priority (optional, default medium)
- * - target_server_uuid (optional)
+ * - target_server_uuid (optional): scopes any granted server access to this config
+ * - requested_access (optional): JSON array of permission names being asked for
  * - items (optional): JSON array of component items
  * - stage_overrides (optional): JSON object keyed by stage template id ->
  *     { "assignee_type": "user"|"role", "assignee_id": 4 }
@@ -50,11 +51,22 @@ try {
         $overrides = [];
     }
 
+    // requested_access: which permissions this request is asking for. Accepts a
+    // JSON string or a repeated form field; PipelineManager validates the
+    // contents against the grantable whitelist and the approval narrows it
+    // further, so nothing trusted happens here.
+    $requestedRaw = $_POST['requested_access'] ?? null;
+    $requestedAccess = is_array($requestedRaw) ? $requestedRaw : json_decode((string)$requestedRaw, true);
+    if (!is_array($requestedAccess)) {
+        $requestedAccess = [];
+    }
+
     $data = [
         'title' => $_POST['title'] ?? '',
         'description' => $_POST['description'] ?? '',
         'priority' => $_POST['priority'] ?? 'medium',
         'target_server_uuid' => $_POST['target_server_uuid'] ?? null,
+        'requested_access' => $requestedAccess,
         'items' => $items,
         'stage_overrides' => $overrides
     ];

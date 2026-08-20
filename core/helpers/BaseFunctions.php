@@ -11,6 +11,7 @@
 // Include JWT Helper and ACL classes
 require_once(__DIR__ . '/../auth/JWTHelper.php');
 require_once(__DIR__ . '/../auth/ACL.php');
+require_once(__DIR__ . '/../auth/TemporaryAccessManager.php');
 
 // Initialize JWT secret
 $jwtSecret = defined('JWT_SECRET_KEY') ? JWT_SECRET_KEY : getenv('JWT_SECRET');
@@ -264,13 +265,22 @@ function loadUserPermissionData($pdo, $userId) {
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         $data['is_admin'] = ($result['count'] > 0);
 
-        // If not admin, load all permissions (direct + role-based) in single query
+        // If not admin, load all permissions (direct + role-based) in single query.
+        // Direct grants in user_permissions may be TEMPORARY: activeGrantClause()
+        // drops the ones that have expired or been revoked, and returns an empty
+        // string on a database where the expiry migration hasn't been applied yet
+        // (in which case every direct grant is permanent, exactly as before).
         if (!$data['is_admin']) {
+            // globalOnly: grants scoped to a single server configuration are
+            // excluded here on purpose, so they can never widen a general
+            // permission check. server_api.php consults them per-configuration.
+            $activeGrant = TemporaryAccessManager::activeGrantClause($pdo, '', true);
             $stmt = $pdo->prepare("
                 SELECT DISTINCT ap.name
                 FROM permissions ap
                 WHERE ap.id IN (
-                    SELECT permission_id FROM user_permissions WHERE user_id = ?
+                    SELECT permission_id FROM user_permissions
+                    WHERE user_id = ?{$activeGrant}
                     UNION
                     SELECT rp.permission_id
                     FROM user_roles ur
@@ -309,6 +319,101 @@ function hasPermission($pdo, $permission, $userId) {
 
     // Check if permission exists in cached list
     return in_array($permission, $cache['permissions']);
+}
+
+/**
+ * Read the server configuration UUID this request is about, if any.
+ *
+ * Handlers accept it from POST or GET under a couple of spellings; this mirrors
+ * what they do so the permission layer looks at the same value they will.
+ * Returns null when the operation names no configuration (server-create-start,
+ * server-list-configs, ...), which is exactly when a scoped grant must NOT help.
+ */
+function requestedConfigUuid() {
+    $candidates = [
+        $_POST['config_uuid'] ?? null,
+        $_GET['config_uuid'] ?? null,
+        $_POST['configUuid'] ?? null,
+        $_GET['configUuid'] ?? null,
+        $_POST['server_uuid'] ?? null,
+        $_GET['server_uuid'] ?? null,
+    ];
+
+    foreach ($candidates as $value) {
+        if (is_string($value) && trim($value) !== '') {
+            return trim($value);
+        }
+    }
+
+    return null;
+}
+
+/**
+ * COARSE gate fallback for per-configuration temporary access.
+ *
+ * Grants scoped to a single configuration are deliberately excluded from the
+ * flat permission list (see loadUserPermissionData), so hasPermission() cannot
+ * see them — otherwise "edit server X" would satisfy every server.edit check in
+ * the system. This is the one place that consults them, and only when the
+ * request actually names a configuration.
+ *
+ * The FINE half — is this the right configuration — is enforced in
+ * server_api.php via userCanActOnConfig().
+ */
+function hasScopedPermissionForRequest($pdo, $permission, $userId) {
+    $configUuid = requestedConfigUuid();
+    if ($configUuid === null) {
+        return false;
+    }
+
+    static $manager = null;
+    if ($manager === null) {
+        $manager = new TemporaryAccessManager($pdo);
+    }
+
+    return $manager->hasScopedPermission($userId, $permission, $configUuid);
+}
+
+/**
+ * Can this user act on THIS configuration?
+ *
+ * The idiom this replaces was copied ~10 times through server_api.php:
+ *
+ *     if ($config->get('created_by') != $user['id']
+ *         && !hasPermission($pdo, 'server.edit_all', $user['id'])) { 403 }
+ *
+ * i.e. you must own it, or hold the blanket escalation permission. That left no
+ * way to say "this person may work on this one server", which is what a targeted
+ * access request grants — so a third branch was needed, and one helper is better
+ * than ten near-identical conditions.
+ *
+ * @param object $config    a loaded ServerConfiguration
+ * @param string $escalation the blanket permission that has always bypassed
+ *                           ownership (server.edit_all / server.view_all)
+ * @param bool   $allowScoped whether a per-configuration temporary grant counts
+ *                            here. False for finalize and delete: a temporary
+ *                            grant lets you CHANGE a build, not lock or destroy it.
+ */
+function userCanActOnConfig($pdo, $config, $userId, $escalation, $allowScoped = true) {
+    if ((int)$config->get('created_by') === (int)$userId) {
+        return true;
+    }
+
+    if (hasPermission($pdo, $escalation, $userId)) {
+        return true;
+    }
+
+    if (!$allowScoped) {
+        return false;
+    }
+
+    $configUuid = $config->get('config_uuid');
+    if (!$configUuid) {
+        return false;
+    }
+
+    $manager = new TemporaryAccessManager($pdo);
+    return $manager->hasAnyScopedGrant($userId, $configUuid);
 }
 
 /**

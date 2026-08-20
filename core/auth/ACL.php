@@ -4,6 +4,8 @@
  * File: includes/ACL.php
  */
 
+require_once(__DIR__ . '/TemporaryAccessManager.php');
+
 class ACL {
     private $pdo;
     private $userPermissions = [];
@@ -384,26 +386,50 @@ class ACL {
     }
     
     /**
-     * Load user permissions into cache
+     * Load user permissions into cache.
+     *
+     * Reads BOTH role grants and direct per-user grants from `user_permissions`.
+     * The direct half used to be missing here, which meant the two permission
+     * checkers in this codebase disagreed: hasPermission() in BaseFunctions.php
+     * honours user_permissions, this one did not — so every module that checks
+     * through $acl->hasPermission() (all the pipeline handlers) was blind to a
+     * direct grant. Temporary access is issued as a direct grant, so that gap
+     * had to close for it to work at all.
+     *
+     * activeGrantClause() drops expired/revoked grants, and yields an empty
+     * string on a database without the expiry columns.
+     *
+     * Note this method still has NO admin bypass, unlike its BaseFunctions
+     * counterpart — that difference is deliberate and unchanged.
      */
     private function loadUserPermissions($userId) {
         try {
+            // globalOnly: a grant scoped to one configuration must never satisfy a
+            // plain permission check. Scoped access is resolved by
+            // TemporaryAccessManager::hasScopedPermission() at the point of use.
+            $activeGrant = TemporaryAccessManager::activeGrantClause($this->pdo, 'up', true);
+
             $stmt = $this->pdo->prepare("
-                SELECT DISTINCT p.name, rp.granted
-                FROM users u
-                JOIN user_roles ur ON u.id = ur.user_id
-                JOIN roles r ON ur.role_id = r.id
-                JOIN role_permissions rp ON r.id = rp.role_id
-                JOIN permissions p ON rp.permission_id = p.id
-                WHERE u.id = ? AND rp.granted = 1
+                SELECT DISTINCT p.name
+                FROM permissions p
+                WHERE p.id IN (
+                    SELECT rp.permission_id
+                    FROM user_roles ur
+                    JOIN role_permissions rp ON ur.role_id = rp.role_id
+                    WHERE ur.user_id = ? AND rp.granted = 1
+                    UNION
+                    SELECT up.permission_id
+                    FROM user_permissions up
+                    WHERE up.user_id = ?{$activeGrant}
+                )
             ");
-            $stmt->execute([$userId]);
-            
+            $stmt->execute([$userId, $userId]);
+
             $this->userPermissions[$userId] = [];
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $this->userPermissions[$userId][$row['name']] = $row['granted'];
+                $this->userPermissions[$userId][$row['name']] = 1;
             }
-            
+
         } catch (PDOException $e) {
             error_log("Error loading user permissions: " . $e->getMessage());
             $this->userPermissions[$userId] = [];

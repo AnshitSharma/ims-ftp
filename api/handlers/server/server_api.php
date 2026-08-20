@@ -178,7 +178,7 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         }
         
         // Check if user owns this configuration or has edit permissions
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
         
@@ -479,7 +479,7 @@ function handleAddComponent($serverBuilder, $user) {
         }
         
         // Check if user owns this configuration or has edit permissions
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
         
@@ -950,7 +950,7 @@ function handleRemoveComponent($serverBuilder, $user) {
         }
         
         // Check permissions
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -1139,7 +1139,7 @@ function handleReplaceComponent($serverBuilder, $user) {
         if (!$config) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -1212,7 +1212,7 @@ function handleTransitionStatus($serverBuilder, $user) {
         if (!$config) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
@@ -1264,7 +1264,7 @@ function handleGetConfiguration($serverBuilder, $user) {
         }
         
         // Check permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.view_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
         }
         
@@ -1703,7 +1703,7 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
         }
 
         // Check permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.finalize', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.finalize', false)) {
             send_json_response(0, 1, 403, "Insufficient permissions to finalize this configuration");
         }
         
@@ -1863,7 +1863,7 @@ function handleDeleteConfiguration($serverBuilder, $user) {
         }
         
         // Check permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.delete', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.delete', false)) {
             send_json_response(0, 1, 403, "Insufficient permissions to delete this configuration");
         }
         
@@ -2193,7 +2193,7 @@ function handleValidateConfiguration($serverBuilder, $user) {
         }
 
         // Check permissions
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.view_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to validate this configuration");
         }
 
@@ -2268,7 +2268,7 @@ function handleGetCompatible($serverBuilder, $user) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
 
-        if ($config->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.view_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
         }
 
@@ -2964,7 +2964,7 @@ function handleSetPlatform($user) {
         }
 
         // Same ownership clause as handleAddComponent — stamping the platform is an edit.
-        if ((int)$config->get('created_by') !== (int)$user['id'] && !hasPermission($pdo, 'server.edit_all', $user['id'])) {
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 

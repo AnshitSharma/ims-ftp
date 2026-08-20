@@ -48,8 +48,16 @@ try {
         ? "Final stage completed — pipeline closed"
         : "Stage completed — advanced to '" . ($result['next_stage'] ?? 'next stage') . "'";
 
+    // Say so when completing the stage granted something — the approver should not
+    // have to go and check whether their approval actually did anything.
+    $effect = $result['effect'] ?? null;
+    if ($effect && !empty($effect['expires_at'])) {
+        $message .= ". Temporary access granted until " . $effect['expires_at'];
+    }
+
     send_json_response(true, true, 200, $message, [
         'completed' => !empty($result['completed']),
+        'effect' => $effect,
         'pipeline' => $pipeline
     ]);
 } catch (Exception $e) {

@@ -46,4 +46,21 @@ class PipelineConfig
     {
         return ['user', 'role'];
     }
+
+    /**
+     * Side effect: completing this stage grants the REQUEST'S CREATOR a set of
+     * permissions for a fixed window. effect_config shape:
+     *   {"permissions": ["server.create", ...], "duration_hours": 24}
+     */
+    const EFFECT_GRANT_TEMPORARY_PERMISSION = 'grant_temporary_permission';
+
+    /**
+     * Effects a stage may carry (pipeline_stages.effect_type). A stage with no
+     * effect_type is pure status tracking, which is what every stage was before
+     * 2026_08_20_002 and what almost every stage still is.
+     */
+    public static function getStageEffectTypes()
+    {
+        return [self::EFFECT_GRANT_TEMPORARY_PERMISSION];
+    }
 }

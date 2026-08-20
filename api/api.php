@@ -256,7 +256,15 @@ function requireModulePermission($module, $operation, $user) {
     $requiredPermission = str_replace('{module}', $module, $map[$moduleKey][$operation]);
 
     if (!hasPermission($pdo, $requiredPermission, $user['id'])) {
-        send_json_response(0, 1, 403, "Insufficient permissions: $requiredPermission required");
+        // Second chance for per-configuration temporary access: the user may hold
+        // this permission scoped to the very configuration this request names.
+        // Scoped grants are kept out of the flat permission list on purpose, so
+        // this is the only path that sees them — and it needs a config_uuid in
+        // the request, which means server-create-start and the list endpoints can
+        // never be satisfied this way.
+        if (!hasScopedPermissionForRequest($pdo, $requiredPermission, $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions: $requiredPermission required");
+        }
     }
 }
 
@@ -268,12 +276,22 @@ function requireModulePermission($module, $operation, $user) {
 function handlePipelineOperations($operation, $user) {
     global $pdo;
 
-    // Pipelines are accessible to admin and super_admin roles.
-    // Belt-and-braces: pipeline.* grants are limited to these roles via seeders,
-    // but this explicit gate guarantees it in code.
-    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
-        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
-        return;
+    // Raising and tracking a Request is open to any authenticated user — that is
+    // the point of the Requests module, and it is what lets a viewer ask for
+    // temporary access. The four operations below fall through to each handler's
+    // own ACL check (pipeline.create / .view_own / .template_view), which is the
+    // real gate.
+    //
+    // Everything else — editing Request Types, claiming, completing, reassigning,
+    // cancelling — stays admin/super_admin in code, on top of ACL. Approving is
+    // in that set on purpose: it is what grants access.
+    $selfServiceOperations = ['create', 'list', 'get', 'template-list'];
+
+    if (!in_array($operation, $selfServiceOperations, true)) {
+        if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+            send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+            return;
+        }
     }
 
     try {
