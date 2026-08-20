@@ -216,8 +216,8 @@
             }
         }
     ],
-    "twenty_sixth_session_2026_08_19": {
-        "date": "2026-08-19",
+    "twenty_sixth_session_2026_08_20": {
+        "date": "2026-08-20",
         "note": "NEWEST SESSION -- supersedes twenty_fifth_session_2026_07_30. Scope: F-29 ONLY (the caddy/bay contradiction), fixed on BOTH sides in one unit as that record required. No flag was changed, no seeder was written, no DB was touched. NOTE for whoever reads CUTOVER-STATUS-FOR-LEAD.md next: that document is dated 2026-07-25 and is STALE -- it reports ENGINE_MODE/STATE_MACHINE at shadow and command_parity/read reports as missing. Per this file's own later records the flags are DUAL_WRITE=on, STATE_MACHINE=enforce, ENGINE_MODE=enforce, COMMAND_LAYER=shadow, READ_FROM_ROWS=sample, and both report scripts exist and are available:true in run_all.php.",
         "F-29_caddy_bay_contradiction_FIXED": {
             "supersedes": "F-29_caddy_bay_contradiction_NOT_FIXED in twenty_fifth_session_2026_07_30.",
