@@ -52,6 +52,10 @@ const REGISTRY = [
     // criterion was written against that artifact. Takes --since like the other
     // two, for the same append-only-log reason.
     'read'        => ['script' => __DIR__ . '/read_report.php',        'available' => true,  'lands_in' => null],
+    // deadcode (2026-08-20): landed with U-D.1's "Files Created (1)". Gates the P9
+    // deletions -- it is expected to be RED until those units actually run, since
+    // every scheduled symbol still has its callers. It is NOT in QUICK_SET or P8,
+    // so the daily nightly.sh battery is unaffected.
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => true,  'lands_in' => null],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
     'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],
