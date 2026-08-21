@@ -89,12 +89,44 @@ class TicketValidator
         }
 
         // Target server validation (optional but recommended)
-        if (isset($data['target_server_uuid']) && !empty($data['target_server_uuid'])) {
-            if (!$this->isValidUuid($data['target_server_uuid'])) {
+        $server = $this->validateTargetServer($data['target_server_uuid'] ?? null);
+        if (!$server['valid']) {
+            $errors = array_merge($errors, $server['errors']);
+        }
+
+        return [
+            'valid' => empty($errors),
+            'errors' => $errors
+        ];
+    }
+
+    /**
+     * Validate a target server reference on its own.
+     *
+     * Public and standalone because the pipeline (Requests) engine needs THIS rule
+     * without the rest of validateTicketBusinessRules(): that method also demands
+     * ticket-level assignment fields, which a pipeline instance does not have —
+     * its owners live on the snapshotted steps. So PipelineManager::createPipeline()
+     * could not call it, and for a long time validated the target server nowhere
+     * at all. An unchecked uuid is worse here than on a legacy ticket: the
+     * approval scopes the temporary grant to it, and a uuid matching no row
+     * produces a grant that unlocks nothing, silently.
+     *
+     * An empty value is VALID — naming a server is optional; it means the request
+     * is not about one particular configuration.
+     *
+     * @param string|null $serverUuid
+     * @return array ['valid' => bool, 'errors' => array]
+     */
+    public function validateTargetServer($serverUuid)
+    {
+        $errors = [];
+
+        if ($serverUuid !== null && trim((string)$serverUuid) !== '') {
+            $serverUuid = trim((string)$serverUuid);
+            if (!$this->isValidUuid($serverUuid)) {
                 $errors[] = "Invalid target_server_uuid format";
-            }
-            // Check if server exists
-            if (!$this->serverExists($data['target_server_uuid'])) {
+            } elseif (!$this->serverExists($serverUuid)) {
                 $errors[] = "Target server not found";
             }
         }

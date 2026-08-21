@@ -1,0 +1,19 @@
+# scripts/ holds CLI-only verification and audit tooling. Nothing under it is meant to
+# be reachable over HTTP.
+#
+# Measured 2026-08-22: this host already returns 403 for .php outside api/api.php, but it
+# SERVES .json from here — deadcode_manifest.json and expected_diffs.json were fetchable
+# unauthenticated, disclosing internal symbol names, repo paths and expected-diff shapes.
+# reports/ already denies; this brings scripts/ in line with it.
+#
+# Safe by construction: the API entry point lives in api/, not here, so denying this
+# directory cannot affect request handling. Nothing in production reads these files over
+# HTTP — the server-side callers read them from the filesystem.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

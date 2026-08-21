@@ -54,6 +54,9 @@ switch ($action) {
     case 'unassigned-servers':
         handleRackUnassignedServers($pdo, $user);
         break;
+    case 'placement':
+        handleRackPlacement($pdo, $user);
+        break;
     default:
         send_json_response(0, 1, 400, "Invalid rack operation: $action");
 }
@@ -521,5 +524,58 @@ function handleRackUnassignedServers($pdo, $user) {
     } catch (Throwable $e) {
         error_log("handleRackUnassignedServers error: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to list unassigned servers");
+    }
+}
+
+/**
+ * Current rack placement of one server configuration, plus the U-height it needs.
+ *
+ * Read side of "move this server": the servers list only carries the derived
+ * rack_position text, so the placement dialog asks here for the authoritative
+ * rack_uuid / start_u AND for the height the server occupies today (re-derived from
+ * its chassis, which may have been added after it was racked). The position picker
+ * offers only start-U values where that height actually fits.
+ */
+function handleRackPlacement($pdo, $user) {
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "config_uuid is required");
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT config_uuid, server_name, is_virtual, chassis_uuid FROM server_configurations WHERE config_uuid = ? LIMIT 1");
+        $stmt->execute([$configUuid]);
+        $server = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$server) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        $placement = null;
+        $row = RackPlacement::getPlacement($pdo, $configUuid);
+        if ($row) {
+            $startU = (int)$row['start_u'];
+            $height = max(1, (int)$row['u_height']);
+            $rack = rackFetchByUuid($pdo, $row['rack_uuid']);
+            $placement = [
+                'rack_uuid' => $row['rack_uuid'],
+                'rack_name' => $rack['name'] ?? null,
+                'total_u' => isset($rack['total_u']) ? (int)$rack['total_u'] : null,
+                'start_u' => $startU,
+                'u_height' => $height,
+                'end_u' => $startU + $height - 1,
+            ];
+        }
+
+        send_json_response(1, 1, 200, "Placement retrieved successfully", [
+            'config_uuid' => $configUuid,
+            'server_name' => $server['server_name'],
+            'is_virtual' => (int)$server['is_virtual'] === 1,
+            'placement' => $placement,
+            'required_u_height' => rackDeriveUHeight($server['chassis_uuid'] ?? null),
+            'chassis_name' => rackChassisName($server['chassis_uuid'] ?? null),
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleRackPlacement error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve rack placement");
     }
 }

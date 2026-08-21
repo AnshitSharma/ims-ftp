@@ -285,7 +285,10 @@ function handlePipelineOperations($operation, $user) {
     // Everything else — editing Request Types, claiming, completing, reassigning,
     // cancelling — stays admin/super_admin in code, on top of ACL. Approving is
     // in that set on purpose: it is what grants access.
-    $selfServiceOperations = ['create', 'list', 'get', 'template-list'];
+    // 'servers' is in this set because it feeds the create form's server picker:
+    // the requester naming a server is by definition not an admin, and is usually
+    // someone without server.view (the handler gates on pipeline.create instead).
+    $selfServiceOperations = ['create', 'list', 'get', 'template-list', 'servers'];
 
     if (!in_array($operation, $selfServiceOperations, true)) {
         if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
@@ -311,6 +314,7 @@ function handlePipelineOperations($operation, $user) {
             'template-update' => 'pipeline-template-update.php',
             'template-delete' => 'pipeline-template-delete.php',
             'create'          => 'pipeline-create.php',
+            'servers'         => 'pipeline-servers.php',
             'list'            => 'pipeline-list.php',
             'get'             => 'pipeline-get.php',
             'claim'           => 'pipeline-claim.php',

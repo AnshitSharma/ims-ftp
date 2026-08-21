@@ -52,7 +52,7 @@ const REGISTRY = [
     // criterion was written against that artifact. Takes --since like the other
     // two, for the same append-only-log reason.
     'read'        => ['script' => __DIR__ . '/read_report.php',        'available' => true,  'lands_in' => null],
-    'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => false, 'lands_in' => 'U-D.1'],
+    'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => true,  'lands_in' => null],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
     'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],
 ];

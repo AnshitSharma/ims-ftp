@@ -153,6 +153,11 @@ switch ($action) {
         handleDebugShadowLog($user);
         break;
 
+    case 'debug-deadcode':
+    case 'server-debug-deadcode':
+        handleDebugDeadcode($user);
+        break;
+
     default:
         send_json_response(0, 1, 400, "Invalid action specified");
 }
@@ -1486,6 +1491,40 @@ function handleListConfigurations($serverBuilder, $user) {
         }
         unset($config);
 
+        // Rack placement for the server cards. The rows themselves only carry the
+        // DERIVED rack_position text ("U12"), which never says WHICH rack -- one grouped
+        // query over rack_servers adds that, and the placement dialog reuses it to
+        // preselect the current rack. Guarded on purpose: rack placement is decoration
+        // here, and an unreadable rack table must not take the Servers list down.
+        if (!empty($configurations)) {
+            $placements = [];
+            try {
+                $configUuids = array_column($configurations, 'config_uuid');
+                $inClause = implode(',', array_fill(0, count($configUuids), '?'));
+                $rackStmt = $pdo->prepare("
+                    SELECT rs.config_uuid, rs.rack_uuid, rs.start_u, rs.u_height, r.name AS rack_name
+                    FROM rack_servers rs
+                    LEFT JOIN racks r ON r.rack_uuid = rs.rack_uuid
+                    WHERE rs.config_uuid IN ($inClause)
+                ");
+                $rackStmt->execute($configUuids);
+                foreach ($rackStmt->fetchAll(PDO::FETCH_ASSOC) as $placementRow) {
+                    $placements[$placementRow['config_uuid']] = $placementRow;
+                }
+            } catch (Throwable $rackError) {
+                error_log("Rack placement lookup for configuration list failed: " . $rackError->getMessage());
+            }
+
+            foreach ($configurations as &$config) {
+                $placement = $placements[$config['config_uuid']] ?? null;
+                $config['rack_uuid'] = $placement['rack_uuid'] ?? null;
+                $config['rack_name'] = $placement['rack_name'] ?? null;
+                $config['rack_start_u'] = isset($placement['start_u']) ? (int)$placement['start_u'] : null;
+                $config['rack_u_height'] = isset($placement['u_height']) ? max(1, (int)$placement['u_height']) : null;
+            }
+            unset($config);
+        }
+
         // Get total count
         $countStmt = $pdo->prepare("
             SELECT COUNT(*) as total
@@ -1610,12 +1649,58 @@ function handleImportVirtual($serverBuilder, $user) {
                     $options['slot_position'] = $component['slot_position'];
                 }
 
-                $addResult = $serverBuilder->addComponent(
-                    $realConfigUuid,
-                    $componentType,
-                    $uuid,
-                    $options
-                );
+                // U-A.1 leftover, found 2026-08-22: this call site was never routed
+                // through the command layer, so at COMMAND_LAYER_ENABLED=enforce the
+                // virtual-import path still dispatched to the LEGACY builder while
+                // every other add went through AddComponentCommand. That is the
+                // silent bypass ServerBuilder's own platform-feature note warned
+                // would "appear the day someone flips the flag" -- it appeared on
+                // 2026-08-21. It also kept ServerBuilder::addComponent() reachable,
+                // and with it the whole legacy validation chain P9 is meant to
+                // delete (validateComponentCompatibility / validateCPUAddition /
+                // validateRAMAddition / validateComponentQuantity /
+                // assignComponentSlot), every one of which is called only from
+                // addComponent().
+                //
+                // BaseCommand uses the nestable ownTransaction pattern: inside this
+                // handler's outer transaction it neither begins nor rolls back, so a
+                // CommandFailed propagates here without destroying the import, and
+                // the per-component "collect a warning and carry on" behaviour is
+                // preserved exactly. The command also evaluates before it applies,
+                // so a blocked component fails with no partial write -- strictly
+                // safer than the legacy path it replaces.
+                // One more asymmetry to preserve: legacy addComponent() reads
+                // $options['quantity'] (ServerBuilder:621) and reserves N units in a
+                // single call, whereas a command adds exactly ONE unit. So quantity
+                // maps to N sequential dispatches, the same way handleAddComponent
+                // does it -- each dispatch re-locks the UUID's inventory rows and
+                // naturally claims the next available physical unit.
+                require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
+                if (CommandLayer::mode() === 'enforce') {
+                    $importQuantity = max(1, (int)($options['quantity'] ?? 1));
+                    try {
+                        for ($unit = 0; $unit < $importQuantity; $unit++) {
+                            (new AddComponentCommand(
+                                $pdo,
+                                $realConfigUuid,
+                                $componentType,
+                                $uuid,
+                                $options,
+                                (int)$user['id']
+                            ))->execute();
+                        }
+                        $addResult = ['success' => true];
+                    } catch (CommandFailed $importFailure) {
+                        $addResult = ['success' => false, 'message' => $importFailure->getMessage()];
+                    }
+                } else {
+                    $addResult = $serverBuilder->addComponent(
+                        $realConfigUuid,
+                        $componentType,
+                        $uuid,
+                        $options
+                    );
+                }
 
                 if ($addResult['success']) {
                     $importedComponents[] = [
@@ -2085,6 +2170,101 @@ function handleDebugShadowLog($user) {
         'total_lines' => count($lines),
         'returned' => count($rows),
         'rows' => $rows,
+    ]);
+}
+
+/**
+ * TEMPORARY diagnostic (U-D.1 deletion precondition): run the dead-code scan
+ * against the DEPLOYED tree and report, per symbol scheduled for deletion by P9,
+ * whether any call site still blocks it.
+ *
+ * This exists because the CLI report it shares rules with
+ * (scripts/verify/deadcode_report.php) cannot be run on this host at all -- there
+ * is no shell, and scripts/ is now CLI-guarded precisely so it cannot be reached
+ * over HTTP. A deletion precondition that can never be evaluated against
+ * production is not a precondition, so the scan gets an authenticated door.
+ *
+ * Read-only: filesystem reads of the source tree, no DB writes, no source TEXT in
+ * the response -- repo-relative path + line number only, so hard rule 8 (never
+ * expose filesystem paths) is respected. The tree lint half of the contract stays
+ * with the CLI report; there is no shell here to run `php -l` with. In practice a
+ * syntax error in these files 500s every request that touches them, so exercising
+ * the API after a deletion is the working substitute.
+ *
+ * Admin/super_admin only, same gate as handleDebugMigrationFlags(). Remove
+ * alongside the rest of the debug-* actions when P9 closes.
+ */
+function handleDebugDeadcode($user) {
+    global $pdo;
+
+    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+    }
+
+    $root = dirname(__DIR__, 3);                 // ims-ftp/
+    $manifestPath = $root . '/scripts/verify/deadcode_manifest.json';
+    $scanPath = $root . '/scripts/verify/deadcode_scan.php';
+
+    if (!is_file($manifestPath) || !is_file($scanPath)) {
+        send_json_response(0, 1, 500, "Dead-code scan is not deployed on this host");
+    }
+
+    $manifest = json_decode((string)file_get_contents($manifestPath), true);
+    if (!is_array($manifest) || empty($manifest['symbols'])) {
+        send_json_response(0, 1, 500, "deadcode_manifest.json is missing or malformed");
+    }
+
+    require_once $scanPath;
+
+    $unit = trim($_POST['unit'] ?? $_GET['unit'] ?? '');
+    $symbol = trim($_POST['symbol'] ?? $_GET['symbol'] ?? '');
+
+    $scan = deadcodeScan(
+        $root,
+        $manifest,
+        $unit !== '' ? $unit : null,
+        $symbol !== '' ? $symbol : null
+    );
+    if (!empty($scan['error'])) {
+        send_json_response(0, 1, 400, $scan['error']);
+    }
+
+    // Path + line only, never the source line itself.
+    $sites = function (array $hits) {
+        $out = [];
+        foreach (array_slice($hits, 0, 20) as $h) {
+            $out[] = $h['file'] . ':' . $h['line'];
+        }
+        return $out;
+    };
+
+    $symbols = [];
+    foreach ($scan['results'] as $r) {
+        $symbols[] = [
+            'symbol' => $r['symbol'],
+            'unit' => $r['unit'],
+            'status' => $r['status'],
+            'defined_in' => $r['defined_in'],
+            'definition_present' => $r['definition_present'],
+            'retain' => $r['retain'],
+            'blocking_count' => $r['blocking_count'],
+            'blocking_sites' => $sites($r['blocking_call_sites']),
+            'internal_count' => $r['internal_count'],
+            'internal_sites' => $sites($r['internal_call_sites']),
+            'internal_callers_also_deleted' => $r['internal_callers_also_deleted'],
+            'allowed_count' => $r['allowed_count'],
+            'note' => $r['note'],
+        ];
+    }
+
+    send_json_response(1, 1, 200, "Dead-code scan of the deployed tree", [
+        'status' => $scan['symbols_red'] === 0 ? 'GREEN' : 'RED',
+        'php_files_scanned' => $scan['php_files_scanned'],
+        'symbols_selected' => $scan['symbols_selected'],
+        'symbols_red' => $scan['symbols_red'],
+        'filters' => ['unit' => $unit !== '' ? $unit : null, 'symbol' => $symbol !== '' ? $symbol : null],
+        'lint' => ['ran' => false, 'reason' => 'no shell on this host; the CLI report owns the tree lint'],
+        'symbols' => $symbols,
     ]);
 }
 

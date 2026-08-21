@@ -1,0 +1,156 @@
+{
+  "_comment": "Symbols scheduled for deletion by P9 (10-cleanup), consumed by scripts/verify/deadcode_report.php. Sibling of expected_diffs.json / expected_command_diffs.json. A symbol is GREEN when it has ZERO blocking call sites: matches in its own defining file, under tests/, and in any path listed in its allowed_callers are not blocking. GREEN means 'safe to delete'; it is a PRECONDITION of the deletion, never a record that the deletion happened.",
+  "_scan_roots": [
+    "api",
+    "core",
+    "scripts",
+    "includes",
+    "cli"
+  ],
+  "_excluded_dirs": [
+    "tests",
+    "migration",
+    "docs",
+    "reports",
+    "database",
+    "vendor",
+    "node_modules",
+    ".git"
+  ],
+  "symbols": [
+    {
+      "symbol": "validateComponentCompatibility",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Phase 1.5 pairwise loop. Superseded by the ValidationEngine rule registry at ENGINE_MODE=enforce."
+    },
+    {
+      "symbol": "checkComponentPairCompatibility",
+      "kind": "method",
+      "defined_in": "core/models/compatibility/ComponentCompatibility.php",
+      "unit": "U-D.1",
+      "retain": true,
+      "allowed_callers": [
+        "api/handlers/server/compatibility_api.php"
+      ],
+      "note": "RETAINED, not deleted. U-D.1 removes only ServerBuilder's loop over it; the compatibility API's check_pair operation is a documented external contract and keeps its callers. GREEN here means 'no callers left outside compatibility_api.php'. Remaining blockers to clear in U-D.1: ServerBuilder (the Phase 1.5 loop) and TicketValidator, which needs its own decision before deletion."
+    },
+    {
+      "symbol": "validateConfiguration",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Legacy finalize-time validator. Verdict surface is 100% engine at enforce."
+    },
+    {
+      "symbol": "validateConfigurationEnhanced",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Legacy finalize validator; the weaker RAM path F-? corrected in U-R.* lives here."
+    },
+    {
+      "symbol": "validateConfigurationComprehensive",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Plus its private tracker family. The unlocked pre-check U-C.5 removed from handleFinalizeConfiguration called this."
+    },
+    {
+      "symbol": "getConfigurationWarnings",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Read-time warnings (audit A-10). Its API call site goes with it."
+    },
+    {
+      "symbol": "calculateHardwareCompatibilityScore",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Scoring helper for the legacy verdict surface, with the checkPower*/checkFormFactor* privates."
+    },
+    {
+      "symbol": "assignComponentSlot",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Slot assignment superseded by the resource ledger (PL)."
+    },
+    {
+      "symbol": "extractPCIeSlotSize",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "FILE-SCOPED: only ServerBuilder's copy is a target. ComponentCompatibility.php and UnifiedSlotTracker.php define and call their OWN copies of this name; the scan matches on method name and cannot resolve a $this-> receiver back to a class, so those files are allow-listed as a documented limitation rather than silently counted. Re-check by hand if either file ever starts calling ServerBuilder's copy.",
+      "allowed_callers": [
+        "core/models/compatibility/ComponentCompatibility.php",
+        "core/models/compatibility/UnifiedSlotTracker.php"
+      ]
+    },
+    {
+      "symbol": "validateCPUAddition",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Superseded by the cpu.* rule family (U-R.*)."
+    },
+    {
+      "symbol": "validateRAMAddition",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Superseded by the ram.* rule family (U-R.*)."
+    },
+    {
+      "symbol": "validateComponentQuantity",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.2",
+      "note": "Quantity gating now a ledger consumption check."
+    },
+    {
+      "symbol": "replaceOnboardNIC",
+      "kind": "method",
+      "defined_in": "core/models/compatibility/OnboardNICHandler.php",
+      "unit": "U-D.2",
+      "note": "Replaced by ReplaceComponentCommand at COMMAND_LAYER=enforce."
+    },
+    {
+      "symbol": "MemoryAuthority",
+      "kind": "class",
+      "defined_in": "core/models/compatibility/MemoryAuthority.php",
+      "unit": "U-D.2",
+      "note": "Superseded authority; its cases live in tests/unit/rules since U-R.*. Flag MEMORY_AUTHORITY_ENABLED dies in U-D.4."
+    },
+    {
+      "symbol": "SlotAuthority",
+      "kind": "class",
+      "defined_in": "core/models/compatibility/SlotAuthority.php",
+      "unit": "U-D.2",
+      "note": "Superseded authority. Flag SLOT_AUTHORITY_ENABLED dies in U-D.4."
+    },
+    {
+      "symbol": "StorageConnectionAuthority",
+      "kind": "class",
+      "defined_in": "core/models/compatibility/StorageConnectionAuthority.php",
+      "unit": "U-D.2",
+      "note": "Superseded by the storage.* rule family (U-R.5). Flag STORAGE_CONNECTION_AUTHORITY_ENABLED dies in U-D.4."
+    },
+    {
+      "symbol": "ValidationPipeline",
+      "kind": "class",
+      "defined_in": "core/models/compatibility/ValidationPipeline.php",
+      "unit": "U-D.2",
+      "note": "Phase-4 shell that was never wired in. Flag VALIDATION_PIPELINE_ENABLED dies in U-D.4."
+    },
+    {
+      "symbol": "PcieLaneBudgetValidator",
+      "kind": "class",
+      "defined_in": "core/models/compatibility/PcieLaneBudgetValidator.php",
+      "unit": "U-D.2",
+      "note": "Superseded by PcieLaneBudgetRule. NOTE: FLAGS.md cites this class's currentMode() as the canonical flag-read pattern -- update that reference when deleting."
+    }
+  ]
+}

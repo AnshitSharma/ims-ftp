@@ -49,6 +49,7 @@ return [
         'debug-migration-flags' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
         'debug-config-dualwrite' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
         'debug-shadow-log' => 'server.view', // TEMPORARY (shadow-soak diagnostic) -- also role-gated admin/super_admin in the handler
+        'debug-deadcode' => 'server.view', // TEMPORARY (U-D.1 deletion precondition) -- also role-gated admin/super_admin in the handler
     ],
 
     // Operations use underscores to match the cases in
@@ -76,6 +77,7 @@ return [
         'list' => 'rack.view',
         'get' => 'rack.view',
         'unassigned-servers' => 'rack.view',
+        'placement' => 'rack.view',
         'create' => 'rack.create',
         'update' => 'rack.edit',
         'delete' => 'rack.delete',

@@ -24,6 +24,7 @@ require_once(__DIR__ . '/../tickets/TicketItemService.php');
 require_once(__DIR__ . '/../tickets/TicketHistoryService.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
 require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
+require_once(__DIR__ . '/../state/StatusMap.php');
 
 class PipelineManager
 {
@@ -84,7 +85,17 @@ class PipelineManager
             $errors[] = 'Invalid priority';
         }
 
-        $targetServer = !empty($data['target_server_uuid']) ? $data['target_server_uuid'] : null;
+        $targetServer = !empty($data['target_server_uuid']) ? trim((string)$data['target_server_uuid']) : null;
+
+        // A named server is what any granted server permission gets SCOPED to, so
+        // an unknown uuid is not a cosmetic problem: the grant would be attached
+        // to a configuration that does not exist, hasScopedPermission() could
+        // never match it, and the requester would be handed access that unlocks
+        // nothing — with no error anywhere. Catch it at submit time instead.
+        $serverCheck = $this->validator->validateTargetServer($targetServer);
+        if (!$serverCheck['valid']) {
+            $errors = array_merge($errors, $serverCheck['errors']);
+        }
 
         // What access is this request asking for? Validated here so the requester
         // gets a clear error at submit time rather than a silent no-op at
@@ -517,10 +528,14 @@ class PipelineManager
                     t.target_server_uuid, t.rejection_reason, t.pipeline_template_id,
                     t.current_stage_progress_id, t.created_at, t.updated_at, t.completed_at,
                     t.created_by, creator.username AS created_by_username,
-                    pt.name AS pipeline_type_name{$requestedSelect}
+                    pt.name AS pipeline_type_name{$requestedSelect},
+                    sc.config_uuid AS ts_uuid, sc.server_name AS ts_name,
+                    sc.status_v2 AS ts_status_v2, sc.configuration_status AS ts_status_legacy,
+                    sc.location AS ts_location, sc.rack_position AS ts_rack
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN pipeline_templates pt ON t.pipeline_template_id = pt.id
+                LEFT JOIN server_configurations sc ON sc.config_uuid = t.target_server_uuid
                 WHERE t.id = ? AND t.pipeline_template_id IS NOT NULL
             ");
             $stmt->execute([$ticketId]);
@@ -537,6 +552,12 @@ class PipelineManager
                 'status' => $row['status'],
                 'priority' => $row['priority'],
                 'target_server_uuid' => $row['target_server_uuid'],
+                // Resolved so the approver reads a server NAME instead of a
+                // 36-character uuid — they are deciding whether to unlock this
+                // exact machine. 'exists' false means the configuration has been
+                // deleted since the request was raised, which the UI must say out
+                // loud: any server access granted now would be scoped to nothing.
+                'target_server' => $this->describeTargetServer($row),
                 // What the requester asked for. Not an authorisation — the
                 // approval intersects it with the step ceiling and the whitelist.
                 'requested_access' => !empty($row['requested_access'])
@@ -569,6 +590,43 @@ class PipelineManager
             error_log("PipelineManager::getPipeline error: " . $e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * Shape the target-server columns joined in getPipeline() into a small object.
+     *
+     * The uuid alone is not enough for the approver: they are deciding whether to
+     * unlock one specific machine, and "e321313b-..." tells them nothing. When the
+     * join found no row, 'exists' is false — the configuration was deleted after
+     * the request was raised, and any server access granted now would be scoped to
+     * a target that no longer exists.
+     *
+     * @param array $row a getPipeline() result row (ts_* aliases)
+     * @return array|null null when the request names no server
+     */
+    private function describeTargetServer(array $row)
+    {
+        if (empty($row['target_server_uuid'])) {
+            return null;
+        }
+
+        $exists = !empty($row['ts_uuid']);
+        $status = null;
+        if ($exists) {
+            // StatusMap owns the status_v2 <-> legacy int pairing.
+            $status = !empty($row['ts_status_v2'])
+                ? $row['ts_status_v2']
+                : (StatusMap::CONFIG_LEGACY_TO_V2[(int)$row['ts_status_legacy']] ?? null);
+        }
+
+        return [
+            'uuid' => $row['target_server_uuid'],
+            'exists' => $exists,
+            'name' => $exists ? $row['ts_name'] : null,
+            'status' => $status,
+            'location' => $exists ? $row['ts_location'] : null,
+            'rack_position' => $exists ? $row['ts_rack'] : null,
+        ];
     }
 
     /**

@@ -1117,13 +1117,25 @@ class ServerBuilder {
             // synthetic array with no ID), so there is nothing to dual-write.
             if (!$isVirtual) {
                 require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+                // An SFP's slot IS its NIC port, and the canonical slot_ref for it is
+                // "port_{N}" -- the shape ConfigReadRouter::portIndexFromSlotRef(),
+                // TargetStateBuilder's json-fallback sfp rows, and the ENGINE_MODE hook
+                // in validateComponentAddition() all already use. The API accepts
+                // slot_position as a backward-compatible alias for port_index
+                // (server_api.php:455), so an SFP add carries BOTH keys and the raw
+                // alias used to land here as a bare "1", which portIndexFromSlotRef()
+                // cannot read -- that is what made every SFP-bearing config report a
+                // divergence for the whole READ_FROM_ROWS sample window.
+                $dualWriteSlotRef = ($componentType === 'sfp' && ($options['port_index'] ?? null) !== null)
+                    ? 'port_' . (int)$options['port_index']
+                    : ($options['slot_position'] ?? null);
                 ConfigComponentWriter::afterLegacyAdd(
                     $this->pdo,
                     $configUuid,
                     $componentType,
                     $componentUuid,
                     $resolvedSerialNumber,
-                    $options['slot_position'] ?? null,
+                    $dualWriteSlotRef,
                     $this->getComponentInventoryTable($componentType),
                     $componentDetails['ID'] ?? null,
                     0, // actor: ServerBuilder has no authenticated-user context today;
@@ -5244,28 +5256,78 @@ class ServerBuilder {
             $verdict = new Verdict([new RuleResult('engine.build_exception', Severity::ERROR, false, $e->getMessage())], Trigger::ADD);
         }
 
-        $legacyResult = $this->legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid, $portIndex, $quantity);
-
-        $legacyBlocked = empty($legacyResult['success']);
-        $legacyClass = $legacyBlocked ? ($legacyResult['message'] ?? 'unknown') : 'none';
-        ShadowRunner::record($configUuid, 'add', $legacyBlocked, $legacyClass, $verdict, [
-            'component_type' => $componentType,
-            'component_uuid' => $componentUuid,
-        ], $shadowPhase);
-
+        // Added 2026-08-22. At ENGINE_MODE=enforce the legacy body used to be called
+        // here and its verdict thrown away one line later -- enforce returns
+        // mapVerdictToLegacyResult($verdict) and never reads $legacyResult. Skipping
+        // it is VERDICT-NEUTRAL BY CONSTRUCTION; it cannot change any decision.
+        //
+        // SCOPE, stated precisely because it is narrower than it looks: at
+        // COMMAND_LAYER_ENABLED=enforce this whole method is unreachable, so the
+        // change is a no-op for production as configured today. server_api.php:516
+        // gates the advisory pre-check on CommandLayer::mode() !== 'enforce', and the
+        // authoritative call at :892 lives inside addComponent(), which the command
+        // layer replaces. An add is validated exactly once, by BaseCommand's registry
+        // evaluate(). This is NOT what makes the legacy chain dead at enforce --
+        // COMMAND_LAYER=enforce is, together with the handleImportVirtual() fix that
+        // closed the one call site bypassing it.
+        //
+        // Where it does bite is the ENGINE_MODE=enforce + COMMAND_LAYER=off/shadow
+        // combination, i.e. the posture you land in if the command layer is rolled
+        // back while the engine stays authoritative. There this method IS reached,
+        // and the old code ran a full legacy validation pass per call purely to
+        // discard it. Worse, that call sat OUTSIDE the try/catch guarding the engine
+        // above, so an exception anywhere in the legacy chain failed an add whose
+        // answer came from the engine and whose legacy answer was unused.
+        //
+        // Cost: no shadow comparison row at ENGINE_MODE=enforce, i.e. the free
+        // divergence monitoring that ran after the engine became authoritative. A
+        // real loss, but at enforce the engine is already the sole authority, and
+        // deliberate engine-vs-legacy comparison is what ENGINE_MODE=shadow is for.
+        // No synthetic row is written -- recording legacy as "allowed" when it was
+        // never evaluated would fabricate divergences against an engine block and
+        // corrupt the parity denominator.
         if ($mode === 'shadow') {
+            $legacyResult = $this->legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid, $portIndex, $quantity);
+
+            $legacyBlocked = empty($legacyResult['success']);
+            $legacyClass = $legacyBlocked ? ($legacyResult['message'] ?? 'unknown') : 'none';
+            ShadowRunner::record($configUuid, 'add', $legacyBlocked, $legacyClass, $verdict, [
+                'component_type' => $componentType,
+                'component_uuid' => $componentUuid,
+            ], $shadowPhase);
+
             return $legacyResult;
         }
 
-        // enforce
+        // enforce -- and any unrecognised mode, which fell through to the engine
+        // before this change too; that default is preserved deliberately.
         return ShadowRunner::mapVerdictToLegacyResult($verdict);
     }
 
     /**
      * Legacy component-addition validation body (unmodified — only renamed
      * from public validateComponentAddition() when the ENGINE_MODE hook was
-     * added above it, U-V.3). This is the sole authority whenever
-     * ENGINE_MODE=off (production default).
+     * added above it, U-V.3). Sole authority whenever ENGINE_MODE=off.
+     *
+     * NOT reachable in production as of 2026-08-22, for TWO independent reasons —
+     * the outer one is what actually matters:
+     *   1. COMMAND_LAYER_ENABLED=enforce. Adds run through AddComponentCommand, so
+     *      neither caller of validateComponentAddition() fires: the advisory
+     *      pre-check is gated at server_api.php:516 and the authoritative call at
+     *      :892 lives inside addComponent(), which the command layer replaces.
+     *      handleImportVirtual() was the one call site that bypassed this, fixed
+     *      2026-08-22.
+     *   2. ENGINE_MODE=enforce, whose branch in the hook above no longer calls this
+     *      at all (it used to, and discarded the result).
+     *
+     * Together these make this method and everything it reaches —
+     * PcieLaneBudgetValidator, the ValidationPipeline override, the per-type
+     * validators — deletable by U-D.2. Note that deleting it forecloses rolling
+     * COMMAND_LAYER or ENGINE_MODE back, since the off/shadow branches still call
+     * it; U-D.4 removing those flags is what makes that coherent.
+     *
+     * The old note here claimed "ENGINE_MODE=off (production default)"; that
+     * stopped being true when the flag was promoted.
      */
     private function legacyValidateComponentAddition($configUuid, $componentType, $componentUuid, $compatibility, $configData, $parentNicUuid = null, $portIndex = null, $quantity = 1) {
         try {
