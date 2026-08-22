@@ -216,6 +216,32 @@
    }
   }
  ],
+ "twenty_eighth_session_2026_08_23": {
+  "date": "2026-08-23",
+  "note": "NEWEST SESSION -- supersedes twenty_seventh_session_2026_08_22. Scope: owner-directed removal of the hardware compatibility score, plus a decision on the 2c8ab2f commit boundary. No deletion of any P9 manifest symbol; no flag changed; no seeder written.",
+  "compatibility_score_REMOVED": {
+   "owner_decision": "2026-08-23: 'we don't want any calculate hardware compatibility score. You can remove that.'",
+   "why_it_was_safe": "Nothing consumed it. server_configurations.compatibility_score had no reader in api/ (the AVG(compatibility_score) queries in compatibility_api.php read compatibility_log, a different table), and no API response carried it. The frontend's component.compatibility_score in dashboard.js/configuration.js is per-component pair data, also unrelated.",
+   "removed": "calculateHardwareCompatibilityScore() + both call sites (updateConfigurationMetrics:3860 live, validateConfiguration:4055 inside a deletion target); checkMotherboardCpuCompatibilityDetailed(); checkMotherboardRamCompatibilityDetailed(); hasCompatibilityScoreColumn() and its cached property. updateConfigurationCalculatedFields() is now power-only with a 2-arg signature.",
+   "F17_note": "The F-17 column probe went with it, correctly: it existed only because compatibility_score rode in the SAME UPDATE as power_consumption, so a missing column failed with 1054 and silently stopped power being written. One column left, nothing to guard.",
+   "deliberately_not_deleted": "checkPowerCompatibilityDetailed, checkFormFactorCompatibilityDetailed, their two callerless wrappers (checkPowerCompatibility, checkFormFactorCompatibility -- both already dead before this change), formatPowerBreakdown, getChassisPsuWattage. Transitively dead but statically referenced, and SystemPsuCapacityRule cites the 85% continuous-ceiling budget as provenance. Added to deadcode_manifest.json (18 -> 23 symbols) so they leave with the P9 commit behind its regression gate, not as unverified deletions now.",
+   "verification": "php -l clean across all 200 backend files (local XAMPP PHP 8.0.30 -- note this host DOES have a PHP binary, contrary to the 2026-08-22 record). ServerBuilder loads and reflects correctly: the four removed methods absent, updateConfigurationCalculatedFields arity 2, zero compat-named properties.",
+   "db": "Column left in place. Nothing writes it from here on; existing values are historical. Dropping it is irreversible and would need its own owner decision plus a seeder.",
+   "commit": "7da0c63 on branch migration/remove-compatibility-score -- NOT merged to main, and NOT deployed (backend uploads only on a VS Code save)."
+  },
+  "commit_boundary_RESOLVED_without_rewrite": {
+   "question": "The 2026-08-22 record flagged that U-D.2's stated rollback ('git revert per sub-session') is unusable because 2c8ab2f mixes migration work with temporary-access and rack-placement work. Owner delegated the call.",
+   "finding": "2c8ab2f is on origin/main. Splitting it means force-pushing over a merged PR (#38) on the default branch and breaking every clone -- a destructive, outward-facing action taken to buy a property a path-scoped revert already provides.",
+   "decision": "History NOT rewritten. migration/rollback-playbook.md gains an R-MIXED section mapping every migration-owned path and hunk in 2c8ab2f (and naming the one non-migration hunk inside a shared file: @@ -1486 rack placement in handleListConfigurations). R-UNIT now has a documented exception instead of a false assumption.",
+   "forward_rule": "Migration commits from 2026-08-23 on are single-purpose. 7da0c63 is the first."
+  },
+  "frontend_deploy_gap_MEASURED": {
+   "what": "Seeder 2026_08_22_005 is live in the DB (three action-shaped Request Types, ceilings 13/14/2, verified by the owner), but production's assets/js/requests/requests.js is still the pre-change 93744-byte build; local is 97129. Zero occurrences of accessImplicit on production.",
+   "consequence": "Production still splits a type's ceiling place-shaped (server. prefix vs not) instead of action-shaped. 'Add Hardware' -> 'into a server configuration' therefore offers only server.create/server.view instead of the 11 component creates, and 'Remove Hardware' gets an empty inventory branch. The feature 005 shipped is not usable until that file is uploaded.",
+   "why": "IMS-Frontend has uploadOnSave:false and watcher.autoUpload:false -- it has never auto-deployed. Re-measured after the owner reported the files were in place; still stale.",
+   "watcher_change": "autoDelete was flipped false -> true in BOTH ims-ftp/.vscode/sftp.json and IMS-Frontend/.vscode/sftp.json on owner request. This leaves IMS-Frontend delete-only (autoDelete true, autoUpload false): a local rename removes the old file from production and never uploads the new one. Flagged to the owner; awaiting a decision."
+  }
+ },
  "twenty_seventh_session_2026_08_22": {
   "date": "2026-08-22",
   "note": "NEWEST SESSION -- supersedes twenty_sixth_session_2026_08_19. Scope: complete the migration, per owner instruction. This record also BACKFILLS the 2026-08-21 double flag flip, which no session had recorded even though this file's schema requires it. Two live defects were found and fixed, one of which was a command-layer bypass created by that flip. No deletion was performed. No seeder was written this session; the owner ran 2026_08_22_001 and it is verified applied.",
@@ -265,7 +291,6 @@
    "awaiting_one_sync": "deadcode_scan.php, deadcode_report.php, permission_map.php, server_api.php (debug action), scripts/.htaccess."
   },
   "deliberately_not_done": "The remaining external-blocker edits were left alone on purpose. Two of them are not deletions at all but builds on the live validation path (see correction_i_made_to_my_own_finding), and the characterization suite -- the only check that would catch a behavioural regression the deadcode scan cannot see -- cannot run from this host.",
-
   "found_in_production_test_artifact_DELETED": {
    "what": "core/models/server/_ServerBuilder_unpatched_probe.php -- a copy of ServerBuilder.php with the unit-identity fix mechanically reverted to 'if (false)', written by tests/regression/run_serial_less_check.php to prove that test is capable of failing. It is meant to exist for seconds. It was sitting in the production core/models/server/ directory.",
    "how_it_was_found": "Only by running the deadcode scan as real PHP against the DEPLOYED tree. It is not in the local repo, so no local scan could ever have seen it. 11 of the 17 RED symbols were red ONLY because of it -- it acted as a phantom second caller for everything in ServerBuilder.",
@@ -273,7 +298,6 @@
    "root_cause": "The deploy config, not the test. sftp.json has watcher.autoUpload:true over **/* with autoDelete:false, so the watcher uploaded the probe the instant the test wrote it and never removed it when the test deleted it locally seconds later.",
    "fixed": "Added **/_ServerBuilder_unpatched_probe.php to the sftp.json ignore list so it cannot recur. Owner deleted the file from the server 2026-08-22; re-scan confirms 160 files and zero probe references."
   },
-
   "correction_i_made_to_my_own_finding": {
    "what_i_claimed": "That at ENGINE_MODE=enforce the whole legacy validation chain still executed on every add (four validation passes per add), and that stopping it was what unblocked P9.",
    "what_is_actually_true": "All three claims were wrong, and wrong in the direction that overstated my own change. At COMMAND_LAYER_ENABLED=enforce, validateComponentAddition() is not reached AT ALL: server_api.php:516 gates the advisory pre-check on CommandLayer::mode() !== 'enforce', and the authoritative call at ServerBuilder:892 is inside addComponent(), which the command layer replaces. An add is validated exactly ONCE, by BaseCommand's registry evaluate(). Legacy was already unreachable in production before this edit.",
@@ -282,15 +306,12 @@
    "the_edit_was_kept_on_smaller_merits": "At ENGINE_MODE=enforce the dispatch no longer calls the legacy body. Verdict-neutral by construction (enforce never read $legacyResult). It is a NO-OP for production as configured today. It bites in the ENGINE_MODE=enforce + COMMAND_LAYER=off/shadow posture -- command layer rolled back, engine still authoritative -- where the old code ran a full legacy pass per call purely to discard it, and ran it OUTSIDE the try/catch guarding the engine, so a legacy exception failed an add whose answer came from the engine. Cost: no shadow comparison row at ENGINE_MODE=enforce. Both in-code comments were rewritten to say all of this accurately, because a confidently wrong comment is worse than none.",
    "real_constraint_on_deleting_the_legacy_body": "Not reachability but ROLLBACK: the off and shadow branches still call legacyValidateComponentAddition(), so deleting it forecloses rolling COMMAND_LAYER or ENGINE_MODE back. U-D.4 removing those flags is what makes the deletion coherent, which means U-D.4 and U-D.2 are COUPLED, not independent. The packs treat them as separate."
   },
-
   "evidence_obtained_this_session": {
    "hold_condition_a_scan_runs_for_real": "server-debug-deadcode executed against production: 160 PHP files, 18 symbols, 17 RED. Matches the Python mirror exactly. Every ServerBuilder line number shifted by exactly the inserted comment block (5498->5537, 5295->5334, 6029->6068), independently proving the deployed file is the edited one. Six symbols are now RED_INTERNAL -- their only callers are inside deletion targets. Still RED overall, correctly: the genuine external blockers have not been edited yet.",
    "hold_condition_c_add_path_at_enforce": "Attempted a second motherboard on a config that already has one. Result: 422, error_type duplicate_component, rule_id 'system.singleton', message 'Configuration has 2 motherboards. Only one motherboard allowed per server.' One call proves the whole stack: the rule_id is a ValidationEngine REGISTRY id, so the verdict came from the engine and not legacy; error_type shows VerdictShim still translating to the legacy contract; the command layer enforced it; and ServerBuilder.php parses and loads after the edit (server-get-config and server-validate-config both 200 -- a syntax error there would 500 every server endpoint). Dual-write rows unchanged afterwards: 5 components, 5 events, SFP still port_1. Zero mutation.",
    "hold_condition_b_NOT_obtained": "The regression/characterization suite did not run and cannot run from this host: tests/ is CLI-only and never deployed, and it needs an isolated scratch DB plus a local PHP binary (tests/golden/setup_scratch_db.sql). This is the one hold-condition item still needing a machine with PHP, and it is the item that matters MOST before deletions land -- it is the only check that would catch a behavioural regression the deadcode scan cannot see."
   },
-
   "commit_boundary_warning": "U-D.2's stated rollback is 'git revert per sub-session'. ims-ftp/.git exists so that is viable in principle, but the working tree currently mixes this migration work with in-flight temporary-access work (rack_api.php, PipelineManager.php, pipeline-servers.php, seeders 2026_08_22_002/003), all uncommitted. Revert is not a usable rollback until the migration changes sit on their own commits. Resolve this BEFORE U-D.2 deletions.",
-
   "next_session_starts_here": "1) Get hold-condition (b): run the characterization suite on a machine with PHP against a scratch DB. 2) Separate the migration changes onto their own commits so revert works. 3) Then U-D.2a: this is a BUILD, not a delete -- create core/models/validation/ValidateConfigService.php and wire handleValidateConfiguration through ValidationEngine.evaluate(VALIDATE), which is what finally frees validateConfigurationComprehensive (server_api.php:1807,2381 + the live finalizeConfiguration() call) and getConfigurationWarnings (server_api.php:1304). 4) Repoint performance_report.php:174-175 and ledger_report.php:57,166,226 at the engine, and repoint FLAGS.md off PcieLaneBudgetValidator::currentMode(). 5) Only then the deletion commit, with U-D.4 in the same change because of the rollback coupling. U-D.3 stays behind the owner's restore-tested backup and a SIGNED U-X.2."
  },
  "twenty_sixth_session_2026_08_19": {
