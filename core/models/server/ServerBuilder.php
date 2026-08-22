@@ -28,8 +28,6 @@ class ServerBuilder {
      */
     private $strictJsonDecode = false;
 
-    /** F-17: null = not yet probed. See hasCompatibilityScoreColumn(). */
-    private $hasCompatibilityScoreColumn = null;
 
     const MAX_ADD_QUANTITY = 128;
 
@@ -3846,25 +3844,13 @@ class ServerBuilder {
 
             $totalPowerWithOverhead = $totalPower * 1.2;
 
-            // Calculate compatibility score.
-            //
-            // BUGFIX (A-L2): this was gated on `class_exists('CompatibilityEngine')`, and
-            // no such class exists anywhere in the codebase -- so the gate was always
-            // false and calculateHardwareCompatibilityScore() was unreachable. Even when
-            // forced, the score could not be stored: the call below passed 3 arguments to
-            // a 2-parameter method, and PHP silently discards the extra. Net effect,
-            // server_configurations.compatibility_score was never maintained by the
-            // add/remove path. Gate removed, arity fixed (see the method signature).
-            $compatibilityScore = null;
-            try {
-                $compatibilityResult = $this->calculateHardwareCompatibilityScore($details);
-                $compatibilityScore = $compatibilityResult['score'] ?? null;
-            } catch (Exception $e) {
-                error_log("Error calculating compatibility score for $configUuid: " . $e->getMessage());
-            }
-
-            // Update the configuration
-            $this->updateConfigurationCalculatedFields($configUuid, $totalPowerWithOverhead, $compatibilityScore);
+            // Update the configuration. Power only: the hardware compatibility score
+            // was removed on 2026-08-23 (owner decision). Compatibility is decided by
+            // the ValidationEngine registry, which returns per-rule verdicts rather
+            // than one blended number, so the score had no consumer: nothing read
+            // server_configurations.compatibility_score and no API returned it. The
+            // column is left in place and its existing values are historical.
+            $this->updateConfigurationCalculatedFields($configUuid, $totalPowerWithOverhead);
 
         } catch (Exception $e) {
             error_log("Error updating configuration metrics: " . $e->getMessage());
@@ -3874,31 +3860,16 @@ class ServerBuilder {
     /**
      * Update calculated fields in configuration
      */
-    private function updateConfigurationCalculatedFields($configUuid, $powerConsumption, $compatibilityScore = null) {
+    private function updateConfigurationCalculatedFields($configUuid, $powerConsumption) {
         try {
-            // A-L2: $compatibilityScore was silently dropped -- callers passed it but the
-            // signature only accepted two parameters. Persist it when the caller computed
-            // one; leave the stored value untouched when it could not be derived.
-            // F-17 (2026-07-27): A-L2 made $compatibilityScore effectively ALWAYS
-            // non-null, so this branch always ran -- but production's
-            // server_configurations has no compatibility_score column (it exists
-            // only on compatibility_log/component_compatibility). The UPDATE
-            // therefore failed with 1054 and, because power_consumption rides in
-            // the SAME statement, POWER STOPPED BEING WRITTEN TOO. The catch below
-            // logged "Error updating calculated fields" and the add/remove still
-            // reported success, so it was silent. Seeder
-            // 2026_07_27_002 adds the column; this probe keeps power correct
-            // whether or not that seeder has been applied yet, since seeders are
-            // run by hand.
-            if ($compatibilityScore !== null && $this->hasCompatibilityScoreColumn()) {
-                $sql = "UPDATE server_configurations
-                        SET power_consumption = ?, compatibility_score = ?, updated_at = NOW()
-                        WHERE config_uuid = ?";
-                $params = [$powerConsumption, $compatibilityScore, $configUuid];
-            } else {
-                $sql = "UPDATE server_configurations SET power_consumption = ?, updated_at = NOW() WHERE config_uuid = ?";
-                $params = [$powerConsumption, $configUuid];
-            }
+            // Power only. The compatibility score this method used to persist was
+            // removed on 2026-08-23 (owner decision), and with it the F-17 column
+            // probe: that probe existed solely because compatibility_score rode in
+            // the SAME statement as power_consumption, so a missing column made the
+            // UPDATE fail with 1054 and silently stopped power being written too.
+            // With one column left there is nothing to guard.
+            $sql = "UPDATE server_configurations SET power_consumption = ?, updated_at = NOW() WHERE config_uuid = ?";
+            $params = [$powerConsumption, $configUuid];
 
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($params);
@@ -3908,27 +3879,6 @@ class ServerBuilder {
         }
     }
 
-    /**
-     * F-17: does server_configurations carry a compatibility_score column?
-     * Probed once per request (same SHOW COLUMNS idiom this class already uses
-     * for server_configuration_history) so a missing column degrades to "write
-     * power only" instead of losing the whole UPDATE.
-     */
-    private function hasCompatibilityScoreColumn() {
-        if ($this->hasCompatibilityScoreColumn !== null) {
-            return $this->hasCompatibilityScoreColumn;
-        }
-
-        try {
-            $stmt = $this->pdo->query("SHOW COLUMNS FROM server_configurations LIKE 'compatibility_score'");
-            $this->hasCompatibilityScoreColumn = ($stmt !== false && $stmt->fetch() !== false);
-        } catch (Exception $e) {
-            $this->hasCompatibilityScoreColumn = false;
-        }
-
-        return $this->hasCompatibilityScoreColumn;
-    }
-    
     /**
      * Update configuration with compatibility score and validation results
      */
@@ -4051,15 +4001,6 @@ class ServerBuilder {
                 }
             }
             
-            // ENHANCED: Calculate compatibility score with detailed diagnostics
-            $compatibilityResult = $this->calculateHardwareCompatibilityScore($summary);
-            $compatibilityDiagnostics = $compatibilityResult['diagnostics'];
-
-            // Add detailed compatibility diagnostics to recommendations
-            if (!empty($compatibilityDiagnostics)) {
-                $validation['recommendations'] = array_merge($validation['recommendations'], $compatibilityDiagnostics);
-            }
-
             // Add general recommendations based on validation
             if (!$validation['is_valid']) {
                 $validation['recommendations'][] = "Resolve all compatibility issues before finalizing";
@@ -7067,188 +7008,6 @@ class ServerBuilder {
         }
         
         return $basePower;
-    }
-    
-    /**
-     * ENHANCED: Calculate hardware compatibility score with detailed diagnostics
-     */
-    private function calculateHardwareCompatibilityScore($summary) {
-        $score = 100.0;
-        $components = $summary['components'] ?? [];
-        $diagnostics = [];
-        
-        try {
-            // If we don't have basic components, score is low
-            if (empty($components)) {
-                return ['score' => 0.0, 'diagnostics' => ['No components found in configuration']];
-            }
-            
-            $motherboard = null;
-            $cpus = [];
-            $rams = [];
-            
-            // Extract key components
-            if (isset($components['motherboard']) && !empty($components['motherboard'])) {
-                $motherboard = $components['motherboard'][0]['details'] ?? null;
-            }
-            
-            if (isset($components['cpu'])) {
-                foreach ($components['cpu'] as $cpu) {
-                    if (isset($cpu['details'])) {
-                        $cpus[] = $cpu['details'];
-                    }
-                }
-            }
-            
-            if (isset($components['ram'])) {
-                foreach ($components['ram'] as $ram) {
-                    if (isset($ram['details'])) {
-                        $rams[] = $ram['details'];
-                    }
-                }
-            }
-            
-            // Check motherboard-CPU compatibility
-            if ($motherboard && !empty($cpus)) {
-                $cpuResult = $this->checkMotherboardCpuCompatibilityDetailed($motherboard, $cpus);
-                $score = min($score, $cpuResult['score']);
-                if (!empty($cpuResult['issues'])) {
-                    $diagnostics = array_merge($diagnostics, $cpuResult['issues']);
-                }
-            }
-            
-            // Check motherboard-RAM compatibility
-            if ($motherboard && !empty($rams)) {
-                $ramResult = $this->checkMotherboardRamCompatibilityDetailed($motherboard, $rams);
-                $score = min($score, $ramResult['score']);
-                if (!empty($ramResult['issues'])) {
-                    $diagnostics = array_merge($diagnostics, $ramResult['issues']);
-                }
-            }
-            
-            // Check power requirements vs motherboard capacity
-            $powerResult = $this->checkPowerCompatibilityDetailed($components);
-            $score = min($score, $powerResult['score']);
-            if (!empty($powerResult['issues'])) {
-                $diagnostics = array_merge($diagnostics, $powerResult['issues']);
-            }
-            
-            // Check form factor compatibility
-            $formFactorResult = $this->checkFormFactorCompatibilityDetailed($components);
-            $score = min($score, $formFactorResult['score']);
-            if (!empty($formFactorResult['issues'])) {
-                $diagnostics = array_merge($diagnostics, $formFactorResult['issues']);
-            }
-            
-        } catch (Exception $e) {
-            error_log("Error calculating hardware compatibility score: " . $e->getMessage());
-            $score = 50.0;
-            $diagnostics[] = "Error during compatibility analysis: " . $e->getMessage();
-        }
-        
-        return [
-            'score' => round($score, 1),
-            'diagnostics' => $diagnostics
-        ];
-    }
-    
-    /**
-     * Check motherboard-CPU socket compatibility with detailed diagnostics
-     */
-    private function checkMotherboardCpuCompatibilityDetailed($motherboard, $cpus) {
-        $score = 100.0;
-        $issues = [];
-        
-        try {
-            $mbNotes = strtolower($motherboard['Notes'] ?? '');
-            $mbSerialNumber = $motherboard['SerialNumber'] ?? 'Unknown';
-            
-            // Extract motherboard socket type
-            $mbSocket = $this->extractSocketType($mbNotes);
-            
-            foreach ($cpus as $cpu) {
-                $cpuNotes = strtolower($cpu['Notes'] ?? '');
-                $cpuSerialNumber = $cpu['SerialNumber'] ?? 'Unknown';
-                $cpuSocket = $this->extractSocketType($cpuNotes);
-                
-                if ($mbSocket && $cpuSocket) {
-                    if ($mbSocket !== $cpuSocket) {
-                        $score = 0.0; // Complete incompatibility
-                        $issues[] = "Critical: CPU socket mismatch - Motherboard ($mbSerialNumber) has $mbSocket socket, but CPU ($cpuSerialNumber) requires $cpuSocket socket";
-                        break;
-                    }
-                } else {
-                    // If we can't determine socket types, reduce score but don't fail completely
-                    $score = min($score, 70.0);
-                    if (!$mbSocket && !$cpuSocket) {
-                        $issues[] = "Warning: Cannot determine socket compatibility for Motherboard ($mbSerialNumber) and CPU ($cpuSerialNumber) - socket information missing from component specifications";
-                    } elseif (!$mbSocket) {
-                        $issues[] = "Warning: Cannot determine motherboard socket type for ($mbSerialNumber) - missing socket specification";
-                    } else {
-                        $issues[] = "Warning: Cannot determine CPU socket type for ($cpuSerialNumber) - missing socket specification";
-                    }
-                }
-            }
-            
-        } catch (Exception $e) {
-            error_log("Error checking motherboard-CPU compatibility: " . $e->getMessage());
-            $score = 50.0;
-            $issues[] = "Error: Failed to analyze CPU-Motherboard compatibility - " . $e->getMessage();
-        }
-        
-        return [
-            'score' => $score,
-            'issues' => $issues
-        ];
-    }
-    
-    /**
-     * Check motherboard-RAM compatibility with detailed diagnostics
-     */
-    private function checkMotherboardRamCompatibilityDetailed($motherboard, $rams) {
-        $score = 100.0;
-        $issues = [];
-        
-        try {
-            $mbNotes = strtolower($motherboard['Notes'] ?? '');
-            $mbSerialNumber = $motherboard['SerialNumber'] ?? 'Unknown';
-            
-            // Extract motherboard supported RAM types
-            $mbMemoryTypes = $this->extractMemoryTypes($mbNotes);
-            
-            foreach ($rams as $ram) {
-                $ramNotes = strtolower($ram['Notes'] ?? '');
-                $ramSerialNumber = $ram['SerialNumber'] ?? 'Unknown';
-                $ramType = $this->extractMemoryType($ramNotes);
-                
-                if (!empty($mbMemoryTypes) && $ramType) {
-                    if (!in_array($ramType, $mbMemoryTypes)) {
-                        $score = min($score, 10.0); // Major incompatibility
-                        $issues[] = "Critical: Memory type incompatibility - Motherboard ($mbSerialNumber) supports " . implode(', ', $mbMemoryTypes) . ", but RAM ($ramSerialNumber) is $ramType";
-                    }
-                } else {
-                    // If we can't determine memory types, reduce score slightly
-                    $score = min($score, 80.0);
-                    if (empty($mbMemoryTypes) && !$ramType) {
-                        $issues[] = "Warning: Cannot determine memory compatibility for Motherboard ($mbSerialNumber) and RAM ($ramSerialNumber) - memory type specifications missing";
-                    } elseif (empty($mbMemoryTypes)) {
-                        $issues[] = "Warning: Cannot determine supported memory types for Motherboard ($mbSerialNumber) - specification missing";
-                    } else {
-                        $issues[] = "Warning: Cannot determine memory type for RAM ($ramSerialNumber) - specification missing";
-                    }
-                }
-            }
-            
-        } catch (Exception $e) {
-            error_log("Error checking motherboard-RAM compatibility: " . $e->getMessage());
-            $score = 60.0;
-            $issues[] = "Error: Failed to analyze RAM-Motherboard compatibility - " . $e->getMessage();
-        }
-        
-        return [
-            'score' => $score,
-            'issues' => $issues
-        ];
     }
     
     /**

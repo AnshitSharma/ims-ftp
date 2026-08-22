@@ -9,8 +9,10 @@ require_once __DIR__ . '/../Trigger.php';
  * RULE_MAP.md: system.psu_capacity (E). Legacy's checkPowerCompatibilityDetailed()
  * (was ~5706) budgets estimated draw against the chassis PSU's nameplate
  * wattage at an 85% continuous ceiling but only ever feeds a compatibility
- * SCORE (calculateHardwareCompatibilityScore -> validateConfigurationComprehensive),
- * never a block (audit V-4: "scoring only"). RULE_MAP: scoring -> E.
+ * SCORE, never a block (audit V-4: "scoring only"). RULE_MAP: scoring -> E.
+ * (That score -- calculateHardwareCompatibilityScore() -- was removed on
+ * 2026-08-23 by owner decision; this rule is now the only consumer of the
+ * 85% budget, and the threshold formula below is its surviving record.)
  *
  * DOCUMENTED DEVIATION (see ResourceCatalog's class docblock, "cpu/storage/
  * nic/hbacard/pciecard CONSUME psu_watt" note, for the full reasoning): this

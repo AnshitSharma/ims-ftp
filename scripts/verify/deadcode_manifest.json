@@ -65,13 +65,6 @@
       "note": "Read-time warnings (audit A-10). Its API call site goes with it."
     },
     {
-      "symbol": "calculateHardwareCompatibilityScore",
-      "kind": "method",
-      "defined_in": "core/models/server/ServerBuilder.php",
-      "unit": "U-D.2",
-      "note": "Scoring helper for the legacy verdict surface, with the checkPower*/checkFormFactor* privates."
-    },
-    {
       "symbol": "assignComponentSlot",
       "kind": "method",
       "defined_in": "core/models/server/ServerBuilder.php",
@@ -151,6 +144,48 @@
       "defined_in": "core/models/compatibility/PcieLaneBudgetValidator.php",
       "unit": "U-D.2",
       "note": "Superseded by PcieLaneBudgetRule. NOTE: FLAGS.md cites this class's currentMode() as the canonical flag-read pattern -- update that reference when deleting."
+    },
+    {
+      "symbol": "checkPowerCompatibilityDetailed",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Orphaned 2026-08-23 by the calculateHardwareCompatibilityScore removal. Its only remaining caller is checkPowerCompatibility(), which itself has zero callers -- transitively dead, statically referenced. Cited by SystemPsuCapacityRule as the 85% budget it reproduces, so kept as provenance until the P9 commit."
+    },
+    {
+      "symbol": "checkFormFactorCompatibilityDetailed",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Orphaned 2026-08-23 by the calculateHardwareCompatibilityScore removal. Only remaining caller is checkFormFactorCompatibility(), itself callerless. Note ComponentCompatibility has an unrelated private method of the same name and a different signature -- do not conflate."
+    },
+    {
+      "symbol": "checkPowerCompatibility",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Zero callers, pre-dating this change. A thin wrapper over checkPowerCompatibilityDetailed; deleting it drops that helper to GREEN."
+    },
+    {
+      "symbol": "checkFormFactorCompatibility",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Zero callers in ServerBuilder, pre-dating this change. Thin wrapper over checkFormFactorCompatibilityDetailed; deleting it drops that helper to GREEN. Distinct from the same-named private in ComponentCompatibility, which is LIVE."
+    },
+    {
+      "symbol": "formatPowerBreakdown",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Reachable only from checkPowerCompatibilityDetailed. Cascades to GREEN with it."
+    },
+    {
+      "symbol": "getChassisPsuWattage",
+      "kind": "method",
+      "defined_in": "core/models/server/ServerBuilder.php",
+      "unit": "U-D.1",
+      "note": "Reachable only from checkPowerCompatibilityDetailed. Cascades to GREEN with it. Cited by ResourceCatalog's docblock as the source of its psu_watt reasoning -- repoint that comment when deleting."
     }
   ]
 }
