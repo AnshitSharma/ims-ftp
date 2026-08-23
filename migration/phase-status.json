@@ -240,6 +240,28 @@
    "consequence": "Production still splits a type's ceiling place-shaped (server. prefix vs not) instead of action-shaped. 'Add Hardware' -> 'into a server configuration' therefore offers only server.create/server.view instead of the 11 component creates, and 'Remove Hardware' gets an empty inventory branch. The feature 005 shipped is not usable until that file is uploaded.",
    "why": "IMS-Frontend has uploadOnSave:false and watcher.autoUpload:false -- it has never auto-deployed. Re-measured after the owner reported the files were in place; still stale.",
    "watcher_change": "autoDelete was flipped false -> true in BOTH ims-ftp/.vscode/sftp.json and IMS-Frontend/.vscode/sftp.json on owner request. This leaves IMS-Frontend delete-only (autoDelete true, autoUpload false): a local rename removes the old file from production and never uploads the new one. Flagged to the owner; awaiting a decision."
+  },
+  "hold_condition_b_RAN_FOR_THE_FIRST_TIME": {
+   "verdict": "RED. 41 suites discovered -- 35 passed, 5 FAILED, 1 ran nothing. P9 deletions stay blocked.",
+   "how": "Local XAMPP PHP 8.0.30 + a PRISTINE MariaDB 10.4 instance on port 3306 with its datadir in the session scratchpad, loaded from imsbdcmsbharatda_Ims_Production.sql via tests/golden/setup_scratch_db.sql's documented procedure. 44/44 tables, 4 configs, 3 tickets, 14 users.",
+   "failing_suites": "add_command_test.php, finalize_command_test.php, read_router_test.php, dependency_rule_test.php, resource_catalog_test.php",
+   "failing_assertions": {
+    "resource_catalog_test": "'riser pciecard: 2 pcie_slot rows' and 'slot_refs are riser_provided_pcie_1_x16, riser_provided_pcie_2_x16'",
+    "dependency_rule_test": "'dependentsOf(riser) finds the card occupying its provided slot_ref (resource-link, no parent_id needed)'",
+    "read_router_test": "'=on does NOT swallow exceptions (fail-closed: it must not silently serve legacy)'",
+    "add_command_test": "'shadow path still calls the real legacy add ($serverBuilder->addComponent) and sets $result from it -- INV-8, mirrors handleRemoveComponent (U-C.3)'",
+    "finalize_command_test": "'finalizeConfiguration() delegates to TransitionStatusCommand at CommandLayer::mode()===enforce'"
+   },
+   "ALL_FIVE_PREDATE_THIS_SESSION": "Proved by differential run, not asserted. A git worktree at a8fed55 (the parent of the score removal) produces the IDENTICAL summary line -- 41 discovered, 35 passed, 5 failed, 1 ran nothing, same five names. The compatibility-score removal is therefore test-visibly inert: zero new failures, zero fixed.",
+   "two_false_differences_corrected": "The FIRST baseline run showed 7 failures (adding fail_closed_test and cpu_identity_matcher_test) and briefly looked like the removal had FIXED two suites. It had not. fail_closed_test.php:45 resolves ims-data by its OWN relative path and ignores IMS_DATA_PATH, so both failed purely because the worktree had no sibling ims-data directory. Re-run with a junction in place, the sets are identical. Recorded because the wrong reading flattered this session's own change.",
+   "caveats": [
+    "The fixture is the production dump, which predates seeders 2026_08_22_005/006 -- it carries 4 pipeline_templates, not the three action-shaped Hardware types. Schema staleness is a live alternative explanation for some of the five and has NOT been ruled out.",
+    "One suite exits 0 having executed no check (no provisioned scratch DB for it). run_tests.php prints its own warning that this is not evidence; it is not counted as a pass here either.",
+    "tests/api/* self-skip without IMS_HTTP_HARNESS_URL, so their DB+HTTP criteria did not execute.",
+    "An abandoned transaction (idle 303s, 27 row locks) caused a Lock wait timeout fatal in add_command_test during an earlier run and was killed before the final measurements."
+   ],
+   "environment_defect_found": "XAMPP's own mysql datadir was ALREADY in a crash-recovery state before this session touched it. Loading the dump there crashed mysqld mid-ALTER, orphaning #sql-*.ibd files that shared InnoDB space IDs with real tables; DROP DATABASE on that state killed the server a second time. The corrupt ims_compat_golden directory was removed (only the fixture created here; mysql/phpmyadmin/test untouched) and a pristine instance built instead, after which the dump loaded in 15s. Any future session running (b) should build a fresh datadir rather than reuse XAMPP's.",
+   "what_b_now_needs": "Fix or formally accept the five. Three (read_router, add_command, finalize_command) assert command-layer/read-path behaviour in the area 2c8ab2f touched; two (resource_catalog, dependency_rule) are riser-provided-PCIe-slot expectations and look like riser-card-separation drift. None is a P9 deletion target, so none is resolved by the deletion commit -- (b) will not go green on its own."
   }
  },
  "twenty_seventh_session_2026_08_22": {
