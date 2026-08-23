@@ -266,6 +266,16 @@ function requireModulePermission($module, $operation, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions: $requiredPermission required");
         }
     }
+
+    // A build permission granted by a Request is only as wide as the Request:
+    // server.create says nothing about WHICH hardware may be fitted, so the
+    // component type this call names must be one the requester actually asked
+    // for. Outside the fallback branch on purpose — an "Any server" grant is
+    // global and satisfies the check above outright, and needs narrowing too.
+    $narrowed = requestScopedComponentPermission($pdo, $user['id'], $module, $operation, $requiredPermission);
+    if ($narrowed !== null) {
+        send_json_response(0, 1, 403, "Insufficient permissions: $narrowed required");
+    }
 }
 
 /**
@@ -319,6 +329,7 @@ function handlePipelineOperations($operation, $user) {
             'get'             => 'pipeline-get.php',
             'claim'           => 'pipeline-claim.php',
             'complete'        => 'pipeline-complete.php',
+            'reject'          => 'pipeline-reject.php',
             'reassign'        => 'pipeline-reassign.php',
             'cancel'          => 'pipeline-cancel.php',
         ];

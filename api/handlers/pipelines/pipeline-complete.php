@@ -39,7 +39,18 @@ try {
     $result = $mgr->completeStage((int)$pipelineId, (int)$stageId, $user_id, $notes, $canManage);
 
     if (!$result['success']) {
-        send_json_response(false, true, 400, "Failed to complete stage", ['errors' => $result['errors']]);
+        // An approval whose work failed is rolled back whole: the step is still
+        // active and the request is still open. Return the pipeline anyway so
+        // the UI can re-render live state instead of leaving a stale screen, and
+        // pass the execution detail through so it can name the offending action
+        // rather than showing a flat string.
+        $payload = ['errors' => $result['errors']];
+        if (!empty($result['execution'])) {
+            $payload['execution'] = $result['execution'];
+        }
+        $payload['pipeline'] = $mgr->getPipeline((int)$pipelineId, true);
+
+        send_json_response(false, true, 400, "Approval was rolled back — nothing was changed", $payload);
         exit;
     }
 
@@ -48,11 +59,12 @@ try {
         ? "Final stage completed — pipeline closed"
         : "Stage completed — advanced to '" . ($result['next_stage'] ?? 'next stage') . "'";
 
-    // Say so when completing the stage granted something — the approver should not
-    // have to go and check whether their approval actually did anything.
+    // Say what the approval actually DID — the approver should not have to go
+    // and check whether it performed anything.
     $effect = $result['effect'] ?? null;
-    if ($effect && !empty($effect['expires_at'])) {
-        $message .= ". Temporary access granted until " . $effect['expires_at'];
+    if ($effect && !empty($effect['count'])) {
+        $message .= '. Performed ' . (int)$effect['count']
+            . ' action' . ((int)$effect['count'] === 1 ? '' : 's');
     }
 
     send_json_response(true, true, 200, $message, [

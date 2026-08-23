@@ -12,6 +12,8 @@
  * (PipelineManager::completeStage(), effect_type = 'grant_temporary_permission').
  */
 
+require_once(__DIR__ . '/../helpers/SchemaHelper.php');
+
 class TemporaryAccessManager
 {
     /**
@@ -36,6 +38,7 @@ class TemporaryAccessManager
         'server.create',
         'server.view',
         'server.edit',
+        'server.edit_details',
         'server.replace',
         'server.transition',
         // Add to and correct the component inventory (11 types x create/edit)
@@ -86,6 +89,7 @@ class TemporaryAccessManager
         'server.view',
         'server.create',
         'server.edit',
+        'server.edit_details',
         'server.replace',
         'server.transition',
     ];
@@ -116,25 +120,10 @@ class TemporaryAccessManager
      */
     public static function hasColumn(PDO $pdo, $table, $column)
     {
-        $cacheKey = $table . '.' . $column;
-        if (isset($GLOBALS['_schema_column_cache'][$cacheKey])) {
-            return $GLOBALS['_schema_column_cache'][$cacheKey];
-        }
-
-        $exists = false;
-        try {
-            // Table and column are compile-time constants at every call site,
-            // never request input — SHOW COLUMNS cannot be parameterised.
-            $stmt = $pdo->query("SHOW COLUMNS FROM `{$table}` LIKE " . $pdo->quote($column));
-            $exists = ($stmt && $stmt->fetch(PDO::FETCH_ASSOC) !== false);
-        } catch (Exception $e) {
-            // Treat any failure as "not there" and fall back to the pre-migration
-            // behaviour. A schema probe must never deny a legitimate permission.
-            error_log("Schema probe failed for {$cacheKey}: " . $e->getMessage());
-        }
-
-        $GLOBALS['_schema_column_cache'][$cacheKey] = $exists;
-        return $exists;
+        // RETIRED 2026-08-23 -- the implementation moved to SchemaHelper so it
+        // could outlive this class. Delegating rather than duplicating keeps the
+        // two provably identical while both names are still in use.
+        return SchemaHelper::hasColumn($pdo, $table, $column);
     }
 
     /**
@@ -237,8 +226,14 @@ class TemporaryAccessManager
      * Composing the two is what makes the model correct without teaching every
      * handler which permission it was gated on. Holding server.replace scoped to
      * config X and then attempting server-update-config fails at the COARSE gate
-     * (server.edit is held nowhere); attempting to replace a part in config Y
-     * fails here.
+     * (server.edit_details is held nowhere); attempting to replace a part in
+     * config Y fails here.
+     *
+     * That example USED to say server.edit, and was wrong: Edit and Remove
+     * Hardware both grant server.edit (remove-component is gated on it), so
+     * until 2026-08-23 a hardware grant also opened server-update-config and
+     * could rename or finalize the build. server.edit_details exists to keep the
+     * coarse gate honest -- see permission_map.php.
      *
      * @return bool
      */

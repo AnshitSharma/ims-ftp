@@ -6,7 +6,7 @@
  *
  * Body params:
  * - pipeline_template_id (required)
- * - title (required), description (required)
+ * - title (required), description (optional)
  * - priority (optional, default medium)
  * - target_server_uuid (optional): scopes any granted server access to this config
  * - requested_access (optional): JSON array of permission names being asked for
@@ -51,10 +51,21 @@ try {
         $overrides = [];
     }
 
-    // requested_access: which permissions this request is asking for. Accepts a
-    // JSON string or a repeated form field; PipelineManager validates the
-    // contents against the grantable whitelist and the approval narrows it
-    // further, so nothing trusted happens here.
+    // actions: the work this request performs once approved. A JSON array of
+    // {action_type, payload}. PipelineManager shape-checks every entry against
+    // RequestActionExecutor's registry and dry-runs the command-backed ones
+    // through the real validation engine, so nothing is trusted here — an
+    // unknown action_type or a smuggled parameter is rejected there.
+    $actionsRaw = $_POST['actions'] ?? null;
+    $actions = is_array($actionsRaw) ? $actionsRaw : json_decode((string)$actionsRaw, true);
+    if (!is_array($actions)) {
+        $actions = [];
+    }
+
+    // requested_access: RETIRED 2026-08-23. A request used to name the
+    // permissions it wanted; approval now performs the work instead. Still
+    // accepted so an older client cannot start failing mid-deploy, but it no
+    // longer authorizes anything.
     $requestedRaw = $_POST['requested_access'] ?? null;
     $requestedAccess = is_array($requestedRaw) ? $requestedRaw : json_decode((string)$requestedRaw, true);
     if (!is_array($requestedAccess)) {
@@ -67,6 +78,7 @@ try {
         'priority' => $_POST['priority'] ?? 'medium',
         'target_server_uuid' => $_POST['target_server_uuid'] ?? null,
         'requested_access' => $requestedAccess,
+        'actions' => $actions,
         'items' => $items,
         'stage_overrides' => $overrides
     ];

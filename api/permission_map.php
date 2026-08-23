@@ -16,6 +16,22 @@
  * handlers because the logic isn't a flat name lookup (admin-role gates,
  * self-delete guards, public auth endpoints). The legacy 'ticket' module was
  * retired — its work items now run on the 'pipeline' (Requests) engine.
+ *
+ * server.edit vs server.edit_details (2026-08-23)
+ * -----------------------------------------------
+ * server.edit gates work on the PARTS in a build (remove-component, and
+ * set-platform, which can only re-stamp a platform the fitted board already
+ * belongs to). server.edit_details gates writes to the build's OWN attributes —
+ * name, description, location, rack position, notes, status.
+ *
+ * They were one permission until a live test showed the consequence: Add / Edit
+ * / Remove Hardware must grant server.edit so a request-holder can take a part
+ * out, and that also handed them server-update-config — renaming someone's build
+ * and setting it Finalized, which then locked them out of it. Component
+ * narrowing (BaseFunctions::requestScopedComponentPermission) cannot catch that:
+ * update-config names no component_type. Splitting the permission is what makes
+ * seeder 2026_08_23_001's promise true — "a hardware grant cannot roam the
+ * build". Server Changes is the request type that grants edit_details.
  */
 return [
     'server' => [
@@ -32,7 +48,7 @@ return [
         'delete-config' => 'server.delete',
         'clone-config' => 'server.create',
         'get-statistics' => 'server.view_statistics',
-        'update-config' => 'server.edit',
+        'update-config' => 'server.edit_details', // 2026-08-23 -- see the note under this array
         'get-components' => 'server.view',
         'export-config' => 'server.view',
         'get-config' => 'server.view',
@@ -42,8 +58,8 @@ return [
         'import-virtual' => 'server.create',
         'search-by-serial' => 'server.view',
         'list-platforms' => 'server.view',
-        'set-platform' => 'server.edit',
-        'update-location' => 'server.edit',
+        'set-platform' => 'server.edit', // stays: it can only re-stamp a platform the fitted board already belongs to
+        'update-location' => 'server.edit_details', // 2026-08-23 -- moves with update-config (no handler today)
         'fix-onboard-nics' => 'server.edit',
         'debug-motherboard-nics' => 'server.view',
         'debug-migration-flags' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler

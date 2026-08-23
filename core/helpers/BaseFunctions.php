@@ -375,6 +375,67 @@ function hasScopedPermissionForRequest($pdo, $permission, $userId) {
 }
 
 /**
+ * Keep a build permission that came from a Request as narrow as the Request.
+ *
+ * `server-add-component` is gated on server.create, which says nothing about
+ * WHICH hardware may be fitted — so an approval for "add an SFP to web-01"
+ * would otherwise fit a CPU, a motherboard, anything, into that build. Same gap
+ * on remove/replace (server.edit / server.replace). The request DID say which
+ * hardware: its component permissions. So when the caller's build access is a
+ * temporary grant, the component type this call names must be one they hold the
+ * matching permission on — which, for a temporary grant, is exactly the set the
+ * approver granted.
+ *
+ * Permanent access is untouched: step 3 returns early for anyone who already
+ * holds the component permission, and every role that can build servers holds
+ * all eleven (super_admin, admin, manager, technician). `viewer` is the only
+ * role without them, and it has no server.create/.edit to begin with.
+ *
+ * @param  string $serverPermission the permission that gated this operation
+ * @return string|null the component permission the caller is missing, meaning
+ *                     the call must be refused; null when nothing needs
+ *                     narrowing
+ */
+function requestScopedComponentPermission($pdo, $userId, $module, $operation, $serverPermission) {
+    // The build operations that name a component type. Add asks for `.create`
+    // because that is what the Add Hardware ceiling grants; remove and replace
+    // ask for `.edit`, matching Edit/Remove Hardware.
+    static $implies = [
+        'add-component'     => 'create',
+        'remove-component'  => 'edit',
+        'replace-component' => 'edit',
+    ];
+
+    if ($module !== 'server' || !isset($implies[$operation])) {
+        return null;
+    }
+
+    $type = strtolower(trim((string)($_POST['component_type'] ?? $_GET['component_type'] ?? '')));
+    if (!in_array($type, VALID_COMPONENT_TYPES, true)) {
+        // Not our business to report — the handler's own 400 says "Invalid
+        // component type", which is the useful answer.
+        return null;
+    }
+
+    $needed = $type . '.' . $implies[$operation];
+    if (hasPermission($pdo, $needed, $userId)) {
+        return null;
+    }
+
+    // They lack it, so this only matters if their build access is temporary.
+    // listActive() reports live temporary grants only; on a database without the
+    // expiry columns it returns [] and this gate stays inert.
+    $manager = new TemporaryAccessManager($pdo);
+    foreach ($manager->listActive($userId) as $grant) {
+        if (($grant['permission'] ?? '') === $serverPermission) {
+            return $needed;
+        }
+    }
+
+    return null;
+}
+
+/**
  * Can this user act on THIS configuration?
  *
  * The idiom this replaces was copied ~10 times through server_api.php:

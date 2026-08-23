@@ -200,7 +200,34 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         if ($currentStatus == 3 && $requestedStatus !== null && $requestedStatus < 3 && !hasPermission($pdo, 'server.edit_finalized', $user['id'])) {
             send_json_response(0, 1, 403, "Cannot change status of finalized configuration without proper permissions");
         }
-        
+
+        // An empty string means "field left alone" -- the field loop below maps
+        // it to null rather than to status 0, so the gates must agree.
+        $statusPosted   = isset($_POST['configuration_status']) && trim((string)$_POST['configuration_status']) !== '';
+        $statusChanging = $statusPosted && $requestedStatus !== (int)$currentStatus;
+
+        // Finalizing is server-finalize-config's job, not this action's.
+        //
+        // That handler refuses virtual configs, runs comprehensive validation and
+        // passes allowScoped = false to userCanActOnConfig -- a temporary grant may
+        // CHANGE a build, never lock one. Writing status 3 straight into the column
+        // here skipped all three, and left the grantee shut out of their own build
+        // by the finalized guard above. One door to Finalized, for everyone.
+        if ($statusChanging && $requestedStatus === 3) {
+            send_json_response(0, 1, 400, "Finalizing a configuration goes through server-finalize-config, which validates the build first");
+        }
+
+        // Every other lifecycle move is what server.transition gates on
+        // server-transition-status; this action must not be a way around it. The
+        // scoped fallback keeps a per-configuration Server Changes grant working on
+        // the build it names -- requireModulePermission's own fallback only ever
+        // looked at server.edit_details, the permission that gated this call.
+        if ($statusChanging
+            && !hasPermission($pdo, 'server.transition', $user['id'])
+            && !hasScopedPermissionForRequest($pdo, 'server.transition', $user['id'])) {
+            send_json_response(0, 1, 403, "Insufficient permissions: server.transition required to change configuration status");
+        }
+
         // Define updatable fields (excluding calculated fields)
         $updatableFields = [
             'server_name',

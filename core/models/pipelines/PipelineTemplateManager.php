@@ -10,7 +10,9 @@
  * @subpackage Pipelines
  */
 
+require_once(__DIR__ . '/../../helpers/SchemaHelper.php');
 require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
+require_once(__DIR__ . '/RequestActionExecutor.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
 
 class PipelineTemplateManager
@@ -173,7 +175,7 @@ class PipelineTemplateManager
      */
     public function supportsStageEffects()
     {
-        return TemporaryAccessManager::hasColumn($this->pdo, 'pipeline_stages', 'effect_type');
+        return SchemaHelper::hasColumn($this->pdo, 'pipeline_stages', 'effect_type');
     }
 
     /**
@@ -304,13 +306,24 @@ class PipelineTemplateManager
     }
 
     /**
-     * Delete a pipeline type. Refuses if pipelines were created from it
-     * (archive it instead via is_active = 0).
+     * Delete a pipeline type.
      *
-     * @param int $templateId
+     * Requests raised from a type do NOT depend on it surviving: the FK is
+     * logical (no constraint), each request's steps were snapshotted into
+     * ticket_stage_progress when it was created, and both read queries LEFT JOIN
+     * the type. The only thing a delete costs is the type's NAME on those
+     * requests - so it is stamped onto them first, and then the type goes.
+     *
+     * $force is the second ask. Without it, a type with requests behind it comes
+     * back refused AND carrying the count, so the caller can put the real number
+     * in front of whoever is about to press delete. Built-in types are never
+     * deletable, force or not.
+     *
+     * @param int  $templateId
+     * @param bool $force Proceed even though requests reference this type
      * @return array
      */
-    public function deleteTemplate($templateId)
+    public function deleteTemplate($templateId, $force = false)
     {
         try {
             $existing = $this->getTemplate($templateId);
@@ -325,14 +338,43 @@ class PipelineTemplateManager
 
             $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM tickets WHERE pipeline_template_id = ?");
             $stmt->execute([$templateId]);
-            if ((int)$stmt->fetchColumn() > 0) {
+            $requestCount = (int)$stmt->fetchColumn();
+            $keepsName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name');
+
+            // Code reaches production ~20s after a save; seeders are applied by
+            // hand afterwards. In that window there is nowhere to put the name,
+            // so the old refusal is still the right answer - it just says why.
+            if ($requestCount > 0 && !$keepsName) {
                 return [
                     'success' => false,
-                    'errors' => ['Cannot delete: pipelines were created from this type. Archive it instead (set inactive).']
+                    'errors' => ['Cannot delete a type that requests were created from until seeder '
+                        . '2026_08_22_006 has been applied - it adds the column that keeps their type '
+                        . 'name readable. Archive it instead for now.']
+                ];
+            }
+
+            if ($requestCount > 0 && !$force) {
+                return [
+                    'success' => false,
+                    'request_count' => $requestCount,
+                    'errors' => [$requestCount . ' request' . ($requestCount === 1 ? ' was' : 's were')
+                        . ' created from this type. Deleting it keeps them, and they still show "'
+                        . $existing['name'] . '" as their type.']
                 ];
             }
 
             $this->pdo->beginTransaction();
+            if ($requestCount > 0) {
+                // Requests raised before the snapshot column existed have no name
+                // of their own yet. This is the last moment it can be read.
+                $stamp = $this->pdo->prepare("
+                    UPDATE tickets
+                       SET pipeline_type_name = ?
+                     WHERE pipeline_template_id = ?
+                       AND (pipeline_type_name IS NULL OR pipeline_type_name = '')
+                ");
+                $stamp->execute([$existing['name'], $templateId]);
+            }
             $this->pdo->prepare("DELETE FROM pipeline_stages WHERE pipeline_template_id = ?")->execute([$templateId]);
             $this->pdo->prepare("DELETE FROM pipeline_templates WHERE id = ?")->execute([$templateId]);
             $this->pdo->commit();
@@ -475,9 +517,9 @@ class PipelineTemplateManager
     /**
      * Validate a step's optional side effect.
      *
-     * The permission list is re-checked against TemporaryAccessManager's hard
-     * whitelist at grant time as well — this is the early, friendly failure, not
-     * the security boundary.
+     * The action list is re-checked against the request type's snapshotted
+     * ceiling at approval time as well — this is the early, friendly failure,
+     * not the security boundary.
      */
     private function validateStageEffect($stage, $label)
     {
@@ -488,6 +530,15 @@ class PipelineTemplateManager
         }
 
         $effectType = trim($stage['effect_type']);
+
+        // A retired effect is neither authorable nor an error to REPORT as
+        // unknown: existing request types still carry it, and an admin editing
+        // an unrelated step of such a type must not be blocked from saving.
+        // The round-trip preserves it; nothing new can select it, because it is
+        // absent from getStageEffectTypes().
+        if (in_array($effectType, PipelineConfig::getRetiredEffectTypes(), true)) {
+            return $errors;
+        }
 
         if (!in_array($effectType, PipelineConfig::getStageEffectTypes(), true)) {
             $errors[] = "$label: unknown effect type '$effectType'";
@@ -500,27 +551,19 @@ class PipelineTemplateManager
             return $errors;
         }
 
-        if ($effectType === PipelineConfig::EFFECT_GRANT_TEMPORARY_PERMISSION) {
+        if ($effectType === PipelineConfig::EFFECT_EXECUTE_REQUEST) {
             $config = $this->normaliseEffectConfig($stage['effect_config'] ?? null);
 
-            $permissions = $config['permissions'] ?? null;
-            if (!is_array($permissions) || empty($permissions)) {
-                $errors[] = "$label: this effect needs a non-empty 'permissions' list";
+            $actionTypes = $config['action_types'] ?? null;
+            if (!is_array($actionTypes) || empty($actionTypes)) {
+                $errors[] = "$label: this effect needs a non-empty 'action_types' list";
             } else {
-                foreach ($permissions as $permission) {
-                    if (!in_array($permission, TemporaryAccessManager::GRANTABLE_PERMISSIONS, true)) {
-                        $errors[] = "$label: '$permission' cannot be granted as temporary access";
+                $known = RequestActionExecutor::actionTypes();
+                foreach ($actionTypes as $actionType) {
+                    if (!in_array($actionType, $known, true)) {
+                        $errors[] = "$label: '$actionType' is not something a request can perform";
                     }
                 }
-            }
-
-            $hours = $config['duration_hours'] ?? null;
-            if (!is_numeric($hours)
-                || (int)$hours < TemporaryAccessManager::MIN_DURATION_HOURS
-                || (int)$hours > TemporaryAccessManager::MAX_DURATION_HOURS) {
-                $errors[] = "$label: duration_hours must be between "
-                    . TemporaryAccessManager::MIN_DURATION_HOURS . ' and '
-                    . TemporaryAccessManager::MAX_DURATION_HOURS;
             }
         }
 

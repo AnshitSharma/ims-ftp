@@ -31,7 +31,26 @@ try {
     $mgr = new PipelineTemplateManager($pdo);
     $templates = $mgr->listTemplates($includeInactive, $includeStages);
 
-    send_json_response(true, true, 200, "Pipeline types retrieved successfully", ['templates' => $templates]);
+    // The catalogue of work an approval can perform, sent alongside the types so
+    // the Request Types editor can offer it without keeping its own copy. One
+    // source of truth: RequestActionExecutor::ACTION_TYPES. A hardcoded list in
+    // the frontend would drift the moment an action is added or renamed, and the
+    // drift would be silent — the editor would offer something the executor
+    // rejects, or hide something it supports.
+    $actionTypes = [];
+    foreach (RequestActionExecutor::actionTypes() as $type) {
+        $spec = RequestActionExecutor::describe($type);
+        $actionTypes[] = [
+            'action_type' => $type,
+            'label'       => $spec['label'],
+            'scope'       => $spec['scope'],
+        ];
+    }
+
+    send_json_response(true, true, 200, "Pipeline types retrieved successfully", [
+        'templates'    => $templates,
+        'action_types' => $actionTypes,
+    ]);
 } catch (Exception $e) {
     error_log("pipeline-template-list error: " . $e->getMessage());
     send_json_response(false, true, 500, "Failed to retrieve pipeline types");
