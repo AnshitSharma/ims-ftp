@@ -4,8 +4,17 @@
  *
  * Orchestrates the reports registry below. A report not yet implemented is marked
  * "available": false here and prints `<name>: SKIPPED (lands in <unit>)` — it never
- * runs, never writes a report file, and never affects the exit code. This is
- * deliberate: a SKIPPED report cannot green-wash a gate that still requires it.
+ * runs, never writes a report file, and never affects the exit code.
+ *
+ * 2026-08-24 correction: the sentence that used to stand here — "This is
+ * deliberate: a SKIPPED report cannot green-wash a gate that still requires it"
+ * — was simply wrong, and wrong in the direction that matters. A SKIPPED report
+ * green-washes its gate exactly: the loop below `continue`s past it without
+ * touching $overallExit, so a gate whose every unavailable report is skipped
+ * exits 0. `regression` sat unavailable in nine gate lists on the strength of
+ * that sentence. An entry is only safe to leave unavailable when there is
+ * genuinely nothing that could be invoked (see `baseline`) — never because this
+ * runner is assumed to fail closed. It does not.
  *
  * Usage:
  *   php scripts/verify/run_all.php --quick        # schema + inventory + orphan + equivalence
@@ -57,8 +66,48 @@ const REGISTRY = [
     // every scheduled symbol still has its callers. It is NOT in QUICK_SET or P8,
     // so the daily nightly.sh battery is unaffected.
     'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => true,  'lands_in' => null],
-    'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (no dedicated report script planned)'],
-    'regression'  => ['script' => null, 'available' => false, 'lands_in' => 'tests/regression/*.php (no dedicated report script planned)'],
+    // baseline: STILL 'available' => false, deliberately, and this is not an
+    // oversight -- checked 2026-08-24. characterize_compatibility.php is a
+    // CAPTURE tool, not a comparison: it rewrites tests/golden/
+    // compatibility_baseline.json in place and exits 0 unconditionally (its only
+    // non-zero exits are 2/3/4 for "cannot connect", "json_encode failed",
+    // "cannot mkdir"). Wiring it here would be a worse fail-open than SKIPPED:
+    // the gate would overwrite the very baseline it is supposed to be checked
+    // against and then always report GREEN. It needs a --diff/--check mode that
+    // compares against a pinned baseline and exits non-zero on drift before it
+    // can gate anything. Until then the honest reading is SKIPPED.
+    // partial_rows (2026-08-24): gates the fallback gap in
+    // TargetStateBuilder::fromCurrent(). Its source selection is `!empty($rows)` --
+    // a NON-EMPTY test, not a COMPLETE one -- so a config whose config_components
+    // rows cover only PART of its legacy JSON takes the rows path anyway, and the
+    // unmirrored components are silently absent from every TargetState the rules
+    // evaluate. Nothing else catches this: equivalence_report treats an empty rows
+    // store as a diff, so it cannot tell 'not yet backfilled' from 'half
+    // backfilled', and the shadow streams only see configs live traffic touches.
+    // At COMMAND_LAYER=enforce -- production today -- an under-reported TargetState
+    // is a user-visible 404 on remove, not a logged shadow diff. Detection first;
+    // the control-flow fix comes later, with evidence behind it.
+    // NOT in QUICK_SET (full-table scan, P9-scoped), so nightly.sh is unaffected.
+    'partial_rows' => ['script' => __DIR__ . '/partial_rows_report.php', 'available' => true, 'lands_in' => null],
+    'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (capture-only: no compare mode, always exits 0 -- cannot gate)'],
+    // regression (2026-08-24): now wired to tests/run_tests.php, the discovery-
+    // based local suite runner. It was 'available' => false since this registry
+    // was written -- on the assumption that "no dedicated report script" meant
+    // "nothing to invoke" -- while GATE_REPORTS lists `regression` for P0, P1,
+    // PL, P3, P4, P5, P6, P7 and P9. Nine gates therefore printed
+    // "regression: SKIPPED" and could still exit 0: the single most-gated
+    // report in this file had never once been evaluated. Same shape as F-10,
+    // F-11, F-18 and F-21 (a check that reports green because it stopped
+    // looking), committed in the gate runner itself.
+    //
+    // run_tests.php already has exactly the exit contract this registry wants:
+    // 0 iff every discovered suite ran and passed, 1 if any suite failed, and
+    // (as of the same date) 3 for "exited 0 without executing a check" -- so a
+    // sweep that could not reach a scratch DB reads RED here rather than green.
+    // Environment reaches it by inheritance: the proc_open() call below passes
+    // no $env, so the child gets this process's environment verbatim, which is
+    // how GOLDEN_DB_* / IMS_DATA_PATH get through to the DB-backed suites.
+    'regression'  => ['script' => __DIR__ . '/../../tests/run_tests.php', 'available' => true, 'lands_in' => null],
 ];
 
 // Copied verbatim from each phase's "gate_reports" in migration/phase-status.json.
@@ -81,7 +130,7 @@ const GATE_REPORTS = [
     // being checked by eye against a log whose emptiness meant nothing.
     // Mirrored into migration/phase-status.json's P8 gate_reports.
     'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
-    'P9'  => ['deadcode', 'equivalence', 'regression'],
+    'P9'  => ['deadcode', 'partial_rows', 'equivalence', 'regression'],
     'P10' => ['all'],
 ];
 
@@ -170,17 +219,28 @@ foreach ($selection as $name) {
         $cmd[] = $since;
     }
 
-    $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    // 2026-08-24: child stderr goes to a temp FILE, not a second pipe. It used to
+    // be a pipe that was opened, never read, and closed after the child had already
+    // been drained on stdout -- so any report writing more than one pipe buffer
+    // (~4KB) to stderr blocked forever on its own write, and run_all.php hung with
+    // no output at all rather than failing. deadcode_report.php emits ~3.9KB of
+    // stderr today and `--gate P9` deadlocked on it live. stream_select() is not a
+    // fix here: on Windows it does not work on proc_open pipes. Nothing read this
+    // stderr before and nothing reads it now -- the only change is that the child
+    // can always finish writing it.
+    $errFile = tempnam(sys_get_temp_dir(), 'runall_');
+    $descriptors = [1 => ['pipe', 'w'], 2 => ['file', $errFile ?: (DIRECTORY_SEPARATOR === '\\' ? 'nul' : '/dev/null'), 'w']];
     $process = proc_open($cmd, $descriptors, $pipes);
     if (!is_resource($process)) {
         echo "$name: RED (failed to launch {$entry['script']})\n";
+        if ($errFile) { @unlink($errFile); }
         $overallExit = 1;
         continue;
     }
     $stdout = stream_get_contents($pipes[1]);
     fclose($pipes[1]);
-    fclose($pipes[2]);
     $exitCode = proc_close($process);
+    if ($errFile) { @unlink($errFile); }
 
     // Each report script prints "<report_name>: GREEN|RED <path>" as its own last line
     // (report_name is its own name, e.g. "inventory_report", not necessarily this

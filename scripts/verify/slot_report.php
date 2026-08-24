@@ -29,6 +29,10 @@
  *
  * Usage:
  *   php scripts/verify/slot_report.php                # scan all non-virtual configs
+ *   php scripts/verify/slot_report.php --config <uuid> # check ONE config only
+ *                                                        (exit 2 if that config does
+ *                                                         not exist -- an unknown
+ *                                                         uuid is never GREEN)
  *   php scripts/verify/slot_report.php --self-test     # seeds a discrete consumer
  *                                                        row, then tombstones its
  *                                                        provider component WITHOUT
@@ -204,6 +208,52 @@ if (in_array('--self-test', $argv, true)) {
     }
     echo "slot_report --self-test: FAIL (induced defect NOT detected — checker is broken)\n";
     exit(0);
+}
+
+// -----------------------------------------------------------------------
+// --config <uuid>: check exactly ONE config, using the very same per-config
+// function the full scan uses.
+//
+// WHY (2026-08-24): tests/backfill/ledger_backfill_test.php asserted
+// "fixture A: slot_report GREEN" by running the FULL-FLEET scan, because
+// --config did not exist. Against an empty scratch DB the two are
+// indistinguishable; against a restored production dump they are not, and the
+// assertion reported on ~every config in the database while claiming to report
+// on fixture A. Scope creep in an assertion is a correctness defect in both
+// directions -- it fails on data the test never created, and it would pass a
+// fixture-A defect that happened to be drowned out. The fix is a mode whose
+// scope matches the label.
+//
+// No logic is duplicated: checkConfigSlots() is the single source of truth for
+// what "clean" means, shared with the scan below.
+// -----------------------------------------------------------------------
+$configArgIndex = array_search('--config', $argv, true);
+if ($configArgIndex !== false) {
+    $targetConfig = $argv[$configArgIndex + 1] ?? null;
+    if (!is_string($targetConfig) || $targetConfig === '' || strncmp($targetConfig, '--', 2) === 0) {
+        fwrite(STDERR, "--config requires a config_uuid argument\n");
+        exit(2);
+    }
+
+    // A config_uuid that does not exist must NOT report GREEN. "I found no
+    // violations because I looked at nothing" is the exact fail-open this mode
+    // was added to remove from the caller; it is not allowed to reappear here.
+    $exists = $pdo->prepare('SELECT COUNT(*) FROM server_configurations WHERE config_uuid = ?');
+    $exists->execute([$targetConfig]);
+    if ((int)$exists->fetchColumn() === 0) {
+        fwrite(STDERR, "--config: no server_configurations row for '$targetConfig' -- nothing to check\n");
+        exit(2);
+    }
+
+    $violations = [];
+    foreach (checkConfigSlots($pdo, $targetConfig) as $v) {
+        $v['config_uuid'] = $targetConfig;
+        $violations[] = $v;
+    }
+    $file = writeReport($violations, 1, 'config:' . $targetConfig);
+    $status = empty($violations) ? 'GREEN' : 'RED';
+    echo "slot_report: $status $file\n";
+    exit(empty($violations) ? 0 : 1);
 }
 
 // -----------------------------------------------------------------------

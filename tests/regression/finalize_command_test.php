@@ -52,23 +52,81 @@ check('apply() promotes allocated inventory to installed post-finalize', strpos(
 // =========================================================================
 echo "-- ServerBuilder::finalizeConfiguration() enforce delegation --\n";
 $sbSrc = file_get_contents("$ROOT/core/models/server/ServerBuilder.php");
-check('finalizeConfiguration() delegates to TransitionStatusCommand at CommandLayer::mode()===enforce', preg_match('/function finalizeConfiguration[\s\S]{0,600}CommandLayer::mode\(\) === .enforce.[\s\S]{0,300}TransitionStatusCommand/', $sbSrc) === 1);
+// Scoped by POSITION to finalizeConfiguration()'s prelude -- its signature down to
+// the first line of the legacy body (the RACE CONDITION FIX comment the next check
+// pins) -- instead of a character budget. The isSandboxConfig() guard is
+// deliberately placed ahead of BOTH the command and legacy paths and pushed the
+// enforce gate out of the old 600-char window while the invariant still held.
+// Scoping also makes this STRICTER than the window it replaces: the command must
+// actually be CONSTRUCTED (`new TransitionStatusCommand(`) after the enforce gate,
+// where the old regex was satisfied by the bare class name in a require_once, and
+// both must sit ahead of the legacy body rather than merely near each other.
+$finalizeStart   = strpos($sbSrc, 'function finalizeConfiguration');
+$legacyBodyAt    = $finalizeStart !== false
+    ? strpos($sbSrc, 'RACE CONDITION FIX (Phase 1): wrap finalize in a transaction', $finalizeStart)
+    : false;
+$finalizePrelude = ($finalizeStart !== false && $legacyBodyAt !== false && $legacyBodyAt > $finalizeStart)
+    ? substr($sbSrc, $finalizeStart, $legacyBodyAt - $finalizeStart)
+    : '';
+$enforceGateAt   = $finalizePrelude !== '' ? strpos($finalizePrelude, "CommandLayer::mode() === 'enforce'") : false;
+$commandNewAt    = $finalizePrelude !== '' ? strpos($finalizePrelude, 'new TransitionStatusCommand(') : false;
+check('finalizeConfiguration() delegates to TransitionStatusCommand at CommandLayer::mode()===enforce, ahead of the legacy body',
+    $enforceGateAt !== false && $commandNewAt !== false && $enforceGateAt < $commandNewAt);
 check('legacy finalize body is untouched below the enforce delegation (U-D.2 deletes it later, not this unit)', strpos($sbSrc, 'RACE CONDITION FIX (Phase 1): wrap finalize in a transaction') !== false);
 
 // =========================================================================
 echo "-- server_api.php: unlocked comprehensive pre-check dropped at enforce --\n";
 $apiSrc = file_get_contents("$ROOT/api/handlers/server/server_api.php");
+// ---- scope to handleFinalizeConfiguration, once --------------------------
+// strpos boundaries instead of byte budgets over the whole file: the previous
+// matchers could be satisfied by handleAddComponent's shadow/enforce chain, and
+// they rot on any insertion inside the branch they describe. The not-enforce
+// branch runs from the `!== 'enforce'` gate to the finalizeConfiguration() call
+// that follows it, so anything inserted inside the branch stays in scope. Every
+// slice is fail-closed: a moved anchor yields '' and turns the check RED.
+$finFnStart = strpos($apiSrc, 'function handleFinalizeConfiguration(');
+$finFnNext  = $finFnStart !== false ? strpos($apiSrc, "\nfunction ", $finFnStart + 1) : false;
+$finFnBody  = $finFnStart === false
+    ? ''
+    : ($finFnNext === false ? substr($apiSrc, $finFnStart) : substr($apiSrc, $finFnStart, $finFnNext - $finFnStart));
+
 // The handler hoists CommandLayer::mode() into $commandLayerMode (the finalize
 // shadow hook, U-A.2, needs to test it twice), so accept either the inline call
 // or that variable -- the guarantee under test is "the pre-check sits inside a
 // NOT-enforce branch", not which spelling reads the flag.
-check('handleFinalizeConfiguration only runs the unlocked validateConfigurationComprehensive pre-check when NOT enforce', preg_match('/(CommandLayer::mode\(\)|\$commandLayerMode) !== .enforce.[\s\S]{0,200}validateConfigurationComprehensive/', $apiSrc) === 1);
+$notEnforceAt = false;
+foreach (["\$commandLayerMode !== 'enforce'", "CommandLayer::mode() !== 'enforce'"] as $spelling) {
+    $at = $finFnBody !== '' ? strpos($finFnBody, $spelling) : false;
+    if ($at !== false && ($notEnforceAt === false || $at < $notEnforceAt)) { $notEnforceAt = $at; }
+}
+$legacyFinalizeAt = $finFnBody !== '' ? strpos($finFnBody, '$serverBuilder->finalizeConfiguration($configUuid') : false;
+$notEnforceBranch = ($notEnforceAt !== false && $legacyFinalizeAt !== false && $legacyFinalizeAt > $notEnforceAt)
+    ? substr($finFnBody, $notEnforceAt, $legacyFinalizeAt - $notEnforceAt)
+    : '';
+// Stricter than the old window in both directions: the pre-check must be INSIDE
+// the not-enforce branch, and it must exist NOWHERE ELSE in the handler -- "only
+// runs when NOT enforce" is a uniqueness claim the distance match never made.
+check('handleFinalizeConfiguration only runs the unlocked validateConfigurationComprehensive pre-check when NOT enforce',
+    $notEnforceBranch !== ''
+    && strpos($notEnforceBranch, 'validateConfigurationComprehensive(') !== false
+    && substr_count($finFnBody, 'validateConfigurationComprehensive(') === 1);
 
 // U-A.2 (2026-07-29): the finalize shadow hook itself. Without it the four
 // Trigger::FINALIZE rules never ran in production and COMMAND_LAYER's soak could
 // not produce evidence at all -- see CommandShadowLog's SCOPE note.
+// Scoped to the shadow hook's own try -- from `$commandLayerMode === 'shadow'` to
+// the `catch (CommandFailed $finalizeFailure)` that closes it -- so the assertion
+// cannot be satisfied by handleAddComponent's dry-run (the old haystack was the
+// whole file) and cannot rot when a line is added inside the try.
+$finShadowAt  = $finFnBody !== '' ? strpos($finFnBody, "\$commandLayerMode === 'shadow'") : false;
+$finShadowEnd = $finShadowAt !== false ? strpos($finFnBody, 'catch (CommandFailed $finalizeFailure)', $finShadowAt) : false;
+$finShadowTry = ($finShadowAt !== false && $finShadowEnd !== false && $finShadowEnd > $finShadowAt)
+    ? substr($finFnBody, $finShadowAt, $finShadowEnd - $finShadowAt)
+    : '';
+$finCmdNewAt  = $finShadowTry !== '' ? strpos($finShadowTry, 'new TransitionStatusCommand(') : false;
+$finDryRunAt  = $finShadowTry !== '' ? strpos($finShadowTry, '->dryRun()') : false;
 check('handleFinalizeConfiguration dry-runs TransitionStatusCommand at shadow',
-    preg_match('/\$commandLayerMode === .shadow.[\s\S]{0,600}TransitionStatusCommand[\s\S]{0,300}->dryRun\(\)/', $apiSrc) === 1);
+    $finCmdNewAt !== false && $finDryRunAt !== false && $finCmdNewAt < $finDryRunAt);
 // Ordering, asserted by position rather than proximity: a distance-bounded regex
 // would start failing on a comment edit, which is not what this protects.
 $recordAt = strpos($apiSrc, "CommandShadowLog::record('finalize'");

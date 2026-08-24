@@ -65,10 +65,24 @@ check('multi-entry supported_types still matches on any member',
 
 echo "\n-- The source no longer contains the raw compare --\n";
 $src = file_get_contents($ROOT . '/core/models/components/ComponentValidator.php');
+// Isolate the method (signature to the next method declaration) instead of
+// budgeting 2500 bytes from the signature. The negative check especially: a
+// distance-bounded negative passes by stopping to look, so the raw compare only
+// had to be pushed past byte 2500 -- inside a method that is 3176 bytes long
+// today -- to satisfy it. The slice is fail-closed and the boundary regex
+// tolerates the modifier and indentation drift.
+$ramFnStart = strpos($src, 'public function validateRAMTypeCompatibility(');
+$ramFnRest  = $ramFnStart === false ? '' : substr($src, $ramFnStart + 20);
+$ramFn      = '';
+if ($ramFnStart !== false) {
+    $ramFn = preg_match('/\n\s*(?:public|private|protected)[^\n]*function\s/', $ramFnRest, $m, PREG_OFFSET_CAPTURE)
+        ? substr($src, $ramFnStart, 20 + $m[0][1])
+        : substr($src, $ramFnStart);
+}
 check('validateRAMTypeCompatibility no longer uses a raw in_array on memory types',
-    preg_match('/function validateRAMTypeCompatibility[\s\S]{0,2500}\$compatible = in_array\(\$ramType, \$supportedTypes\)/', $src) !== 1);
+    $ramFn !== '' && strpos($ramFn, '$compatible = in_array($ramType, $supportedTypes)') === false);
 check('validateRAMTypeCompatibility normalizes via DataNormalizationUtils',
-    preg_match('/function validateRAMTypeCompatibility[\s\S]{0,2500}DataNormalizationUtils::normalizeMemoryType/', $src) === 1);
+    $ramFn !== '' && strpos($ramFn, 'DataNormalizationUtils::normalizeMemoryType') !== false);
 
 echo "\n-- The fleet-wide precondition that made this total, asserted against real ims-data --\n";
 require_once $ROOT . '/core/models/components/ComponentSpecPaths.php';

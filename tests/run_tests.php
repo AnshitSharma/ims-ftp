@@ -17,15 +17,28 @@
  * the same result and this runner will not print them as one.
  *
  * Usage:
- *   php tests/run_tests.php            # regression + unit
+ *   php tests/run_tests.php            # every directory in SUITE_DIRS
  *   php tests/run_tests.php --verbose  # also echo each suite's own output
  *
- * Exit: 0 iff every discovered suite exited 0.
+ * Exit: 0 iff every discovered suite exited 0 AND at least one check ran in
+ * every one of them. 1 if any suite failed. 3 if none failed but one or more
+ * exited 0 without executing a single check (see the 2026-08-24 note below).
+ * 2 on setup error (nothing discovered).
  */
 
 declare(strict_types=1);
 
+/**
+ * 2026-08-24: `api` and `backfill` added. They were missing since this file was
+ * written on 2026-07-29, which made the runner commit the exact drift its own
+ * header calls out: tests/api/add_remove_response_shape_test.php is unit
+ * U-A.1's stated acceptance artifact and was never discovered at all, and
+ * tests/backfill/* likewise. A glob cannot drift from the directory it globs --
+ * but it can drift from the directories it was never pointed at.
+ */
 const SUITE_DIRS = [
+    'api'        => __DIR__ . '/api',
+    'backfill'   => __DIR__ . '/backfill',
     'regression' => __DIR__ . '/regression',
     'unit'       => __DIR__ . '/unit',
 ];
@@ -105,4 +118,23 @@ if ($provedNothing > 0) {
 if ($failed > 0) {
     echo "run_tests: FAILED — " . implode(', ', $failedNames) . "\n";
 }
-exit($failed === 0 ? 0 : 1);
+
+/**
+ * 2026-08-24: "ran nothing" is now a NON-ZERO exit (3), distinct from a real
+ * failure (1). Until today this runner printed the ran-nothing warning and then
+ * exited 0 anyway, so the one consumer that only reads the exit code -- and as
+ * of today scripts/verify/run_all.php's `regression` gate report IS that
+ * consumer -- read "no scratch DB was reachable, nothing was proved" as GREEN.
+ * The header has always insisted those are not the same result; the exit code
+ * now agrees with the header.
+ *
+ * The final line is emitted in the `<name>: GREEN|RED <detail>` shape that
+ * run_all.php's report-line regex expects, so the gate reprints a real verdict
+ * instead of "(no report line found in child output)".
+ */
+$verdict = ($failed === 0 && $provedNothing === 0) ? 'GREEN' : 'RED';
+echo "run_tests: $verdict $total discovered / $passed passed / $failed failed / $provedNothing ran nothing\n";
+
+if ($failed > 0) { exit(1); }
+if ($provedNothing > 0) { exit(3); }
+exit(0);

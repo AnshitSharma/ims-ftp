@@ -90,8 +90,24 @@ check('sample branch contains exactly one return, and it returns $legacy',
 check('sample-mode comparison is wrapped so a shadow-side failure cannot break a read',
     strpos($routerSrc, 'catch (Throwable $e)') !== false
     && strpos($routerSrc, 'ConfigReadRouter sample-mode comparison failed') !== false);
+// Scoped exactly the way the sample branch above is: the =on branch runs from its
+// '// =on.' marker to the first member declared after components(). The old
+// haystack ran from that marker to END OF FILE, so the check was being DEFEATED by
+// the try/catch inside isKnownRiserSpecUuid()'s memoization ~160 lines below -- an
+// unrelated helper this assertion does not speak for. Also strictly stronger than
+// the regex it replaces: the branch must still CONTAIN the rowsToLegacyShape
+// return (so deleting the =on path cannot pass vacuously) and must contain no
+// try/catch ANYWHERE in it, not merely none positioned after rowsToLegacyShape.
+$onStart  = strpos($routerSrc, '// =on.');
+$onEnd    = $onStart !== false ? strpos($routerSrc, 'private static function ', $onStart) : false;
+$onBranch = ($onStart !== false && $onEnd !== false && $onEnd > $onStart)
+    ? substr($routerSrc, $onStart, $onEnd - $onStart)
+    : '';
 check('=on does NOT swallow exceptions (fail-closed: it must not silently serve legacy)',
-    preg_match('/rowsToLegacyShape.*?catch/s', substr($routerSrc, strpos($routerSrc, '// =on.'))) !== 1);
+    $onBranch !== ''
+    && strpos($onBranch, 'return self::rowsToLegacyShape(') !== false
+    && strpos($onBranch, 'catch') === false
+    && strpos($onBranch, 'try {') === false);
 check('divergence rows carry the sapi discriminator (F-23)', strpos($routerSrc, "'sapi' => PHP_SAPI") !== false);
 
 // ---- F-27: the read log must have a denominator -------------------------
@@ -100,9 +116,23 @@ check('divergence rows carry the sapi discriminator (F-23)', strpos($routerSrc, 
 // whenever the scratch DB is unreachable -- which is the normal case on a dev
 // box. A guarantee that only holds when an optional fixture is present is the
 // same kind of un-evidenced claim F-27 itself was.
+// Scoped to the agreement branch itself: from the both-sides-equal test to the
+// divergence logRead() that follows it. The old `.*?KIND_COMPARED` ran to
+// end-of-file, so it could be satisfied by the const declaration or the docblock
+// long after the branch had stopped logging anything.
+$agreeStart = strpos($routerSrc, 'if (empty($onlyInJson) && empty($onlyInRows)) {');
+$agreeEnd   = $agreeStart !== false ? strpos($routerSrc, 'self::KIND_DIVERGENCE', $agreeStart) : false;
+$agreeBlock = ($agreeStart !== false && $agreeEnd !== false && $agreeEnd > $agreeStart)
+    ? substr($routerSrc, $agreeStart, $agreeEnd - $agreeStart)
+    : '';
 check('the router records agreement, not only disagreement (F-27 denominator)',
     strpos($routerSrc, 'KIND_COMPARED') !== false
-    && preg_match('/if \(empty\(\$onlyInJson\) && empty\(\$onlyInRows\)\) \{.*?KIND_COMPARED/s', $routerSrc) === 1);
+    && $agreeBlock !== ''
+    && strpos($agreeBlock, 'self::logRead(') !== false
+    && strpos($agreeBlock, 'self::KIND_COMPARED') !== false
+    // ...and it must RETURN there, or agreement would fall through and be logged
+    // a second time as a divergence.
+    && strpos($agreeBlock, 'return;') !== false);
 check('a virtual-config skip is recorded, so a virtual-only window cannot read as a clean comparison',
     strpos($routerSrc, 'KIND_SKIPPED_VIRTUAL') !== false);
 check('all three row kinds are public constants a reader can bind to',
@@ -118,8 +148,17 @@ if (is_file($readReportPath)) {
     $reportSrc = file_get_contents($readReportPath);
     check('read_report treats a row with NO kind as a divergence, never as a comparison',
         strpos($reportSrc, "\$row['kind'] ?? KIND_DIVERGENCE") !== false);
+    // Scoped to readReportGreen()'s own body (signature to the next top-level
+    // function). The old `.*?` pair ran to end-of-file and could stitch together
+    // a "comparisons" mention in one function with a "> 0" in another -- and this
+    // file has both scattered through its self-test fixtures.
+    $greenStart = strpos($reportSrc, 'function readReportGreen(');
+    $greenNext  = $greenStart !== false ? strpos($reportSrc, "\nfunction ", $greenStart + 1) : false;
+    $greenFn    = $greenStart === false
+        ? ''
+        : ($greenNext === false ? substr($reportSrc, $greenStart) : substr($reportSrc, $greenStart, $greenNext - $greenStart));
     check('read_report is RED on zero production comparisons (emptiness must not pass)',
-        preg_match('/function readReportGreen.*?comparisons.*?>\s*0/s', $reportSrc) === 1);
+        $greenFn !== '' && preg_match('/\$analysis\[.comparisons.\]\s*>\s*0/', $greenFn) === 1);
     check('read_report excludes cli rows (F-23)', strpos($reportSrc, "\$sapi === 'cli'") !== false);
 }
 $runAllSrc = file_get_contents("$ROOT/scripts/verify/run_all.php");
@@ -164,8 +203,12 @@ echo "-- DB-backed: three modes over a dual-written fixture --\n";
 $dbHost = getenv('GOLDEN_DB_HOST') ?: '127.0.0.1';
 $dbName = getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden';
 $dbUser = getenv('GOLDEN_DB_USER') ?: 'root';
-$dbPass = getenv('GOLDEN_DB_PASS');
-if (!is_string($dbPass)) { $dbPass = ''; }
+// Credential resolution is shared, not copy-pasted: scratch_db_password()
+// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
+// replaced honoured only the former, so the documented pass-file fixture
+// silently reduced this suite to a self-skip. See _scratch_db.php.
+require_once __DIR__ . '/_scratch_db.php';
+$dbPass = scratch_db_password();
 
 $pdo = null;
 try {

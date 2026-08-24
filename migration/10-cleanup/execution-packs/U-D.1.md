@@ -3,7 +3,7 @@ Pins baseline: yes (ZERO diffs — paths already unreachable at enforce). Invari
 
 ## Inputs
 deadcode contract 11-verification §deadcode; targets:
-ServerBuilder::validateComponentCompatibility 4631 (Phase 1.5 pairwise) + its call site ~515;
+ServerBuilder::validateComponentCompatibility 5931 (Phase 1.5 pairwise) + its call site 728 (inside addComponent, LIVE);
 ComponentCompatibility::checkComponentPairCompatibility callers (verify compatibility_api check_pair
 still uses it — if yes it STAYS, only ServerBuilder's loop goes); the U-C.2/C.3 shadow dispatch
 blocks (enforce is permanent now).

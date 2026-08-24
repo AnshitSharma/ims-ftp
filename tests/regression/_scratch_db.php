@@ -11,13 +11,62 @@
  * Returns null (never throws) on any connection failure so callers can print
  * their own SKIPPED lines and exit 0 rather than fail the whole suite.
  */
+
+/**
+ * scratch_db_password() — THE single place the scratch credential is resolved.
+ *
+ * WHY (2026-08-24, the F-11/F-18/F-21/F-24 family again): until today exactly
+ * ONE suite (serial_less_unit_identity_test.php) honoured GOLDEN_DB_PASS_FILE.
+ * Every other DB-backed suite carried a copy-pasted
+ * `getenv('GOLDEN_DB_PASS') ?: ''` and nothing else. So a session that followed
+ * this project's OWN documented fixture instruction — "put the scratch password
+ * in a file, point GOLDEN_DB_PASS_FILE at it" (run_serial_less_check.php's
+ * header, migration/00-overview/SESSION_PROTOCOL.md) — handed all of them an
+ * EMPTY password, which the server refuses, which each suite then reported as
+ * "scratch DB unreachable" and self-skipped. Nine suites at once printed a
+ * self-skip that meant "the credential resolver stopped looking", not "there is
+ * no database" — a check reporting green because it stopped looking, which is
+ * the defect class this repo has now logged five times.
+ *
+ * One resolver cannot drift from itself. Every DB-backed suite calls this.
+ *
+ * Resolution order (deliberately GOLDEN_DB_PASS first — these are exactly the
+ * semantics lifted from serial_less_unit_identity_test.php, the one suite that
+ * already had it right):
+ *   1. GOLDEN_DB_PASS when set and non-empty;
+ *   2. else the trimmed contents of GOLDEN_DB_PASS_FILE when it names a
+ *      readable, non-blank file;
+ *   3. else '' — no credential configured.
+ *
+ * Returns '' rather than throwing. Suites that must REFUSE to connect
+ * passwordless (serial_less_unit_identity_test.php) test for '' themselves;
+ * that refusal is theirs to keep and not this helper's to impose on suites which
+ * legitimately run against a passwordless local scratch instance.
+ */
+function scratch_db_password(): string
+{
+    $pass = getenv('GOLDEN_DB_PASS');
+    if (is_string($pass) && $pass !== '') {
+        return $pass;
+    }
+
+    $passFile = getenv('GOLDEN_DB_PASS_FILE');
+    if (is_string($passFile) && $passFile !== '' && is_readable($passFile)) {
+        $contents = @file_get_contents($passFile);
+        if (is_string($contents) && trim($contents) !== '') {
+            return trim($contents);
+        }
+    }
+
+    return '';
+}
+
 function scratch_db_connect(): ?PDO
 {
     $host = getenv('GOLDEN_DB_HOST') ?: '127.0.0.1';
     $name = getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden';
     $user = getenv('GOLDEN_DB_USER') ?: 'root';
-    $pass = getenv('GOLDEN_DB_PASS');
-    $pass = is_string($pass) ? $pass : '';
+    $pass = scratch_db_password();
 
     try {
         return new PDO(

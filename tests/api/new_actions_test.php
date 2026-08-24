@@ -25,11 +25,17 @@ $ROOT = dirname(__DIR__, 2);
 $src = file_get_contents("$ROOT/api/handlers/server/server_api.php");
 
 $fails = 0;
+$checksRun = 0;
 function check($label, $cond) {
-    global $fails;
+    global $fails, $checksRun;
+    $checksRun++;
     echo ($cond ? "  PASS" : "  FAIL") . "  $label\n";
     if (!$cond) { $fails++; }
 }
+
+// Set to true ONLY on the branch that actually exercises the DB+HTTP
+// acceptance criteria. See the exit block at the bottom of this file.
+$httpCriteriaRan = false;
 
 echo "-- action dispatch wiring (no DB needed) --\n";
 check("switch has 'server-replace-component' -> handleReplaceComponent", strpos($src, "case 'server-replace-component':") !== false);
@@ -134,8 +140,12 @@ if ($pdo === null) {
     }
     function h_makeConfig(PDO $pdo, array &$created, string $name, string $status = 'draft'): string {
         $cu = 'TEST-HTTP-' . strtoupper(substr(md5(uniqid('', true)), 0, 10));
-        $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, ?, 0, ?, 0, 1, 5)")
-            ->execute([$cu, $name, $status]);
+        // created_by is a HARD FK to users.id (fk_server_config_user); a literal 5
+        // is a fatal 1452 against any replica without that row, which is how these
+        // criteria went un-run. Resolve a real id rather than assuming one.
+        $ownerId = (int)$pdo->query('SELECT id FROM users ORDER BY id LIMIT 1')->fetchColumn();
+        $pdo->prepare("INSERT INTO server_configurations (config_uuid, server_name, configuration_status, status_v2, revision, is_virtual, created_by) VALUES (?, ?, 0, ?, 0, 1, ?)")
+            ->execute([$cu, $name, $status, $ownerId]);
         $created['configs'][] = $cu;
         return $cu;
     }
@@ -241,8 +251,40 @@ if ($pdo === null) {
             }
         }
     }
+    $httpCriteriaRan = true;
     echo "  (all scenarios ran against " . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden') . " over real HTTP, throwaway configs + inventory fully torn down afterward)\n";
 }
 
-echo $fails === 0 ? "\nALL CHECKS PASS\n" : "\n$fails FAILURE(S)\n";
-exit($fails === 0 ? 0 : 1);
+// -----------------------------------------------------------------------
+// Exit reporting.
+//
+// WHY (2026-08-24, the F-11/F-18/F-21/F-24 family): until today this file
+// printed per-criterion SKIPPED lines when no IMS_HTTP_HARNESS_URL was
+// reachable, then printed "ALL CHECKS PASS" and exited 0 anyway. It never
+// emitted the "SKIPPED: 0 check(s) run" marker tests/run_tests.php greps
+// for, so the runner counted it as a plain PASS -- indistinguishable from a
+// run in which U-A.2's acceptance criteria actually executed. A pass on
+// the offline structural checks never implied the HTTP criteria ran, and
+// U-A.2's acceptance rests on exactly those criteria.
+//
+// The offline checks are genuinely real and are KEPT and still enforced --
+// a failure in one still exits 1. What changes is that a run which executed
+// only the offline half now says so in the one line the runner understands,
+// and is counted as "ran nothing" (of the acceptance criteria) rather than
+// as a pass. Same convention as _scratch_db.php's scratch_db_or_skip().
+// -----------------------------------------------------------------------
+if ($fails > 0) {
+    echo "\n$fails FAILURE(S)\n";
+    exit(1);
+}
+
+if (!$httpCriteriaRan) {
+    echo "\n$checksRun offline structural check(s) ran and passed -- real, and kept, but they are\n";
+    echo "NOT U-A.2's acceptance criteria (replace happy/blocked, transition legal/illegal, the real 409 path, serial-targeted remove).\n";
+    echo "SKIPPED: 0 check(s) run of U-A.2's DB+HTTP acceptance criteria -- this suite proved\n"
+       . "NOTHING about them in this environment (no reachable scratch DB + IMS_HTTP_HARNESS_URL)\n";
+    exit(0);
+}
+
+echo "\nALL CHECKS PASS\n";
+exit(0);

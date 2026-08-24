@@ -38,6 +38,52 @@ function check($label, $cond) {
     if (!$cond) { $fails++; }
 }
 
+/**
+ * The `{ ... }` block introduced by $opener, delimited by BRACE MATCHING.
+ *
+ * Used instead of the byte windows this file used to carry. A window is wrong in
+ * both directions: it under-reaches the moment a line is inserted (the guarantee
+ * still holds, the test goes red) and it over-reaches into whatever follows the
+ * block (an assertion about a catch body gets satisfied by code outside it).
+ * A matched block is exactly the construct under test, whatever its size.
+ *
+ * Returns '' when the opener is absent or the braces do not balance, so every
+ * caller fails CLOSED. (Braces inside string literals would fool the counter;
+ * none of the blocks asserted on below contain any.)
+ */
+function blockSlice(string $src, string $opener): string {
+    $at = strpos($src, $opener);
+    if ($at === false) { return ''; }
+    $open = strpos($src, '{', $at);
+    if ($open === false) { return ''; }
+    $depth = 0;
+    for ($i = $open, $n = strlen($src); $i < $n; $i++) {
+        if ($src[$i] === '{') {
+            $depth++;
+        } elseif ($src[$i] === '}') {
+            $depth--;
+            if ($depth === 0) { return substr($src, $at, $i - $at + 1); }
+        }
+    }
+    return '';
+}
+
+/** The argument list of the first $callee call, delimited by its own parens. */
+function callArgSlice(string $src, string $callee): string {
+    $at = strpos($src, $callee);
+    if ($at === false || substr($callee, -1) !== '(') { return ''; }
+    $depth = 0;
+    for ($i = $at + strlen($callee) - 1, $n = strlen($src); $i < $n; $i++) {
+        if ($src[$i] === '(') {
+            $depth++;
+        } elseif ($src[$i] === ')') {
+            $depth--;
+            if ($depth === 0) { return substr($src, $at, $i - $at + 1); }
+        }
+    }
+    return '';
+}
+
 echo "shadow_dry_run_error_test (F-30)\n";
 
 $apiPath = $ROOT . '/api/handlers/server/server_api.php';
@@ -53,8 +99,13 @@ check('shadowDryRunErrorLabel() exists',
 // BaseCommand wraps a genuine Throwable as CommandFailed('command_exception').
 // Labelling that 'command_failed:command_exception' would satisfy the report's
 // strpos(..., 'command_failed') === 0 test and promote a CRASH into a verdict.
-$labelStart = strpos($src, 'function shadowDryRunErrorLabel(');
-$labelBody  = $labelStart === false ? '' : substr($src, $labelStart, 400);
+// The function's own braces, not a 400-byte prefix: the whole function is 284
+// bytes today, so the window was silently reaching 116 bytes past its closing
+// brace into handleAddComponent's docblock -- text moved OUT of the classifier
+// but left sitting above the next function could still satisfy these checks.
+// (Caught by the negative control: a fn-signature-to-next-fn slice had the same
+// hole, a brace-matched one does not.)
+$labelBody = blockSlice($src, 'function shadowDryRunErrorLabel(');
 check("maps 'command_exception' to 'exception', not to a command_failed: label",
     preg_match("/command_exception'\s*\?\s*'exception'/", $labelBody) === 1);
 check("labels every other type 'command_failed:<type>'",
@@ -62,9 +113,13 @@ check("labels every other type 'command_failed:<type>'",
 
 // 'command_exception' must really be the wrapped-crash type this guards against.
 $baseSrc = @file_get_contents($ROOT . '/core/models/commands/BaseCommand.php');
+// Asserted INSIDE the catch block (brace-matched) rather than within 300 bytes
+// of it: the wrap must be what that catch does, not something that merely
+// follows it closely enough today.
+$baseCatch = is_string($baseSrc) ? blockSlice($baseSrc, 'catch (\Throwable') : '';
 check("BaseCommand still wraps a Throwable as CommandFailed('command_exception')",
-    is_string($baseSrc)
-    && preg_match("/catch\s*\(\\\\?Throwable[^)]*\)[\s\S]{0,300}new CommandFailed\('command_exception'/", $baseSrc) === 1);
+    $baseCatch !== ''
+    && strpos($baseCatch, "throw new CommandFailed('command_exception'") !== false);
 
 // ---------------------------------------------------------- the two hooks --
 echo "\n[2] add and remove hooks record WHY, and survive a crash\n";
@@ -84,10 +139,16 @@ foreach (['handleAddComponent' => 'addComponent', 'handleRemoveComponent' => 're
         strpos($body, '$shadowDryRunError = shadowDryRunErrorLabel($shadowFailure);') !== false);
     // Without this catch, a fault in SHADOW-only code escapes into a real
     // mutating request and 500s it -- shadow forking behaviour, INV-8.
+    // Both of these are now bound to the construct they describe -- the catch
+    // BLOCK and the record() CALL -- instead of 900/600-byte windows after a
+    // token. Inserting a line inside either construct can no longer break them,
+    // and code outside the construct can no longer satisfy them.
+    $rawCatch = blockSlice($body, 'catch (\Throwable $shadowFailure)');
     check("  $fn() also catches a raw Throwable and calls it 'exception' (INV-8)",
-        preg_match("/catch\s*\(\\\\Throwable\s*\\\$shadowFailure\)[\s\S]{0,900}\\\$shadowDryRunError = 'exception';/", $body) === 1);
+        $rawCatch !== '' && strpos($rawCatch, "\$shadowDryRunError = 'exception';") !== false);
+    $recordCall = callArgSlice($body, 'CommandShadowLog::record(');
     check("  $fn() passes dry_run_error through to CommandShadowLog",
-        preg_match("/CommandShadowLog::record\([\s\S]{0,600}'dry_run_error' => \\\$shadowDryRunError,/", $body) === 1);
+        $recordCall !== '' && strpos($recordCall, "'dry_run_error' => \$shadowDryRunError,") !== false);
     // A verdict object alongside dryRunFailed=true would be contradictory.
     check("  $fn() sends no verdict when the dry run threw",
         strpos($body, '$shadowDryRunFailed ? null : $commandVerdict') !== false);
@@ -111,8 +172,16 @@ check('report treats a command_failed: prefix as a real verdict',
     is_string($repSrc) && strpos($repSrc, "strpos(\$dryRunError, 'command_failed') === 0") !== false);
 check('report still counts a verdict-less row as a dry-run failure (gate-RED)',
     is_string($repSrc) && preg_match('/\$commandBlocked === null\)\s*\{\s*\$dryRunFailed\+\+;/', $repSrc) === 1);
+// Scoped to commandParityGreen()'s own body (signature to the next top-level
+// function): the green definition must contain the term, not merely sit within
+// 300 bytes of somewhere that mentions it.
+$greenStart = is_string($repSrc) ? strpos($repSrc, 'function commandParityGreen') : false;
+$greenNext  = $greenStart !== false ? strpos($repSrc, "\nfunction ", $greenStart + 1) : false;
+$greenFn    = $greenStart === false
+    ? ''
+    : ($greenNext === false ? substr($repSrc, $greenStart) : substr($repSrc, $greenStart, $greenNext - $greenStart));
 check('dry_run_failed is still part of the green definition',
-    is_string($repSrc) && preg_match("/function commandParityGreen[\s\S]{0,300}dry_run_failed.\]\s*===\s*0/", $repSrc) === 1);
+    $greenFn !== '' && preg_match("/\\\$analysis\['dry_run_failed'\]\s*===\s*0/", $greenFn) === 1);
 
 // ---------------------------------------------------------------------------
 echo "\n";

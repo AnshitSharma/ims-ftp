@@ -35,13 +35,26 @@ const CADDY_UUID = '4a8a2c05-e993-4b00-acae-9f036617091c';
 require_once $ROOT . '/core/models/shared/DataExtractionUtilities.php';
 $dataUtils = new DataExtractionUtilities();
 $riserUuid = null;
+$riserSpec = null;
 $imsDataPath = getenv('IMS_DATA_PATH') ?: ($ROOT . '/../ims-data');
-$pciSpecs = json_decode(file_get_contents($imsDataPath . '/pciecard/pci-level-3.json'), true);
-foreach ($pciSpecs as $family) {
-    if (($family['component_subtype'] ?? '') !== 'Riser Card') { continue; }
-    foreach ($family['models'] as $m) { $riserUuid = $m['UUID']; break 2; }
+// 2026-08-14 split: risers are their own component type ('risercard'), and
+// ResourceCatalog::provides('pciecard', …) deliberately provides NOTHING at all — so the
+// riser fixture must be sourced from the risercard spec file for the resource-link
+// assertions below to exercise a real provider.
+$riserSpecs = json_decode(file_get_contents($imsDataPath . '/risercard/riser-level-3.json'), true);
+foreach ($riserSpecs as $family) {
+    foreach ($family['models'] as $m) { $riserUuid = $m['UUID']; $riserSpec = $m; break 2; }
 }
-if ($riserUuid === null) { echo "FATAL: no real Riser Card fixture found in ims-data\n"; exit(1); }
+if ($riserUuid === null) { echo "FATAL: no real risercard fixture found in ims-data\n"; exit(1); }
+// The riser_provided_pcie_1_x8 slot_ref asserted further down is spelled out literally on
+// purpose (deriving it from the catalog under test would be circular), so pin the two spec
+// fields ResourceCatalog::providesRisercard() builds it from. A fixture change must FAIL
+// loudly here rather than silently make that assertion unreachable.
+if (($riserSpec['pcie_slots'] ?? null) !== 1 || ($riserSpec['slot_type'] ?? null) !== 'x8') {
+    echo "FATAL: risercard fixture $riserUuid is no longer 1 slot / x8 — the expected"
+        . " riser_provided_pcie_1_x8 slot_ref below would be stale\n";
+    exit(1);
+}
 
 function row($id, $type, $uuid, $extra = []) {
     return array_merge([
@@ -63,9 +76,15 @@ check('dependency severity is ERROR', $r1->severity() === Severity::ERROR);
 $ids1 = array_column($r1->details()['dependents'], 'component_type');
 check('dependents list BOTH cpu and ram (not just one)', in_array('cpu', $ids1) && in_array('ram', $ids1));
 
-echo "-- board-with-cpus -- but a riser still present: cpu/ram still orphaned (they need motherboard specifically, not riser) --\n";
-$boardRemovedRiserPresent = new TargetState([row(2, 'cpu', CPU_UUID), row(4, 'pciecard', $riserUuid)]);
-check('cpu still orphaned even with a riser present (riser is not in cpu\'s DEPENDS_ON)', $rule->evaluate($boardRemovedRiserPresent)->passed() === false);
+echo "-- board-with-cpus -- but a genuine riser (risercard) still present: cpu/ram still orphaned (they need motherboard specifically, not riser) --\n";
+// Post-2026-08-14 the riser row must be typed 'risercard'; typed 'pciecard' it is no longer
+// a riser at all, which made this case vacuous (it asserted nothing about risers).
+$boardRemovedRiserPresent = new TargetState([row(2, 'cpu', CPU_UUID), row(4, 'risercard', $riserUuid)]);
+$rRiser = $rule->evaluate($boardRemovedRiserPresent);
+check('cpu still orphaned even with a riser present (riser is not in cpu\'s DEPENDS_ON)', $rRiser->passed() === false);
+// The riser itself also depends on motherboard, so passed()===false alone could be satisfied
+// by the riser's own orphaning — name the cpu explicitly so this cannot pass for the wrong reason.
+check('the orphan named is the cpu itself, not only the riser', in_array('cpu', array_column($rRiser->details()['dependents'], 'component_type'), true));
 
 // =========================================================================
 echo "-- riser-with-cards -- remove the only riser while a card is plugged into it, no motherboard in this config --\n";
@@ -129,7 +148,8 @@ check('dependentsOf(nic) finds its child sfp', count($deps) === 1 && $deps[0]['i
 check('dependentsOf() on an id not in the state returns []', TargetStateBuilder::dependentsOf(new TargetState([]), 999) === []);
 
 $riserWithCard = new TargetState([
-    row(1, 'pciecard', $riserUuid),
+    // provider side must be typed 'risercard' post-split; the occupant stays a plain pciecard.
+    row(1, 'risercard', $riserUuid),
     row(2, 'pciecard', 'c8384a51-5630-4ecf-9ecc-15bc660a4b17', ['slot_ref' => 'riser_provided_pcie_1_x8']),
 ]);
 $slotDeps = TargetStateBuilder::dependentsOf($riserWithCard, 1);

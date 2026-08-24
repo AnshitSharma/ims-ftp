@@ -10,31 +10,51 @@ in the handoff — don't let the two silently drift.
 None of `tests/` is deployed (SFTP ignore list, per `ims-ftp/CLAUDE.md`) — this
 manifest only matters for local/scratch runs.
 
-## 1. Canonical suite — 30 `*_test.php` files, five directories
+## 1. Canonical suite — 45 discovered files, seven directories
 
-These are the files `scripts/verify/run_all.php`'s `regression`/`baseline`
-registry entries implicitly point at, and what every "N/30" sweep count in
-prior handoffs refers to.
+**2026-08-24 reconciliation.** The table below was written on 2026-07-13 and had
+drifted badly by today: it listed 30 files in five directories, while
+`tests/run_tests.php` discovers 45 in seven. Two separate causes, both now
+fixed:
+
+1. `run_tests.php`'s `SUITE_DIRS` only listed `regression` and `unit`, so
+   `tests/api/*` and `tests/backfill/*` — 4 files, including unit U-A.1's own
+   stated acceptance artifact `api/add_remove_response_shape_test.php` — were
+   never discovered at all. `api` and `backfill` were added to `SUITE_DIRS` on
+   2026-08-24.
+2. Suites added between 2026-07-13 and today (the whole of
+   `unit/compatibility/`, the whole of `unit/validation/`, and six files under
+   `regression/` and `unit/`) were never added to this table.
+
+The counts below are the live `run_tests.php` discovery, not a hand-typed list.
+**Regenerate this table from a real run, never from memory** — the numbers here
+are only meaningful as a reconciliation target for the runner's own output.
 
 | Directory | Count | Files |
 |---|---|---|
-| `tests/unit/` | 8 | `base_command_test.php`, `config_component_repository_test.php`, `engine_shadow_test.php`, `onboard_nic_engine_test.php`, `resource_catalog_test.php`, `target_state_test.php`, `verdict_shim_test.php`, `verdict_test.php` |
-| `tests/unit/rules/` | 8 | `cpu_rules_test.php`, `dependency_rule_test.php`, `lane_rule_test.php`, `memory_rules_test.php`, `net_rules_test.php`, `slot_rules_test.php`, `storage_rules_test.php`, `system_rules_test.php` |
-| `tests/regression/` | 10 | `add_command_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `remove_command_test.php`, `replace_command_test.php`, `state_guard_test.php` |
 | `tests/api/` | 2 | `add_remove_response_shape_test.php`, `new_actions_test.php` |
 | `tests/backfill/` | 2 | `extractor_test.php`, `ledger_backfill_test.php` |
-| **Total** | **30** | |
+| `tests/regression/` | 15 | `add_command_test.php`, `caddy_finalize_parity_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `read_router_test.php`, `remove_command_test.php`, `replace_command_test.php`, `require_paths_test.php`, `serial_less_unit_identity_test.php`, `shadow_dry_run_error_test.php`, `state_guard_test.php` |
+| `tests/unit/` | 11 | `base_command_test.php`, `component_entry_identity_test.php`, `config_component_repository_test.php`, `engine_shadow_test.php`, `onboard_nic_engine_test.php`, `rate_limiter_concurrency_test.php`, `resource_catalog_test.php`, `slot_namespace_test.php`, `target_state_test.php`, `verdict_shim_test.php`, `verdict_test.php` |
+| `tests/unit/rules/` | 8 | `cpu_rules_test.php`, `dependency_rule_test.php`, `lane_rule_test.php`, `memory_rules_test.php`, `net_rules_test.php`, `slot_rules_test.php`, `storage_rules_test.php`, `system_rules_test.php` |
+| `tests/unit/compatibility/` | 3 | `cpu_identity_matcher_test.php`, `motherboard_storage_gate_test.php`, `storage_bay_placement_test.php` |
+| `tests/unit/validation/` | 4 | `finalize_trigger_coverage_test.php`, `m2_capacity_rule_test.php`, `onboard_nic_pcie_count_test.php`, `ram_type_normalization_test.php` |
+| **Total discovered** | **45** | |
 
-Non-test helpers in these same directories (not counted above, never run
-standalone): `tests/regression/_scratch_db.php` (shared `scratch_db_connect()`
-used by the regression suite), `tests/api/_http_harness.php` (shared HTTP
-harness client used by the two api tests when `IMS_HTTP_HARNESS_URL` is set).
+Non-suites in these same directories, excluded by `run_tests.php` itself
+(`_`-prefixed helpers plus the `NOT_A_SUITE` list) and therefore not counted
+above: `tests/regression/_scratch_db.php` (shared `scratch_db_connect()`),
+`tests/regression/run_serial_less_check.php` (single-purpose probe, named in
+`NOT_A_SUITE`), `tests/api/_http_harness.php` (shared HTTP harness client).
 
-`tests/api/*`'s DB+HTTP-backed criteria self-skip (print `SKIPPED`, exit 0)
-unless `IMS_HTTP_HARNESS_URL` points at a running scratch-only `php -S`
-server — see the ninth/tenth-session handoff records for the harness
-procedure. A "sweep without the HTTP harness" run still exits 0 for these two
-files; it just means fewer criteria actually executed.
+`tests/api/*`'s DB+HTTP-backed criteria self-skip unless `IMS_HTTP_HARNESS_URL`
+points at a running scratch-only `php -S` server. **Note the sharp edge, found
+2026-08-24 when these two files were first ever discovered:** they print
+per-criterion `SKIPPED` lines and then `ALL CHECKS PASS`, and exit 0 — they do
+NOT print the `SKIPPED: 0 check(s) run` marker `run_tests.php` looks for, so
+they are counted as **pass**, not as "ran nothing". That is defensible (both do
+execute real structural checks with no harness) but it means a `pass` on these
+two lines never implies their HTTP criteria ran. Read their own output.
 
 ## 2. Named top-level legacy scripts — 8 files
 
@@ -53,10 +73,15 @@ files that are NOT part of the sweep at all (§3).
 | `tests/getDashboardDataShapeTest.php` | no (DB-free) |
 | `tests/fixture_scenarios_real.php` | **yes**, as of 2026-07-13 — env-gated `PROBE_DB_*` connection (default `imsbdcmsbharatda_Ims_Production` local mirror), prints `SKIPPED: ...` and exits 0 if that DB isn't reachable (mirrors `tests/regression/_scratch_db.php`'s convention). Previously hard-fataled (uncaught `PDOException`, exit 255) in any environment without that exact local DB mirror — this was the tenth-session verify finding's root cause, fixed this session. |
 
-**30 canonical + 8 named legacy = 38 files.** This is very likely what the
-tenth session's uncorroborated "38/38" figure meant, though that session did
-not enumerate it — treat this table as the retroactive enumeration, not
-confirmation of the session's own working.
+**45 discovered + 8 named legacy = 53 files.** (Until 2026-08-24 this line
+read "30 canonical + 8 named legacy = 38" — see §1's reconciliation note for
+why both halves of that arithmetic were wrong.)
+
+The 8 legacy scripts above live directly under `tests/`, which is NOT in
+`run_tests.php`'s `SUITE_DIRS` — adding `tests/` itself would sweep in
+`characterize_compatibility.php` and `state_machine_unit.php`, both explicitly
+excluded (§3). They are therefore still run by hand, and a `run_tests.php`
+number never includes them. Report the two figures separately.
 
 ## 3. Explicitly excluded from the sweep count
 
@@ -80,7 +105,16 @@ confirmation of the session's own working.
 
 ## Reporting convention going forward
 
-A sweep result must read: **"30/30 canonical + 8/8 legacy = 38/38"** (or the
-actual pass counts if not full green), with any excluded/self-skipped file
-named explicitly. Do not report a bare "N/M" without stating which list M
-refers to — this file is that list.
+A sweep result must read: **"N discovered / P passed / F failed / R ran
+nothing"** — `run_tests.php`'s own final line, quoted verbatim — plus the legacy
+count separately if those 8 were run. Do not report a bare "N/M" without
+stating which list M refers to, and never report "ran nothing" folded into
+"passed": as of 2026-08-24 `run_tests.php` exits **3** (not 0) when any suite
+exited 0 without executing a check, so `scripts/verify/run_all.php`'s
+`regression` gate report reads that case as RED rather than green.
+
+`regression` in `run_all.php`'s registry now points at `tests/run_tests.php`
+(2026-08-24). Before that it was `available => false` and printed
+`regression: SKIPPED` in all nine gates that list it, without affecting the
+exit code — so this manifest's counts were the ONLY thing standing between the
+suite and an unverified gate. They now have a runner behind them.

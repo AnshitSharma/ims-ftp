@@ -35,7 +35,7 @@ try {
     $pdo = new PDO(
         'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
         getenv('GOLDEN_DB_USER') ?: 'root',
-        getenv('GOLDEN_DB_PASS') ?: '',
+        scratch_db_password(),
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
     );
 } catch (\Throwable $e) {

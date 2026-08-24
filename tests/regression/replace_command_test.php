@@ -55,8 +55,27 @@ echo "-- API reachability (per the pack: this unit ships command + tests only; U
 $apiSrc = file_get_contents("$ROOT/api/handlers/server/server_api.php");
 check('server_api.php now exposes ReplaceComponentCommand via handleReplaceComponent (U-A.2)',
     strpos($apiSrc, 'function handleReplaceComponent') !== false && strpos($apiSrc, 'new ReplaceComponentCommand(') !== false);
+// Scoped to handleReplaceComponent's own body, and within it to the gate block
+// itself (the =off test up to the require_once of the command class that follows
+// it), instead of a 400-byte window from the signature. Strictly stronger: the
+// gate must not merely EXIST near the top, it must REFUSE (send_json_response)
+// and it must sit ahead of every ReplaceComponentCommand construction, which is
+// the actual "not reachable in production by default" claim.
+$rpFnStart = strpos($apiSrc, 'function handleReplaceComponent(');
+$rpFnNext  = $rpFnStart !== false ? strpos($apiSrc, "\nfunction ", $rpFnStart + 1) : false;
+$rpFnBody  = $rpFnStart === false
+    ? ''
+    : ($rpFnNext === false ? substr($apiSrc, $rpFnStart) : substr($apiSrc, $rpFnStart, $rpFnNext - $rpFnStart));
+$rpGateAt   = $rpFnBody !== '' ? strpos($rpFnBody, "if (CommandLayer::mode() === 'off')") : false;
+$rpGateEnd  = $rpGateAt !== false ? strpos($rpFnBody, "ReplaceComponentCommand.php'", $rpGateAt) : false;
+$rpGateBody = ($rpGateAt !== false && $rpGateEnd !== false && $rpGateEnd > $rpGateAt)
+    ? substr($rpFnBody, $rpGateAt, $rpGateEnd - $rpGateAt)
+    : '';
+$rpNewCmdAt = $rpFnBody !== '' ? strpos($rpFnBody, 'new ReplaceComponentCommand(') : false;
 check('the new action is flag-gated (CommandLayer::mode() !== off), not reachable in production by default',
-    preg_match("/function handleReplaceComponent[\\s\\S]{0,400}CommandLayer::mode\\(\\) === 'off'/", $apiSrc) === 1);
+    $rpGateBody !== ''
+    && strpos($rpGateBody, 'send_json_response(') !== false
+    && $rpNewCmdAt !== false && $rpGateAt < $rpNewCmdAt);
 
 // =========================================================================
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";

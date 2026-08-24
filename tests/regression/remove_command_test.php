@@ -52,7 +52,23 @@ check('cascade rows resolved via TargetStateBuilder::dependentsOf() against the 
 // =========================================================================
 echo "-- server_api.php shadow/enforce dispatch wiring --\n";
 $apiSrc = file_get_contents("$ROOT/api/handlers/server/server_api.php");
-check('handleRemoveComponent references CommandLayer::mode()', preg_match('/function handleRemoveComponent[\s\S]{0,2000}CommandLayer::mode\(\)/', $apiSrc) === 1);
+// Scoped to handleRemoveComponent's own body (signature to the next top-level
+// function) instead of a 2000-byte window -- the flag read sits at byte 1942 of
+// that body, i.e. the old window had 58 bytes of headroom left and would have
+// gone RED on the next comment edit above it. The replacement also proves MORE
+// than "the token appears somewhere near the signature": the handler reads the
+// flag once, into the hoist, ahead of BOTH dispatch branches.
+$rmFnStart = strpos($apiSrc, 'function handleRemoveComponent(');
+$rmFnNext  = $rmFnStart !== false ? strpos($apiSrc, "\nfunction ", $rmFnStart + 1) : false;
+$rmFnBody  = $rmFnStart === false
+    ? ''
+    : ($rmFnNext === false ? substr($apiSrc, $rmFnStart) : substr($apiSrc, $rmFnStart, $rmFnNext - $rmFnStart));
+$rmHoistAt   = $rmFnBody !== '' ? strpos($rmFnBody, '$commandLayerMode = CommandLayer::mode();') : false;
+$rmShadowAt  = $rmFnBody !== '' ? strpos($rmFnBody, "\$commandLayerMode === 'shadow'") : false;
+$rmEnforceAt = $rmFnBody !== '' ? strpos($rmFnBody, "\$commandLayerMode === 'enforce'") : false;
+check('handleRemoveComponent references CommandLayer::mode()',
+    $rmHoistAt !== false && $rmShadowAt !== false && $rmEnforceAt !== false
+    && $rmHoistAt < $rmShadowAt && $rmShadowAt < $rmEnforceAt);
 check('cascade defaults to false (matches legacy single-component removal)', strpos($apiSrc, "\$_POST['cascade'] ?? false") !== false);
 
 // =========================================================================

@@ -67,6 +67,7 @@ $storageUuidU2NoWidth = 's1a2b3c4-0000-4000-8000-000000000004';
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/motherboard", 0777, true);
 mkdir("$tmpImsData/pciecard", 0777, true);
+mkdir("$tmpImsData/risercard", 0777, true);
 mkdir("$tmpImsData/cpu", 0777, true);
 mkdir("$tmpImsData/nic", 0777, true);
 mkdir("$tmpImsData/hbacard", 0777, true);
@@ -162,6 +163,21 @@ file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
             ['UUID' => $plainPciecardUuid],
             ['UUID' => $pciecardUuidLaneFallback, 'pcie_lanes' => 8],
             ['UUID' => $pciecardUuidUnparseableInterfaceFallback, 'interface' => 'PCIe Gen4', 'pcie_lanes' => 8],
+        ],
+    ],
+]));
+
+// 2026-08-14 split: risers are their own component type. The riser model below is
+// deliberately ALSO left in the pciecard fixture above (production ims-data still
+// carries both copies) so the "pciecard provides nothing" assertion below is a real
+// negative — a resolvable Riser Card spec reached through 'pciecard' must still
+// provide nothing, not merely fail to resolve.
+file_put_contents("$tmpImsData/risercard/riser-level-3.json", json_encode([
+    [
+        'component_subtype' => 'Riser Card',
+        'brand' => 'Supermicro',
+        'models' => [
+            ['UUID' => $riserUuid, 'pcie_slots' => 2, 'slot_type' => 'x16'],
         ],
     ],
 ]));
@@ -262,10 +278,13 @@ try {
     }
     check('motherboard (non-numeric pcie_slots count): throws CatalogException', $threw);
 
-    // ---- pciecard: riser provides pcie_slot rows ------------------------
-    $rows = $catalog->provides('pciecard', $riserUuid);
-    check('riser pciecard: 2 pcie_slot rows', count($rows) === 2);
-    check('riser pciecard: slot_refs are riser_provided_pcie_1_x16, riser_provided_pcie_2_x16', array_column($rows, 'slot_ref') === ['riser_provided_pcie_1_x16', 'riser_provided_pcie_2_x16']);
+    // ---- risercard: riser provides pcie_slot rows -----------------------
+    // Post-2026-08-14 split (ResourceCatalog docblock): 'risercard' is the provider,
+    // 'pciecard' provides nothing at all. Both halves are pinned below.
+    $rows = $catalog->provides('risercard', $riserUuid);
+    check('riser risercard: exactly 2 rows, both resource=pcie_slot', count($rows) === 2 && array_unique(array_column($rows, 'resource')) === ['pcie_slot']);
+    check('riser risercard: slot_refs are riser_provided_pcie_1_x16, riser_provided_pcie_2_x16', array_column($rows, 'slot_ref') === ['riser_provided_pcie_1_x16', 'riser_provided_pcie_2_x16']);
+    check('riser UUID under pciecard: provides() returns [] (2026-08-14 split MOVED the capability to risercard — a resolvable Riser Card spec reached as pciecard must still provide nothing)', $catalog->provides('pciecard', $riserUuid) === []);
 
     // ---- pciecard: plain card provides nothing --------------------------
     $rows = $catalog->provides('pciecard', $plainPciecardUuid);

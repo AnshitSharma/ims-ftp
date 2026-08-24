@@ -44,15 +44,15 @@ $user = getenv('GOLDEN_DB_USER') ?: 'root';
 // Read the credential from a FILE by preference, so it never has to be typed on a
 // command line or into a shell history. GOLDEN_DB_PASS still works if already set
 // in the environment.
-$pass = getenv('GOLDEN_DB_PASS');
-if ($pass === false || $pass === '') {
-    $passFile = getenv('GOLDEN_DB_PASS_FILE');
-    if ($passFile !== false && $passFile !== '' && is_readable($passFile)) {
-        $pass = trim(file_get_contents($passFile));
-    }
-}
+//
+// 2026-08-24: this block used to BE the resolver, and was the only copy of it in
+// the whole harness. It now lives in _scratch_db.php as scratch_db_password() and
+// every DB-backed suite shares it — same order, same '' outcome, so the refusal
+// below is bit-for-bit the decision it always was.
+require_once __DIR__ . '/_scratch_db.php';
+$pass = scratch_db_password();
 
-if ($pass === false || $pass === '') {
+if ($pass === '') {
     // The refusal itself is unchanged -- this suite still will not connect
     // passwordless. Only the REPORTING changes: exit(2) made a deliberate safety
     // refusal indistinguishable from a genuine test failure to any runner.

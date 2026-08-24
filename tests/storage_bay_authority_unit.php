@@ -20,8 +20,12 @@ $ROOT = dirname(__DIR__);
 $dbHost = getenv('GOLDEN_DB_HOST') ?: '127.0.0.1';
 $dbName = getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden';
 $dbUser = getenv('GOLDEN_DB_USER') ?: 'root';
-$dbPass = getenv('GOLDEN_DB_PASS');
-if ($dbPass === false) { $dbPass = ''; }
+// Credential resolution is shared, not copy-pasted: scratch_db_password()
+// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
+// replaced honoured only the former, so the documented pass-file fixture
+// silently reduced this suite to a self-skip. See _scratch_db.php.
+require_once __DIR__ . '/regression/_scratch_db.php';
+$dbPass = scratch_db_password();
 putenv("DB_HOST=$dbHost"); putenv("DB_NAME=$dbName");
 putenv("DB_USER=$dbUser"); putenv("DB_PASS=$dbPass");
 

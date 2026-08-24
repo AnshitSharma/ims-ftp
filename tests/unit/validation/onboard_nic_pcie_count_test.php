@@ -75,17 +75,31 @@ $trackerPath = $ROOT . '/core/models/compatibility/UnifiedSlotTracker.php';
 check('UnifiedSlotTracker.php is readable', is_file($trackerPath));
 $src = is_file($trackerPath) ? file_get_contents($trackerPath) : '';
 
-// Isolate validateAllSlots() so a match anywhere else in the file cannot satisfy this.
+// Isolate validateAllSlots() so a match anywhere else in the file cannot satisfy
+// this -- and then, inside it, the component-counting loop itself. The 4000-byte
+// window this replaces was arbitrary in both directions: the method is 6436 bytes
+// today (so the window silently truncated the last third of it, one insertion
+// away from dropping the very guard it pins) while still being three times wider
+// than the loop these assertions are actually about. The loop runs from its
+// foreach to the motherboard check that follows it; both slices are fail-closed,
+// so a moved anchor turns the checks RED instead of matching something else.
 $start = strpos($src, 'function validateAllSlots');
-$body  = $start === false ? '' : substr($src, $start, 4000);
+$next  = $start === false ? false : strpos($src, 'function validateAllRiserSlots', $start);
+$method = $start === false ? '' : ($next === false ? substr($src, $start) : substr($src, $start, $next - $start));
+$loopAt  = $method === '' ? false : strpos($method, 'foreach ($components as $comp) {');
+$loopEnd = $loopAt !== false ? strpos($method, 'if (!$motherboard && $pcieCount > 0)', $loopAt) : false;
+$body = ($loopAt !== false && $loopEnd !== false && $loopEnd > $loopAt)
+    ? substr($method, $loopAt, $loopEnd - $loopAt)
+    : '';
 
 check('validateAllSlots() found', $start !== false);
 check('validateAllSlots() still builds $pcieCount from nic/pciecard/hbacard',
-    strpos($body, "'pciecard', 'hbacard', 'nic'") !== false);
+    $body !== '' && strpos($body, "'pciecard', 'hbacard', 'nic'") !== false);
 check('validateAllSlots() excludes the "onboard-" prefix from $pcieCount',
-    strpos($body, "'onboard-'") !== false);
+    $body !== '' && strpos($body, "'onboard-'") !== false);
 check('the exclusion is attached to the $pcieCount++ guard, not merely mentioned',
-    preg_match('/in_array\(\s*\$comp\[.component_type.\][^)]*\)\s*\n?\s*&&\s*strpos\(\s*\(string\)\$comp\[.component_uuid.\],\s*.onboard-.\s*\)\s*!==\s*0/', $body) === 1);
+    $body !== ''
+    && preg_match('/in_array\(\s*\$comp\[.component_type.\][^)]*\)\s*\n?\s*&&\s*strpos\(\s*\(string\)\$comp\[.component_uuid.\],\s*.onboard-.\s*\)\s*!==\s*0/', $body) === 1);
 
 // ------------------------------------------------------- sibling agreement --
 // The bug was an inconsistency, not an isolated typo: two other layers were already

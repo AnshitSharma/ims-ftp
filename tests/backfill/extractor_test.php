@@ -29,10 +29,15 @@ function check($label, $cond) {
     if (!$cond) { $fails++; }
 }
 
+// Credential resolution is shared, not copy-pasted: scratch_db_password()
+// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
+// replaced honoured only the former, so the documented pass-file fixture
+// silently reduced this suite to a self-skip. See _scratch_db.php.
+require_once __DIR__ . '/../regression/_scratch_db.php';
 $pdo = new PDO(
     'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
     getenv('GOLDEN_DB_USER') ?: 'root',
-    getenv('GOLDEN_DB_PASS') ?: '',
+    scratch_db_password(),
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
 );
 
@@ -51,11 +56,20 @@ function rrmdir($dir) {
 }
 rrmdir($tmpImsData);
 mkdir("$tmpImsData/pciecard", 0777, true);
+// 2026-08-14 riser/pciecard split: Extractor::isRiser() consults the risercard
+// catalog FIRST and only falls back to the pciecard component_subtype test.
+// The catalog directory must therefore exist, or the risercard lookup fails and
+// the subtype fallback is never reached. Deliberately does NOT contain
+// $subtypeRiserUuid -- that entry must be detected by SUBTYPE alone.
+mkdir("$tmpImsData/risercard", 0777, true);
 
 $subtypeRiserUuid = 'r1ser000-0000-4000-8000-000000000001'; // detected via component_subtype, no 'riser-' prefix
 file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
     ['component_subtype' => 'Riser Card', 'brand' => 'Supermicro', 'models' => [['UUID' => $subtypeRiserUuid, 'pcie_slots' => 2, 'slot_type' => 'x16']]],
     ['component_subtype' => 'Standard PCIe Card', 'brand' => 'Intel', 'models' => [['UUID' => 'plain0000-0000-4000-8000-000000000001']]],
+]));
+file_put_contents("$tmpImsData/risercard/riser-level-3.json", json_encode([
+    ['component_subtype' => 'Riser Card', 'brand' => 'ASUS', 'models' => [['UUID' => 'riser-0000-4000-8000-000000000001', 'pcie_slots' => 1, 'slot_type' => 'x8']]],
 ]));
 putenv("IMS_DATA_PATH=$tmpImsData");
 
@@ -95,7 +109,11 @@ try {
     insertInv($pdo, 'raminventory', $ramUuid, 'RAM-SN-2', $configUuid);
     insertInv($pdo, 'storageinventory', $storageUuid, 'STG-SN-1', $configUuid);
     insertInv($pdo, 'storageinventory', $storageUuid2, 'STG-SN-2', $configUuid);
-    insertInv($pdo, 'pciecardinventory', $riserPrefixUuid, 'RISER-SN-1', $configUuid);
+    // 2026-08-14 riser/pciecard split: Extractor.php:27 maps 'risercard' to
+    // risercardinventory, so a riser's inventory unit lives there, not in
+    // pciecardinventory. Production agrees: risercardinventory is empty and NO
+    // pciecardinventory row carries a risercard-spec UUID (checked 2026-08-24).
+    insertInv($pdo, 'risercardinventory', $riserPrefixUuid, 'RISER-SN-1', $configUuid);
     insertInv($pdo, 'pciecardinventory', $plainCardUuid, 'CARD-SN-1', $configUuid);
     insertInv($pdo, 'hbacardinventory', $hbaUuid, 'HBA-SN-1', $configUuid);
     insertInv($pdo, 'nicinventory', $nicUuid, 'NIC-SN-1', $configUuid);
@@ -157,8 +175,12 @@ try {
     $storageNoConn = array_values(array_filter($byType['storage'] ?? [], fn($p) => $p['spec_uuid'] === $storageUuid2));
     check('storage without connection resolves with null slot_ref (not quarantined)', count($storageNoConn) === 1 && $storageNoConn[0]['slot_ref'] === null);
 
-    check('riser via uuid prefix retyped to riser', count($byType['riser'] ?? []) === 1 && $byType['riser'][0]['spec_uuid'] === $riserPrefixUuid);
-    check('riser parents to motherboard', ($byType['riser'][0]['parent_ref'] ?? null) === 'motherboard');
+    // 2026-08-14 riser/pciecard split: Extractor.php:123 resolves risers under the
+    // canonical type 'risercard'. The 'riser' PARENT_REF marker (Extractor.php:134) is
+    // a different namespace and is deliberately unchanged -- see the pciecard check below.
+    check('riser via uuid prefix retyped to risercard', count($byType['risercard'] ?? []) === 1 && $byType['risercard'][0]['spec_uuid'] === $riserPrefixUuid);
+    check('no plan emitted under the pre-split type riser', empty($byType['riser']));
+    check('riser parents to motherboard', ($byType['risercard'][0]['parent_ref'] ?? null) === 'motherboard');
     check('plain card left as pciecard', count($byType['pciecard'] ?? []) === 1);
     check('plain card w/ riser-looking slot parents to the single riser', ($byType['pciecard'][0]['parent_ref'] ?? null) === 'riser');
 
@@ -179,14 +201,15 @@ try {
     check('unassigned sfp has null slot_ref and null parent_ref', $unassignedSfp && $unassignedSfp['slot_ref'] === null && $unassignedSfp['parent_ref'] === null);
 
     // ---- component_subtype riser detection (separate config, isolated fixture) ----
-    insertInv($pdo, 'pciecardinventory', $subtypeRiserUuid, 'SUBRISER-SN-1', $configUuid2);
+    insertInv($pdo, 'risercardinventory', $subtypeRiserUuid, 'SUBRISER-SN-1', $configUuid2);
     $result2 = $extractor->extract($pdo, [
         'config_uuid' => $configUuid2,
         'pciecard_configurations' => json_encode([['uuid' => $subtypeRiserUuid]]),
     ]);
     $byType2 = [];
     foreach ($result2['plans'] as $p) { $byType2[$p['component_type']][] = $p; }
-    check('component_subtype=Riser Card retypes to riser (no uuid prefix)', count($byType2['riser'] ?? []) === 1);
+    check('component_subtype=Riser Card retypes to risercard (no uuid prefix)', count($byType2['risercard'] ?? []) === 1);
+    check('subtype retype emits nothing under the pre-split type riser', empty($byType2['riser']));
 
     // ---- missing-uuid quarantine ----
     $result3 = $extractor->extract($pdo, ['config_uuid' => 'TEST-UB2C', 'caddy_configuration' => json_encode([['not_uuid' => 'x']])]);
@@ -198,7 +221,7 @@ try {
 
 } finally {
     foreach (['motherboardinventory', 'chassisinventory', 'cpuinventory', 'raminventory', 'storageinventory',
-              'pciecardinventory', 'hbacardinventory', 'nicinventory', 'sfpinventory'] as $t) {
+              'pciecardinventory', 'risercardinventory', 'hbacardinventory', 'nicinventory', 'sfpinventory'] as $t) {
         $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID IN (?, ?)")->execute([$configUuid, $configUuid2]);
     }
     rrmdir($tmpImsData);

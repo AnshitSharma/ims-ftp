@@ -50,11 +50,51 @@ check('re-derives the slot plan in apply() rather than trusting a stashed value 
 // =========================================================================
 echo "-- server_api.php shadow/enforce dispatch wiring --\n";
 $apiSrc = file_get_contents("$ROOT/api/handlers/server/server_api.php");
-check('handleAddComponent references CommandLayer::mode()', strpos($apiSrc, 'CommandLayer::mode()') !== false);
-check('shadow path calls dryRun(), not execute()', preg_match('/commandLayerMode === .shadow.[\s\S]{0,200}dryRun\(\)/', $apiSrc) === 1);
-check('enforce path calls execute()', preg_match('/commandLayerMode === .enforce.[\s\S]{0,200}execute\(\)/', $apiSrc) === 1);
+// ---- scope the handler's own dispatch chain, once ------------------------
+// Every assertion in this section is bound to a strpos-delimited slice of
+// handleAddComponent instead of a character budget over the whole file. A byte
+// window rots on the next legitimate insertion -- the catch (\Throwable
+// $shadowFailure) guard (added so a shadow-only fault stops 500-ing real
+// add-component requests) already pushed the legacy add out of a 900-char one --
+// and an unanchored haystack can be satisfied by a sibling handler:
+// handleRemoveComponent has a shadow/enforce chain of its own that these checks
+// do not speak for. Every slice is fail-closed: if an anchor moves, the slice is
+// '' and the check goes RED rather than quietly matching something else.
+$addFnStart = strpos($apiSrc, 'function handleAddComponent(');
+$addFnNext  = $addFnStart !== false ? strpos($apiSrc, "\nfunction ", $addFnStart + 1) : false;
+$addFnBody  = $addFnStart === false
+    ? ''
+    : ($addFnNext === false ? substr($apiSrc, $addFnStart) : substr($apiSrc, $addFnStart, $addFnNext - $addFnStart));
+
+$addShadowAt  = $addFnBody !== '' ? strpos($addFnBody, "\$commandLayerMode === 'shadow'") : false;
+$addEnforceAt = $addFnBody !== '' ? strpos($addFnBody, "\$commandLayerMode === 'enforce'") : false;
+// The dispatch chain ends where post-dispatch response building begins.
+$addChainEnd  = $addEnforceAt !== false ? strpos($addFnBody, "if (\$result['success']) {", $addEnforceAt) : false;
+$addShadowBranch = ($addShadowAt !== false && $addEnforceAt !== false && $addEnforceAt > $addShadowAt)
+    ? substr($addFnBody, $addShadowAt, $addEnforceAt - $addShadowAt)
+    : '';
+$addEnforceBranch = ($addEnforceAt !== false && $addChainEnd !== false && $addChainEnd > $addEnforceAt)
+    ? substr($addFnBody, $addEnforceAt, $addChainEnd - $addEnforceAt)
+    : '';
+
+// Was a strpos over the WHOLE file, which any of the 38 handlers could satisfy.
+// Now: this handler reads the flag ONCE, into the hoist, ahead of both branches.
+$addHoistAt = $addFnBody !== '' ? strpos($addFnBody, '$commandLayerMode = CommandLayer::mode();') : false;
+check('handleAddComponent references CommandLayer::mode()',
+    $addHoistAt !== false && $addShadowAt !== false && $addEnforceAt !== false
+    && $addHoistAt < $addShadowAt && $addShadowAt < $addEnforceAt);
+// The "not execute()" half of this label was never actually asserted; it is now,
+// over the branch rather than over 200 bytes of it.
+check('shadow path calls dryRun(), not execute()',
+    $addShadowBranch !== ''
+    && strpos($addShadowBranch, '$addCommand->dryRun()') !== false
+    && strpos($addShadowBranch, '->execute(') === false);
+check('enforce path calls execute()',
+    $addEnforceBranch !== ''
+    && strpos($addEnforceBranch, '$addCommand->execute()') !== false);
 check('shadow path still calls the real legacy add ($serverBuilder->addComponent) and sets $result from it -- INV-8, mirrors handleRemoveComponent (U-C.3)',
-    preg_match('/commandLayerMode === .shadow.[\s\S]{0,900}\$result = \$serverBuilder->addComponent\(/', $apiSrc) === 1);
+    $addShadowBranch !== ''
+    && strpos($addShadowBranch, '$result = $serverBuilder->addComponent(') !== false);
 check('shadow diff comparison uses the legacy call\'s REAL outcome (!$result[\'success\']), not a hardcoded false',
     strpos($apiSrc, '$legacyBlocked = !$result[\'success\']') !== false
     && preg_match('/\$legacyPrecheckBlocked\s*=\s*false;/', $apiSrc) !== 1);

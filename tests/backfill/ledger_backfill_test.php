@@ -32,7 +32,12 @@ function check($label, $cond) {
 $dbHost = getenv('GOLDEN_DB_HOST') ?: '127.0.0.1';
 $dbName = getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden';
 $dbUser = getenv('GOLDEN_DB_USER') ?: 'root';
-$dbPass = getenv('GOLDEN_DB_PASS');
+// Credential resolution is shared, not copy-pasted: scratch_db_password()
+// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
+// replaced honoured only the former, so the documented pass-file fixture
+// silently reduced this suite to a self-skip. See _scratch_db.php.
+require_once __DIR__ . '/../regression/_scratch_db.php';
+$dbPass = scratch_db_password();
 $pdo = new PDO("mysql:host=$dbHost;dbname=$dbName", $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 
 function runBackfill(string $root, string $dbHost, string $dbName, string $dbUser, string $dbPass, array $args): array
@@ -54,6 +59,42 @@ function runBackfill(string $root, string $dbHost, string $dbName, string $dbUse
     fclose($pipes[2]);
     $exit = proc_close($process);
     return ['exit' => $exit, 'stdout' => $stdout, 'stderr' => $stderr];
+}
+
+/**
+ * Runs one scripts/verify/*_report.php as a subprocess and returns its exit
+ * code plus the parsed contents of the JSON report it wrote.
+ *
+ * Both are needed: the exit code is the pass/fail contract, and the report is
+ * the only way to see WHICH violations produced it -- which is what lets the
+ * fleet-wide assertion at the bottom of this file distinguish "the known,
+ * separately-owned production data defects" from "a new one appeared".
+ *
+ * @return array{exit:int, stdout:string, report:?array}
+ */
+function runVerifyReport(string $root, string $dbHost, string $dbName, string $dbUser, string $dbPass, string $script, array $args = []): array
+{
+    $env = [
+        'DB_HOST' => $dbHost, 'DB_NAME' => $dbName, 'DB_USER' => $dbUser, 'DB_PASS' => $dbPass,
+        'JWT_SECRET' => 'probe', 'PATH' => getenv('PATH'),
+        'SystemRoot' => getenv('SystemRoot') ?: getenv('SYSTEMROOT') ?: 'C:\\Windows',
+    ];
+    $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $p = proc_open(array_merge(['php', $script], $args), $descriptors, $pipes, $root, $env);
+    $stdout = stream_get_contents($pipes[1]);
+    stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exit = proc_close($p);
+
+    $report = null;
+    if (preg_match('/^(?:ledger|slot)_report: (?:GREEN|RED) (.+)$/m', $stdout, $m) === 1) {
+        $decoded = json_decode((string)@file_get_contents(trim($m[1])), true);
+        if (is_array($decoded)) {
+            $report = $decoded;
+        }
+    }
+    return ['exit' => $exit, 'stdout' => $stdout, 'report' => $report];
 }
 
 function insertInv(PDO $pdo, $table, $uuid, $serial, $serverUuid, $extra = []) {
@@ -81,6 +122,7 @@ rrmdir($tmpImsData);
 mkdir("$tmpImsData/motherboard", 0777, true);
 mkdir("$tmpImsData/chassis", 0777, true);
 mkdir("$tmpImsData/pciecard", 0777, true);
+mkdir("$tmpImsData/risercard", 0777, true);
 mkdir("$tmpImsData/storage", 0777, true);
 mkdir("$tmpImsData/cpu", 0777, true);
 mkdir("$tmpImsData/nic", 0777, true);
@@ -109,6 +151,12 @@ file_put_contents("$tmpImsData/chassis/chasis-level-3.json", json_encode([
 file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
     ['component_subtype' => 'Riser Card', 'brand' => 'Supermicro', 'models' => [['UUID' => $riserUuid, 'pcie_slots' => 2, 'slot_type' => 'x8']]],
     ['component_subtype' => 'Standard PCIe Card', 'brand' => 'Intel', 'models' => [['UUID' => $cardUuid]]],
+]));
+// 2026-08-14 riser/pciecard split: risers resolve through the risercard catalog
+// and risercardinventory. The pciecard entry above is retained because the legacy
+// JSON column still carries both kinds; only the ROW store separates them.
+file_put_contents("$tmpImsData/risercard/riser-level-3.json", json_encode([
+    ['component_subtype' => 'Riser Card', 'brand' => 'Supermicro', 'models' => [['UUID' => $riserUuid, 'pcie_slots' => 2, 'slot_type' => 'x8']]],
 ]));
 file_put_contents("$tmpImsData/storage/storage-level-3.json", json_encode([
     ['brand' => 'Seagate', 'models' => [['uuid' => $sataUuid, 'interface' => 'SATA', 'form_factor' => '2.5"']]],
@@ -141,7 +189,7 @@ $configA = 'TEST-LGBF-A-' . substr(md5(uniqid('', true)), 0, 8);
 try {
     insertInv($pdo, 'motherboardinventory', $mbUuid, 'MB-LG-1', $configA);
     insertInv($pdo, 'chassisinventory', $chassisUuid, 'CH-LG-1', $configA);
-    insertInv($pdo, 'pciecardinventory', $riserUuid, 'RISER-LG-1', $configA);
+    insertInv($pdo, 'risercardinventory', $riserUuid, 'RISER-LG-1', $configA);
     insertInv($pdo, 'pciecardinventory', $cardUuid, 'CARD-LG-1', $configA);
     insertInv($pdo, 'storageinventory', $sataUuid, 'SATA-LG-1', $configA);
 
@@ -177,30 +225,28 @@ try {
     $satConsumeRows = $pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configA) . " AND resource = 'pcie_lane'")->fetchColumn();
     check('fixture A (U-L.5): SATA storage + fieldless plain card produce no pcie_lane rows (0-lane fallback, not a throw)', (int)$satConsumeRows === 0);
 
-    // Neither report supports --config (only --self-test / full-fleet scan) —
-    // run the full scan; at this point in the suite Fixture A is the only
-    // live, non-virtual config in the scratch DB.
-    $runFullScan = function (string $script) use ($ROOT, $dbHost, $dbName, $dbUser, $dbPass) {
-        $env = [
-            'DB_HOST' => $dbHost, 'DB_NAME' => $dbName, 'DB_USER' => $dbUser, 'DB_PASS' => $dbPass,
-            'JWT_SECRET' => 'probe', 'PATH' => getenv('PATH'),
-            'SystemRoot' => getenv('SystemRoot') ?: getenv('SYSTEMROOT') ?: 'C:\\Windows',
-        ];
-        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $p = proc_open(['php', $script], $descriptors, $pipes, $ROOT, $env);
-        stream_get_contents($pipes[1]); stream_get_contents($pipes[2]);
-        fclose($pipes[1]); fclose($pipes[2]);
-        return proc_close($p);
+    // Scoped to fixture A's OWN config, which is what the label always claimed.
+    //
+    // 2026-08-24: these two ran the reports' FULL-FLEET scan, because --config
+    // did not exist. Against an empty scratch DB that is indistinguishable from
+    // a fixture-A check; against a restored production dump it is not, and both
+    // assertions failed on real, pre-existing, separately-owned production data
+    // defects in a config this test never touched. The assertions now test
+    // exactly what they are labelled. The whole-database signal that CAUGHT
+    // those defects is not lost -- it is asserted, deliberately and separately,
+    // at the bottom of this file.
+    $runConfigScan = function (string $script) use ($ROOT, $dbHost, $dbName, $dbUser, $dbPass, $configA) {
+        return runVerifyReport($ROOT, $dbHost, $dbName, $dbUser, $dbPass, $script, ['--config', $configA])['exit'];
     };
-    check('fixture A: ledger_report GREEN', $runFullScan($ROOT . '/scripts/verify/ledger_report.php') === 0);
-    check('fixture A: slot_report GREEN', $runFullScan($ROOT . '/scripts/verify/slot_report.php') === 0);
+    check("fixture A: ledger_report GREEN for fixture A's own config", $runConfigScan($ROOT . '/scripts/verify/ledger_report.php') === 0);
+    check("fixture A: slot_report GREEN for fixture A's own config", $runConfigScan($ROOT . '/scripts/verify/slot_report.php') === 0);
 } finally {
     // --rollback-run (not raw DELETEs) — deleting config_components directly
     // hits the same parent_id FK ordering rollbackRun() had to be fixed for;
     // this dogfoods that fix instead of re-deriving a safe delete order here.
     runBackfill($ROOT, $dbHost, $dbName, $dbUser, $dbPass, ['--rollback-run', 'test-lgbf-a-run']);
     $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configA));
-    foreach (['motherboardinventory', 'chassisinventory', 'pciecardinventory', 'storageinventory'] as $t) {
+    foreach (['motherboardinventory', 'chassisinventory', 'pciecardinventory', 'risercardinventory', 'storageinventory'] as $t) {
         $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID = ?")->execute([$configA]);
     }
 }
@@ -334,6 +380,81 @@ try {
         $pdo->prepare("DELETE FROM `$t` WHERE ServerUUID = ?")->execute([$configD]);
     }
     rrmdir($tmpImsData);
+}
+
+// -----------------------------------------------------------------------
+// FLEET-WIDE ledger + slot signal (deliberately NOT fixture-scoped).
+//
+// Runs LAST, after every fixture above has been torn down, so it sees the
+// database's own resting state and nothing this file created.
+//
+// WHY IT EXISTS: until 2026-08-24 the fixture-A assertions above ran the
+// reports' full-fleet scan under a fixture-A label. That was the wrong scope
+// for THEM -- but the whole-database scan is exactly what surfaced two real
+// production data defects in config 4dee234b (a pcie_lane lane_model_mismatch,
+// and a slotless non-onboard NIC), so deleting it along with the mislabel would
+// have thrown away the only thing in this harness watching the whole fleet. It
+// is kept, under a label that says what it actually does.
+//
+// It is a KNOWN-FINDINGS check, NOT a violation count: every known finding is
+// pinned by its complete field set, and ANY violation whose fingerprint is not
+// in that list fails this suite -- a third defect, a fourth, or a change to the
+// numbers inside either known one. Nothing here says "2 violations are fine".
+// A known finding disappearing is not a failure (that is someone fixing the
+// data); it is reported so this list can be tightened.
+// -----------------------------------------------------------------------
+$knownFleetFindings = [
+    // Separately owned (data defect under investigation as of 2026-08-24) --
+    // not this suite's to fix, and not this suite's to tolerate MORE of.
+    'ledger_report' => [
+        ['type' => 'lane_model_mismatch', 'config_uuid' => '4dee234b-d4ab-447a-95cd-e321313b1af8',
+         'ledger_budget' => 40, 'ledger_used' => 8, 'legacy_budget' => 40, 'legacy_used' => 0],
+    ],
+    'slot_report' => [
+        ['type' => 'slotless_card', 'config_uuid' => '4dee234b-d4ab-447a-95cd-e321313b1af8',
+         'component_id' => 10291, 'component_type' => 'nic'],
+    ],
+];
+
+$fingerprint = static function (array $v): string {
+    ksort($v);
+    return json_encode($v);
+};
+
+foreach (['ledger_report' => '/scripts/verify/ledger_report.php',
+          'slot_report'   => '/scripts/verify/slot_report.php'] as $reportName => $rel) {
+    $run = runVerifyReport($ROOT, $dbHost, $dbName, $dbUser, $dbPass, $ROOT . $rel);
+
+    // A scan whose report cannot be read proves nothing, and must never be the
+    // reason this check passes.
+    check("fleet-wide $reportName: report written and parseable", is_array($run['report']));
+    if (!is_array($run['report'])) {
+        continue;
+    }
+    // ...and neither must a scan that looked at zero configs.
+    check("fleet-wide $reportName: scanned at least one config", (int)($run['report']['configs_scanned'] ?? 0) > 0);
+
+    $known = array_map($fingerprint, $knownFleetFindings[$reportName]);
+    $seen  = [];
+    $newViolations = [];
+    foreach (($run['report']['violations'] ?? []) as $v) {
+        $fp = is_array($v) ? $fingerprint($v) : json_encode($v);
+        if (in_array($fp, $known, true)) {
+            $seen[] = $fp;
+            continue;
+        }
+        $newViolations[] = $v;
+    }
+
+    foreach ($newViolations as $v) {
+        echo "  NEW FLEET VIOLATION ($reportName): " . json_encode($v) . PHP_EOL;
+    }
+    check("fleet-wide $reportName: no violation outside the known, separately-owned findings ("
+        . count($newViolations) . " new)", $newViolations === []);
+
+    foreach (array_diff($known, $seen) as $goneFp) {
+        echo "  NOTE  a known $reportName finding is gone -- tighten the list: $goneFp" . PHP_EOL;
+    }
 }
 
 echo $fails === 0 ? "ledger_backfill_test: ALL PASS\n" : "ledger_backfill_test: $fails FAILURE(S)\n";
