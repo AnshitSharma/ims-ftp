@@ -12,9 +12,19 @@
  * That is the same wrong-denominator shape as F-8, F-23 and F-27, committed in
  * the verification step itself. A glob cannot drift from the directory it globs.
  *
- * A suite that exits 0 having run NOTHING (no reachable/provisioned scratch DB)
- * is counted and reported separately from one that ran and passed. Those are not
- * the same result and this runner will not print them as one.
+ * A suite that exits 0 having run NOTHING (no reachable/provisioned scratch DB,
+ * no HTTP harness, a missing PHP extension) is counted and reported separately
+ * from one that ran and passed. Those are not the same result and this runner
+ * will not print them as one.
+ *
+ * That verdict rests on TWO independent signals, and needs only one of them:
+ *   (1) the suite prints the "SKIPPED: 0 check(s) run" marker itself, and
+ *   (2) the runner counts ZERO per-check "PASS"/"FAIL" lines in the suite's
+ *       own output.
+ * (1) alone made the mechanism opt-in and therefore forgettable -- see the
+ * 2026-08-24 note at the ranNothing assignment for the suite that forgot.
+ * (2) is the runner measuring for itself, which is the same reason discovery is
+ * a glob and not a typed list.
  *
  * Usage:
  *   php tests/run_tests.php            # every directory in SUITE_DIRS
@@ -86,14 +96,37 @@ foreach ($files as [$label, $path, $base]) {
     $code = proc_close($proc);
 
     // "Ran nothing" is a distinct outcome, printed as such. See the header.
-    $ranNothing = strpos($stdout, 'SKIPPED: 0 check(s) run') !== false;
+    //
+    // TWO independent signals, deliberately (2026-08-24, part two). Until today
+    // this was the marker grep ALONE, which made the whole ran-nothing mechanism
+    // OPT-IN: a suite was counted as "ran nothing" only if the suite itself
+    // remembered to volunteer the marker string. Any suite that exited 0 having
+    // executed no assertion and simply said nothing about it was counted as a
+    // `pass` -- which is precisely how tests/unit/rate_limiter_concurrency_test
+    // .php (one `SKIP: pcntl not available` line, zero of its assertions, exit 0)
+    // read as green on every Windows box this project is developed on.
+    //
+    // Signal 2 is the runner's OWN measurement: count the per-check result lines
+    // in the suite's output. Every suite in this tree reports each check as a
+    // line beginning "PASS" / "FAIL" (the `check()` helper they all share by
+    // copy), so zero such lines means zero checks executed, whatever the suite
+    // claims. A runner that measures for itself cannot be lied to by silence --
+    // the same reasoning that made discovery a glob instead of a typed list.
+    //
+    // The marker is KEPT and still honoured: a suite can execute some real
+    // checks and still declare that its actual acceptance criteria never ran
+    // (tests/api/*), which no count of output lines could infer.
+    $checksRun = preg_match_all('/^\s*(?:PASS|FAIL)\b/m', $stdout);
+    $ranNothing = strpos($stdout, 'SKIPPED: 0 check(s) run') !== false || $checksRun === 0;
 
     if ($code !== 0) {
         $status = 'FAIL';
         $failed++;
         $failedNames[] = $base;
     } elseif ($ranNothing) {
-        $status = 'RAN NOTHING';
+        // Say WHICH signal fired, so "the suite told us" and "the suite said
+        // nothing and we counted zero" are never confused for each other.
+        $status = $checksRun === 0 ? 'RAN NOTHING (0 checks)' : 'RAN NOTHING (declared)';
         $provedNothing++;
     } else {
         $status = 'pass';
@@ -113,7 +146,7 @@ echo "\n";
 echo "run_tests: $total suite(s) discovered — $passed passed, $failed failed, $provedNothing ran nothing\n";
 if ($provedNothing > 0) {
     echo "run_tests: WARNING $provedNothing suite(s) exited 0 without executing a single check "
-       . "(no provisioned scratch DB). They are NOT evidence.\n";
+       . "(no provisioned scratch DB, no harness, or a missing PHP extension). They are NOT evidence.\n";
 }
 if ($failed > 0) {
     echo "run_tests: FAILED — " . implode(', ', $failedNames) . "\n";

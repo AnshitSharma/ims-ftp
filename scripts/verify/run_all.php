@@ -89,6 +89,25 @@ const REGISTRY = [
     // the control-flow fix comes later, with evidence behind it.
     // NOT in QUICK_SET (full-table scan, P9-scoped), so nightly.sh is unaffected.
     'partial_rows' => ['script' => __DIR__ . '/partial_rows_report.php', 'available' => true, 'lands_in' => null],
+    // deploy_skew (2026-08-24): gates the dead-code gate's own CORPUS. The
+    // authoritative run of the deletion authority is the DEPLOYED one (no shell
+    // on that host, so server-debug-deadcode is the only way it runs against
+    // production), and the SFTP deployment uploads on save but NEVER deletes --
+    // measured the same day, production scans 162 PHP files under the same
+    // _scan_roots minus _excluded_dirs where local has 146. Those 16 orphans sit
+    // INSIDE the gate's corpus. Checked by hand and benign today (none of the 23
+    // deployed symbols' verdicts cites a production-only file), but nothing
+    // detected it, so the next skew could poison a verdict silently: an orphan
+    // that cites a symbol is a permanent unexplained RED, and a stale COPY of a
+    // file we later removed a caller from keeps the gate RED after the real fix
+    // landed. RED only when a production-only file is actually CITED by a symbol
+    // verdict; a bare count delta is a WARN, because a count delta is the normal
+    // state of this deployment and a check that screams every run gets ignored.
+    // NOT RUNNABLE (no production snapshot) reads RED, deliberately -- see
+    // reports/deploy-skew-20260824.md and the file's own header.
+    // NOT in QUICK_SET (P9-scoped, needs a captured snapshot), so nightly.sh is
+    // unaffected.
+    'deploy_skew' => ['script' => __DIR__ . '/deploy_skew_report.php', 'available' => true, 'lands_in' => null],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (capture-only: no compare mode, always exits 0 -- cannot gate)'],
     // regression (2026-08-24): now wired to tests/run_tests.php, the discovery-
     // based local suite runner. It was 'available' => false since this registry
@@ -130,7 +149,11 @@ const GATE_REPORTS = [
     // being checked by eye against a log whose emptiness meant nothing.
     // Mirrored into migration/phase-status.json's P8 gate_reports.
     'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
-    'P9'  => ['deadcode', 'partial_rows', 'equivalence', 'regression'],
+    // P9 gains 'deploy_skew' (2026-08-24): P9 is the phase that DELETES, and
+    // 'deadcode' is trusted to authorise those deletions. deploy_skew is the check
+    // that the corpus deadcode scanned is the source of truth. Mirrored into
+    // migration/phase-status.json's P9 gate_reports.
+    'P9'  => ['deadcode', 'partial_rows', 'deploy_skew', 'equivalence', 'regression'],
     'P10' => ['all'],
 ];
 

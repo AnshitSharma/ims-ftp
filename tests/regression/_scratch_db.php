@@ -43,14 +43,43 @@
  * that refusal is theirs to keep and not this helper's to impose on suites which
  * legitimately run against a passwordless local scratch instance.
  */
-function scratch_db_password(): string
+/**
+ * test_db_password() — the generalised form. THE single credential resolver for
+ * every DB-touching test in this tree, whatever env-var family it uses.
+ *
+ * WHY the prefix parameter (2026-08-24, part two): scratch_db_password() below
+ * fixed the GOLDEN_DB_* family, but tests/state_machine_unit.php (SM_TEST_DB_*)
+ * and tests/fixture_scenarios_real.php (PROBE_DB_*) still each carried their own
+ * `getenv('..._PASS')`-only lookup. Two more places for the same drift to
+ * reappear, and neither honoured the project's own documented "put the password
+ * in a file, point *_PASS_FILE at it" fixture instruction. One resolver, three
+ * families, one documented precedence.
+ *
+ * DOCUMENTED PRECEDENCE (identical for every family; highest first):
+ *   1. {PREFIX}_PASS       — env var, when set and non-empty.
+ *   2. {PREFIX}_PASS_FILE  — env var naming a readable file; the file's trimmed
+ *                            contents are used when non-blank. Keeps the
+ *                            credential out of argv and shell history.
+ *   3. ''                  — nothing configured. Returned, never thrown, so the
+ *                            caller decides whether a passwordless local
+ *                            instance is legitimate (it is, for a default XAMPP
+ *                            scratch box) or must be refused.
+ *
+ * A caller that must NOT connect passwordless tests the '' itself — see
+ * serial_less_unit_identity_test.php. That refusal is the caller's policy, not
+ * this resolver's.
+ *
+ * @param string $prefix env-var family prefix, e.g. 'GOLDEN_DB', 'SM_TEST_DB',
+ *                       'PROBE_DB'. No trailing underscore.
+ */
+function test_db_password(string $prefix): string
 {
-    $pass = getenv('GOLDEN_DB_PASS');
+    $pass = getenv($prefix . '_PASS');
     if (is_string($pass) && $pass !== '') {
         return $pass;
     }
 
-    $passFile = getenv('GOLDEN_DB_PASS_FILE');
+    $passFile = getenv($prefix . '_PASS_FILE');
     if (is_string($passFile) && $passFile !== '' && is_readable($passFile)) {
         $contents = @file_get_contents($passFile);
         if (is_string($contents) && trim($contents) !== '') {
@@ -59,6 +88,11 @@ function scratch_db_password(): string
     }
 
     return '';
+}
+
+function scratch_db_password(): string
+{
+    return test_db_password('GOLDEN_DB');
 }
 
 function scratch_db_connect(): ?PDO
@@ -127,6 +161,23 @@ function scratch_db_or_skip(?PDO $pdo, string $suiteLabel): PDO
     if ($reason === null) {
         return $pdo;
     }
+    test_skip_suite($suiteLabel, $reason);
+}
+
+/**
+ * test_skip_suite() — emit the ran-nothing marker WITH A REASON and exit 0.
+ *
+ * The one place the `SKIPPED: 0 check(s) run` marker string is produced, so a
+ * non-DB reason gets the same treatment as a missing database. A missing PHP
+ * extension is just as much a "this suite proved nothing" as a missing replica:
+ * tests/unit/rate_limiter_concurrency_test.php printed a bare `SKIP:` line and
+ * exited 0, so run_tests.php counted it as a PASS on every pcntl-less platform
+ * (i.e. every Windows dev box) for as long as it has existed.
+ *
+ * Never returns.
+ */
+function test_skip_suite(string $suiteLabel, string $reason): void
+{
     echo "  SKIPPED SUITE  $suiteLabel — $reason\n";
     echo "\nSKIPPED: 0 check(s) run — this suite proved NOTHING in this environment\n";
     exit(0);

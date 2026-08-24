@@ -25,6 +25,8 @@
  * Usage:
  *   php scripts/verify/ledger_report.php                # scan all non-virtual configs
  *   php scripts/verify/ledger_report.php --config <uuid> # check ONE config only
+ *   php scripts/verify/ledger_report.php --config=<uuid> #   (same thing; both
+ *                                                          spellings accepted)
  *                                                          (exit 2 if that config
  *                                                           does not exist -- an
  *                                                           unknown uuid is never GREEN)
@@ -236,11 +238,40 @@ if (in_array('--self-test', $argv, true)) {
 // No logic is duplicated: checkConfigLedger() is the single source of truth for
 // what "clean" means, shared with the scan below.
 // -----------------------------------------------------------------------
-$configArgIndex = array_search('--config', $argv, true);
-if ($configArgIndex !== false) {
-    $targetConfig = $argv[$configArgIndex + 1] ?? null;
-    if (!is_string($targetConfig) || $targetConfig === '' || strncmp($targetConfig, '--', 2) === 0) {
-        fwrite(STDERR, "--config requires a config_uuid argument\n");
+// Both spellings are accepted: `--config <uuid>` (space-separated, the original)
+// and `--config=<uuid>` (equals form). Callers in the wild write either; a mode
+// that silently ignores one of them and falls through to the FULL-FLEET scan is
+// the very scope-creep defect this mode exists to remove. An unrecognised or
+// value-less --config is a usage error (exit 2), never a silent full scan.
+//
+// STRICTLY ADDITIVE: with no --config argument present, $configFlagSeen is false,
+// this whole block is skipped, and behaviour is byte-identical to before.
+$targetConfig = null;
+$configFlagSeen = false;
+foreach ($argv as $argIndex => $arg) {
+    if (!is_string($arg)) {
+        continue;
+    }
+    if ($arg === '--config') {
+        $configFlagSeen = true;
+        $next = $argv[$argIndex + 1] ?? null;
+        if (is_string($next) && $next !== '' && strncmp($next, '--', 2) !== 0) {
+            $targetConfig = $next;
+        }
+        break;
+    }
+    if (strncmp($arg, '--config=', 9) === 0) {
+        $configFlagSeen = true;
+        $candidate = substr($arg, 9);
+        if ($candidate !== '') {
+            $targetConfig = $candidate;
+        }
+        break;
+    }
+}
+if ($configFlagSeen) {
+    if ($targetConfig === null) {
+        fwrite(STDERR, "--config requires a config_uuid argument (--config <uuid> or --config=<uuid>)\n");
         exit(2);
     }
 

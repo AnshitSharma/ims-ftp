@@ -193,7 +193,8 @@
    "gate": "closed",
    "gate_reports": [
     "deadcode",
-     "partial_rows",
+    "partial_rows",
+    "deploy_skew",
     "equivalence",
     "regression"
    ],

@@ -20,9 +20,26 @@
 
 require_once __DIR__ . '/../../core/helpers/RateLimiter.php';
 
+// The ran-nothing marker, not a bare SKIP line (2026-08-24).
+//
+// WHY: pcntl does not exist on Windows, so on every Windows dev box -- which is
+// where this project is developed -- this file printed one `SKIP:` line and
+// exited 0, having executed ZERO of its assertions. run_tests.php's ran-nothing
+// detection keys off the "SKIPPED: 0 check(s) run" marker, which this file never
+// emitted, so it was counted as a plain `pass`: a suite whose entire subject is
+// concurrency safety reported green on a platform where it cannot fork. Exactly
+// the fail-open class the api/* suites were fixed for earlier the same day, in a
+// suite nobody had looked at because it was never DB-backed.
+//
+// test_skip_suite() is the shared emitter in tests/regression/_scratch_db.php --
+// one marker string, one place, whatever the reason for not running.
+require_once __DIR__ . '/../regression/_scratch_db.php';
+
 if (!function_exists('pcntl_fork')) {
-    echo "SKIP: pcntl not available (needed to create real concurrency)\n";
-    exit(0);
+    test_skip_suite(
+        'RateLimiter atomicity under real concurrency (audit I)',
+        'pcntl not available on this platform (needed to fork real concurrent workers)'
+    );
 }
 
 $failures = 0;

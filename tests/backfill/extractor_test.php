@@ -33,13 +33,27 @@ function check($label, $cond) {
 // honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
 // replaced honoured only the former, so the documented pass-file fixture
 // silently reduced this suite to a self-skip. See _scratch_db.php.
+//
+// The connection itself is GUARDED (2026-08-24, part two). Until today this was
+// a bare `new PDO(...)`: with no reachable scratch DB -- or with the credential
+// resolver returning '' because nothing was configured -- it threw an uncaught
+// PDOException and the process died with exit 255. run_tests.php then reported
+// FAIL, i.e. "the code under test is broken", for an environment problem, which
+// is the mirror image of the fail-open: a suite that cannot run must say
+// SKIPPED-with-reason once, in the one line the runner understands, and be
+// counted as "ran nothing" -- never as a pass, and never as a code failure.
 require_once __DIR__ . '/../regression/_scratch_db.php';
-$pdo = new PDO(
-    'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
-    getenv('GOLDEN_DB_USER') ?: 'root',
-    scratch_db_password(),
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-);
+try {
+    $pdo = new PDO(
+        'mysql:host=' . (getenv('GOLDEN_DB_HOST') ?: '127.0.0.1') . ';dbname=' . (getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden'),
+        getenv('GOLDEN_DB_USER') ?: 'root',
+        scratch_db_password(),
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+} catch (\Throwable $e) {
+    $pdo = null; // reported by scratch_db_or_skip() below
+}
+$pdo = scratch_db_or_skip($pdo, 'Extractor::extract() against a live scratch schema');
 
 // -----------------------------------------------------------------------
 // Throwaway ims-data fixture (riser component_subtype detection only).

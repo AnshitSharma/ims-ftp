@@ -25,14 +25,23 @@ putenv('SLOT_AUTHORITY_ENABLED=off'); putenv('STORAGE_CONNECTION_AUTHORITY_ENABL
 $probeHost = getenv('PROBE_DB_HOST') ?: '127.0.0.1';
 $probeName = getenv('PROBE_DB_NAME') ?: 'imsbdcmsbharatda_Ims_Production';
 $probeUser = getenv('PROBE_DB_USER') ?: 'root';
-$probePass = getenv('PROBE_DB_PASS');
-$probePass = is_string($probePass) ? $probePass : '';
+// Credential resolution is shared, not local (2026-08-24, part two):
+// test_db_password() applies the ONE documented precedence -- {PREFIX}_PASS,
+// then {PREFIX}_PASS_FILE, then '' -- to every env-var family in this tree.
+// This file previously read PROBE_DB_PASS and nothing else, so the project's own
+// "password in a file" fixture convention silently reduced it to a self-skip.
+require_once __DIR__ . '/regression/_scratch_db.php';
+$probePass = test_db_password('PROBE_DB');
 putenv('DB_HOST='.$probeHost);putenv('DB_USER='.$probeUser);putenv('DB_PASS='.$probePass);putenv('DB_NAME='.$probeName);
 try {
     $pdo=new PDO("mysql:host=$probeHost;dbname=$probeName;charset=utf8mb4",$probeUser,$probePass,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]);
 } catch (\Throwable $e) {
-    echo "SKIPPED: fixture_scenarios_real.php needs a local '$probeName' DB mirror (override via PROBE_DB_* env vars) — not reachable here: ".$e->getMessage()."\n";
-    exit(0);
+    // The MARKER line, so a runner counts this as "ran nothing" rather than a
+    // pass. A bare "SKIPPED:" prefix is not the string run_tests.php greps for.
+    test_skip_suite(
+        'real-fleet fixture scenarios',
+        "needs a local '$probeName' DB mirror (override via PROBE_DB_* env vars) — not reachable here: " . $e->getMessage()
+    );
 }
 require_once "$ROOT/core/models/server/ServerBuilder.php";
 require_once "$ROOT/core/models/compatibility/ComponentCompatibility.php";

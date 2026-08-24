@@ -34,12 +34,17 @@ are only meaningful as a reconciliation target for the runner's own output.
 |---|---|---|
 | `tests/api/` | 2 | `add_remove_response_shape_test.php`, `new_actions_test.php` |
 | `tests/backfill/` | 2 | `extractor_test.php`, `ledger_backfill_test.php` |
-| `tests/regression/` | 15 | `add_command_test.php`, `caddy_finalize_parity_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `read_router_test.php`, `remove_command_test.php`, `replace_command_test.php`, `require_paths_test.php`, `serial_less_unit_identity_test.php`, `shadow_dry_run_error_test.php`, `state_guard_test.php` |
+| `tests/regression/` | 16 | `add_command_test.php`, `caddy_finalize_parity_test.php`, `dual_write_test.php`, `fail_closed_test.php`, `finalize_command_test.php`, `finalized_immutability_test.php`, `ledger_dual_write_test.php`, `nested_transaction_test.php`, `read_router_test.php`, `remove_command_test.php`, `replace_command_test.php`, `require_paths_test.php`, `serial_less_unit_identity_test.php`, `shadow_dry_run_error_test.php`, `state_guard_test.php`, `transaction_ownership_test.php` |
 | `tests/unit/` | 11 | `base_command_test.php`, `component_entry_identity_test.php`, `config_component_repository_test.php`, `engine_shadow_test.php`, `onboard_nic_engine_test.php`, `rate_limiter_concurrency_test.php`, `resource_catalog_test.php`, `slot_namespace_test.php`, `target_state_test.php`, `verdict_shim_test.php`, `verdict_test.php` |
 | `tests/unit/rules/` | 8 | `cpu_rules_test.php`, `dependency_rule_test.php`, `lane_rule_test.php`, `memory_rules_test.php`, `net_rules_test.php`, `slot_rules_test.php`, `storage_rules_test.php`, `system_rules_test.php` |
 | `tests/unit/compatibility/` | 3 | `cpu_identity_matcher_test.php`, `motherboard_storage_gate_test.php`, `storage_bay_placement_test.php` |
 | `tests/unit/validation/` | 4 | `finalize_trigger_coverage_test.php`, `m2_capacity_rule_test.php`, `onboard_nic_pcie_count_test.php`, `ram_type_normalization_test.php` |
-| **Total discovered** | **45** | |
+| **Total discovered** | **46** | |
+
+**2026-08-24 (part two) reconciliation.** The regression row read 15 and the
+total 45; a live `run_tests.php` discovery reports 16 and 46 —
+`regression/transaction_ownership_test.php` was missing from the table. Same
+drift shape as the note above, one row down.
 
 Non-suites in these same directories, excluded by `run_tests.php` itself
 (`_`-prefixed helpers plus the `NOT_A_SUITE` list) and therefore not counted
@@ -48,13 +53,12 @@ above: `tests/regression/_scratch_db.php` (shared `scratch_db_connect()`),
 `NOT_A_SUITE`), `tests/api/_http_harness.php` (shared HTTP harness client).
 
 `tests/api/*`'s DB+HTTP-backed criteria self-skip unless `IMS_HTTP_HARNESS_URL`
-points at a running scratch-only `php -S` server. **Note the sharp edge, found
-2026-08-24 when these two files were first ever discovered:** they print
-per-criterion `SKIPPED` lines and then `ALL CHECKS PASS`, and exit 0 — they do
-NOT print the `SKIPPED: 0 check(s) run` marker `run_tests.php` looks for, so
-they are counted as **pass**, not as "ran nothing". That is defensible (both do
-execute real structural checks with no harness) but it means a `pass` on these
-two lines never implies their HTTP criteria ran. Read their own output.
+points at a running scratch-only `php -S` server. **The sharp edge found
+2026-08-24 (they printed per-criterion `SKIPPED` lines, then `ALL CHECKS PASS`,
+exited 0, and were therefore counted as `pass` while their acceptance criteria
+had not run) is CLOSED:** both files now emit the `SKIPPED: 0 check(s) run`
+marker on that branch and are reported as `RAN NOTHING (declared)`. Their offline
+structural checks are kept and still fail the suite (exit 1) when broken.
 
 ## 2. Named top-level legacy scripts — 8 files
 
@@ -107,7 +111,15 @@ number never includes them. Report the two figures separately.
 
 A sweep result must read: **"N discovered / P passed / F failed / R ran
 nothing"** — `run_tests.php`'s own final line, quoted verbatim — plus the legacy
-count separately if those 8 were run. Do not report a bare "N/M" without
+count separately if those 8 were run. As of 2026-08-24 (part two) "ran nothing"
+rests on TWO independent signals and needs only one: the suite printing the
+`SKIPPED: 0 check(s) run` marker (reported as `RAN NOTHING (declared)`), or the
+runner counting zero `PASS`/`FAIL` lines in the suite's output (reported as
+`RAN NOTHING (0 checks)`). The second signal exists because the first was
+opt-in: `tests/unit/rate_limiter_concurrency_test.php` printed one bare
+`SKIP: pcntl not available` line, executed none of its assertions, and was
+counted as a **pass** on every Windows box — the same fail-open as the
+`tests/api/*` one above, in a suite nobody had audited because it is DB-free. Do not report a bare "N/M" without
 stating which list M refers to, and never report "ran nothing" folded into
 "passed": as of 2026-08-24 `run_tests.php` exits **3** (not 0) when any suite
 exited 0 without executing a check, so `scripts/verify/run_all.php`'s

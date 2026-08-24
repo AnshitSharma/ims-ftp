@@ -19,6 +19,20 @@
  * never a record that the deletion happened — a symbol that no longer exists at
  * all is reported ALREADY_GONE and counts as green.
  *
+ * TWO NEW NON-DELETABLE VERDICTS (2026-08-24), both from deadcode_scan.php's
+ * sole-writer rule — read that file's docblock for the reasoning:
+ *   RETAIN_SOLE_WRITER — zero callers, but this symbol is the ONLY writer of a
+ *       persisted literal value that other code still reads. Deleting it would
+ *       leave those readers permanently unreachable yet syntactically live, and
+ *       the next scan would rate THEM deletable on the same reasoning. The
+ *       readers are named in the report. Counts RED unless the manifest entry
+ *       declares retain: true.
+ *   RETAIN_UNVERIFIED — the sole-writer analysis could not run for a symbol the
+ *       reference count had otherwise cleared (body span unresolvable, file not
+ *       tokenisable). Counts RED: a check that could not run must not print a
+ *       pass.
+ * Neither is a call-site finding, so neither changes any pre-existing verdict.
+ *
  * SAME-FILE CALLERS ARE COUNTED, and this is a deliberate departure from the letter
  * of the 11-verification wording ("outside tests + the symbol's own file"). That
  * wording is safe for a small class and actively dangerous for this codebase:
@@ -112,6 +126,7 @@ if (!empty($scan['error'])) {
 $results = $scan['results'];
 $selected = $scan['symbols_selected'];
 $redCount = $scan['symbols_red'];
+$retainCount = $scan['symbols_retain'] ?? 0;
 $files = deadcodeCollectPhpFiles($root, $scan['scan']['roots'], $scan['scan']['excluded_dirs']);
 
 // ---- tree lint (contract: "PHP lint of full tree") --------------------------
@@ -150,6 +165,7 @@ file_put_contents($file, json_encode([
     ],
     'symbols_selected' => $selected,
     'symbols_red' => $redCount,
+    'symbols_retain' => $retainCount,
     'lint' => $lint,
     'results' => $results,
     'status' => $green ? 'GREEN' : 'RED',
@@ -161,6 +177,43 @@ foreach ($results as $r) {
         foreach (array_slice($r['blocking_call_sites'], 0, 5) as $h) {
             fwrite(STDERR, sprintf("         %s:%d  %s\n", $h['file'], $h['line'], $h['text']));
         }
+    } elseif ($r['status'] === 'RETAIN_SOLE_WRITER') {
+        fwrite(STDERR, sprintf(
+            "  %-4s %-38s zero callers, but SOLE WRITER of persisted state other code reads
+",
+            $r['retain'] ? 'HOLD' : 'RED',
+            $r['symbol']
+        ));
+        foreach ($r['sole_writer']['findings'] as $f) {
+            fwrite(STDERR, sprintf(
+                "         writes %s = '%s' at %s:%s -- and nothing else in the tree does
+",
+                $f['column'],
+                $f['value'],
+                $r['defined_in'],
+                implode(',', $f['write_lines_in_symbol'])
+            ));
+            foreach ($f['readers'] as $rd) {
+                fwrite(STDERR, sprintf("         read by %s:%d  %s
+", $rd['file'], $rd['line'], $rd['text']));
+            }
+        }
+        fwrite(STDERR, "         Deleting it leaves those readers permanently unreachable but syntactically
+");
+        fwrite(STDERR, "         live -- retire the writer and its readers together, as one reviewed change,
+");
+        fwrite(STDERR, "         or set retain:true on the manifest entry with the reason.
+");
+    } elseif ($r['status'] === 'RETAIN_UNVERIFIED') {
+        fwrite(STDERR, sprintf(
+            "  %-4s %-38s sole-writer analysis COULD NOT RUN: %s
+",
+            $r['retain'] ? 'HOLD' : 'RED',
+            $r['symbol'],
+            (string)$r['sole_writer']['reason']
+        ));
+        fwrite(STDERR, "         Not deletable on this run. A check that could not run is not a pass.
+");
     } elseif ($r['status'] === 'RED_INTERNAL') {
         fwrite(STDERR, sprintf(
             "  RED  %-38s no external callers, but %d SAME-FILE caller(s) still live\n",

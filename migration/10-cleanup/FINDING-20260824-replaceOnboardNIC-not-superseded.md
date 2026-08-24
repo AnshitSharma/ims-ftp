@@ -1,28 +1,88 @@
-# REMOVED 2026-08-24 — `OnboardNICHandler::replaceOnboardNIC()`
+# FINDING 2026-08-24 — `OnboardNICHandler::replaceOnboardNIC()` is NOT dead, and NOT superseded
 
-**Unit:** Commit 0 (U-D.2 cleanup pack)
-**File:** `ims-ftp/core/models/compatibility/OnboardNICHandler.php`, lines 449–575 (127 lines incl. docblock)
-**Gate evidence:** `server-debug-deadcode` against the DEPLOYED tree reported this symbol
-GREEN — `blocking_callers: 0`, `internal_callers: 0`. Independently re-confirmed by a
-tree-wide grep at deletion time: the only surviving occurrences were three explanatory
-comments (`:105`, `:390`, `:410`) and documentation; zero invocation sites in any `.php`
-or `.js` file in the monorepo.
+**Verdict: DO NOT DELETE. Commit 0's premise is wrong for this symbol.**
 
-**Why it went:** superseded by `ReplaceComponent` (U-C.4). This was the codebase's only
-replace path and it performed **zero compatibility validation** (audit finding RP-2);
-`ReplaceComponent` reimplements it as a first-class command with one TargetState and one
-commit, and does not inherit the validation-free path.
+**Unit:** Commit 0 (U-D.2 cleanup pack) · **Symbol:** `replaceOnboardNIC()`,
+`core/models/compatibility/OnboardNICHandler.php:449-575` (127 lines incl. docblock)
 
-**Why this archive exists:** the monorepo is not under version control, and `ims-ftp/`
-auto-uploads to production on save, so the delete would otherwise be unrecoverable.
-`*.md` is in the SFTP ignore list, so this file never deploys. To restore, paste the
-block below back in ahead of the class-closing brace.
+## What the gate said
 
-The two `BUGFIX` comments below (A-L7 model-vs-unit conflation, TP-4C onboard-NIC
-disable-instead-of-delete) record real production defects. Their invariants live on in
-the `nicinventory` handling elsewhere in this class and in `ReplaceComponent`; they are
-preserved here so the reasoning is not lost with the code.
+`server-debug-deadcode` against the deployed tree reports this symbol **GREEN** —
+`blocking_callers: 0`, `internal_callers: 0`. A tree-wide grep confirms it independently:
+the only surviving occurrences are three explanatory comments (`:105`, `:390`, `:410`)
+and documentation. Zero invocation sites in any `.php` or `.js` file in the monorepo.
 
+That is all true, and it is not sufficient.
+
+## What the gate cannot see
+
+The scanner asks one question: *does any file name this symbol?* It cannot ask the
+question that decides whether deletion is safe: **does anything still depend on the state
+this code is the only producer of?**
+
+Here it does. `replaceOnboardNIC()` contains the sole `Flag = 'replaced'` write in the
+entire codebase (`OnboardNICHandler.php:530`). Three surviving branches *read* that flag
+and exist only to honour it:
+
+| site | what it does | becomes if the writer is deleted |
+|---|---|---|
+| `OnboardNICHandler.php:108` | skips a `'replaced'` port when a motherboard is re-added, so replacing a port is not silently undone | permanently false |
+| `OnboardNICHandler.php:420` | `Status = CASE WHEN Flag='replaced' THEN Status ELSE 1 END` on detach | `ELSE` branch always |
+| `OnboardNICHandler.php:421` | same for `status_v2` | `ELSE` branch always |
+
+Deleting the producer does not make those branches dead in a way the gate would ever
+report — they stay syntactically reachable and semantically unreachable forever. The gate
+would then rate them GREEN too, on the same reasoning, and the TP-4C invariant would be
+deleted in pieces, each piece individually justified.
+
+## Why the supersession claim is false
+
+`IMS_TARGET_ARCHITECTURE.md:226` states that `replaceOnboardNIC` *"is reimplemented as a
+ReplaceComponent specialization and loses its validation-free path"*. That reimplementation
+**did not happen**. `ReplaceComponentCommand.php:105-107` reads:
+
+```php
+if (in_array($this->componentType, ['nic','pciecard','hbacard'], true)
+    && strpos($this->newComponentUuid, 'onboard-') !== 0
+) {
+```
+
+Onboard components are explicitly **excluded**. `ReplaceComponentCommand` cannot replace an
+onboard NIC; `onboard` appears nowhere else in that file. So the capability was never
+ported — and because nothing calls `replaceOnboardNIC()` either, **the capability is
+already unreachable from the API today.**
+
+That is the actual finding. This is not dead code awaiting cleanup; it is a **regression
+that already shipped**, and this function is the last surviving specification of the
+behaviour. Deleting it would erase the evidence and the reference implementation in the
+same stroke, converting a recoverable gap into an invisible one.
+
+## Current data exposure
+
+Checked the 2026-08-24 production dump: **zero** `nicinventory` rows carry
+`Flag = 'replaced'`. So no live row currently depends on the consumers above. The exposure
+is capability loss, not data corruption — which is why this is a finding and not an incident.
+
+## Recommended disposition (owner decision)
+
+1. **Keep the code.** Mark the manifest entry `retain: true` with this file as the reason,
+   so the gate stops proposing it and the next reader learns why in one hop.
+2. **File the real unit**: either extend `ReplaceComponentCommand` to handle `onboard-`
+   NICs (the genuine U-C.4 completion), or record an explicit product decision that
+   onboard-NIC replacement is withdrawn — in which case the three consumer branches and
+   the `Flag='replaced'` vocabulary come out *together*, as one reviewed change.
+3. **Harden the gate.** A symbol that is the only writer of a persisted state other code
+   reads is not deletable on a name-reference count. Sole-writer detection belongs in
+   `deadcode_scan.php`, or at minimum in the manifest as a declared hazard.
+
+Point 3 is the durable lesson: this is the same fail-open family as the rest of the
+migration — a check that returned a verdict because it could not see the thing that mattered.
+
+## The source, preserved
+
+Kept verbatim below so this finding stands alone even if the code later moves. The two
+`BUGFIX` comments record real production defects (A-L7 model-vs-unit conflation, TP-4C
+disable-instead-of-delete).
 ```php
     /**
      * Replace an onboard NIC with a component NIC

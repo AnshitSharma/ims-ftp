@@ -17,18 +17,37 @@ $ROOT   = dirname(__DIR__);
 $dbHost = getenv('SM_TEST_DB_HOST') ?: '127.0.0.1';
 $dbName = getenv('SM_TEST_DB_NAME') ?: 'ims_scratch_smunit';
 $dbUser = getenv('SM_TEST_DB_USER') ?: 'root';
-$dbPass = getenv('SM_TEST_DB_PASS');
-if ($dbPass === false) { $dbPass = ''; }
+// Credential resolution is shared, not local (2026-08-24, part two).
+// test_db_password() applies ONE documented precedence -- {PREFIX}_PASS, then
+// {PREFIX}_PASS_FILE, then '' -- to every env-var family in this tree. This file
+// previously read SM_TEST_DB_PASS and nothing else, so the project's own
+// "password in a file" fixture convention handed it an empty string here while
+// working correctly for the GOLDEN_DB_* suites next door. Note the prefix stays
+// SM_TEST_DB: this suite must never point at ims_compat_golden (see the header
+// and tests/MANIFEST.md 3).
+require_once __DIR__ . '/regression/_scratch_db.php';
+$dbPass = test_db_password('SM_TEST_DB');
 
-$bootstrapPdo = new PDO("mysql:host=$dbHost;charset=utf8mb4", $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-$bootstrapPdo->exec("DROP DATABASE IF EXISTS `$dbName`");
-$bootstrapPdo->exec("CREATE DATABASE `$dbName` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
+// Guarded: an unreachable/unauthorised server is an environment fact, not a
+// StateMachine defect. Say it once, in the marker line run_tests.php
+// understands, and exit 0 having claimed nothing.
+try {
+    $bootstrapPdo = new PDO("mysql:host=$dbHost;charset=utf8mb4", $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $bootstrapPdo->exec("DROP DATABASE IF EXISTS `$dbName`");
+    $bootstrapPdo->exec("CREATE DATABASE `$dbName` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
 
-$pdo = new PDO(
-    "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
-    $dbUser, $dbPass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
-);
+    $pdo = new PDO(
+        "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
+        $dbUser, $dbPass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+    );
+} catch (\Throwable $e) {
+    test_skip_suite(
+        'StateMachine transition substrate (U-SM.3)',
+        "cannot provision the throwaway fixture DB '$dbName' on '$dbHost' ("
+            . $e->getMessage() . ') -- set SM_TEST_DB_HOST/_NAME/_USER/_PASS or SM_TEST_DB_PASS_FILE'
+    );
+}
 
 require_once $ROOT . '/core/models/state/StatusMap.php';
 require_once $ROOT . '/core/models/state/StateMachine.php';
