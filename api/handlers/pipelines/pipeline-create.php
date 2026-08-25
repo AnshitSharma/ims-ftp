@@ -10,6 +10,11 @@
  * - priority (optional, default medium)
  * - target_server_uuid (optional): scopes any granted server access to this config
  * - requested_access (optional): JSON array of permission names being asked for
+ * - parent_ticket_id (optional): raise this as a PREREQUISITE for that request,
+ *     which stays frozen until this one is resolved. Validated in
+ *     PipelineManager::validateParent() — the caller must already be involved in
+ *     the parent (or hold pipeline.manage), the parent must be open, and the
+ *     chain must stay within PipelineConfig::MAX_REQUEST_DEPTH.
  * - items (optional): JSON array of component items
  * - stage_overrides (optional): JSON object keyed by stage template id ->
  *     { "assignee_type": "user"|"role", "assignee_id": 4 }
@@ -21,8 +26,8 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    if (!$acl->hasPermission($user_id, 'pipeline.create')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
+    $canManage = $acl->hasPermission($user_id, 'pipeline.manage');
+    if (!$acl->hasPermission($user_id, 'pipeline.create') && !$canManage) {
         send_json_response(false, true, 403, "Permission denied: pipeline.create required", null);
         exit;
     }
@@ -72,6 +77,14 @@ try {
         $requestedAccess = [];
     }
 
+    // The request this one is a prerequisite for. Left as-is when absent, so a
+    // top-level request is exactly what it was before this parameter existed.
+    $parentTicketId = $_POST['parent_ticket_id'] ?? null;
+    if ($parentTicketId !== null && $parentTicketId !== '' && !is_numeric($parentTicketId)) {
+        send_json_response(false, true, 400, "parent_ticket_id must be numeric", null);
+        exit;
+    }
+
     $data = [
         'title' => $_POST['title'] ?? '',
         'description' => $_POST['description'] ?? '',
@@ -80,11 +93,12 @@ try {
         'requested_access' => $requestedAccess,
         'actions' => $actions,
         'items' => $items,
-        'stage_overrides' => $overrides
+        'stage_overrides' => $overrides,
+        'parent_ticket_id' => ($parentTicketId === '' ? null : $parentTicketId)
     ];
 
     $mgr = new PipelineManager($pdo);
-    $result = $mgr->createPipeline((int)$templateId, $data, $user_id);
+    $result = $mgr->createPipeline((int)$templateId, $data, $user_id, $canManage);
 
     if (!$result['success']) {
         send_json_response(false, true, 400, "Failed to create pipeline", ['errors' => $result['errors']]);

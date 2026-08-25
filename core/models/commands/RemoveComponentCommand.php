@@ -118,7 +118,30 @@ final class RemoveComponentCommand extends BaseCommand
             ? TargetStateBuilder::dependentsOf($current, $this->targetRow['id'])
             : [];
 
-        return TargetStateBuilder::withRemove($current, $this->targetRow['id'], $this->cascade);
+        $target = TargetStateBuilder::withRemove($current, $this->targetRow['id'], $this->cascade);
+
+        // An onboard port is not a separable dependent, -- it IS the board. apply()
+        // below hands the whole set to OnboardNICHandler::removeOnboardNICs(), so by
+        // the time this removal lands those rows are gone too; leaving them in the
+        // target state would only make dependency.blocked_removal (U-R.8) refuse the
+        // board on account of the very ports the removal takes with it. They are
+        // deliberately NOT recorded as cascadeRows: nothing extra was removed to
+        // report, and apply()'s detach already owns their tombstones.
+        //
+        // Matched by the synthetic "onboard-" spec_uuid prefix rather than by
+        // parent_id, because rows written before parentage was resolvable carry a
+        // NULL parent and would otherwise survive into mechanism 2 as structural
+        // orphans. A config holds at most one motherboard (system.singleton), so
+        // every live onboard port in it belongs to the board being removed.
+        if ($this->targetRow['component_type'] === 'motherboard') {
+            foreach ($current->byType('nic') as $nicRow) {
+                if (strpos((string)$nicRow['spec_uuid'], 'onboard-') === 0) {
+                    $target = TargetStateBuilder::withRemove($target, $nicRow['id'], false);
+                }
+            }
+        }
+
+        return $target;
     }
 
     protected function apply(PDO $pdo, TargetState $target): void

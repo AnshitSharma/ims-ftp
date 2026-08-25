@@ -333,6 +333,7 @@ function handlePipelineOperations($operation, $user) {
             'reject'          => 'pipeline-reject.php',
             'reassign'        => 'pipeline-reassign.php',
             'cancel'          => 'pipeline-cancel.php',
+            'unlink-child'    => 'pipeline-unlink-child.php',
         ];
 
         if (!isset($endpointMap[$operation])) {

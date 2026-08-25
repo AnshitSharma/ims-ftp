@@ -48,6 +48,47 @@ class PipelineConfig
     }
 
     /**
+     * How deeply Requests may nest as prerequisites of one another.
+     *
+     * A request raised inside another (tickets.parent_ticket_id) is a
+     * PREREQUISITE: its parent freezes until it resolves. Depth 3 means
+     * grandparent -> parent -> child, and no further. The cap exists because a
+     * chain has to terminate somewhere for any of it to ever be approved: every
+     * link adds another human decision that must land first, and a chain nobody
+     * can finish is a request nobody can close.
+     */
+    const MAX_REQUEST_DEPTH = 3;
+
+    /**
+     * Child statuses that FREEZE the parent request.
+     *
+     *   draft, in_progress -> the prerequisite is still open.
+     *   rejected           -> the prerequisite was REFUSED. It must never read
+     *                         as met, so it keeps freezing the parent. Someone
+     *                         then rejects or cancels the parent, or an admin
+     *                         unlinks the refused child (PipelineManager::
+     *                         unlinkChild) so a replacement can be raised.
+     *
+     * Absent, and therefore releasing the parent:
+     *
+     *   completed -> the prerequisite was met.
+     *   cancelled -> the requester withdrew it; there is nothing left to wait
+     *                for. Not a bypass: the parent still needs its own approval
+     *                by someone other than its creator.
+     *
+     * Note what this list is NOT: a "blocked" lifecycle status. Blocked-ness is
+     * derived from these rows on every read (PipelineManager::blockingChildren)
+     * rather than stored on the parent, because a stored flag would be a second
+     * truth that can drift from the children it claims to summarise.
+     *
+     * @return string[]
+     */
+    public static function getParentBlockingStatuses()
+    {
+        return ['draft', 'in_progress', 'rejected'];
+    }
+
+    /**
      * Side effect: completing this stage PERFORMS the work the request asked
      * for, through RequestActionExecutor. effect_config shape:
      *   {"action_types": ["server.component.add", ...]}

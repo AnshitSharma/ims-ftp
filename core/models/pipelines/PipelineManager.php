@@ -52,9 +52,11 @@ class PipelineManager
      * @param array $data ['title','description','priority','target_server_uuid',
      *                     'items' => [...], 'stage_overrides' => [stageTemplateId => ['assignee_type','assignee_id']]]
      * @param int $userId
+     * @param bool $hasManage caller holds pipeline.manage — lets them raise a
+     *                        prerequisite on a request they are not involved in
      * @return array ['success','ticket_id','ticket_number','errors']
      */
-    public function createPipeline($templateId, $data, $userId)
+    public function createPipeline($templateId, $data, $userId, $hasManage = false)
     {
         // Load + validate the type
         $template = $this->templateManager->getTemplate($templateId);
@@ -156,6 +158,21 @@ class PipelineManager
             }
         }
 
+        // The request this one is a PREREQUISITE for. Checked here so an
+        // impossible link is refused while the requester is still looking at the
+        // form; re-checked under a row lock inside the transaction below, which
+        // is what actually makes "a parent is never approved while a blocking
+        // child exists" true rather than merely likely.
+        $parentTicketId = null;
+        if (!empty($data['parent_ticket_id'])) {
+            $parentCheck = $this->validateParent($data['parent_ticket_id'], $userId, $hasManage);
+            if (!$parentCheck['valid']) {
+                $errors = array_merge($errors, $parentCheck['errors']);
+            } else {
+                $parentTicketId = $parentCheck['parent_id'];
+            }
+        }
+
         // Validate items (reuse ticket item validation + UUID/compatibility checks)
         $items = isset($data['items']) && is_array($data['items']) ? $data['items'] : [];
         $itemsValidation = $this->validator->validateTicketItems($items, $targetServer);
@@ -210,6 +227,32 @@ class PipelineManager
         try {
             $this->pdo->beginTransaction();
 
+            // Lock the parent for the rest of this transaction. completeStage()
+            // locks the same row before it probes for blocking children, so the
+            // two serialise: a child can never be inserted in the window between
+            // that probe finding nothing and the approval committing. Re-checked
+            // under the lock because the parent may have been closed since the
+            // pre-flight validation above.
+            if ($parentTicketId !== null) {
+                $stmt = $this->pdo->prepare(
+                    "SELECT status FROM tickets WHERE id = ? AND pipeline_template_id IS NOT NULL FOR UPDATE"
+                );
+                $stmt->execute([$parentTicketId]);
+                $parentRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$parentRow) {
+                    $this->pdo->rollBack();
+                    return ['success' => false, 'errors' => ['The request this would be a prerequisite for no longer exists']];
+                }
+                if (in_array($parentRow['status'], PipelineConfig::getTerminalStatuses(), true)) {
+                    $this->pdo->rollBack();
+                    return [
+                        'success' => false,
+                        'errors' => ['That request was just ' . $parentRow['status'] . ' — a prerequisite would have nothing left to unblock']
+                    ];
+                }
+            }
+
             $ticketNumber = $this->generateTicketNumber();
 
             // requested_access arrives with 2026_08_21_002; write it only once
@@ -220,16 +263,23 @@ class PipelineManager
             // both read queries LEFT JOIN the type - but without this it would
             // lose the one thing the join was for. Arrives with 2026_08_22_006.
             $storeTypeName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name');
+            // parent_ticket_id arrives with 2026_08_25_007. validateParent()
+            // has already REFUSED the request outright if a parent was asked
+            // for and the column is missing, so reaching here with a parent
+            // means the column exists.
+            $storeParent = ($parentTicketId !== null);
 
             $stmt = $this->pdo->prepare("
                 INSERT INTO tickets
                     (ticket_number, title, description, status, priority, target_server_uuid,
                      pipeline_template_id, created_by, created_at, submitted_at"
                      . ($storeRequested ? ", requested_access" : "")
-                     . ($storeTypeName ? ", pipeline_type_name" : "") . ")
+                     . ($storeTypeName ? ", pipeline_type_name" : "")
+                     . ($storeParent ? ", parent_ticket_id" : "") . ")
                 VALUES (?, ?, ?, 'in_progress', ?, ?, ?, ?, NOW(), NOW()"
                      . ($storeRequested ? ", ?" : "")
-                     . ($storeTypeName ? ", ?" : "") . ")
+                     . ($storeTypeName ? ", ?" : "")
+                     . ($storeParent ? ", ?" : "") . ")
             ");
             $insertParams = [
                 $ticketNumber,
@@ -245,6 +295,9 @@ class PipelineManager
             }
             if ($storeTypeName) {
                 $insertParams[] = $template['name'];
+            }
+            if ($storeParent) {
+                $insertParams[] = $parentTicketId;
             }
             $stmt->execute($insertParams);
             $ticketId = (int)$this->pdo->lastInsertId();
@@ -321,6 +374,38 @@ class PipelineManager
             // History
             $this->historyService->logHistory($ticketId, 'pipeline_created', null, $template['name'], $userId, "Pipeline started from type '{$template['name']}'");
             $this->historyService->logHistory($ticketId, 'stage_activated', null, $resolvedStages[0]['name'], $userId, "Stage '{$resolvedStages[0]['name']}' activated");
+
+            // Logged on BOTH timelines, because both are read by different
+            // people for different reasons: the parent's approver needs to see
+            // why it stopped moving, and the child's owner needs to see that
+            // something else is waiting on their decision.
+            if ($parentTicketId !== null) {
+                $parentNumber = $this->ticketNumberOf($parentTicketId);
+
+                $this->historyService->logHistory(
+                    $ticketId,
+                    'parent_linked',
+                    null,
+                    $parentNumber,
+                    $userId,
+                    "Raised as a prerequisite for #{$parentNumber}, which stays frozen until this is resolved"
+                );
+                $this->historyService->logHistory(
+                    $parentTicketId,
+                    'child_requested',
+                    null,
+                    $ticketNumber,
+                    $userId,
+                    "Frozen: waiting on prerequisite #{$ticketNumber} ('{$template['name']}')"
+                );
+
+                // So the frozen parent resurfaces in the list, which orders by
+                // updated_at DESC. Without this it sinks while the thing it is
+                // waiting for sits at the top, and its requester cannot tell the
+                // two are connected.
+                $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")
+                    ->execute([$parentTicketId]);
+            }
 
             $this->pdo->commit();
 
@@ -412,6 +497,29 @@ class PipelineManager
                 return ['success' => false, 'errors' => [$authError]];
             }
 
+            // Is this request frozen behind a prerequisite? Checked here —
+            // before anything is written and before any effect runs — so a
+            // blocked approval leaves the step exactly as it found it.
+            //
+            // The lock is what makes this a guarantee: createPipeline() takes
+            // the same row lock before inserting a child, so a child cannot
+            // appear in the gap between this probe and the commit below.
+            //
+            // EVERY step is frozen, not just the one carrying the effect. The
+            // prerequisite is a condition on the whole request: advancing its
+            // paperwork while the thing it depends on is unresolved only moves
+            // the stall further down the line.
+            $this->pdo->prepare("SELECT id FROM tickets WHERE id = ? FOR UPDATE")->execute([$ticketId]);
+            $blockers = $this->blockingChildren($ticketId);
+            if (!empty($blockers)) {
+                $this->pdo->rollBack();
+                return [
+                    'success' => false,
+                    'errors' => [$this->describeBlockers($blockers)],
+                    'blocked_by' => $blockers
+                ];
+            }
+
             // Complete the current stage
             $this->pdo->prepare("
                 UPDATE ticket_stage_progress
@@ -486,6 +594,11 @@ class PipelineManager
             ")->execute([$ticketId]);
 
             $this->historyService->logHistory($ticketId, 'pipeline_completed', null, 'completed', $userId, 'All stages completed — pipeline closed');
+
+            // If this request was somebody's prerequisite, its parent has just
+            // stopped waiting. Called after the status UPDATE so the remaining-
+            // blocker count reads the new value.
+            $this->notifyParent($ticketId, 'completed', $userId);
 
             $this->pdo->commit();
             return ['success' => true, 'completed' => true, 'effect' => $effect['applied'], 'errors' => []];
@@ -592,6 +705,11 @@ class PipelineManager
 
             $this->historyService->logHistory($ticketId, 'pipeline_cancelled', $ticket['status'], 'cancelled', $userId, $reason ?: 'Pipeline cancelled');
 
+            // A withdrawn prerequisite stops freezing its parent — there is
+            // nothing left to wait for. Not a bypass: the parent still needs
+            // its own approval, by somebody other than its creator.
+            $this->notifyParent($ticketId, 'cancelled', $userId);
+
             $this->pdo->commit();
             return ['success' => true, 'errors' => []];
         } catch (Exception $e) {
@@ -600,6 +718,101 @@ class PipelineManager
             }
             error_log("PipelineManager::cancelPipeline error: " . $e->getMessage());
             return ['success' => false, 'errors' => ['Failed to cancel pipeline: ' . $e->getMessage()]];
+        }
+    }
+
+    /**
+     * Break the prerequisite link between a child request and its parent.
+     *
+     * THE ESCAPE HATCH FOR A REFUSED PREREQUISITE, and the reason
+     * getParentBlockingStatuses() can safely include 'rejected'. A refused
+     * prerequisite keeps its parent frozen — it must never read as a met one —
+     * so without this the parent's only exits are rejection and cancellation.
+     * That is too blunt for the ordinary case: the access was asked of the wrong
+     * team, or for the wrong window. Unlink the refusal, raise a corrected one.
+     *
+     * Admin/super_admin only, gated in api.php by this operation NOT being
+     * listed in $selfServiceOperations — the same mechanism as claim/complete/
+     * reassign/cancel.
+     *
+     * Nothing about either request changes except the link. The child keeps its
+     * own status, steps, actions and history; a rejected child stays rejected.
+     * Both timelines record the detachment, because a parent that suddenly
+     * unfreezes with no explanation is worse than one that stays stuck.
+     *
+     * @return array ['success','errors','parent_ticket_id','parent_still_blocked']
+     */
+    public function unlinkChild($childId, $userId)
+    {
+        if (!$this->supportsChildRequests()) {
+            return [
+                'success' => false,
+                'errors' => ['Prerequisite requests are not available yet (seeder 2026_08_25_007 has not been applied)']
+            ];
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+
+            $stmt = $this->pdo->prepare(
+                "SELECT id, ticket_number, status, parent_ticket_id
+                 FROM tickets WHERE id = ? AND pipeline_template_id IS NOT NULL FOR UPDATE"
+            );
+            $stmt->execute([$childId]);
+            $child = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$child) {
+                $this->pdo->rollBack();
+                return ['success' => false, 'errors' => ['Request not found']];
+            }
+            if (empty($child['parent_ticket_id'])) {
+                $this->pdo->rollBack();
+                return ['success' => false, 'errors' => ['This request is not a prerequisite for anything']];
+            }
+
+            $parentId = (int)$child['parent_ticket_id'];
+            $parentNumber = $this->ticketNumberOf($parentId);
+
+            $this->pdo->prepare("UPDATE tickets SET parent_ticket_id = NULL, updated_at = NOW() WHERE id = ?")
+                ->execute([$childId]);
+
+            $this->historyService->logHistory(
+                $childId,
+                'parent_unlinked',
+                $parentNumber,
+                null,
+                $userId,
+                "No longer a prerequisite for #{$parentNumber}. This request is unchanged and still {$child['status']}."
+            );
+            $this->historyService->logHistory(
+                $parentId,
+                'child_unlinked',
+                $child['ticket_number'],
+                null,
+                $userId,
+                "Prerequisite #{$child['ticket_number']} ({$child['status']}) was detached — it no longer holds this request up"
+            );
+
+            $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")->execute([$parentId]);
+
+            // Read AFTER the unlink, so it reports what the parent is actually
+            // waiting on now. More than one prerequisite is allowed.
+            $stillBlocked = !empty($this->blockingChildren($parentId));
+
+            $this->pdo->commit();
+            return [
+                'success' => true,
+                'errors' => [],
+                'parent_ticket_id' => $parentId,
+                'parent_ticket_number' => $parentNumber,
+                'parent_still_blocked' => $stillBlocked
+            ];
+        } catch (Exception $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            error_log("PipelineManager::unlinkChild error: " . $e->getMessage());
+            return ['success' => false, 'errors' => ['Failed to detach the prerequisite: ' . $e->getMessage()]];
         }
     }
 
@@ -698,6 +911,13 @@ class PipelineManager
                 "Rejected at step '{$stage['name']}': $reason"
             );
 
+            // A REFUSED prerequisite keeps freezing its parent. It must never
+            // read as a met one, so the parent does not quietly resume — see
+            // PipelineConfig::getParentBlockingStatuses(). Somebody now rejects
+            // or cancels the parent, or an admin unlinks this refusal so a
+            // replacement prerequisite can be raised.
+            $this->notifyParent($ticketId, 'rejected', $userId, $reason);
+
             $this->pdo->commit();
             return ['success' => true, 'errors' => []];
         } catch (Exception $e) {
@@ -781,6 +1001,21 @@ class PipelineManager
                 'items' => $this->itemService->getTicketItems($ticketId),
                 'actions' => $this->getRequestActions($ticketId)
             ];
+
+            // Prerequisites, in both directions. `blocked` is DERIVED from the
+            // children on every read and never stored, so it cannot drift from
+            // the rows it summarises — see PipelineConfig::getParentBlockingStatuses().
+            $children = $this->getChildRequests($ticketId);
+            $blocking = [];
+            foreach ($children as $child) {
+                if (!empty($child['blocks'])) {
+                    $blocking[] = $child;
+                }
+            }
+            $pipeline['parent'] = $this->getParentSummary($ticketId);
+            $pipeline['children'] = $children;
+            $pipeline['blocked_by'] = $blocking;
+            $pipeline['blocked'] = !empty($blocking);
             if ($row['rejection_reason']) {
                 $pipeline['cancel_reason'] = $row['rejection_reason'];
             }
@@ -895,6 +1130,19 @@ class PipelineManager
                 $params[] = $term;
             }
 
+            // Prerequisite filters (2026_08_25_007). Deliberately written
+            // against t.parent_ticket_id rather than a joined alias, so the
+            // COUNT query below needs no extra join to share this WHERE.
+            $supportsChildren = $this->supportsChildRequests();
+            if ($supportsChildren) {
+                if (!empty($filters['parent_ticket_id'])) {
+                    $where[] = 't.parent_ticket_id = ?';
+                    $params[] = (int)$filters['parent_ticket_id'];
+                } elseif (!empty($filters['top_level_only'])) {
+                    $where[] = 't.parent_ticket_id IS NULL';
+                }
+            }
+
             $whereClause = 'WHERE ' . implode(' AND ', $where);
 
             $countStmt = $this->pdo->prepare("
@@ -912,6 +1160,26 @@ class PipelineManager
             $typeName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name')
                 ? 'COALESCE(pt.name, t.pipeline_type_name)'
                 : 'pt.name';
+
+            // Blocked-ness is computed per row rather than stored, so the list
+            // and the detail view can never disagree about it. The status list
+            // is interpolated, not bound: these are PipelineConfig constants,
+            // and the surrounding WHERE already owns every positional
+            // placeholder in this statement.
+            $parentSelect = '';
+            $parentJoin = '';
+            if ($supportsChildren) {
+                $blockStatuses = implode(',', array_map(
+                    array($this->pdo, 'quote'),
+                    PipelineConfig::getParentBlockingStatuses()
+                ));
+                $parentSelect = ",
+                    t.parent_ticket_id, parent.ticket_number AS parent_ticket_number,
+                    EXISTS (SELECT 1 FROM tickets kid
+                             WHERE kid.parent_ticket_id = t.id
+                               AND kid.status IN ($blockStatuses)) AS is_blocked";
+                $parentJoin = 'LEFT JOIN tickets parent ON parent.id = t.parent_ticket_id';
+            }
 
             $stmt = $this->pdo->prepare("
                 SELECT
@@ -933,6 +1201,7 @@ class PipelineManager
                       WHERE h.ticket_id = t.id
                         AND h.action IN ('execution_failed', 'actions_executed')
                       ORDER BY h.created_at DESC, h.id DESC LIMIT 1) AS last_execution_event
+                    {$parentSelect}
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN pipeline_templates pt ON t.pipeline_template_id = pt.id
@@ -940,6 +1209,7 @@ class PipelineManager
                 LEFT JOIN users su ON cur.assigned_to_user_id = su.id
                 LEFT JOIN roles sr ON cur.assigned_to_role_id = sr.id
                 LEFT JOIN users cu ON cur.claimed_by_user_id = cu.id
+                {$parentJoin}
                 $whereClause
                 ORDER BY t.updated_at DESC
                 LIMIT ? OFFSET ?
@@ -956,6 +1226,11 @@ class PipelineManager
                     'priority' => $row['priority'],
                     'pipeline_type' => $row['pipeline_type_name'],
                     'last_attempt_failed' => ($row['last_execution_event'] === 'execution_failed'),
+                    // Absent, not false, before 2026_08_25_007 — the keys only
+                    // exist when the column does.
+                    'parent_ticket_id' => !empty($row['parent_ticket_id']) ? (int)$row['parent_ticket_id'] : null,
+                    'parent_ticket_number' => isset($row['parent_ticket_number']) ? $row['parent_ticket_number'] : null,
+                    'is_blocked' => !empty($row['is_blocked']),
                     'created_by' => $row['created_by'] ? [
                         'id' => (int)$row['created_by'],
                         'username' => $row['created_by_username']
@@ -1148,6 +1423,366 @@ class PipelineManager
     private function supportsStageEffects()
     {
         return SchemaHelper::hasColumn($this->pdo, 'ticket_stage_progress', 'effect_type');
+    }
+
+    // ---------------------------------------------------------------------
+    // Prerequisites (child requests) — 2026_08_25_007
+    //
+    // A request raised inside another freezes it until resolved. There is no
+    // stored "blocked" flag and no 'blocked' lifecycle status: blocked-ness IS
+    // "has an open blocking child", so it is derived on every read from the
+    // rows that define it and cannot drift from them.
+    //
+    // ONLY DIRECT CHILDREN ARE EVER QUERIED. Transitivity is free: a blocked
+    // child cannot complete, so it stays open, so it keeps its own parent
+    // frozen. Nothing here walks the tree downward.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Has 2026_08_25_007 been applied? Requests can nest only once it has.
+     */
+    private function supportsChildRequests()
+    {
+        return SchemaHelper::hasColumn($this->pdo, 'tickets', 'parent_ticket_id');
+    }
+
+    private function ticketNumberOf($ticketId)
+    {
+        $stmt = $this->pdo->prepare("SELECT ticket_number FROM tickets WHERE id = ?");
+        $stmt->execute([$ticketId]);
+        $number = $stmt->fetchColumn();
+        return $number !== false ? $number : ('#' . (int)$ticketId);
+    }
+
+    /**
+     * The direct children currently freezing $ticketId.
+     *
+     * @return array [['id','ticket_number','title','status','pipeline_type_name'], …]
+     */
+    private function blockingChildren($ticketId)
+    {
+        if (!$this->supportsChildRequests()) {
+            return [];
+        }
+
+        $statuses = PipelineConfig::getParentBlockingStatuses();
+        if (empty($statuses)) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($statuses), '?'));
+
+        // Uses idx_tickets_parent_status directly: (parent_ticket_id, status).
+        $typeName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name')
+            ? 'pipeline_type_name'
+            : 'NULL AS pipeline_type_name';
+
+        $stmt = $this->pdo->prepare(
+            "SELECT id, ticket_number, title, status, {$typeName}
+             FROM tickets
+             WHERE parent_ticket_id = ? AND status IN ($placeholders)
+             ORDER BY id ASC"
+        );
+        $stmt->execute(array_merge([(int)$ticketId], $statuses));
+
+        return array_map(function ($row) {
+            return [
+                'id' => (int)$row['id'],
+                'ticket_number' => $row['ticket_number'],
+                'title' => $row['title'],
+                'status' => $row['status'],
+                'pipeline_type_name' => $row['pipeline_type_name'],
+            ];
+        }, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    /**
+     * The refusal an approver sees when they try to advance a frozen request.
+     *
+     * It names the blocker and, for a rejected one, says outright that waiting
+     * will not help — otherwise the approver retries the same click tomorrow.
+     */
+    private function describeBlockers(array $blockers)
+    {
+        $parts = [];
+        $refused = false;
+        foreach ($blockers as $blocker) {
+            $parts[] = '#' . $blocker['ticket_number']
+                . ' (' . ($blocker['pipeline_type_name'] ?: 'request') . ', ' . $blocker['status'] . ')';
+            if ($blocker['status'] === 'rejected') {
+                $refused = true;
+            }
+        }
+
+        $message = 'Blocked by prerequisite ' . implode(', ', $parts) . '.';
+
+        return $refused
+            ? $message . ' A rejected prerequisite does not clear by itself: reject or cancel this request,'
+                . ' or have an admin detach the refused one so a replacement can be raised.'
+            : $message . ' It has to be resolved before this request can move.';
+    }
+
+    /**
+     * Every direct child of $ticketId, each flagged with whether it is currently
+     * freezing the parent. One query serves both the listing and blocked_by.
+     */
+    private function getChildRequests($ticketId)
+    {
+        if (!$this->supportsChildRequests()) {
+            return [];
+        }
+
+        $blocking = PipelineConfig::getParentBlockingStatuses();
+        $typeName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name')
+            ? 'COALESCE(pt.name, c.pipeline_type_name)'
+            : 'pt.name';
+
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT c.id, c.ticket_number, c.title, c.status, c.priority,
+                       c.created_at, c.rejection_reason,
+                       c.created_by, creator.username AS created_by_username,
+                       {$typeName} AS pipeline_type_name
+                FROM tickets c
+                LEFT JOIN users creator ON c.created_by = creator.id
+                LEFT JOIN pipeline_templates pt ON c.pipeline_template_id = pt.id
+                WHERE c.parent_ticket_id = ?
+                ORDER BY c.id ASC
+            ");
+            $stmt->execute([(int)$ticketId]);
+
+            return array_map(function ($row) use ($blocking) {
+                return [
+                    'id' => (int)$row['id'],
+                    'ticket_number' => $row['ticket_number'],
+                    'title' => $row['title'],
+                    'status' => $row['status'],
+                    'priority' => $row['priority'],
+                    'pipeline_type_name' => $row['pipeline_type_name'],
+                    'created_by' => $row['created_by'] ? [
+                        'id' => (int)$row['created_by'],
+                        'username' => $row['created_by_username']
+                    ] : null,
+                    'created_at' => $row['created_at'],
+                    // Why it was refused. The parent's requester has to be able
+                    // to read this without the row-level visibility on the child
+                    // letting them open it.
+                    'rejection_reason' => $row['rejection_reason'],
+                    'blocks' => in_array($row['status'], $blocking, true),
+                ];
+            }, $stmt->fetchAll(PDO::FETCH_ASSOC));
+        } catch (Exception $e) {
+            error_log("PipelineManager::getChildRequests error: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * The request this one is a prerequisite for, or null when top-level.
+     */
+    private function getParentSummary($ticketId)
+    {
+        if (!$this->supportsChildRequests()) {
+            return null;
+        }
+
+        $typeName = SchemaHelper::hasColumn($this->pdo, 'tickets', 'pipeline_type_name')
+            ? 'COALESCE(pt.name, p.pipeline_type_name)'
+            : 'pt.name';
+
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT p.id, p.ticket_number, p.title, p.status,
+                       {$typeName} AS pipeline_type_name
+                FROM tickets t
+                JOIN tickets p ON p.id = t.parent_ticket_id
+                LEFT JOIN pipeline_templates pt ON p.pipeline_template_id = pt.id
+                WHERE t.id = ?
+            ");
+            $stmt->execute([(int)$ticketId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return null;
+            }
+
+            return [
+                'id' => (int)$row['id'],
+                'ticket_number' => $row['ticket_number'],
+                'title' => $row['title'],
+                'status' => $row['status'],
+                'pipeline_type_name' => $row['pipeline_type_name'],
+            ];
+        } catch (Exception $e) {
+            error_log("PipelineManager::getParentSummary error: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Can $userId hang a new prerequisite off request $parentId?
+     *
+     * @return array ['valid' => bool, 'errors' => string[], 'parent_id' => int|null]
+     */
+    private function validateParent($parentId, $userId, $hasManage)
+    {
+        $fail = function ($message) {
+            return ['valid' => false, 'errors' => [$message], 'parent_id' => null];
+        };
+
+        if (!is_numeric($parentId) || (int)$parentId <= 0) {
+            return $fail('parent_ticket_id must be a request id');
+        }
+        $parentId = (int)$parentId;
+
+        // REFUSE rather than quietly create an unlinked request. Code reaches
+        // production ~20s after a save and seeders are applied by hand, so this
+        // window is real — and a prerequisite that silently fails to freeze
+        // anything is the exact failure this feature exists to prevent.
+        if (!$this->supportsChildRequests()) {
+            return $fail('Prerequisite requests are not available yet (seeder 2026_08_25_007 has not been applied)');
+        }
+
+        $stmt = $this->pdo->prepare(
+            "SELECT id, status, created_by FROM tickets WHERE id = ? AND pipeline_template_id IS NOT NULL"
+        );
+        $stmt->execute([$parentId]);
+        $parent = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$parent) {
+            return $fail('The request this would be a prerequisite for was not found');
+        }
+        if (in_array($parent['status'], PipelineConfig::getTerminalStatuses(), true)) {
+            return $fail('That request is already ' . $parent['status'] . ' — a prerequisite would have nothing to unblock');
+        }
+
+        // Freezing somebody else's request is a real imposition, so it takes
+        // more than being logged in: you must already be part of it, or hold
+        // pipeline.manage.
+        if (!$hasManage && !$this->userInvolvedInTicket($parentId, $userId)) {
+            return $fail('You can only raise a prerequisite on a request you raised or are working on');
+        }
+
+        // A chain has to terminate for any of it to be approvable: every link
+        // adds another human decision that must land first.
+        $depth = $this->ancestorDepth($parentId) + 2; // the parent's own level, plus this new child
+        if ($depth > PipelineConfig::MAX_REQUEST_DEPTH) {
+            return $fail(
+                'Requests can only nest ' . PipelineConfig::MAX_REQUEST_DEPTH
+                . ' deep. Raise this prerequisite on the request at the top of the chain instead.'
+            );
+        }
+
+        return ['valid' => true, 'errors' => [], 'parent_id' => $parentId];
+    }
+
+    /**
+     * How many ancestors $ticketId has (0 = top-level).
+     *
+     * A cycle cannot be CREATED — the child row does not exist when its parent
+     * is chosen, so it can never be its own ancestor. The iteration cap is
+     * defensive only: it stops a loop introduced by hand in the database from
+     * hanging every request that touches it.
+     */
+    private function ancestorDepth($ticketId)
+    {
+        $stmt = $this->pdo->prepare("SELECT parent_ticket_id FROM tickets WHERE id = ?");
+
+        $depth = 0;
+        $current = (int)$ticketId;
+        $guard = PipelineConfig::MAX_REQUEST_DEPTH + 5;
+
+        while ($guard-- > 0) {
+            $stmt->execute([$current]);
+            $parent = $stmt->fetchColumn();
+            if (empty($parent)) {
+                return $depth;
+            }
+            $depth++;
+            $current = (int)$parent;
+        }
+
+        error_log("PipelineManager::ancestorDepth walked off the end from ticket $ticketId — possible parent loop");
+        return $depth;
+    }
+
+    /**
+     * Is $userId part of request $ticketId — its creator, the owner of one of
+     * its steps, a member of a role that owns one, or the claimer of one?
+     *
+     * The same test pipeline-get.php applies for row-level visibility, run here
+     * against the raw rows instead of an already-shaped response.
+     */
+    private function userInvolvedInTicket($ticketId, $userId)
+    {
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM tickets WHERE id = ? AND created_by = ?");
+        $stmt->execute([(int)$ticketId, (int)$userId]);
+        if ($stmt->fetchColumn() > 0) {
+            return true;
+        }
+
+        $stmt = $this->pdo->prepare("
+            SELECT COUNT(*) FROM ticket_stage_progress sp
+            WHERE sp.ticket_id = ?
+              AND (sp.assigned_to_user_id = ?
+                   OR sp.claimed_by_user_id = ?
+                   OR sp.assigned_to_role_id IN (SELECT role_id FROM user_roles WHERE user_id = ?))
+        ");
+        $stmt->execute([(int)$ticketId, (int)$userId, (int)$userId, (int)$userId]);
+        return $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Record on the PARENT's timeline that one of its prerequisites reached a
+     * terminal state, and bump it so it resurfaces in the list.
+     *
+     * MUST be called after the child's own status UPDATE and inside the same
+     * transaction: the remaining-blocker count below reads the new status, and
+     * a note about an outcome that then rolls back would be a lie.
+     *
+     * @param string $outcome 'completed' | 'rejected' | 'cancelled'
+     */
+    private function notifyParent($ticketId, $outcome, $userId, $reason = null)
+    {
+        if (!$this->supportsChildRequests()) {
+            return;
+        }
+
+        $stmt = $this->pdo->prepare("SELECT parent_ticket_id, ticket_number FROM tickets WHERE id = ?");
+        $stmt->execute([(int)$ticketId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row || empty($row['parent_ticket_id'])) {
+            return;
+        }
+
+        $parentId = (int)$row['parent_ticket_id'];
+        $number = $row['ticket_number'];
+        $remaining = $this->blockingChildren($parentId);
+
+        if ($outcome === 'rejected') {
+            // Still counted among $remaining — a refusal is not a resolution.
+            $note = "Prerequisite #{$number} was REJECTED" . ($reason ? ": $reason" : '')
+                . '. This request stays frozen: a refused prerequisite does not clear by itself.';
+        } elseif ($outcome === 'cancelled') {
+            $note = "Prerequisite #{$number} was withdrawn.";
+        } else {
+            $note = "Prerequisite #{$number} was completed.";
+        }
+
+        if ($outcome !== 'rejected') {
+            $note .= empty($remaining)
+                ? ' This request is no longer frozen and can be approved on its own merits.'
+                : ' Still frozen, waiting on ' . count($remaining) . ' more.';
+        }
+
+        $this->historyService->logHistory(
+            $parentId,
+            'prerequisite_' . $outcome,
+            null,
+            $number,
+            $userId,
+            $note
+        );
+
+        $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")->execute([$parentId]);
     }
 
     /**

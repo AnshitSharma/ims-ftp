@@ -167,6 +167,38 @@ final class AddComponentCommand extends BaseCommand
                     500
                 );
             }
+
+            // The handler writes nicinventory and the legacy nic_config blob, but says
+            // nothing to the rows store -- the F-13 mirror that fixes that lives in
+            // ServerBuilder::addComponent()'s motherboard branch, which this command
+            // replaces at COMMAND_LAYER_ENABLED=enforce. Without this loop a loose
+            // board's onboard NIC is reserved in inventory yet absent from
+            // config_components, so at READ_FROM_ROWS=on every read reports zero NICs.
+            // Same fail-closed posture as the error branch above: a writer failure
+            // propagates and rolls the whole motherboard add back.
+            //
+            // parent_id is left to resolve via server_configurations.motherboard_uuid,
+            // already stamped by updateServerConfigurationTable() further up.
+            require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+            foreach (($onboard['nics'] ?? []) as $onboardNic) {
+                if (empty($onboardNic['inventory_id'])) {
+                    // A 'replaced' port is skipped by the handler and carries no
+                    // identity; there is nothing to mirror.
+                    continue;
+                }
+                ConfigComponentWriter::afterLegacyAdd(
+                    $pdo,
+                    $this->configUuid,
+                    'nic',
+                    $onboardNic['uuid'],
+                    $onboardNic['serial_number'] ?? null,
+                    null, // onboard ports occupy no PCIe slot
+                    $onboardNic['inventory_table'] ?? 'nicinventory',
+                    $onboardNic['inventory_id'],
+                    $this->actor,
+                    null
+                );
+            }
         }
 
         // Identify the unit by the inventory row this command already locked, not by
