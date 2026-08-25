@@ -42,6 +42,7 @@ require_once(__DIR__ . '/../commands/ReplaceComponentCommand.php');
 require_once(__DIR__ . '/../commands/TransitionStatusCommand.php');
 require_once(__DIR__ . '/../state/StatusMap.php');
 require_once(__DIR__ . '/../../config/WorkflowConfig.php');
+require_once(__DIR__ . '/../rack/ServerRelocation.php');
 
 class RequestActionExecutor
 {
@@ -92,6 +93,24 @@ class RequestActionExecutor
             'required' => ['config_uuid', 'to_status'],
             'optional' => ['notes'],
         ],
+        // 2026-08-26. Moving a server is admin work -- api.php role-gates the
+        // whole rack module -- so this is the only route for anyone else. The
+        // requester never gains rack.assign; the approval performs the move.
+        //
+        // rack_uuid + start_u are OPTIONAL because "put it at this site but not
+        // in a rack yet" is a real request. Given a rack, the U is required and
+        // is checked against the rack's real occupancy at approval time.
+        'server.relocate' => [
+            'label'    => 'Move a server to another location / rack / U',
+            'scope'    => 'server',
+            'required' => ['config_uuid', 'location_uuid'],
+            // location_name / rack_name are DISPLAY-ONLY snapshots the client
+            // sends so the request list and the approver's confirmation can read
+            // "move to Jaipur Office - RACK 12 - U8" without a join. They are
+            // never read when performing the move -- the uuids are -- so a stale
+            // or forged name misleads nobody about what actually happens.
+            'optional' => ['rack_uuid', 'start_u', 'reason', 'location_name', 'rack_name'],
+        ],
         'inventory.component.add' => [
             'label'    => 'Add a component to inventory',
             'scope'    => 'inventory',
@@ -115,8 +134,14 @@ class RequestActionExecutor
      * server.config.transition exists as a separate action. One door per state
      * change, the same rule handleUpdateConfiguration() enforces at
      * server_api.php:216.
+     *
+     * rack_position was REMOVED on 2026-08-26. It is derived from the real
+     * rack_servers placement (RackPlacement.php:9-13), so a value typed into a
+     * request survived only until the next sync -- long enough for an approver to
+     * believe it, not long enough to be true. Moving a server is what
+     * `server.relocate` is for, and it moves the components too.
      */
-    const UPDATABLE_CONFIG_FIELDS = ['server_name', 'description', 'location', 'rack_position', 'notes'];
+    const UPDATABLE_CONFIG_FIELDS = ['server_name', 'description', 'location', 'notes'];
 
     public function __construct(PDO $pdo)
     {
@@ -163,6 +188,10 @@ class RequestActionExecutor
                 return "Update details of server {$where}";
             case 'server.config.transition':
                 return "Set server {$where} to " . (isset($payload['to_status']) ? $payload['to_status'] : '?');
+            case 'server.relocate':
+                // Named, not uuid'd: an approver reading "move to Jaipur Office"
+                // can sanity-check it; "move to a1b2c3d4" tells them nothing.
+                return "Move server {$where} to " . self::relocateTargetLabel($payload);
             case 'inventory.component.add':
                 return "Add a {$type} to inventory";
             case 'inventory.component.edit':
@@ -170,6 +199,36 @@ class RequestActionExecutor
                     . (isset($payload['inventory_id']) ? $payload['inventory_id'] : '?');
         }
         return $spec['label'];
+    }
+
+    /**
+     * A readable destination for a relocate action.
+     *
+     * summarise() is static and has no PDO, so the names are read from the
+     * payload when the client put them there (it does -- the Move dialog knows
+     * them already) and fall back to a short uuid when it did not. Display only.
+     */
+    private static function relocateTargetLabel(array $payload)
+    {
+        $bits = [];
+
+        if (!empty($payload['location_name'])) {
+            $bits[] = $payload['location_name'];
+        } elseif (!empty($payload['location_uuid'])) {
+            $bits[] = 'location ' . self::shortUuid($payload['location_uuid']);
+        }
+
+        if (!empty($payload['rack_name'])) {
+            $bits[] = $payload['rack_name'];
+        } elseif (!empty($payload['rack_uuid'])) {
+            $bits[] = 'rack ' . self::shortUuid($payload['rack_uuid']);
+        }
+
+        if (!empty($payload['start_u'])) {
+            $bits[] = 'U' . (int)$payload['start_u'];
+        }
+
+        return empty($bits) ? '?' : implode(" \u{00B7} ", $bits);
     }
 
     private static function shortUuid($uuid)
@@ -229,9 +288,16 @@ class RequestActionExecutor
      *               retired grant effect, whose recipient was always
      *               tickets.created_by and never anything from the request body.
      * @param int    $approverId    recorded for audit; never the owner.
+     * @param int|null $ticketId    the request this action belongs to, threaded
+     *               through so an action that keeps its own history (currently
+     *               server.relocate -> server_movements.ticket_id) can say which
+     *               request authorised it. Deliberately a PARAMETER and not a
+     *               payload key: the payload is client-supplied, and a request
+     *               must not be able to name a different request as its own
+     *               authority.
      * @return array ['success' => bool, 'errors' => string[], 'result' => array|null]
      */
-    public function execute($actionType, array $payload, $subjectUserId, $approverId)
+    public function execute($actionType, array $payload, $subjectUserId, $approverId, $ticketId = null)
     {
         $errors = $this->validateShape($actionType, $payload);
         if (!empty($errors)) {
@@ -251,6 +317,9 @@ class RequestActionExecutor
 
                 case 'server.config.update':
                     return $this->updateConfiguration($payload);
+
+                case 'server.relocate':
+                    return $this->relocateServer($payload, $subjectUserId, $ticketId);
 
                 case 'inventory.component.add':
                     return $this->addInventoryComponent($payload, $subjectUserId);
@@ -524,6 +593,68 @@ class RequestActionExecutor
      * Attribute-only update, guarded the way handleUpdateConfiguration() guards
      * it: a finalized build is not editable through this door.
      */
+    /**
+     * Perform an approved relocation.
+     *
+     * Straight through to ServerRelocation::move(), the same call the "Move
+     * server" dialog and Rack View make. Nothing about the move is
+     * re-implemented here -- if it were, an approved request could put a server
+     * somewhere the button would have refused, which is the exact class of
+     * divergence that left components behind on a move in the first place.
+     *
+     * Runs inside completeStage()'s open transaction. move() notices that
+     * (inTransaction) and does NOT open its own, so a refusal returns
+     * success=false and the approval rolls back with it -- placement,
+     * propagation and movement row together. An approval can never leave a
+     * server half-moved.
+     *
+     * ticket_id is threaded through so the movement row records which request
+     * authorised it, and $subjectUserId (the REQUESTER, not the approver)
+     * becomes moved_by: the work is done on their behalf, matching every other
+     * action here.
+     */
+    private function relocateServer(array $payload, $subjectUserId, $ticketId = null)
+    {
+        $result = ServerRelocation::move(
+            $this->pdo,
+            $payload['config_uuid'],
+            [
+                'location_uuid' => $payload['location_uuid'],
+                'rack_uuid'     => isset($payload['rack_uuid']) ? $payload['rack_uuid'] : null,
+                'start_u'       => isset($payload['start_u'])   ? $payload['start_u']   : null,
+            ],
+            [
+                'user_id'   => $subjectUserId,
+                'reason'    => isset($payload['reason']) ? $payload['reason'] : null,
+                'ticket_id' => $ticketId,
+            ]
+        );
+
+        if (!$result['success']) {
+            return [
+                'success' => false,
+                'errors'  => [$result['message']],
+                'result'  => ['error_code' => 'relocation_refused', 'message' => $result['message']],
+            ];
+        }
+
+        $to = isset($result['data']['to']) ? $result['data']['to'] : [];
+
+        return [
+            'success' => true,
+            'errors'  => [],
+            'result'  => [
+                'action'             => 'server.relocate',
+                'config_uuid'        => $payload['config_uuid'],
+                'location_name'      => isset($to['location_name']) ? $to['location_name'] : null,
+                'rack_name'          => isset($to['rack_name'])     ? $to['rack_name']     : null,
+                'start_u'            => isset($to['start_u'])       ? $to['start_u']       : null,
+                'components_updated' => $result['data']['components_updated'],
+                'message'            => $result['message'],
+            ],
+        ];
+    }
+
     private function updateConfiguration(array $payload)
     {
         $stmt = $this->pdo->prepare(

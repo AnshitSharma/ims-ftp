@@ -7,6 +7,8 @@
  * Params:
  * - scope: my_queue | created | all   (non-privileged users are forced off 'all')
  * - status, priority, search, pipeline_template_id
+ * - parent_ticket_id: only prerequisites raised on that request
+ * - top_level_only: exclude prerequisites (ignored when parent_ticket_id is set)
  * - page, limit
  */
 
@@ -44,6 +46,20 @@ try {
         'search' => $_POST['search'] ?? $_GET['search'] ?? null,
         'pipeline_template_id' => $_POST['pipeline_template_id'] ?? $_GET['pipeline_template_id'] ?? null,
     ];
+
+    // Prerequisite filters (2026_08_25_007). Mutually exclusive in the manager,
+    // which prefers parent_ticket_id when both arrive. Both are ignored outright
+    // while tickets.parent_ticket_id is absent, so an un-seeded server lists
+    // everything rather than erroring.
+    $parentFilter = $_POST['parent_ticket_id'] ?? $_GET['parent_ticket_id'] ?? null;
+    if ($parentFilter !== null && $parentFilter !== '' && is_numeric($parentFilter)) {
+        $filters['parent_ticket_id'] = (int)$parentFilter;
+    }
+
+    $topOnly = $_POST['top_level_only'] ?? $_GET['top_level_only'] ?? null;
+    if ($topOnly !== null && filter_var($topOnly, FILTER_VALIDATE_BOOLEAN)) {
+        $filters['top_level_only'] = true;
+    }
 
     $page = max(1, (int)($_POST['page'] ?? $_GET['page'] ?? 1));
     $limit = min(100, max(1, (int)($_POST['limit'] ?? $_GET['limit'] ?? 20)));

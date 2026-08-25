@@ -159,6 +159,26 @@ try {
             require_once(__DIR__ . '/handlers/rack/rack_api.php');
             break;
 
+        case 'location':
+            // Unlike `rack`, this module is NOT role-gated whole. Reads have to
+            // stay open: the Add Component form, the Create Server form, the
+            // Bulk Update dialog and the location filter on every inventory page
+            // all render a location dropdown from location-list, and a user who
+            // cannot read it cannot file a component at all. Location names are
+            // not sensitive.
+            //
+            // The WRITES are admin/super_admin, matching the rack module -- the
+            // shape of the estate is not something individual users redraw.
+            if (in_array($operation, ['create', 'update', 'delete'], true)) {
+                if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
+                    send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
+                }
+            }
+            requireModulePermission('location', $operation, $user);
+            $GLOBALS['operation'] = $operation;
+            require_once(__DIR__ . '/handlers/location/location_api.php');
+            break;
+
         case 'acl':
             require_once(__DIR__ . '/handlers/acl/acl_api.php');
             handleACLOperations($operation, $user);

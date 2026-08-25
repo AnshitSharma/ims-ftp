@@ -12,6 +12,7 @@
 require_once(__DIR__ . '/../auth/JWTHelper.php');
 require_once(__DIR__ . '/../auth/ACL.php');
 require_once(__DIR__ . '/../auth/TemporaryAccessManager.php');
+require_once(__DIR__ . '/SchemaHelper.php');
 
 // Initialize JWT secret
 $jwtSecret = defined('JWT_SECRET_KEY') ? JWT_SECRET_KEY : getenv('JWT_SECRET');
@@ -890,6 +891,17 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
     // Limit total results
     $results = array_slice($results, 0, $limit);
 
+    // Attach the physical address to every hit. Searching for a serial number
+    // and being told the part exists, without being told where it is, answers
+    // half the question people actually ask.
+    try {
+        require_once(__DIR__ . '/../models/location/LocationResolver.php');
+        LocationResolver::enrichComponentRows($pdo, $results);
+    } catch (Throwable $e) {
+        // Search must still return its hits.
+        error_log("[location] global search enrichment failed: " . $e->getMessage());
+    }
+
     return [
         'query' => $query,
         'results' => $results,
@@ -1096,25 +1108,44 @@ function getComponentFieldMap($type) {
  * Shared by getComponentsByType / getComponentCountByType so the row query
  * and the count query can never disagree on what matches.
  */
-function buildComponentSearchWhere($search, &$params) {
-    if ($search === '') {
-        return '';
+function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo = null, $table = null) {
+    $clauses = [];
+
+    if ($search !== '') {
+        $term = '%' . addcslashes($search, '%_\\') . '%';
+        $params = array_merge($params, [$term, $term, $term, $term, $term, $term]);
+        $clauses[] = "(AssetTag LIKE ? OR SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
     }
-    $term = '%' . addcslashes($search, '%_\\') . '%';
-    $params = array_merge($params, [$term, $term, $term, $term, $term, $term]);
-    return "WHERE (AssetTag LIKE ? OR SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
+
+    // Filter by physical site. Reads the denormalised location_uuid rather than
+    // joining out to racks and locations: that column is kept in sync on every
+    // move (LocationResolver::syncConfig) precisely so this filter is one
+    // indexed predicate instead of a four-table join repeated across 12 tables.
+    //
+    // Guarded, because the column arrives with seeder 2026_08_26_003 and this
+    // code deploys ~20s after save. Without the column the filter is IGNORED
+    // rather than applied wrongly -- the caller still gets components, just
+    // unfiltered, which is what it got yesterday.
+    if ($locationUuid !== null && $locationUuid !== '' && $pdo !== null && $table !== null) {
+        if (SchemaHelper::hasColumn($pdo, $table, 'location_uuid')) {
+            $clauses[] = "location_uuid = ?";
+            $params[] = $locationUuid;
+        }
+    }
+
+    return empty($clauses) ? '' : 'WHERE ' . implode(' AND ', $clauses);
 }
 
 /**
  * Get components by type.
  * $limit === null preserves the original return-everything behavior.
  */
-function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '') {
+function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '', $locationUuid = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName);
 
         $sql = "SELECT * FROM $tableName $where ORDER BY id DESC";
         if ($limit !== null) {
@@ -1135,12 +1166,12 @@ function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = 
 /**
  * Count components of a type matching an optional search term.
  */
-function getComponentCountByType($pdo, $type, $search = '') {
+function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName);
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM $tableName $where");
         $stmt->execute($params);
         return (int)$stmt->fetchColumn();

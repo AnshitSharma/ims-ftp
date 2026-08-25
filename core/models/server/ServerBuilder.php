@@ -458,11 +458,26 @@ class ServerBuilder {
             }
             
             if ($serverUuid !== null) {
-                // Prioritize exact ServerUUID matches, but allow fallback if DB is inconsistent
-                $sql .= " ORDER BY CASE WHEN ServerUUID = ? THEN 1 ELSE 0 END DESC";
+                // STRICT, not a preference. This used to be
+                //   ORDER BY CASE WHEN ServerUUID = ? THEN 1 ELSE 0 END DESC ... LIMIT 1
+                // which merely SORTED by ownership: with no unit of this model bound to
+                // this config (or the bound one excluded as already-assigned), it still
+                // returned a row -- a free unit, or one installed in somebody else's
+                // build -- and the caller published that serial as this build's.
+                //
+                // Observed live 2026-08-25 on config 1f61541b: the response advertised
+                // CPU 2W505038A2140, a unit belonging to config 4dee234b. Two costs, both
+                // real: the UI attributes another build's hardware to this one, and a
+                // remove posted with that serial matches no stored row and 404s -- the
+                // same "response names a serial the engine does not hold" failure as the
+                // 'Not Found' placeholder removed from getServerConfiguration().
+                //
+                // Ownership is the whole question being asked, so it belongs in WHERE.
+                // No bound unit now yields null, which the caller already handles.
+                $sql .= " AND ServerUUID = ?";
                 $params[] = $serverUuid;
             }
-            
+
             $sql .= " LIMIT 1";
 
             $stmt = $this->pdo->prepare($sql);
@@ -2417,6 +2432,58 @@ class ServerBuilder {
     }
 
     /**
+     * The resolved spec of the board installed in this configuration, or null when
+     * the build has no board (or its spec is unreadable).
+     *
+     * WHY THIS IS ON THE API AT ALL
+     *
+     *   The builder UI used to fetch ims-data/motherboard/motherboard-level-3.json
+     *   over HTTP and search it by UUID itself -- a THIRD spec resolver alongside
+     *   ComponentDataService and DataExtractionUtilities. A board that comes inside a
+     *   server compute platform is described in serverplatform/, not in the
+     *   motherboard catalog, so that search silently found nothing and every board
+     *   figure in the hardware panel fell back to a hardcoded literal: 4 DIMM slots
+     *   on a 24-slot R630, 1 CPU socket on a 2-socket board, "288-pin DIMM" for
+     *   DDR4 ECC. Silently, because the live copy of that function had dropped the
+     *   "UUID not found" warning its earlier version carried.
+     *
+     *   PlatformSpecIndex was written for exactly this divergence between the two
+     *   backend resolvers, and its docblock's conclusion applies here unchanged:
+     *   one implementation, N consumers. Teaching the frontend to ALSO read the
+     *   platform catalog would have made a fourth place to keep in sync. This
+     *   resolves the board once, on the side that already does it correctly, and
+     *   publishes the answer.
+     *
+     * getMotherboardByUUID() consults PlatformSpecIndex before the catalog, so a
+     * platform-owned board and a loose spare both resolve through this one call.
+     *
+     * @param string $configUuid
+     * @return array|null
+     */
+    public function getMotherboardSpecForConfig($configUuid) {
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT motherboard_uuid FROM server_configurations WHERE config_uuid = ?"
+            );
+            $stmt->execute([$configUuid]);
+            $motherboardUuid = $stmt->fetchColumn();
+
+            if (empty($motherboardUuid)) {
+                return null;
+            }
+
+            $spec = $this->dataUtils->getMotherboardByUUID($motherboardUuid);
+
+            return is_array($spec) ? $spec : null;
+        } catch (Exception $e) {
+            // Presentation data only -- a build must still load without it, falling
+            // back to the UI's own defaults exactly as it did before this existed.
+            error_log("Error resolving motherboard spec for config $configUuid: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Get unified slot tracking for a server configuration
      * Consolidates PCIe, riser, and M.2 slot information from UnifiedSlotTracker
      *
@@ -3019,10 +3086,17 @@ class ServerBuilder {
 
                 // CRITICAL: Use serial_number from JSON first (already stored when component was added)
                 // Only fall back to inventory query if not present in JSON
-                $serialNumber = $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? 'Not Found';
-                
+                //
+                // A unit with no manufacturer serial stays null here. This used to
+                // substitute the display string 'Not Found', which the frontend read back
+                // as a real serial (its `comp.serial_number || null` guard only catches
+                // falsy values) and posted to server-remove-component, where it matched no
+                // row -- "Component not found in configuration with SerialNumber
+                // 'Not Found'". Display copy belongs in the renderer, not in a data field.
+                $serialNumber = $component['serial_number'] ?? $inventoryDetails['SerialNumber'] ?? null;
+
                 // Track assigned serial to avoid duplicates when multiple identical components exist
-                if ($serialNumber !== 'Not Found' && strpos($serialNumber, 'VIRTUAL-') !== 0) {
+                if ($serialNumber !== null && strpos($serialNumber, 'VIRTUAL-') !== 0) {
                     if (!isset($assignedSerials[$type])) {
                         $assignedSerials[$type] = [];
                     }

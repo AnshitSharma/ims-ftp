@@ -63,7 +63,12 @@ return [
         // remove-component).
         'set-platform' => 'server.create',
         'remove-platform' => 'server.edit',
-        'update-location' => 'server.edit_details', // 2026-08-23 -- moves with update-config (no handler today)
+        // 2026-08-26: update-location finally has a handler. It sets the location
+        // of an UNRACKED server (staging room, bench, in transit) and propagates
+        // it to every component inside. A racked server's location comes from its
+        // rack, so the handler refuses one -- moving it is rack-assign-server.
+        'update-location' => 'server.edit_details',
+        'movements' => 'server.view', // 2026-08-26 -- relocation history for one config
         'fix-onboard-nics' => 'server.edit',
         'debug-motherboard-nics' => 'server.view',
         'debug-migration-flags' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
@@ -103,6 +108,18 @@ return [
         'delete' => 'rack.delete',
         'assign-server' => 'rack.assign',
         'unassign-server' => 'rack.assign',
+    ],
+
+    // Locations — the physical sites racks stand in. Reads are deliberately
+    // broad (every component form renders a location dropdown); the writes are
+    // additionally role-gated to admin/super_admin in api.php.
+    'location' => [
+        'list' => 'location.view',
+        'get' => 'location.view',
+        'racks' => 'location.view',
+        'create' => 'location.create',
+        'update' => 'location.edit',
+        'delete' => 'location.delete',
     ],
 
     // Shared template for the 10 component-type modules.

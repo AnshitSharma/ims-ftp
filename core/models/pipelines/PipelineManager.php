@@ -1995,7 +1995,12 @@ class PipelineManager
                 ];
             }
 
-            $outcome = $executor->execute($actionType, $payload, (int)$createdBy, (int)$userId);
+            // $ticketId is passed as an ARGUMENT, never merged into $payload: the
+            // payload is client-supplied, and a request must not be able to name
+            // a different request as the authority for its own work. Actions that
+            // keep their own history (server.relocate -> server_movements) record
+            // it so "who authorised this move" is answerable afterwards.
+            $outcome = $executor->execute($actionType, $payload, (int)$createdBy, (int)$userId, (int)$ticketId);
 
             if (empty($outcome['success'])) {
                 // Record the failure on the row, then fail the whole approval.

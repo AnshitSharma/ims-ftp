@@ -5,6 +5,9 @@ require_once __DIR__ . '/../../../core/models/components/ComponentSpecPaths.php'
 require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
 require_once __DIR__ . '/../../../core/models/server/ServerConfiguration.php';
 require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
+require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
+require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
+require_once __DIR__ . '/../../../core/models/rack/ServerRelocation.php';
 
 
 header('Content-Type: application/json');
@@ -118,6 +121,18 @@ switch ($action) {
         handleUpdateConfiguration($serverBuilder, $user);
         break;
 
+    // 2026-08-26: mapped since 2026-08-23 but never implemented. Sets the
+    // location of an UNRACKED server and carries its components with it.
+    case 'update-location':
+    case 'server-update-location':
+        handleUpdateServerLocation($user);
+        break;
+
+    case 'movements':
+    case 'server-movements':
+        handleServerMovements($user);
+        break;
+
     case 'search-by-serial':
     case 'server-search-by-serial':
         handleSearchBySerial($serverBuilder, $user);
@@ -171,6 +186,275 @@ switch ($action) {
  * NEW: Update server configuration details
  * Updates all editable fields in server_configurations table except compatibility_score and validation_results
  */
+/**
+ * Set an UNRACKED server's location, and carry its components with it.
+ *
+ * `server-update-location` has been in permission_map.php since 2026-08-23 with
+ * no handler behind it. This is that handler.
+ *
+ * A RACKED server is refused. Its location comes from its rack -- that is the
+ * whole point of the hierarchy -- so letting this action write a different one
+ * would create exactly the two-sources-of-truth split the location feature
+ * exists to remove. Moving a racked server is rack-assign-server.
+ */
+function handleUpdateServerLocation($user) {
+    global $pdo;
+
+    $configUuid   = $_POST['config_uuid'] ?? '';
+    $locationUuid = trim($_POST['location_uuid'] ?? '');
+
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "config_uuid is required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
+            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+        }
+
+        $address = LocationResolver::resolveForConfig($pdo, $configUuid);
+        if ($address !== null && $address['is_racked']) {
+            send_json_response(0, 1, 409,
+                "This server is installed in rack \"{$address['rack_name']}\", so its location is that rack's. "
+                . "Use the Move server action to put it somewhere else.");
+        }
+
+        // An empty location_uuid clears the location: a server can legitimately
+        // have no recorded place (just built, not yet shipped).
+        if ($locationUuid !== '') {
+            if (!SchemaHelper::hasTable($pdo, 'locations')) {
+                send_json_response(0, 1, 503,
+                    "Locations are not available yet -- the database migration for this feature has not been applied.");
+            }
+            $stmt = $pdo->prepare("SELECT name, is_active FROM locations WHERE location_uuid = ? LIMIT 1");
+            $stmt->execute([$locationUuid]);
+            $location = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$location) {
+                send_json_response(0, 1, 404, "Location not found");
+            }
+            if ((int)$location['is_active'] !== 1) {
+                send_json_response(0, 1, 400, "\"{$location['name']}\" has been retired and cannot be used as a location");
+            }
+        }
+
+        $componentsUpdated = applyServerLocation($pdo, $configUuid, $locationUuid !== '' ? $locationUuid : null);
+
+        $updated = LocationResolver::resolveForConfig($pdo, $configUuid);
+        $where = $updated ? LocationResolver::formatAddress($updated) : null;
+
+        logActivity($pdo, $user['id'], 'Server location set', 'server', null,
+            $config->get('server_name') . ' -> ' . ($where ?: 'no location')
+            . " ({$componentsUpdated} component(s) updated)");
+
+        $message = $where !== null ? "Location set to {$where}" : "Location cleared";
+        if ($componentsUpdated > 0) {
+            $message .= " \u{00B7} {$componentsUpdated} component"
+                . ($componentsUpdated === 1 ? '' : 's') . ' updated';
+        }
+
+        send_json_response(1, 1, 200, $message, [
+            'config_uuid'        => $configUuid,
+            'address'            => $updated,
+            'address_text'       => $where,
+            'components_updated' => $componentsUpdated,
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleUpdateServerLocation error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to set the server location");
+    }
+}
+
+/**
+ * Write an unracked server's location and propagate it to its components.
+ *
+ * @return int inventory rows updated.
+ */
+function applyServerLocation($pdo, $configUuid, $locationUuid) {
+    $ownsTransaction = !$pdo->inTransaction();
+    if ($ownsTransaction) {
+        $pdo->beginTransaction();
+    }
+
+    try {
+        $fields = [];
+        $values = [];
+
+        if (SchemaHelper::hasColumn($pdo, 'server_configurations', 'location_uuid')) {
+            $fields[] = 'location_uuid = ?';
+            $values[] = $locationUuid;
+        }
+        $name = $locationUuid !== null ? LocationResolver::locationName($pdo, $locationUuid) : null;
+        $fields[] = 'location = ?';
+        $values[] = $name;
+
+        $values[] = $configUuid;
+        $stmt = $pdo->prepare("UPDATE server_configurations SET " . implode(', ', $fields)
+            . " WHERE config_uuid = ?");
+        $stmt->execute($values);
+
+        $touched = LocationResolver::syncConfig($pdo, $configUuid);
+
+        // syncConfig only writes a location it can resolve, and never blanks one
+        // -- correct for a move, wrong for a deliberate clear. So the clear is
+        // applied here, explicitly, where it was actually asked for.
+        if ($locationUuid === null) {
+            $touched = clearComponentLocations($pdo, $configUuid);
+        }
+
+        if ($ownsTransaction) {
+            $pdo->commit();
+        }
+        return $touched;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+/**
+ * Resolve a free-text location name to a location row and propagate it.
+ *
+ * The bridge for callers that still send text -- the "Update Server Details"
+ * request type, and any older client. Text that matches no location row is left
+ * exactly as written, which is what the system did before this feature.
+ *
+ * @return int inventory rows updated.
+ */
+function applyServerLocationFromText($pdo, $configUuid, $locationText) {
+    if (!SchemaHelper::hasTable($pdo, 'locations')) {
+        return 0;
+    }
+
+    $locationText = trim((string)$locationText);
+    if ($locationText === '') {
+        return 0;
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT location_uuid FROM locations WHERE name = ? AND is_active = 1 LIMIT 1");
+        $stmt->execute([$locationText]);
+        $locationUuid = $stmt->fetchColumn();
+        if ($locationUuid === false) {
+            return 0;
+        }
+
+        // Racked servers take their location from the rack; this text change
+        // must not override it.
+        $address = LocationResolver::resolveForConfig($pdo, $configUuid);
+        if ($address !== null && $address['is_racked']) {
+            return 0;
+        }
+
+        return applyServerLocation($pdo, $configUuid, $locationUuid);
+    } catch (Throwable $e) {
+        error_log("applyServerLocationFromText error: " . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Clear the location fields on every component in a config.
+ *
+ * Separate from LocationResolver::syncConfig() because that method will not
+ * blank a location it cannot resolve -- "unknown" must never overwrite a real
+ * value. An explicit clear is a different instruction and gets its own path.
+ *
+ * @return int rows updated.
+ */
+function clearComponentLocations($pdo, $configUuid) {
+    $touched = 0;
+
+    foreach (LocationResolver::COMPONENT_TYPES as $type) {
+        $table = $type . 'inventory';
+        if (!SchemaHelper::hasTable($pdo, $table)) {
+            continue;
+        }
+
+        $sets = ['Location = NULL', 'RackPosition = NULL'];
+        if (SchemaHelper::hasColumn($pdo, $table, 'location_uuid')) {
+            $sets[] = 'location_uuid = NULL';
+        }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE `{$table}` SET " . implode(', ', $sets)
+                . ", UpdatedAt = NOW() WHERE ServerUUID = ?");
+            $stmt->execute([$configUuid]);
+            $touched += $stmt->rowCount();
+        } catch (Throwable $e) {
+            error_log("clearComponentLocations error on {$table}: " . $e->getMessage());
+        }
+    }
+
+    return $touched;
+}
+
+/**
+ * Relocation history for one server — where it has been, when, and who moved it.
+ */
+function handleServerMovements($user) {
+    global $pdo;
+
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "config_uuid is required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        $rows = ServerRelocation::history($pdo, $configUuid, $_POST['limit'] ?? 50);
+
+        $movements = array_map(function ($m) {
+            return [
+                'id'                => (int)$m['id'],
+                'moved_at'          => $m['moved_at'],
+                'moved_by'          => $m['moved_by'] !== null ? (int)$m['moved_by'] : null,
+                'moved_by_username' => $m['moved_by_username'],
+                'reason'            => $m['reason'],
+                'ticket_id'         => $m['ticket_id'] !== null ? (int)$m['ticket_id'] : null,
+                'components_moved'  => (int)$m['components_moved'],
+                // Snapshotted names, so a row still reads correctly after the
+                // location it names has been renamed or deleted.
+                'from' => [
+                    'location_name' => $m['from_location_name'],
+                    'rack_name'     => $m['from_rack_name'],
+                    'floor'         => $m['from_floor'],
+                    'u_text'        => LocationResolver::uText($m['from_start_u'], $m['from_u_height']),
+                ],
+                'to' => [
+                    'location_name' => $m['to_location_name'],
+                    'rack_name'     => $m['to_rack_name'],
+                    'floor'         => $m['to_floor'],
+                    'u_text'        => LocationResolver::uText($m['to_start_u'], $m['to_u_height']),
+                ],
+            ];
+        }, $rows);
+
+        $current = LocationResolver::resolveForConfig($pdo, $configUuid);
+
+        send_json_response(1, 1, 200, "Movement history retrieved successfully", [
+            'config_uuid'     => $configUuid,
+            'server_name'     => $config->get('server_name'),
+            'current_address' => $current,
+            'current_text'    => $current ? LocationResolver::formatAddress($current) : null,
+            'movements'       => $movements,
+            'total'           => count($movements),
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleServerMovements error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to retrieve movement history");
+    }
+}
+
 function handleUpdateConfiguration($serverBuilder, $user) {
     global $pdo;
     
@@ -233,16 +517,26 @@ function handleUpdateConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions: server.transition required to change configuration status");
         }
 
-        // Define updatable fields (excluding calculated fields)
+        // rack_position is DERIVED, and accepting it here was a hole in that
+        // contract: RackPlacement rewrites the column from the real rack_servers
+        // placement (RackPlacement.php:9-13), so a hand-typed value survived only
+        // until the next sync -- long enough to be believed, not long enough to
+        // be true. Moving a server is rack-assign-server's job.
+        if (isset($_POST['rack_position'])) {
+            send_json_response(0, 1, 400,
+                "rack_position cannot be set directly -- it is derived from the server's actual rack placement. "
+                . "Use rack-assign-server to move the server, or rack-unassign-server to take it out.");
+        }
+
+        // Define updatable fields (excluding calculated and derived fields)
         $updatableFields = [
             'server_name',
-            'description', 
+            'description',
             'configuration_status',
             'location',
-            'rack_position',
             'notes'
         ];
-        
+
         // Build update query dynamically based on provided fields
         $updateFields = [];
         $updateValues = [];
@@ -309,16 +603,27 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         
         // Log the update action
         logConfigurationUpdate($pdo, $configUuid, $changes, $user['id']);
-        
+
+        // A changed location text has to reach the components too, or the server
+        // says Jaipur while everything inside it still says Noida. Resolving the
+        // text to a real location row is what makes that possible; text that
+        // matches no row is left as-is, which is the pre-migration behaviour.
+        $componentsUpdated = 0;
+        if (isset($changes['location'])) {
+            $componentsUpdated = applyServerLocationFromText($pdo, $configUuid, $changes['location']['new']);
+        }
+
         // Get updated configuration details
         $updatedConfig = ServerConfiguration::loadByUuid($pdo, $configUuid);
-        
-        // Prepare response data
+
+        // Prepare response data. rack_position is included even though it is no
+        // longer writable here -- callers read it, and dropping it from the
+        // response would be a second, unrelated break.
         $configData = [];
-        foreach ($updatableFields as $field) {
+        foreach (array_merge($updatableFields, ['rack_position']) as $field) {
             $configData[$field] = $updatedConfig->get($field);
         }
-        
+
         // Add metadata fields
         $configData['config_uuid'] = $configUuid;
         $configData['created_by'] = $updatedConfig->get('created_by');
@@ -333,6 +638,7 @@ function handleUpdateConfiguration($serverBuilder, $user) {
             'config_uuid' => $configUuid,
             'changes_made' => $changes,
             'total_changes' => count($changes),
+            'components_updated' => $componentsUpdated,
             'configuration' => $configData,
             'configuration_status_text' => getConfigurationStatusText($configData['configuration_status']),
             'updated_by_user_id' => $user['id'],
@@ -1352,6 +1658,12 @@ function handleGetConfiguration($serverBuilder, $user) {
         // Get storage connectivity tracking
         $storageConnectivity = $serverBuilder->getStorageConnectivity($configUuid, $details['components'] ?? []);
 
+        // The installed board's resolved spec, so the builder renders DIMM slots,
+        // CPU sockets and memory type from the same board this engine validates
+        // against. Platform-owned boards live outside the motherboard catalog and
+        // the UI cannot resolve them on its own -- see getMotherboardSpecForConfig().
+        $motherboardSpec = $serverBuilder->getMotherboardSpecForConfig($configUuid);
+
         // Which component types this build can currently accept, so the builder
         // offers a type only where the hardware actually has a place for it.
         // Reuses the structures computed above rather than recomputing them.
@@ -1360,7 +1672,8 @@ function handleGetConfiguration($serverBuilder, $user) {
             $configUuid,
             $details['components'] ?? [],
             $slotTracking,
-            $networkConfig
+            $networkConfig,
+            $motherboardSpec
         );
 
         // Compute platform. Explicit now: it is either installed (a stocked box was
@@ -1403,7 +1716,8 @@ function handleGetConfiguration($serverBuilder, $user) {
                     'm2' => $slotTracking['m2']
                 ],
                 'network' => $networkConfig,
-                'storage_connectivity' => $storageConnectivity
+                'storage_connectivity' => $storageConnectivity,
+                'motherboard_spec' => $motherboardSpec
             ],
             'component_options' => $componentOptions,
             'validation' => [
@@ -1538,12 +1852,29 @@ function handleListConfigurations($serverBuilder, $user) {
         if (!empty($configurations)) {
             $placements = [];
             try {
+                // 2026-08-26: the same query now also carries the LOCATION the
+                // rack stands in, so the card can read "Yotta Noida - RACK 682 -
+                // U21" instead of a U with no place attached. Both new columns
+                // are probed: this code deploys ~20s after save and seeder
+                // 2026_08_26_003 is run by hand afterwards.
+                $rackHasLocation = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
+                $rackHasFloor    = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
+                $hasLocations    = SchemaHelper::hasTable($pdo, 'locations');
+
+                $locSelect = $rackHasLocation ? 'r.location_uuid' : 'NULL AS location_uuid';
+                $floorSelect = $rackHasFloor ? 'r.floor' : 'NULL AS floor';
+                $nameSelect = ($rackHasLocation && $hasLocations) ? 'l.name AS location_name' : 'NULL AS location_name';
+                $locJoin = ($rackHasLocation && $hasLocations)
+                    ? 'LEFT JOIN locations l ON l.location_uuid = r.location_uuid' : '';
+
                 $configUuids = array_column($configurations, 'config_uuid');
                 $inClause = implode(',', array_fill(0, count($configUuids), '?'));
                 $rackStmt = $pdo->prepare("
-                    SELECT rs.config_uuid, rs.rack_uuid, rs.start_u, rs.u_height, r.name AS rack_name
+                    SELECT rs.config_uuid, rs.rack_uuid, rs.start_u, rs.u_height, r.name AS rack_name,
+                           $locSelect, $floorSelect, $nameSelect
                     FROM rack_servers rs
                     LEFT JOIN racks r ON r.rack_uuid = rs.rack_uuid
+                    $locJoin
                     WHERE rs.config_uuid IN ($inClause)
                 ");
                 $rackStmt->execute($configUuids);
@@ -1560,6 +1891,23 @@ function handleListConfigurations($serverBuilder, $user) {
                 $config['rack_name'] = $placement['rack_name'] ?? null;
                 $config['rack_start_u'] = isset($placement['start_u']) ? (int)$placement['start_u'] : null;
                 $config['rack_u_height'] = isset($placement['u_height']) ? max(1, (int)$placement['u_height']) : null;
+                $config['floor'] = $placement['floor'] ?? null;
+
+                // A RACKED server's location comes from its rack; an unracked one
+                // keeps its own. Never both, so the card can never show two
+                // different places for one machine.
+                $config['location_uuid'] = $placement
+                    ? ($placement['location_uuid'] ?? null)
+                    : ($config['location_uuid'] ?? null);
+                $config['location_name'] = $placement
+                    ? ($placement['location_name'] ?? null)
+                    : null;
+
+                // Fall back to the legacy free-text column so a server that has
+                // not been linked to a location row yet still shows a place.
+                if (empty($config['location_name']) && !empty($config['location'])) {
+                    $config['location_name'] = $config['location'];
+                }
             }
             unset($config);
         }

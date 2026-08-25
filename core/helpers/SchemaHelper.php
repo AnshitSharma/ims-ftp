@@ -60,4 +60,42 @@ class SchemaHelper
         $GLOBALS['_schema_column_cache'][$cacheKey] = $exists;
         return $exists;
     }
+
+    /**
+     * Does $table exist yet?
+     *
+     * The table-level twin of hasColumn(), for the same reason: a feature whose
+     * seeder introduces a WHOLE table (locations, server_movements) has the same
+     * deploy-order window as one that adds a column, and needs the same guard.
+     *
+     * SHOW TABLES rather than INFORMATION_SCHEMA on purpose -- it needs no grant
+     * beyond what the connection already has, and matches how hasColumn probes.
+     *
+     * Results are cached for the life of the request.
+     *
+     * @param PDO    $pdo
+     * @param string $table
+     * @return bool
+     */
+    public static function hasTable(PDO $pdo, $table)
+    {
+        if (isset($GLOBALS['_schema_table_cache'][$table])) {
+            return $GLOBALS['_schema_table_cache'][$table];
+        }
+
+        $exists = false;
+        try {
+            // $table is a compile-time constant at every call site, never
+            // request input -- SHOW TABLES cannot be parameterised.
+            $stmt = $pdo->query("SHOW TABLES LIKE " . $pdo->quote($table));
+            $exists = ($stmt && $stmt->fetch(PDO::FETCH_NUM) !== false);
+        } catch (Exception $e) {
+            // Same contract as hasColumn: any failure reads as "not there" and
+            // the caller falls back to pre-migration behaviour.
+            error_log("Schema probe failed for table {$table}: " . $e->getMessage());
+        }
+
+        $GLOBALS['_schema_table_cache'][$table] = $exists;
+        return $exists;
+    }
 }

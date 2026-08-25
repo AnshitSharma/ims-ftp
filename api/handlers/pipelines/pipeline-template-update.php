@@ -7,6 +7,9 @@
  * Body params:
  * - template_id (required)
  * - name, description, is_active (optional)
+ * - asks_for_server, asks_for_components (optional): which questions this type's
+ *   create form asks. Only applies to a type that performs no action -- one that
+ *   does asks whatever its action needs. Ignored before seeder 2026_08_25_009.
  * - stages (optional): JSON array — when supplied, fully REPLACES the stage set.
  *   Running pipelines are unaffected (they snapshot their stages).
  */
@@ -38,6 +41,12 @@ try {
     }
     if (array_key_exists('is_active', $_POST)) {
         $data['is_active'] = $_POST['is_active'];
+    }
+    if (array_key_exists('asks_for_server', $_POST)) {
+        $data['asks_for_server'] = $_POST['asks_for_server'];
+    }
+    if (array_key_exists('asks_for_components', $_POST)) {
+        $data['asks_for_components'] = $_POST['asks_for_components'];
     }
     if (array_key_exists('stages', $_POST)) {
         $stagesRaw = $_POST['stages'];

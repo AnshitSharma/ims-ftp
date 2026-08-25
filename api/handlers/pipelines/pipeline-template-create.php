@@ -8,6 +8,10 @@
  * - name (required)
  * - description (optional)
  * - is_active (optional, default 1)
+ * - asks_for_server (optional, default 1): does the create form ask which
+ *     server this request is about? Only applies to a type that performs no
+ *     action -- one that does asks whatever its action needs.
+ * - asks_for_components (optional, default 1): does it offer a Components list?
  * - stages (required): JSON array, each:
  *     { "name": "...", "assignee_type": "user"|"role", "assignee_id": 4, "instructions": "..." }
  */
@@ -35,6 +39,8 @@ try {
         'name' => $_POST['name'] ?? '',
         'description' => $_POST['description'] ?? null,
         'is_active' => $_POST['is_active'] ?? 1,
+        'asks_for_server' => $_POST['asks_for_server'] ?? 1,
+        'asks_for_components' => $_POST['asks_for_components'] ?? 1,
         'stages' => $stages
     ];
 

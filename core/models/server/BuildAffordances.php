@@ -57,14 +57,15 @@ class BuildAffordances {
     }
 
     /**
-     * @param string $configUuid
-     * @param array  $components    $details['components'], keyed by type
-     * @param array  $slotTracking  ServerBuilder::getSlotTracking() output
-     * @param array  $networkConfig ServerBuilder::getNetworkConfiguration() output
+     * @param string     $configUuid
+     * @param array      $components      $details['components'], keyed by type
+     * @param array      $slotTracking    ServerBuilder::getSlotTracking() output
+     * @param array      $networkConfig   ServerBuilder::getNetworkConfiguration() output
+     * @param array|null $motherboardSpec ServerBuilder::getMotherboardSpecForConfig()
      * @return array<string, array{available:bool, can_add:bool, gate:string,
      *                             capacity:?array, reason:?string}>
      */
-    public function forConfiguration($configUuid, array $components, array $slotTracking, array $networkConfig) {
+    public function forConfiguration($configUuid, array $components, array $slotTracking, array $networkConfig, $motherboardSpec = null) {
         $options = [];
 
         foreach (self::BASE_TYPES as $type) {
@@ -72,6 +73,20 @@ class BuildAffordances {
         }
 
         $hasMotherboard = !empty($components['motherboard']);
+
+        // RAM and CPU are base parts, but they are also the two whose capacity the
+        // board states outright. Overriding here rather than dropping them from
+        // BASE_TYPES keeps that list meaning what it says -- and keeps the fallback
+        // an unconditional base option, so a build with no board or no readable spec
+        // behaves exactly as it did before these gates existed.
+        $options['ram'] = $this->boardCapacityOption(
+            $options['ram'], $motherboardSpec, ['memory', 'slots'],
+            $this->installedUnits($components, 'ram'), 'dimm_slot', 'DIMM slot'
+        );
+        $options['cpu'] = $this->boardCapacityOption(
+            $options['cpu'], $motherboardSpec, ['socket', 'count'],
+            $this->installedUnits($components, 'cpu'), 'cpu_socket', 'CPU socket'
+        );
 
         $options['risercard'] = $this->slotOption(
             $slotTracking['riser'] ?? [],
@@ -254,6 +269,72 @@ class BuildAffordances {
             'used' => $installed,
             'available' => max(0, $bayDrives - $installed)
         ]);
+    }
+
+    /**
+     * Gate a base type on a capacity the motherboard spec states directly
+     * (memory.slots, socket.count).
+     *
+     * FAILS OPEN, deliberately, and returns $base untouched whenever the board
+     * cannot answer: no board yet, no readable spec, or a spec whose figure is
+     * absent or non-numeric. RAM and CPU are required parts -- a builder that
+     * refused to add them because a spec file was unreadable would be a far worse
+     * failure than an add that comes back with the engine's own message. Add-time
+     * validation (ServerBuilder::validateComponentQuantity) remains the real gate;
+     * this only decides whether the button is offered.
+     *
+     * `available` stays true throughout: these rows always render. Only `can_add`
+     * closes, which is the same available/can_add split slotOption() applies.
+     *
+     * @param array      $base   the unconditional option to fall back to
+     * @param array|null $spec   resolved motherboard spec
+     * @param array      $path   where the total lives in the spec, e.g. ['memory','slots']
+     * @param int        $used   units already installed
+     */
+    private function boardCapacityOption(array $base, $spec, array $path, $used, $gate, $slotNoun) {
+        if (!is_array($spec)) {
+            return $base;
+        }
+
+        $total = $spec;
+        foreach ($path as $key) {
+            if (!is_array($total) || !isset($total[$key])) {
+                return $base;
+            }
+            $total = $total[$key];
+        }
+
+        if (!is_numeric($total) || (int)$total <= 0) {
+            return $base;
+        }
+
+        $total = (int)$total;
+        $capacity = [
+            'total' => $total,
+            'used' => $used,
+            'available' => max(0, $total - $used)
+        ];
+
+        if ($used >= $total) {
+            return $this->option(true, false, $gate, $capacity,
+                sprintf('%d/%d %ss in use', $used, $total, $slotNoun));
+        }
+
+        return $this->option(true, true, $gate, $capacity);
+    }
+
+    /**
+     * Units of a type installed, summing each entry's own quantity rather than
+     * counting entries -- one entry of quantity 4 occupies four slots. Mirrors
+     * ServerBuilder::sumEntryQuantities(), which the add-time check budgets with.
+     */
+    private function installedUnits(array $components, $type) {
+        $used = 0;
+        foreach ($components[$type] ?? [] as $entry) {
+            $quantity = $entry['quantity'] ?? 1;
+            $used += is_numeric($quantity) ? max(1, (int)$quantity) : 1;
+        }
+        return $used;
     }
 
     private function option($available, $canAdd, $gate, $capacity = null, $reason = null, $state = null) {

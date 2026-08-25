@@ -22,8 +22,11 @@ function handleComponentOperations($module, $operation, $user) {
             $limit = ($limitParam !== null && $limitParam !== '') ? max(1, min((int)$limitParam, 500)) : null;
             $offset = max(0, (int)($_GET['offset'] ?? $_POST['offset'] ?? 0));
             $search = trim($_GET['search'] ?? $_POST['search'] ?? '');
+            // Optional site filter — "show me everything at Jaipur". Ignored
+            // (not rejected) while seeder 2026_08_26_003 has not been applied.
+            $locationUuid = trim($_GET['location_uuid'] ?? $_POST['location_uuid'] ?? '');
 
-            $components = getComponentsByType($pdo, $module, $limit, $offset, $search);
+            $components = getComponentsByType($pdo, $module, $limit, $offset, $search, $locationUuid !== '' ? $locationUuid : null);
 
             // Resolve ModelName from JSON specs via UUID
             $componentService = null;
@@ -96,10 +99,23 @@ function handleComponentOperations($module, $operation, $user) {
             }
             unset($comp);
 
+            // Where each of these physically is: location, floor, rack and U for
+            // an installed part, location and shelf for free stock. The rack is
+            // the piece the inventory row cannot hold on its own -- it belongs to
+            // the server the part is installed in -- so one grouped query adds it
+            // for the whole page.
+            try {
+                require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
+                LocationResolver::enrichComponentRows($pdo, $components);
+            } catch (Throwable $locError) {
+                // Decoration only. An inventory page must still render.
+                error_log("[location] component list enrichment failed: " . $locError->getMessage());
+            }
+
             // total_count = all matching rows (not page size) so the dashboard's
             // pagination UI (built from total_count) reflects the real total
             $totalCount = ($limit !== null)
-                ? getComponentCountByType($pdo, $module, $search)
+                ? getComponentCountByType($pdo, $module, $search, $locationUuid !== '' ? $locationUuid : null)
                 : count($components);
 
             $responseData = [
@@ -124,6 +140,17 @@ function handleComponentOperations($module, $operation, $user) {
             $component = getComponentById($pdo, $module, $componentId);
 
             if ($component) {
+                // Same address the list view shows, so opening one unit answers
+                // "where is this?" without going back to the list to read it.
+                try {
+                    require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
+                    $one = [$component];
+                    LocationResolver::enrichComponentRows($pdo, $one);
+                    $component = $one[0];
+                } catch (Throwable $locError) {
+                    error_log("[location] component get enrichment failed: " . $locError->getMessage());
+                }
+
                 send_json_response(1, 1, 200, "Component retrieved successfully", ['component' => $component]);
             } else {
                 send_json_response(0, 1, 404, "Component not found");

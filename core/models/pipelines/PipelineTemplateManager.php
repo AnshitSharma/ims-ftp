@@ -35,9 +35,11 @@ class PipelineTemplateManager
     {
         try {
             $where = $includeInactive ? '' : 'WHERE t.is_active = 1';
+            $shapeSelect = $this->supportsFormShape()
+                ? ', t.asks_for_server, t.asks_for_components' : '';
             $stmt = $this->pdo->prepare("
                 SELECT
-                    t.id, t.name, t.description, t.is_active, t.is_system,
+                    t.id, t.name, t.description, t.is_active, t.is_system{$shapeSelect},
                     t.created_by, creator.username AS created_by_username,
                     t.created_at, t.updated_at,
                     (SELECT COUNT(*) FROM pipeline_stages s WHERE s.pipeline_template_id = t.id) AS stage_count
@@ -56,6 +58,10 @@ class PipelineTemplateManager
                     'description' => $row['description'],
                     'is_active' => (int)$row['is_active'],
                     'is_system' => (int)$row['is_system'],
+                    // Absent column => 1: ask, which is what the form did before
+                    // 2026_08_25_009 and what every type still does by default.
+                    'asks_for_server' => isset($row['asks_for_server']) ? (int)$row['asks_for_server'] : 1,
+                    'asks_for_components' => isset($row['asks_for_components']) ? (int)$row['asks_for_components'] : 1,
                     'stage_count' => (int)$row['stage_count'],
                     'created_by' => $row['created_by'] ? [
                         'id' => (int)$row['created_by'],
@@ -89,9 +95,11 @@ class PipelineTemplateManager
     public function getTemplate($templateId)
     {
         try {
+            $shapeSelect = $this->supportsFormShape()
+                ? ', t.asks_for_server, t.asks_for_components' : '';
             $stmt = $this->pdo->prepare("
                 SELECT
-                    t.id, t.name, t.description, t.is_active, t.is_system,
+                    t.id, t.name, t.description, t.is_active, t.is_system{$shapeSelect},
                     t.created_by, creator.username AS created_by_username,
                     t.created_at, t.updated_at
                 FROM pipeline_templates t
@@ -111,6 +119,8 @@ class PipelineTemplateManager
                 'description' => $row['description'],
                 'is_active' => (int)$row['is_active'],
                 'is_system' => (int)$row['is_system'],
+                'asks_for_server' => isset($row['asks_for_server']) ? (int)$row['asks_for_server'] : 1,
+                'asks_for_components' => isset($row['asks_for_components']) ? (int)$row['asks_for_components'] : 1,
                 'created_by' => $row['created_by'] ? [
                     'id' => (int)$row['created_by'],
                     'username' => $row['created_by_username']
@@ -179,9 +189,20 @@ class PipelineTemplateManager
     }
 
     /**
+     * Has 2026_08_25_009 been applied? A type shapes its own create form only
+     * once it has — before that every type reports 1/1, which is exactly what
+     * the form did anyway, so the pre-seeder deploy window changes nothing.
+     */
+    public function supportsFormShape()
+    {
+        return SchemaHelper::hasColumn($this->pdo, 'pipeline_templates', 'asks_for_server');
+    }
+
+    /**
      * Create a pipeline type with its stages.
      *
-     * @param array $data ['name', 'description', 'is_active', 'stages' => [...]]
+     * @param array $data ['name', 'description', 'is_active', 'asks_for_server',
+     *   'asks_for_components', 'stages' => [...]]
      *   Each stage: ['name', 'instructions', 'assignee_type' => user|role, 'assignee_id']
      * @param int $userId
      * @return array ['success' => bool, 'template_id' => int, 'errors' => array]
@@ -196,16 +217,30 @@ class PipelineTemplateManager
         try {
             $this->pdo->beginTransaction();
 
+            // The form-shape flags exist only after 2026_08_25_009. Before it the
+            // columns are simply absent and every type asks both questions, so a
+            // type created in that window comes out with the same defaults.
+            $shapeCols = '';
+            $shapeVals = '';
+            $shapeParams = [];
+            if ($this->supportsFormShape()) {
+                $shapeCols = ', asks_for_server, asks_for_components';
+                $shapeVals = ', ?, ?';
+                $shapeParams = [
+                    array_key_exists('asks_for_server', $data) ? (int)(bool)$data['asks_for_server'] : 1,
+                    array_key_exists('asks_for_components', $data) ? (int)(bool)$data['asks_for_components'] : 1
+                ];
+            }
+
             $stmt = $this->pdo->prepare("
-                INSERT INTO pipeline_templates (name, description, is_active, created_by, created_at)
-                VALUES (?, ?, ?, ?, NOW())
+                INSERT INTO pipeline_templates (name, description, is_active{$shapeCols}, created_by, created_at)
+                VALUES (?, ?, ?{$shapeVals}, ?, NOW())
             ");
-            $stmt->execute([
+            $stmt->execute(array_merge([
                 trim($data['name']),
                 isset($data['description']) ? trim($data['description']) : null,
-                isset($data['is_active']) ? (int)(bool)$data['is_active'] : 1,
-                $userId
-            ]);
+                isset($data['is_active']) ? (int)(bool)$data['is_active'] : 1
+            ], $shapeParams, [$userId]));
             $templateId = (int)$this->pdo->lastInsertId();
 
             $this->insertStages($templateId, $data['stages']);
@@ -279,6 +314,21 @@ class PipelineTemplateManager
             if (isset($data['is_active'])) {
                 $fields[] = 'is_active = ?';
                 $params[] = (int)(bool)$data['is_active'];
+            }
+
+            // Which questions this type's create form asks. Silently ignored
+            // before 2026_08_25_009 rather than refused: an admin saving an
+            // unrelated edit in that window should not be stopped by a setting
+            // the editor could not have shown them.
+            if ($this->supportsFormShape()) {
+                if (array_key_exists('asks_for_server', $data)) {
+                    $fields[] = 'asks_for_server = ?';
+                    $params[] = (int)(bool)$data['asks_for_server'];
+                }
+                if (array_key_exists('asks_for_components', $data)) {
+                    $fields[] = 'asks_for_components = ?';
+                    $params[] = (int)(bool)$data['asks_for_components'];
+                }
             }
 
             if (!empty($fields)) {

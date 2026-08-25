@@ -18,6 +18,9 @@ require_once __DIR__ . '/../../../core/config/app.php';
 require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
 require_once __DIR__ . '/../../../core/models/chassis/ChassisManager.php';
 require_once __DIR__ . '/../../../core/models/rack/RackPlacement.php';
+require_once __DIR__ . '/../../../core/models/rack/ServerRelocation.php';
+require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
+require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
 
 header('Content-Type: application/json');
 
@@ -102,6 +105,20 @@ function rackChassisName($chassisUuid) {
     return RackPlacement::chassisName($chassisUuid);
 }
 
+/**
+ * A rack's location_uuid, or null while seeder 2026_08_26_003 has not been run.
+ *
+ * Wrapped rather than read inline because a rack row is `SELECT *` and the
+ * column is simply absent pre-migration -- touching $rack['location_uuid']
+ * directly would emit a notice on every rack, on every request.
+ */
+function rackLocationUuid($pdo, array $rack) {
+    if (!SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid')) {
+        return null;
+    }
+    return !empty($rack['location_uuid']) ? $rack['location_uuid'] : null;
+}
+
 /* ============================================================
  * Handlers
  * ============================================================ */
@@ -123,12 +140,26 @@ function handleRackList($pdo, $user) {
             $occ[$row['rack_uuid']] = $row;
         }
 
-        $result = array_map(function ($r) use ($occ) {
+        // location_uuid / floor arrive with seeder 2026_08_26_003 and the
+        // locations table with _001. Both are probed rather than assumed: the
+        // code deploys ~20s after save and the seeders are run by hand, so this
+        // list has to keep working with neither of them present.
+        $hasLocationUuid = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
+        $hasFloor        = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
+
+        $result = array_map(function ($r) use ($occ, $pdo, $hasLocationUuid, $hasFloor) {
             $o = $occ[$r['rack_uuid']] ?? ['server_count' => 0, 'used_u' => 0];
+            $locationUuid = $hasLocationUuid ? ($r['location_uuid'] ?: null) : null;
+
             return [
                 'rack_uuid' => $r['rack_uuid'],
                 'name' => $r['name'],
                 'location' => $r['location'],
+                'location_uuid' => $locationUuid,
+                // Resolved from `locations`, falling back to the legacy text so
+                // a rack that has not been linked yet still shows a place.
+                'location_name' => LocationResolver::locationName($pdo, $locationUuid) ?: $r['location'],
+                'floor' => $hasFloor ? $r['floor'] : null,
                 'total_u' => (int)$r['total_u'],
                 'numbering_top_down' => (int)$r['numbering_top_down'],
                 'notes' => $r['notes'],
@@ -196,6 +227,9 @@ function handleRackGet($pdo, $user) {
                 'rack_uuid' => $rack['rack_uuid'],
                 'name' => $rack['name'],
                 'location' => $rack['location'],
+                'location_uuid' => rackLocationUuid($pdo, $rack),
+                'location_name' => LocationResolver::locationName($pdo, rackLocationUuid($pdo, $rack)) ?: $rack['location'],
+                'floor' => SchemaHelper::hasColumn($pdo, 'racks', 'floor') ? $rack['floor'] : null,
                 'total_u' => (int)$rack['total_u'],
                 'numbering_top_down' => (int)$rack['numbering_top_down'],
                 'notes' => $rack['notes'],
@@ -229,13 +263,26 @@ function handleRackCreate($pdo, $user) {
         send_json_response(0, 1, 400, "Rack height (total_u) must be between 1 and 100");
     }
 
+    // A rack now belongs to a LOCATION, and the free-text location is derived
+    // from it. The text column stays because a lot of existing code reads it,
+    // but once a location_uuid is given it is the location's name that is
+    // written there -- a rack cannot claim a site its location does not name.
+    $locationUuid = trim($_POST['location_uuid'] ?? '');
+    $floor = trim($_POST['floor'] ?? '');
+
+    if ($locationUuid !== '') {
+        $resolved = LocationResolver::locationName($pdo, $locationUuid);
+        if ($resolved === null) {
+            send_json_response(0, 1, 404, "The location you selected was not found");
+        }
+        $location = $resolved;
+    }
+
     try {
         $rackUuid = generateUUID();
-        $stmt = $pdo->prepare("
-            INSERT INTO racks (rack_uuid, name, location, total_u, numbering_top_down, notes, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-        ");
-        $stmt->execute([
+
+        $cols = ['rack_uuid', 'name', 'location', 'total_u', 'numbering_top_down', 'notes', 'created_by'];
+        $vals = [
             $rackUuid,
             $name,
             $location !== '' ? $location : null,
@@ -243,14 +290,31 @@ function handleRackCreate($pdo, $user) {
             $numberingTopDown,
             $notes !== '' ? $notes : null,
             $user['id'],
-        ]);
+        ];
 
-        logActivity($pdo, $user['id'], 'Rack created', 'rack', null, "Created rack: $name ($totalU U)");
+        if (SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid')) {
+            $cols[] = 'location_uuid';
+            $vals[] = $locationUuid !== '' ? $locationUuid : null;
+        }
+        if (SchemaHelper::hasColumn($pdo, 'racks', 'floor')) {
+            $cols[] = 'floor';
+            $vals[] = $floor !== '' ? $floor : null;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($cols), '?'));
+        $stmt = $pdo->prepare("INSERT INTO racks (" . implode(', ', $cols)
+            . ", created_at, updated_at) VALUES ({$placeholders}, NOW(), NOW())");
+        $stmt->execute($vals);
+
+        logActivity($pdo, $user['id'], 'Rack created', 'rack', null,
+            "Created rack: $name ($totalU U)" . ($location !== '' ? " at $location" : ''));
 
         send_json_response(1, 1, 200, "Rack created successfully", [
             'rack_uuid' => $rackUuid,
             'name' => $name,
             'location' => $location,
+            'location_uuid' => $locationUuid !== '' ? $locationUuid : null,
+            'floor' => $floor !== '' ? $floor : null,
             'total_u' => $totalU,
             'numbering_top_down' => $numberingTopDown,
             'notes' => $notes,
@@ -287,10 +351,43 @@ function handleRackUpdate($pdo, $user) {
             $fields[] = "name = ?";
             $values[] = $name;
         }
-        if (isset($_POST['location'])) {
+        // Whether the rack changed site or floor. Either one changes the answer
+        // to "where is this component", for every component in every server in
+        // this rack -- so the propagation below is not optional.
+        $addressChanged = false;
+
+        if (isset($_POST['location_uuid']) && SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid')) {
+            $locationUuid = trim($_POST['location_uuid']);
+
+            if ($locationUuid === '') {
+                $fields[] = "location_uuid = ?";
+                $values[] = null;
+            } else {
+                $resolvedName = LocationResolver::locationName($pdo, $locationUuid);
+                if ($resolvedName === null) {
+                    send_json_response(0, 1, 404, "The location you selected was not found");
+                }
+                $fields[] = "location_uuid = ?";
+                $values[] = $locationUuid;
+                // Keep the legacy text agreeing with the link, rather than
+                // letting the two describe different places.
+                $fields[] = "location = ?";
+                $values[] = $resolvedName;
+            }
+            $addressChanged = $addressChanged || (rackLocationUuid($pdo, $rack) !== ($locationUuid !== '' ? $locationUuid : null));
+        } elseif (isset($_POST['location'])) {
+            // Pre-migration path, and the Rack View form until it is updated.
             $loc = trim($_POST['location']);
             $fields[] = "location = ?";
             $values[] = $loc !== '' ? $loc : null;
+            $addressChanged = true;
+        }
+
+        if (isset($_POST['floor']) && SchemaHelper::hasColumn($pdo, 'racks', 'floor')) {
+            $floor = trim($_POST['floor']);
+            $fields[] = "floor = ?";
+            $values[] = $floor !== '' ? $floor : null;
+            $addressChanged = $addressChanged || (($rack['floor'] ?? null) !== ($floor !== '' ? $floor : null));
         }
         if (isset($_POST['notes'])) {
             $notes = trim($_POST['notes']);
@@ -325,10 +422,21 @@ function handleRackUpdate($pdo, $user) {
         $stmt = $pdo->prepare("UPDATE racks SET " . implode(', ', $fields) . ", updated_at = NOW() WHERE rack_uuid = ?");
         $stmt->execute($values);
 
-        logActivity($pdo, $user['id'], 'Rack updated', 'rack', null, "Updated rack: " . ($rack['name']));
+        // The racks did not move, but the answer to "where is this" did. Without
+        // this, changing a rack's site would leave every server and every
+        // component inside it still naming the old one.
+        $resynced = ['configs' => 0, 'components' => 0];
+        if ($addressChanged) {
+            $resynced = LocationResolver::syncRack($pdo, $rackUuid);
+        }
+
+        logActivity($pdo, $user['id'], 'Rack updated', 'rack', null,
+            "Updated rack: " . $rack['name']
+            . ($addressChanged ? " (re-stamped {$resynced['configs']} server(s), {$resynced['components']} component(s))" : ''));
 
         send_json_response(1, 1, 200, "Rack updated successfully", [
             'rack' => rackFetchByUuid($pdo, $rackUuid),
+            'resynced' => $resynced,
         ]);
     } catch (Throwable $e) {
         error_log("handleRackUpdate error: " . $e->getMessage());
@@ -372,13 +480,26 @@ function handleRackDelete($pdo, $user) {
 
 /**
  * Place (or move) a server into a rack at a given start U.
- * u_height is derived from the server's chassis unless explicitly overridden.
+ *
+ * Every check and every write now lives in ServerRelocation::move(). This
+ * handler is HTTP plumbing only, on purpose: Rack View's place control, the
+ * "Move server" dialog on the server card and an approved Move Server request
+ * all arrive here or at that same class, and each having its own copy of the
+ * bounds/overlap/propagation logic is precisely how the components came to be
+ * left behind on a move.
+ *
+ * `location_uuid` is optional and only ever a CROSS-CHECK: the rack already
+ * determines the site. Sending one that disagrees with the rack is refused
+ * rather than silently resolved, so the response can never describe a place the
+ * caller did not choose.
+ *
+ * u_height stays overridable for Rack View, which sizes sleds explicitly;
+ * omitted, it is re-derived from the chassis as before.
  */
 function handleRackAssignServer($pdo, $user) {
-    $rackUuid = $_POST['rack_uuid'] ?? '';
+    $rackUuid   = $_POST['rack_uuid'] ?? '';
     $configUuid = $_POST['config_uuid'] ?? '';
-    $startU = isset($_POST['start_u']) ? (int)$_POST['start_u'] : 0;
-    $heightOverride = isset($_POST['u_height']) && $_POST['u_height'] !== '' ? (int)$_POST['u_height'] : null;
+    $startU     = isset($_POST['start_u']) ? (int)$_POST['start_u'] : 0;
 
     if (empty($rackUuid) || empty($configUuid)) {
         send_json_response(0, 1, 400, "rack_uuid and config_uuid are required");
@@ -387,85 +508,55 @@ function handleRackAssignServer($pdo, $user) {
         send_json_response(0, 1, 400, "start_u must be 1 or greater");
     }
 
-    try {
-        $rack = rackFetchByUuid($pdo, $rackUuid);
-        if (!$rack) {
-            send_json_response(0, 1, 404, "Rack not found");
-        }
+    $locationUuid = trim($_POST['location_uuid'] ?? '');
 
-        // The server must exist and be a real (non-virtual) configuration.
-        $scStmt = $pdo->prepare("SELECT config_uuid, server_name, is_virtual, chassis_uuid FROM server_configurations WHERE config_uuid = ? LIMIT 1");
-        $scStmt->execute([$configUuid]);
-        $server = $scStmt->fetch(PDO::FETCH_ASSOC);
-        if (!$server) {
-            send_json_response(0, 1, 404, "Server configuration not found");
-        }
-        if ((int)$server['is_virtual'] === 1) {
-            send_json_response(0, 1, 400, "Virtual/test configurations cannot be placed in a rack");
-        }
+    $result = ServerRelocation::move($pdo, $configUuid, [
+        'rack_uuid'     => $rackUuid,
+        'location_uuid' => $locationUuid !== '' ? $locationUuid : null,
+        'start_u'       => $startU,
+        'u_height'      => isset($_POST['u_height']) && $_POST['u_height'] !== '' ? (int)$_POST['u_height'] : null,
+    ], [
+        'user_id' => $user['id'],
+        'reason'  => trim($_POST['reason'] ?? ''),
+    ]);
 
-        $height = $heightOverride !== null ? max(1, $heightOverride) : rackDeriveUHeight($server['chassis_uuid'] ?? null);
-        $endU = $startU + $height - 1;
-
-        // Must fit within the rack.
-        if ($endU > (int)$rack['total_u']) {
-            send_json_response(0, 1, 400, "Server ({$height}U) starting at U{$startU} would exceed the rack height of {$rack['total_u']}U");
-        }
-
-        // Overlap check against other servers in this rack (exclude this server when moving).
-        $existingStmt = $pdo->prepare("SELECT config_uuid, start_u, u_height FROM rack_servers WHERE rack_uuid = ? AND config_uuid <> ?");
-        $existingStmt->execute([$rackUuid, $configUuid]);
-        foreach ($existingStmt->fetchAll(PDO::FETCH_ASSOC) as $ex) {
-            $exStart = (int)$ex['start_u'];
-            $exEnd = $exStart + max(1, (int)$ex['u_height']) - 1;
-            if ($startU <= $exEnd && $endU >= $exStart) {
-                send_json_response(0, 1, 409, "U{$startU}–U{$endU} overlaps a server already installed at U{$exStart}–U{$exEnd}");
-            }
-        }
-
-        // Is this server already placed somewhere? If so, this is a move.
-        $curStmt = $pdo->prepare("SELECT id, rack_uuid FROM rack_servers WHERE config_uuid = ? LIMIT 1");
-        $curStmt->execute([$configUuid]);
-        $current = $curStmt->fetch(PDO::FETCH_ASSOC);
-        $moved = false;
-
-        if ($current) {
-            $stmt = $pdo->prepare("UPDATE rack_servers SET rack_uuid = ?, start_u = ?, u_height = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([$rackUuid, $startU, $height, $configUuid]);
-            $moved = true;
-        } else {
-            $stmt = $pdo->prepare("
-                INSERT INTO rack_servers (rack_uuid, config_uuid, start_u, u_height, created_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, NOW(), NOW())
-            ");
-            $stmt->execute([$rackUuid, $configUuid, $startU, $height, $user['id']]);
-        }
-
-        // Keep the server's own rack_position text derived from this placement.
-        RackPlacement::syncPositionText($pdo, $configUuid);
-
-        logActivity($pdo, $user['id'], $moved ? 'Server moved in rack' : 'Server placed in rack', 'rack', null,
-            "{$server['server_name']} -> {$rack['name']} U{$startU} ({$height}U)");
-
-        send_json_response(1, 1, 200, $moved ? "Server moved successfully" : "Server placed successfully", [
-            'placement' => [
-                'rack_uuid' => $rackUuid,
-                'config_uuid' => $configUuid,
-                'server_name' => $server['server_name'],
-                'start_u' => $startU,
-                'u_height' => $height,
-                'end_u' => $endU,
-            ],
-            'moved' => $moved,
-        ]);
-    } catch (Throwable $e) {
-        error_log("handleRackAssignServer error: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to place server in rack");
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
     }
+
+    $to = $result['data']['to'];
+
+    send_json_response(1, 1, 200, $result['message'], [
+        // Shape preserved from before this refactor: the Rack View and the
+        // server card both read data.placement.*, and they still can.
+        'placement' => [
+            'rack_uuid'     => $to['rack_uuid'],
+            'config_uuid'   => $configUuid,
+            'server_name'   => $to['server_name'],
+            'start_u'       => $to['start_u'],
+            'u_height'      => $to['u_height'],
+            'end_u'         => $to['end_u'],
+            'rack_name'     => $to['rack_name'],
+            'floor'         => $to['floor'],
+            'location_uuid' => $to['location_uuid'],
+            'location_name' => $to['location_name'],
+        ],
+        'moved'              => $result['data']['moved'],
+        'components_updated' => $result['data']['components_updated'],
+        'from'               => $result['data']['from'],
+        'to'                 => $to,
+    ]);
 }
 
 /**
  * Remove a server from whatever rack it currently occupies.
+ *
+ * Delegates to ServerRelocation::unrack(), which clears the U position from
+ * every component in the build as well as from the server. Before that this
+ * handler deleted the placement row and left 14 components claiming a U in a
+ * rack they were no longer in.
+ *
+ * The server keeps its location: it is out of the rack, not off the site.
  */
 function handleRackUnassignServer($pdo, $user) {
     $configUuid = $_POST['config_uuid'] ?? '';
@@ -473,24 +564,16 @@ function handleRackUnassignServer($pdo, $user) {
         send_json_response(0, 1, 400, "config_uuid is required");
     }
 
-    try {
-        $stmt = $pdo->prepare("DELETE FROM rack_servers WHERE config_uuid = ?");
-        $stmt->execute([$configUuid]);
+    $result = ServerRelocation::unrack($pdo, $configUuid, [
+        'user_id' => $user['id'],
+        'reason'  => trim($_POST['reason'] ?? ''),
+    ]);
 
-        if ($stmt->rowCount() === 0) {
-            send_json_response(0, 1, 404, "Server is not currently installed in any rack");
-        }
-
-        // No placement any more — clear the derived rack_position text.
-        RackPlacement::syncPositionText($pdo, $configUuid);
-
-        logActivity($pdo, $user['id'], 'Server removed from rack', 'rack', null, "Removed server $configUuid from rack");
-
-        send_json_response(1, 1, 200, "Server removed from rack", ['config_uuid' => $configUuid]);
-    } catch (Throwable $e) {
-        error_log("handleRackUnassignServer error: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to remove server from rack");
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
     }
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
 }
 
 /**
@@ -556,6 +639,7 @@ function handleRackPlacement($pdo, $user) {
             $startU = (int)$row['start_u'];
             $height = max(1, (int)$row['u_height']);
             $rack = rackFetchByUuid($pdo, $row['rack_uuid']);
+            $rackLocationUuid = $rack ? rackLocationUuid($pdo, $rack) : null;
             $placement = [
                 'rack_uuid' => $row['rack_uuid'],
                 'rack_name' => $rack['name'] ?? null,
@@ -563,8 +647,19 @@ function handleRackPlacement($pdo, $user) {
                 'start_u' => $startU,
                 'u_height' => $height,
                 'end_u' => $startU + $height - 1,
+                // The Move dialog preselects the Location dropdown from these,
+                // so it opens on where the server actually is rather than on the
+                // first site in the list.
+                'location_uuid' => $rackLocationUuid,
+                'location_name' => LocationResolver::locationName($pdo, $rackLocationUuid)
+                                   ?: ($rack['location'] ?? null),
+                'floor' => ($rack && SchemaHelper::hasColumn($pdo, 'racks', 'floor')) ? $rack['floor'] : null,
             ];
         }
+
+        // The full resolved address, including the unracked case where the
+        // location comes from the config itself.
+        $address = LocationResolver::resolveForConfig($pdo, $configUuid);
 
         send_json_response(1, 1, 200, "Placement retrieved successfully", [
             'config_uuid' => $configUuid,
@@ -573,6 +668,14 @@ function handleRackPlacement($pdo, $user) {
             'placement' => $placement,
             'required_u_height' => rackDeriveUHeight($server['chassis_uuid'] ?? null),
             'chassis_name' => rackChassisName($server['chassis_uuid'] ?? null),
+            // Where it is now, and where it is if it is not in a rack at all.
+            'address' => $address,
+            'address_text' => $address ? LocationResolver::formatAddress($address) : null,
+            'location_uuid' => $address ? $address['location_uuid'] : null,
+            // Told to the mover BEFORE they commit: this is the number of
+            // inventory rows the move will re-stamp, and the thing they cannot
+            // see for themselves.
+            'component_count' => LocationResolver::countComponents($pdo, $configUuid),
         ]);
     } catch (Throwable $e) {
         error_log("handleRackPlacement error: " . $e->getMessage());
