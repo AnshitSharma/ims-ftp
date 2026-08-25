@@ -313,13 +313,39 @@ function handlePipelineOperations($operation, $user) {
     // own ACL check (pipeline.create / .view_own / .template_view), which is the
     // real gate.
     //
-    // Everything else — editing Request Types, claiming, completing, reassigning,
-    // cancelling — stays admin/super_admin in code, on top of ACL. Approving is
-    // in that set on purpose: it is what grants access.
+    // Everything else — editing Request Types, reassigning, cancelling, rejecting
+    // — stays admin/super_admin in code, on top of ACL.
     // 'servers' is in this set because it feeds the create form's server picker:
     // the requester naming a server is by definition not an admin, and is usually
     // someone without server.view (the handler gates on pipeline.create instead).
-    $selfServiceOperations = ['create', 'list', 'get', 'template-list', 'servers'];
+    // 'component-location' and 'users' feed the same form's location warning and
+    // its "who is carrying this?" picker, and gate on pipeline.create the same way.
+    //
+    // 'claim' and 'complete' JOINED THIS SET ON 2026-08-26, and this is a fix as
+    // much as a feature. A step can be owned by a named user or a role, and the
+    // whole point of owning one is being the person who completes it — but this
+    // role gate meant only an admin could complete ANY step, so the `developer`
+    // role's pipeline.claim + pipeline.act grants (seeder 2026_08_24_003) had
+    // been dead since the day they were written, and a Hardware Handover's named
+    // carrier could never confirm the handover.
+    //
+    // Three guards make this safe, and none of them is touched:
+    //   * pipeline-complete.php still requires pipeline.act or pipeline.manage;
+    //   * PipelineManager::assertCanAct() still requires the caller to BE the
+    //     named assignee, or to have claimed a role-owned step;
+    //   * applyStageEffect() Guard 1 still refuses any execute_request effect
+    //     unless the completer is admin/super_admin — so a non-admin completing
+    //     a step performs nothing, and one who somehow reached an effect-bearing
+    //     step is refused and the whole completion rolls back.
+    // Separation of duties (Guard 3) is likewise untouched.
+    //
+    // 'reject' is deliberately NOT here: refusing a request outright is a bigger
+    // act than confirming your own step, and it remains admin work.
+    $selfServiceOperations = [
+        'create', 'list', 'get', 'template-list', 'servers',
+        'component-location', 'users',
+        'claim', 'complete',
+    ];
 
     if (!in_array($operation, $selfServiceOperations, true)) {
         if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
@@ -346,6 +372,8 @@ function handlePipelineOperations($operation, $user) {
             'template-delete' => 'pipeline-template-delete.php',
             'create'          => 'pipeline-create.php',
             'servers'         => 'pipeline-servers.php',
+            'users'              => 'pipeline-users.php',
+            'component-location' => 'pipeline-component-location.php',
             'list'            => 'pipeline-list.php',
             'get'             => 'pipeline-get.php',
             'claim'           => 'pipeline-claim.php',

@@ -701,7 +701,7 @@ class ServerBuilder {
             $inventoryId = null;
 
             if (!$isVirtual) {
-                $lockResult = $this->lockAndCheckComponent($componentType, $componentUuid, $serialNumber);
+                $lockResult = $this->lockAndCheckComponent($componentType, $componentUuid, $serialNumber, $configUuid);
                 if (!$lockResult['found']) {
                     if ($ownTransaction && $this->pdo->inTransaction()) {
                         $this->pdo->rollback();
@@ -6789,7 +6789,7 @@ class ServerBuilder {
      * @param string|null $serialNumber Optional serial number for multi-component UUIDs
      * @return array ['found' => bool, 'data' => array|null, 'error' => string|null]
      */
-    private function lockAndCheckComponent($componentType, $componentUuid, $serialNumber = null) {
+    private function lockAndCheckComponent($componentType, $componentUuid, $serialNumber = null, $configUuid = null) {
         try {
             $table = $this->getComponentInventoryTable($componentType);
             if (!$table) {
@@ -6830,15 +6830,37 @@ class ServerBuilder {
                 // LIMIT 1 also bounds the lock: without it FOR UPDATE locked every
                 // physical unit of the model for the transaction's lifetime, which is a
                 // deadlock generator against any concurrent add of the same model.
+                //
+                // LOCATION PREFERENCE (2026-08-26): the ordering above is blind
+                // to geography. With one unit of a model in Noida and one in
+                // Jaipur, an install into a Jaipur server could lock the Noida
+                // unit purely because it had the lower ID. Preferring the
+                // server's own site fixes that everywhere the picker runs, not
+                // only in requests. It is a PREFERENCE, not a filter: if the
+                // only free unit is at the other site it is still found, and
+                // this path deliberately does NOT refuse -- an admin with the
+                // part in their hand is the authority on where it is. Requests
+                // are the path that refuses (RequestActionExecutor's location
+                // gate), because nobody is holding anything there.
+                //
+                // Null (pre-seeder, or an unplaced server) leaves the SQL
+                // byte-identical to what it was.
+                require_once __DIR__ . '/../location/LocationResolver.php';
+                $preferLocation = LocationResolver::preferredUnitLocation($this->pdo, $table, $configUuid);
+                $locationOrder  = $preferLocation !== null ? '(location_uuid = ?) DESC, ' : '';
+                $params         = $preferLocation !== null
+                    ? [$componentUuid, $preferLocation]
+                    : [$componentUuid];
+
                 $stmt = $this->pdo->prepare("
                     SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                     FROM `$table`
                     WHERE UUID = ?
-                    ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+                    ORDER BY (Status = 1) DESC, (Status = 2) DESC, {$locationOrder}ID ASC
                     LIMIT 1
                     FOR UPDATE
                 ");
-                $stmt->execute([$componentUuid]);
+                $stmt->execute($params);
             }
 
             $component = $stmt->fetch(PDO::FETCH_ASSOC);

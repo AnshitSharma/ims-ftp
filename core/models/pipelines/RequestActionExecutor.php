@@ -43,6 +43,8 @@ require_once(__DIR__ . '/../commands/TransitionStatusCommand.php');
 require_once(__DIR__ . '/../state/StatusMap.php');
 require_once(__DIR__ . '/../../config/WorkflowConfig.php');
 require_once(__DIR__ . '/../rack/ServerRelocation.php');
+require_once(__DIR__ . '/../location/LocationResolver.php');
+require_once(__DIR__ . '/../location/ComponentRelocation.php');
 
 class RequestActionExecutor
 {
@@ -123,6 +125,35 @@ class RequestActionExecutor
             'required' => ['component_type', 'inventory_id', 'data'],
             'optional' => [],
         ],
+        // 2026-08-26. The Hardware Handover action: get a loose part from the
+        // site it is at to the site it is needed at.
+        //
+        // Scope is 'inventory' rather than 'server' because it moves STOCK, not
+        // a machine -- and because the Request Types editor renders exactly the
+        // two groups, so an action belonging to neither would never appear as a
+        // tickable ceiling.
+        //
+        // inventory_id, NOT component_uuid: a UUID names a MODEL, and the whole
+        // problem is that two units of one model can be at two different sites.
+        // Only an inventory row identifies the object somebody has to carry.
+        //
+        // handover_user_id names the person who will carry it. It is RECORDED,
+        // and PipelineManager uses it to OWN the confirmation step -- it is
+        // never an authorization input. Guard 2 stands: the work is performed on
+        // behalf of tickets.created_by, never anyone named in a payload.
+        //
+        // The *_name keys are display-only snapshots the client sends so the
+        // request list reads "Noida Yotta -> Jaipur Office" without a join,
+        // exactly as server.relocate's location_name does. They are never read
+        // when performing the move.
+        'inventory.component.relocate' => [
+            'label'    => 'Move a component to another location',
+            'scope'    => 'inventory',
+            'required' => ['component_type', 'inventory_id', 'location_uuid'],
+            'optional' => ['store_location', 'reason', 'handover_user_id',
+                           'component_name', 'serial_number',
+                           'from_location_name', 'to_location_name'],
+        ],
     ];
 
     /**
@@ -197,8 +228,38 @@ class RequestActionExecutor
             case 'inventory.component.edit':
                 return "Update {$type} inventory record #"
                     . (isset($payload['inventory_id']) ? $payload['inventory_id'] : '?');
+            case 'inventory.component.relocate':
+                // Named, not uuid'd, for the same reason server.relocate is: an
+                // approver reading "Noida Yotta -> Jaipur Office" can sanity-check
+                // it; a pair of short uuids tells them nothing.
+                return self::handoverLabel($type, $payload);
         }
         return $spec['label'];
+    }
+
+    /**
+     * A readable one-liner for a component handover.
+     *
+     * Falls back to the serial number, then the inventory id, because those are
+     * what identify the physical object. The model name is only present when the
+     * client sent it, and summarise() is static with no PDO to look one up.
+     */
+    private static function handoverLabel($type, array $payload)
+    {
+        $what = !empty($payload['component_name']) ? $payload['component_name'] : $type;
+        if (!empty($payload['serial_number'])) {
+            $what .= ' SN ' . $payload['serial_number'];
+        } elseif (!empty($payload['inventory_id'])) {
+            $what .= ' #' . (int)$payload['inventory_id'];
+        }
+
+        $to = !empty($payload['to_location_name'])
+            ? $payload['to_location_name']
+            : (!empty($payload['location_uuid']) ? 'location ' . self::shortUuid($payload['location_uuid']) : '?');
+
+        return !empty($payload['from_location_name'])
+            ? "Hand over {$what} from {$payload['from_location_name']} to {$to}"
+            : "Hand over {$what} to {$to}";
     }
 
     /**
@@ -304,6 +365,20 @@ class RequestActionExecutor
             return ['success' => false, 'errors' => $errors, 'result' => null];
         }
 
+        // THE LOCATION GATE. Fitting a part into a server that is at another
+        // site is not something an approval may do: the install would re-stamp
+        // the part with the server's address, producing a record of hardware in
+        // a rack nobody carried it to. Checked HERE and not in preflight()
+        // because at submit time the mismatch is the EXPECTED state -- refusing
+        // there would make the Hardware Handover that fixes it unreachable.
+        //
+        // Returns a plain failure, so completeStage() rolls the whole approval
+        // back exactly as it does for a rack overlap refusal.
+        $gate = $this->locationGate($actionType, $payload);
+        if ($gate !== null) {
+            return $gate;
+        }
+
         try {
             switch ($actionType) {
                 case 'server.component.add':
@@ -326,6 +401,9 @@ class RequestActionExecutor
 
                 case 'inventory.component.edit':
                     return $this->editInventoryComponent($payload, $subjectUserId);
+
+                case 'inventory.component.relocate':
+                    return $this->relocateComponent($payload, $subjectUserId, $ticketId);
             }
 
             // Unreachable: validateShape() rejects anything unknown.
@@ -428,6 +506,19 @@ class RequestActionExecutor
 
         if ($actionType === 'inventory.component.edit' && !ctype_digit((string)$payload['inventory_id'])) {
             $errors[] = 'inventory_id must be numeric';
+        }
+
+        if ($actionType === 'inventory.component.relocate') {
+            if (!ctype_digit((string)$payload['inventory_id'])) {
+                $errors[] = 'inventory_id must be numeric -- a handover names one physical unit, not a model';
+            }
+            if (!preg_match('/^[0-9a-fA-F-]{32,36}$/', (string)$payload['location_uuid'])) {
+                $errors[] = 'location_uuid does not look like a UUID';
+            }
+            if (isset($payload['handover_user_id']) && $payload['handover_user_id'] !== ''
+                && !ctype_digit((string)$payload['handover_user_id'])) {
+                $errors[] = 'handover_user_id must be numeric';
+            }
         }
 
         return $errors;
@@ -651,6 +742,152 @@ class RequestActionExecutor
                 'start_u'            => isset($to['start_u'])       ? $to['start_u']       : null,
                 'components_updated' => $result['data']['components_updated'],
                 'message'            => $result['message'],
+            ],
+        ];
+    }
+
+    /**
+     * Refuse an install whose part is demonstrably at another site.
+     *
+     * Applies to server.component.add and server.component.replace only -- the
+     * two actions that put hardware INTO a machine. Removals, status changes,
+     * config edits and every inventory-only action are untouched: they either
+     * take hardware out (where the site cannot conflict) or never touch a server
+     * at all. That is the "servers only" boundary the feature was asked for.
+     *
+     * THREE-VALUED, AND ONLY ONE VALUE BLOCKS. checkComponentForConfig() returns
+     * match === null whenever it cannot tell -- the location seeders have not
+     * been run, the server has no location, the part has none. Unknown is not a
+     * mismatch, and blocking on it would break every existing request the day
+     * this deploys.
+     *
+     * @return array|null null = proceed. An array is a refusal, in execute()'s
+     *                    own return shape.
+     */
+    private function locationGate($actionType, array $payload)
+    {
+        if ($actionType !== 'server.component.add' && $actionType !== 'server.component.replace') {
+            return null;
+        }
+
+        // A replace is judged on the part going IN. The part coming out is
+        // leaving anyway, and wherever it came from it is physically present in
+        // that server right now.
+        $componentUuid = ($actionType === 'server.component.replace')
+            ? (isset($payload['new_component_uuid']) ? $payload['new_component_uuid'] : null)
+            : (isset($payload['component_uuid']) ? $payload['component_uuid'] : null);
+
+        if (empty($componentUuid) || empty($payload['config_uuid']) || empty($payload['component_type'])) {
+            return null;   // validateShape() has already spoken
+        }
+
+        try {
+            $check = LocationResolver::checkComponentForConfig(
+                $this->pdo,
+                $payload['config_uuid'],
+                $payload['component_type'],
+                $componentUuid,
+                isset($payload['serial_number']) ? $payload['serial_number'] : null
+            );
+        } catch (Throwable $e) {
+            // A resolver failure must not block an approval. Logged loudly.
+            error_log('RequestActionExecutor::locationGate error: ' . $e->getMessage());
+            return null;
+        }
+
+        if (empty($check['supported']) || $check['match'] !== false) {
+            return null;
+        }
+
+        $serverWhere = !empty($check['server']['location_name'])
+            ? $check['server']['location_name']
+            : 'another location';
+
+        $partWhere = null;
+        foreach ($check['units_elsewhere'] as $u) {
+            if (!empty($u['location_name'])) {
+                $partWhere = $u['location_name'];
+                break;
+            }
+        }
+
+        $message = 'This component is at ' . ($partWhere ?: 'a different site')
+            . ', and the server is at ' . $serverWhere . '. '
+            . 'Raise a Hardware Handover request to move the part first -- this request stays '
+            . 'frozen until that one is complete. Nothing has been changed.';
+
+        return [
+            'success' => false,
+            'errors'  => [$message],
+            'result'  => [
+                'error_code'      => 'location_mismatch',
+                'message'         => $message,
+                'server_location' => isset($check['server']['location_name']) ? $check['server']['location_name'] : null,
+                'units_elsewhere' => $check['units_elsewhere'],
+            ],
+        ];
+    }
+
+    /**
+     * Perform a component handover -- the child request an approver signs off so
+     * a part can reach the server that needs it.
+     *
+     * Delegates to ComponentRelocation::move(), the single door for a
+     * component-level move, for the same reason relocateServer() delegates to
+     * ServerRelocation: a second implementation would let an approved request do
+     * something the direct path would have refused.
+     *
+     * Runs inside completeStage()'s open transaction. move() notices that and
+     * does not open its own, so a refusal ("it has been installed since this was
+     * raised") returns success=false and the approval rolls back with it --
+     * inventory write and movement row together.
+     *
+     * $subjectUserId (the REQUESTER, not the approver) becomes moved_by, matching
+     * every other action here. handover_user_id is a different person entirely:
+     * whoever is carrying the hardware.
+     */
+    private function relocateComponent(array $payload, $subjectUserId, $ticketId = null)
+    {
+        $target = ['location_uuid' => $payload['location_uuid']];
+        // Only forwarded when the request actually said something about the
+        // shelf -- ComponentRelocation keeps the existing note when the key is
+        // absent, rather than blanking the only line saying where to pick it up.
+        if (array_key_exists('store_location', $payload)) {
+            $target['store_location'] = $payload['store_location'];
+        }
+
+        $result = ComponentRelocation::move(
+            $this->pdo,
+            $payload['component_type'],
+            (int)$payload['inventory_id'],
+            $target,
+            [
+                'user_id'          => $subjectUserId,
+                'reason'           => isset($payload['reason']) ? $payload['reason'] : null,
+                'ticket_id'        => $ticketId,
+                'handover_user_id' => isset($payload['handover_user_id']) ? $payload['handover_user_id'] : null,
+            ]
+        );
+
+        if (!$result['success']) {
+            return [
+                'success' => false,
+                'errors'  => [$result['message']],
+                'result'  => ['error_code' => 'handover_refused', 'message' => $result['message']],
+            ];
+        }
+
+        return [
+            'success' => true,
+            'errors'  => [],
+            'result'  => [
+                'action'         => 'inventory.component.relocate',
+                'component_type' => $payload['component_type'],
+                'inventory_id'   => (int)$payload['inventory_id'],
+                'moved'          => !empty($result['data']['moved']),
+                'from'           => isset($result['data']['from']) ? $result['data']['from'] : null,
+                'to'             => isset($result['data']['to'])   ? $result['data']['to']   : null,
+                'message'        => $result['message'],
             ],
         ];
     }

@@ -489,4 +489,291 @@ class LocationResolver
 
         return $total;
     }
+
+    /* ============================================================
+     * Matching stock against a server
+     * ============================================================ */
+
+    /**
+     * Every physical unit of one component MODEL, with its address.
+     *
+     * A request names a model ("Kingston KC600 512GB"), because that is what the
+     * requester knows. The thing that has a location is a UNIT — one row in
+     * {type}inventory with its own serial number. This is the bridge between the
+     * two, and it is the only reason the warning can say "the one in Noida,
+     * serial A1B2C3" rather than "some of these are elsewhere".
+     *
+     * @param string      $type          one of COMPONENT_TYPES
+     * @param string      $componentUuid the model UUID from ims-data
+     * @param bool        $availableOnly Status = 1 and not installed. True for the
+     *                                   location check: a unit already in another
+     *                                   server is not a candidate for this one.
+     * @return array rows decorated by enrichComponentRows() (so each carries
+     *               address_text), or [] on any failure. Never throws.
+     */
+    public static function unitsForModel($pdo, $type, $componentUuid, $availableOnly = true)
+    {
+        if (!in_array($type, self::COMPONENT_TYPES, true) || empty($componentUuid)) {
+            return [];
+        }
+
+        $table = $type . 'inventory';
+        if (!SchemaHelper::hasTable($pdo, $table)) {
+            return [];
+        }
+
+        // Built up because each optional column arrived with a seeder that may
+        // not have been run yet. Every fragment is a literal.
+        $select = ['ID', 'UUID', 'SerialNumber', 'Status', 'ServerUUID', 'Location', 'RackPosition'];
+        if (SchemaHelper::hasColumn($pdo, $table, 'AssetTag')) {
+            $select[] = 'AssetTag';
+        }
+        if (SchemaHelper::hasColumn($pdo, $table, 'location_uuid')) {
+            $select[] = 'location_uuid';
+        }
+        if (SchemaHelper::hasColumn($pdo, $table, 'StoreLocation')) {
+            $select[] = 'StoreLocation';
+        }
+
+        $where  = 'UUID = ?';
+        $params = [$componentUuid];
+        if ($availableOnly) {
+            // Status 1 = available. A NULL/empty ServerUUID is what "loose" means;
+            // a unit sitting in another build cannot be picked for this one.
+            $where .= " AND Status = 1 AND (ServerUUID IS NULL OR ServerUUID = '')";
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT " . implode(', ', $select) . " FROM `{$table}`
+                                    WHERE {$where} ORDER BY ID ASC");
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            error_log("LocationResolver::unitsForModel error on {$table}: " . $e->getMessage());
+            return [];
+        }
+
+        if (!empty($rows)) {
+            self::enrichComponentRows($pdo, $rows);
+        }
+        return $rows;
+    }
+
+    /**
+     * The available units of one model, in the display shape a picker needs.
+     *
+     * The Hardware Handover form has to ask "WHICH ONE are you carrying?", and a
+     * model dropdown cannot answer that -- the whole problem is that two units of
+     * one model sit at two different sites. This is that list: identity and
+     * address, for units that are actually free to be moved.
+     */
+    public static function unitOptions($pdo, $type, $componentUuid)
+    {
+        $out = [];
+        foreach (self::unitsForModel($pdo, $type, $componentUuid, true) as $u) {
+            $out[] = self::unitSummary($pdo, $u);
+        }
+        return $out;
+    }
+
+    /**
+     * Is this component where this server is?
+     *
+     * The question behind the whole Hardware Handover feature. A server racked in
+     * Jaipur cannot be fitted with a drive that is physically in Noida, and before
+     * this existed nothing noticed: the install simply re-stamped the drive with
+     * the server's address, producing a record of hardware in a rack nobody ever
+     * carried it to.
+     *
+     * THE THREE-VALUED ANSWER IS THE POINT. `match` is:
+     *   true   the part is at the server's site — proceed
+     *   false  it is demonstrably somewhere else — warn, and refuse at approval
+     *   null   CANNOT TELL, and therefore MUST NOT BLOCK
+     *
+     * null happens whenever the server's location is unknown, no unit's location
+     * is known, or the named unit cannot be found. That is the same policy as the
+     * rest of this class: a NULL location means "unknown", not "nowhere". Blocking
+     * on unknown would make the system unusable on the day it deploys, before the
+     * location seeders have been run and while location_uuid is NULL everywhere.
+     *
+     * `supported` is the deploy guard. Until 2026_08_26_003 has been applied the
+     * inventory tables have no location_uuid at all, so there is nothing to
+     * compare and the check reports itself inert rather than guessing.
+     *
+     * @param string|null $serialNumber when the requester picked one exact unit,
+     *                                  the answer is about THAT unit and nothing
+     *                                  else. Otherwise it is about the model's
+     *                                  available stock as a whole.
+     * @return array{supported:bool, server:array|null, match:bool|null,
+     *               units_here:int, units_elsewhere:array, unit:array|null,
+     *               reason:string}
+     */
+    public static function checkComponentForConfig($pdo, $configUuid, $type, $componentUuid, $serialNumber = null)
+    {
+        $blank = [
+            'supported'       => false,
+            'server'          => null,
+            'match'           => null,
+            'units_here'      => 0,
+            'units_elsewhere' => [],
+            'unit'            => null,
+            'reason'          => 'not_supported',
+        ];
+
+        if (!in_array($type, self::COMPONENT_TYPES, true) || empty($componentUuid) || empty($configUuid)) {
+            return $blank;
+        }
+
+        $table = $type . 'inventory';
+        $supported = SchemaHelper::hasTable($pdo, 'locations')
+            && SchemaHelper::hasColumn($pdo, $table, 'location_uuid');
+
+        if (!$supported) {
+            return $blank;                       // seeders not run yet — inert by design
+        }
+
+        $server = self::resolveForConfig($pdo, $configUuid);
+        $result = [
+            'supported'       => true,
+            'server'          => $server,
+            'match'           => null,
+            'units_here'      => 0,
+            'units_elsewhere' => [],
+            'unit'            => null,
+            'reason'          => 'unknown',
+        ];
+
+        if ($server === null) {
+            $result['reason'] = 'server_not_found';
+            return $result;                      // match stays null — never blocks
+        }
+
+        $serverLoc = !empty($server['location_uuid']) ? $server['location_uuid'] : null;
+        if ($serverLoc === null) {
+            $result['reason'] = 'server_location_unknown';
+            return $result;
+        }
+
+        $units = self::unitsForModel($pdo, $type, $componentUuid, true);
+
+        // --- one named unit: the answer is about that unit alone --------------
+        if ($serialNumber !== null && $serialNumber !== '') {
+            foreach ($units as $u) {
+                if (isset($u['SerialNumber']) && (string)$u['SerialNumber'] === (string)$serialNumber) {
+                    $result['unit'] = $u;
+                    break;
+                }
+            }
+            if ($result['unit'] === null) {
+                // Not among the available units. It may be installed, failed, or
+                // simply mistyped — all of which the add path itself reports far
+                // more precisely than a location check could.
+                $result['reason'] = 'unit_not_found';
+                return $result;
+            }
+            $unitLoc = !empty($result['unit']['location_uuid']) ? $result['unit']['location_uuid'] : null;
+            if ($unitLoc === null) {
+                $result['reason'] = 'component_location_unknown';
+                return $result;
+            }
+            $result['match']  = ($unitLoc === $serverLoc);
+            $result['reason'] = $result['match'] ? 'same_location' : 'different_location';
+            if (!$result['match']) {
+                $result['units_elsewhere'] = [self::unitSummary($pdo, $result['unit'])];
+            } else {
+                $result['units_here'] = 1;
+            }
+            return $result;
+        }
+
+        // --- no serial: the answer is about the model's available stock -------
+        $elsewhere = [];
+        $anyKnown  = false;
+
+        foreach ($units as $u) {
+            $unitLoc = !empty($u['location_uuid']) ? $u['location_uuid'] : null;
+            if ($unitLoc === null) {
+                continue;                        // unknown units neither help nor hurt
+            }
+            $anyKnown = true;
+            if ($unitLoc === $serverLoc) {
+                $result['units_here']++;
+            } else {
+                $elsewhere[] = self::unitSummary($pdo, $u);
+            }
+        }
+
+        if ($result['units_here'] > 0) {
+            $result['match']  = true;
+            $result['reason'] = 'same_location';
+            return $result;
+        }
+        if (!$anyKnown) {
+            // Either there is no available stock at all, or none of it has been
+            // given a location. Neither is a location mismatch.
+            $result['reason'] = 'component_location_unknown';
+            return $result;
+        }
+
+        $result['match']           = false;
+        $result['reason']          = 'different_location';
+        $result['units_elsewhere'] = $elsewhere;
+        return $result;
+    }
+
+    /**
+     * The location a unit-selection query should PREFER, or null when it should
+     * not care.
+     *
+     * WHY THIS EXISTS. Every path that adds a component without an explicit
+     * serial picks its unit with
+     *   ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC LIMIT 1
+     * which is entirely blind to geography. With one KC600 in Noida and one in
+     * Jaipur, an install into a Jaipur server could lock the Noida unit purely
+     * because it had the lower ID -- and then stamp it with the Jaipur address,
+     * inventing a drive in a rack nobody carried it to.
+     *
+     * Callers splice `(location_uuid = ?) DESC` into their ordering when this
+     * returns non-null, and leave their SQL byte-identical when it returns null.
+     * It is a PREFERENCE, never a filter: if the only free unit is at the other
+     * site the add still finds it, and the executor's location gate is what
+     * refuses that case for requests. The direct builder path deliberately does
+     * not refuse -- an admin standing in the room with the part in their hand is
+     * the authority on where it is.
+     *
+     * @return string|null the config's location_uuid, when both it and the
+     *                     column are known to exist.
+     */
+    public static function preferredUnitLocation($pdo, $table, $configUuid)
+    {
+        if (empty($configUuid) || !SchemaHelper::hasColumn($pdo, $table, 'location_uuid')) {
+            return null;
+        }
+        $addr = self::resolveForConfig($pdo, $configUuid);
+        if ($addr === null || empty($addr['location_uuid'])) {
+            return null;
+        }
+        return $addr['location_uuid'];
+    }
+
+    /**
+     * The display shape of one unit, for a warning banner or a picker row.
+     * Deliberately narrow: identity and address, nothing else. This travels to a
+     * requester who may hold no {type}.view permission at all — they are being
+     * shown where the thing they already named happens to be, and no more.
+     */
+    private static function unitSummary($pdo, array $row)
+    {
+        $locUuid = !empty($row['location_uuid']) ? $row['location_uuid'] : null;
+
+        return [
+            'inventory_id'   => isset($row['ID']) ? (int)$row['ID'] : null,
+            'serial_number'  => isset($row['SerialNumber']) ? $row['SerialNumber'] : null,
+            'asset_tag'      => isset($row['AssetTag']) ? $row['AssetTag'] : null,
+            'location_uuid'  => $locUuid,
+            'location_name'  => isset($row['location_name']) ? $row['location_name'] : self::locationName($pdo, $locUuid),
+            'store_location' => isset($row['StoreLocation']) ? $row['StoreLocation'] : null,
+            'address_text'   => isset($row['address_text']) ? $row['address_text'] : null,
+        ];
+    }
 }

@@ -186,6 +186,14 @@ class PipelineManager
 
         // Resolve per-stage owners (template defaults, optionally overridden)
         $overrides = (isset($data['stage_overrides']) && is_array($data['stage_overrides'])) ? $data['stage_overrides'] : [];
+
+        // A Hardware Handover names the person who will physically carry the
+        // hardware, and that person -- nobody else -- owns the confirmation
+        // step. Turning that name into a stage override HERE rather than in the
+        // browser is deliberate: the client would otherwise have to know the
+        // step's template id, and a client that can name a step id can name a
+        // step on some other request's type.
+        $overrides = $this->applyHandoverAssignee($template, $actions, $overrides);
         $resolvedStages = [];
         foreach ($template['stages'] as $stage) {
             $assigneeUserId = null;
@@ -1363,6 +1371,71 @@ class PipelineManager
             }
         }
         return array_values(array_unique($ceiling));
+    }
+
+    /**
+     * Give the confirmation step of a Hardware Handover to the named carrier.
+     *
+     * WHICH STEP. The LAST step of the type that both performs nothing
+     * (effect_type empty) and has no default owner of its own. In the shipped
+     * Hardware Handover type that is exactly one step -- Handover Confirmation,
+     * whose default_assignee columns are NULL precisely so this can fill them.
+     * Requiring "no default owner" is what stops this from hijacking a step some
+     * other type deliberately gave to a role.
+     *
+     * WHAT IT IS NOT. handover_user_id is never an authorization input. It
+     * decides who SIGNS for the hardware; the work itself is still performed on
+     * behalf of tickets.created_by (applyStageEffect Guard 2), and the move
+     * itself sits on the admin approval step above it.
+     *
+     * An explicit stage_overrides entry from the client wins -- it is the
+     * general escape hatch and an admin raising the request on someone's behalf
+     * may have used it.
+     *
+     * @return array the overrides map, with at most one entry added.
+     */
+    private function applyHandoverAssignee(array $template, array $actions, array $overrides)
+    {
+        $carrierId = null;
+        foreach ($actions as $action) {
+            if ($action['action_type'] !== 'inventory.component.relocate') {
+                continue;
+            }
+            $raw = isset($action['payload']['handover_user_id']) ? $action['payload']['handover_user_id'] : null;
+            if ($raw !== null && $raw !== '' && ctype_digit((string)$raw)) {
+                $carrierId = (int)$raw;
+                break;
+            }
+        }
+
+        if ($carrierId === null || !$this->userExists($carrierId)) {
+            return $overrides;
+        }
+
+        $targetStageId = null;
+        foreach ($template['stages'] as $stage) {
+            if (!empty($stage['effect_type'])) {
+                continue;
+            }
+            if (!empty($stage['default_assignee'])) {
+                continue;
+            }
+            $targetStageId = $stage['id'];   // keep going: the LAST one wins
+        }
+
+        if ($targetStageId === null) {
+            // The type has no ownerless sign-off step. Nothing to do -- the
+            // request is still perfectly valid, and the carrier is recorded on
+            // the action either way.
+            return $overrides;
+        }
+
+        if (isset($overrides[$targetStageId]) || isset($overrides[(string)$targetStageId])) {
+            return $overrides;   // an explicit choice wins
+        }
+
+        $overrides[$targetStageId] = ['assignee_type' => 'user', 'assignee_id' => $carrierId];
+        return $overrides;
     }
 
     /**

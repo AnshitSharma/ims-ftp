@@ -6,6 +6,7 @@ require_once __DIR__ . '/../validation/SlotPlanner.php';
 require_once __DIR__ . '/../validation/Trigger.php';
 require_once __DIR__ . '/../server/ServerBuilder.php';
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
+require_once __DIR__ . '/../location/LocationResolver.php';
 
 /**
  * ReplaceComponentCommand — a NEW capability (RULE_MAP.md: no legacy
@@ -200,6 +201,15 @@ final class ReplaceComponentCommand extends BaseCommand
         $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
         $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, (int)$newInventoryData['ID']);
 
+        // ROOT-CAUSE FIX (2026-08-26): both calls above pass null, null for
+        // $serverLocation / $serverRackPosition, which the setter writes
+        // unconditionally onto the unit going IN -- erasing its address rather
+        // than stamping it, and never writing location_uuid. syncConfig()
+        // re-derives the whole config's address from its real placement, in this
+        // command's open transaction. The unit coming OUT keeps its Location and
+        // loses its RackPosition, which is already correct for loose stock.
+        LocationResolver::syncConfig($this->pdo, $this->configUuid);
+
         $sb->recalculateFormFactorLock($this->configUuid);
 
         // Swapping to a taller chassis has to grow the rack placement (or refuse) —
@@ -225,13 +235,22 @@ final class ReplaceComponentCommand extends BaseCommand
         // BUGFIX (A-L1, matching ServerBuilder::lockAndCheckComponent()): `ORDER BY
         // Status ASC` put FAILED units (Status=0) first, so a replacement picked a
         // defective unit ahead of an available one. LIMIT 1 bounds the lock scope.
+        // LOCATION PREFERENCE (2026-08-26): see AddComponentCommand's own copy.
+        // Null when the location columns or the server's location are unknown,
+        // and the SQL is then byte-identical to what it was.
+        $preferLocation = LocationResolver::preferredUnitLocation($this->pdo, $table, $this->configUuid);
+        $locationOrder  = $preferLocation !== null ? '(location_uuid = ?) DESC, ' : '';
+        $params         = $preferLocation !== null
+            ? [$this->newComponentUuid, $preferLocation]
+            : [$this->newComponentUuid];
+
         $stmt = $this->pdo->prepare("
             SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
             FROM `$table` WHERE UUID = ?
-            ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+            ORDER BY (Status = 1) DESC, (Status = 2) DESC, {$locationOrder}ID ASC
             LIMIT 1 FOR UPDATE
         ");
-        $stmt->execute([$this->newComponentUuid]);
+        $stmt->execute($params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? ['table' => $table, 'data' => $row] : null;
     }

@@ -6,6 +6,7 @@ require_once __DIR__ . '/../validation/SlotPlanner.php';
 require_once __DIR__ . '/../validation/Trigger.php';
 require_once __DIR__ . '/../server/ServerBuilder.php';
 require_once __DIR__ . '/../shared/DataExtractionUtilities.php';
+require_once __DIR__ . '/../location/LocationResolver.php';
 
 /**
  * AddComponentCommand — the command-layer strangler over
@@ -208,6 +209,17 @@ final class AddComponentCommand extends BaseCommand
         $sb->updateComponentStatusAndServerUuid(
             $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber, (int)$inventoryData['ID']
         );
+
+        // ROOT-CAUSE FIX (2026-08-26): the call above passes null, null for
+        // $serverLocation / $serverRackPosition, and updateComponentStatusAndServerUuid()
+        // writes those nulls unconditionally when a unit goes in_use -- so a
+        // command-layer install ERASED the part's address instead of stamping
+        // it, and never wrote location_uuid at all. Rather than hand-computing
+        // an address here (a second implementation that would drift), re-derive
+        // the whole config's address from its real placement: syncConfig()
+        // re-stamps Location, RackPosition AND location_uuid for every unit in
+        // the config, and joins this command's open transaction.
+        LocationResolver::syncConfig($this->pdo, $this->configUuid);
     }
 
     /**
@@ -242,13 +254,25 @@ final class AddComponentCommand extends BaseCommand
             // and any add without an explicit serial was rejected as defective while
             // good stock sat available. LIMIT 1 also stops FOR UPDATE locking every
             // unit of the model for the transaction's lifetime.
+            // LOCATION PREFERENCE (2026-08-26): with two units of one model at
+            // two sites, prefer the one that is already where this server is.
+            // Returns null -- and the SQL below is then byte-identical to what
+            // it was -- whenever the location columns or the server's own
+            // location are unknown. A preference, never a filter: the only free
+            // unit still wins even when it is at the wrong site.
+            $preferLocation = LocationResolver::preferredUnitLocation($this->pdo, $table, $this->configUuid);
+            $locationOrder  = $preferLocation !== null ? '(location_uuid = ?) DESC, ' : '';
+            $params         = $preferLocation !== null
+                ? [$this->componentUuid, $preferLocation]
+                : [$this->componentUuid];
+
             $stmt = $this->pdo->prepare("
                 SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
                 FROM `$table` WHERE UUID = ?
-                ORDER BY (Status = 1) DESC, (Status = 2) DESC, ID ASC
+                ORDER BY (Status = 1) DESC, (Status = 2) DESC, {$locationOrder}ID ASC
                 LIMIT 1 FOR UPDATE
             ");
-            $stmt->execute([$this->componentUuid]);
+            $stmt->execute($params);
         }
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? ['table' => $table, 'data' => $row] : null;
