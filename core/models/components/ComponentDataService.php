@@ -2,6 +2,8 @@
 
 require_once __DIR__ . '/ComponentSpecPaths.php';
 
+require_once __DIR__ . '/PlatformSpecIndex.php';
+
 class ComponentDataService {
     private static $instance = null;
     private $jsonCache = [];
@@ -217,7 +219,50 @@ class ComponentDataService {
         }
     }
 
+    /**
+     * Index the board and chassis specs that server compute platforms own.
+     *
+     * A platform is a physical box; the board and chassis inside it are described in
+     * serverplatform/server-platform-level-3.json and are NOT the loose motherboard /
+     * chassis spares of the same model. They still have to resolve under types
+     * 'motherboard' and 'chassis', because that is what server_configurations stamps
+     * and what the whole compatibility engine reads.
+     *
+     * Deliberately a SEPARATE index rather than a merge into $jsonCache[$type]:
+     * loadJsonData() round-trips that array through ComponentSpecCache, so merging
+     * would persist platform data into the motherboard/chassis file cache and leak it
+     * into every later reader of those files.
+     *
+     * The index itself lives in PlatformSpecIndex (2026-08-25) because the validation
+     * engine resolves specs through DataExtractionUtilities, not through this class.
+     *
+     * @return array{motherboard: array<string,array>, chassis: array<string,array>}
+     */
+    private function loadPlatformSpecIndex() {
+        return PlatformSpecIndex::load();
+    }
+
+    /**
+     * The platform-owned board/chassis spec for this UUID, or null.
+     *
+     * Delegates to PlatformSpecIndex, which DataExtractionUtilities resolves through too.
+     * One index, both resolvers -- see that class for why this is not duplicated here.
+     */
+    private function findPlatformOwnedSpec($componentType, $uuid) {
+        return PlatformSpecIndex::find($componentType, $uuid);
+    }
+
     public function findComponentByUuid($componentType, $uuid, $databaseRecord = null) {
+        // A board or chassis that belongs to a server compute platform is described
+        // inside the platform file, not in motherboard-/chasis-level-3.json, and has no
+        // inventory row of its own. Checked FIRST so every engine consumer
+        // (ServerState, UnifiedSlotTracker, MemoryAuthority, NICPortTracker, ...)
+        // resolves it through the path it already uses, unchanged.
+        $platformOwned = $this->findPlatformOwnedSpec($componentType, $uuid);
+        if ($platformOwned !== null) {
+            return $platformOwned;
+        }
+
         $jsonData = $this->loadJsonData($componentType);
 
         // Try indexed lookup first (O(1))
@@ -357,6 +402,13 @@ class ComponentDataService {
     public function validateComponentUuid($componentType, $uuid) {
         try {
             error_log("ComponentDataService::validateComponentUuid called with type=$componentType, uuid=$uuid");
+
+            // Boards and chassis owned by a compute platform live in the platform
+            // file. They are real, catalogued specs -- rule 1 (never bypass UUID
+            // validation) is satisfied by finding them, not by skipping the check.
+            if ($this->findPlatformOwnedSpec($componentType, $uuid) !== null) {
+                return true;
+            }
 
             // Skip JSON validation for synthetic onboard NIC UUIDs
             if ($componentType === 'nic' && str_starts_with($uuid, 'onboard-nic-')) {

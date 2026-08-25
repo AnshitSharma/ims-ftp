@@ -19,9 +19,8 @@
  *
  * server.edit vs server.edit_details (2026-08-23)
  * -----------------------------------------------
- * server.edit gates work on the PARTS in a build (remove-component, and
- * set-platform, which can only re-stamp a platform the fitted board already
- * belongs to). server.edit_details gates writes to the build's OWN attributes —
+ * server.edit gates work on the PARTS in a build (remove-component,
+ * remove-platform). server.edit_details gates writes to the build's OWN attributes —
  * name, description, location, rack position, notes, status.
  *
  * They were one permission until a live test showed the consequence: Add / Edit
@@ -58,7 +57,12 @@ return [
         'import-virtual' => 'server.create',
         'search-by-serial' => 'server.view',
         'list-platforms' => 'server.view',
-        'set-platform' => 'server.edit', // stays: it can only re-stamp a platform the fitted board already belongs to
+        // set-platform installs a compute platform: it CONSUMES a stocked unit and
+        // releases whatever was in the build, so it is a create-family action, not an
+        // edit. remove-platform only releases, which is the edit family (same as
+        // remove-component).
+        'set-platform' => 'server.create',
+        'remove-platform' => 'server.edit',
         'update-location' => 'server.edit_details', // 2026-08-23 -- moves with update-config (no handler today)
         'fix-onboard-nics' => 'server.edit',
         'debug-motherboard-nics' => 'server.view',

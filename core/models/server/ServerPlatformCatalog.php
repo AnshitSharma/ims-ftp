@@ -1,25 +1,26 @@
 <?php
 /**
- * ServerPlatformCatalog — server compute platforms and the system boards they accept.
+ * ServerPlatformCatalog — server compute platforms, their versions, and what is in stock.
  *
- * A "platform" is a shipped server product (HPE ProLiant DL360 Gen10, Dell PowerEdge
- * R740), and one platform can be built around several different system boards. The
- * builder lets a user pick the platform first and then the board, instead of scrolling
- * a flat list of every motherboard in stock.
+ * A "platform" is a shipped server product (HPE ProLiant DL360 Gen9, Dell PowerEdge
+ * R740). It is a PHYSICAL BOX WE STOCK, not a grouping over the motherboard catalog:
+ * `serverplatforminventory` holds one row per box, exactly like every other component
+ * type. The system board and the chassis live INSIDE that box — they are described in
+ * the platform spec file and are NOT the loose `motherboard` / `chassis` spares of the
+ * same model, which stay separately stocked for custom builds.
  *
- * This is a GROUPING OVER motherboard specs, not a component type of its own: platforms
- * have no inventory table, no ACL module and no UUID of their own in any inventory row.
- * Every `system_boards[].uuid` must resolve to a real model in
- * `ims-data/motherboard/motherboard-level-3.json` — a board that does not resolve is
- * reported as `spec_exists: false` rather than hidden, because a silently missing board
- * is a data error someone has to see.
+ * A platform ships in VERSIONS: the same product built around a different chassis, and
+ * therefore a different drive-bay layout (8 x 2.5" SFF vs 4 x 3.5" LFF). The version is
+ * the stocked SKU — `serverplatforminventory.UUID` is a version UUID, never a platform
+ * UUID. Stock is counted per version, and it is a version the user installs.
  *
- * A platform also carries `default_components` — everything the shipped product comes
- * with besides the board (CPUs, DIMMs, chassis, drives, caddies). Selecting a platform
- * installs the board plus that bundle, so the same grouping that answers "which boards
- * is this product built around" also answers "what does this product ship with".
+ * A version is `selectable` only when everything it installs is on the shelf: the box
+ * itself, and the `included_nic` card if it names one. A version that is not selectable
+ * is still RETURNED, carrying `unavailable_reason` — a version that vanished would read
+ * as "this platform has fewer versions", which is a different and wrong statement.
  *
  * Source of truth: ims-data/serverplatform/server-platform-level-3.json
+ * (brand-group = platform, models[] entry = version; see ims-data/CLAUDE.md).
  */
 
 require_once __DIR__ . '/../components/ComponentSpecPaths.php';
@@ -27,24 +28,10 @@ require_once __DIR__ . '/../components/ComponentDataService.php';
 
 class ServerPlatformCatalog
 {
-    /**
-     * Types a bundle may name.
-     *
-     * `motherboard` is absent on purpose — the board comes from the user's pick in
-     * `system_boards`, so a bundled one would either duplicate or contradict it.
-     * `sfp` is absent because `server-add-component` requires a `parent_nic_uuid` for
-     * SFP modules, which a flat bundle list cannot express; bundling one would only
-     * produce a guaranteed failure at install time.
-     */
-    private const BUNDLE_TYPES = [
-        'chassis', 'cpu', 'ram', 'storage', 'nic', 'hbacard', 'caddy', 'risercard', 'pciecard'
-    ];
-
     private $pdo;
 
-    /** Request-level caches — these files are read once per request at most. */
+    /** Request-level caches — the spec file is read once per request at most. */
     private static $platforms = null;
-    private static $boardIndex = null;
     private static $unitCounts = [];
 
     public function __construct($pdo = null)
@@ -53,208 +40,54 @@ class ServerPlatformCatalog
     }
 
     /**
-     * Every platform, each board annotated with whether its spec resolves and how many
-     * units are on the shelf right now.
+     * Every platform with its versions, each annotated with stock and selectability.
      *
      * @return array
      */
-    public function listPlatforms(): array
+    public function listPlatforms()
     {
         $platforms = $this->loadPlatforms();
-        if (empty($platforms)) {
-            return [];
-        }
+        $platformUnits = $this->availableUnits('serverplatform');
+        $nicUnits = $this->availableUnits('nic');
 
-        $boardIndex = $this->loadBoardIndex();
-        $stock = $this->availableUnits('motherboard');
-
-        $result = [];
+        $out = [];
         foreach ($platforms as $platform) {
-            $boards = [];
-            foreach ($platform['system_boards'] ?? [] as $board) {
-                $uuid = $board['uuid'] ?? '';
-                $spec = $boardIndex[$uuid] ?? null;
-
-                $boards[] = [
-                    'uuid' => $uuid,
-                    // The platform file names the board for display; the spec is
-                    // authoritative when the two disagree.
-                    'model' => $spec['model'] ?? ($board['model'] ?? 'Unknown board'),
-                    'part_number' => $board['part_number'] ?? null,
-                    'is_default' => !empty($board['is_default']),
-                    'spec_exists' => $spec !== null,
-                    'available_units' => (int)($stock[$uuid] ?? 0),
-                    'specs' => $spec['specs'] ?? null
-                ];
+            $versions = [];
+            foreach ($platform['models'] ?? [] as $version) {
+                $versions[] = $this->describeVersion($version, $platformUnits, $nicUnits);
             }
 
-            $bundle = $this->annotateBundle($this->loadBundle($platform));
-
-            $result[] = [
-                'platform_uuid' => $platform['platform_uuid'] ?? '',
-                'brand' => $platform['brand'] ?? '',
-                'family' => $platform['family'] ?? '',
-                'platform' => $platform['platform'] ?? '',
-                'generation' => $platform['generation'] ?? '',
-                'form_factor' => $platform['form_factor'] ?? '',
-                'system_boards' => $boards,
-                'board_count' => count($boards),
-                'available_units' => array_sum(array_column($boards, 'available_units')),
-                'default_components' => $bundle,
-                'bundle_unit_count' => array_sum(array_column($bundle, 'quantity'))
+            $out[] = [
+                'platform_uuid'   => $platform['platform_uuid'] ?? null,
+                'brand'           => $platform['brand'] ?? null,
+                'family'          => $platform['series'] ?? null,
+                'platform'        => $platform['family'] ?? null,
+                'generation'      => $platform['generation'] ?? null,
+                'form_factor'     => $platform['form_factor'] ?? null,
+                'versions'        => $versions,
+                'version_count'   => count($versions),
+                'available_units' => array_sum(array_column($versions, 'available_units')),
             ];
         }
 
-        return $result;
+        return $out;
     }
 
     /**
-     * What this platform ships with besides the system board, validated.
+     * One version by its UUID, with the platform it belongs to.
      *
-     * A malformed row is dropped and logged rather than passed on: the installer would
-     * only fail on it later, further from the data that caused it.
-     *
-     * @return array List of ['type', 'uuid', 'model', 'quantity', 'optional']
+     * @return array|null ['platform' => raw platform group, 'version' => raw version]
      */
-    public function loadBundle(array $platform): array
+    public function getVersion($versionUuid)
     {
-        $label = $platform['platform'] ?? ($platform['platform_uuid'] ?? 'unknown platform');
-        $rows = $platform['default_components'] ?? [];
-
-        if (!is_array($rows)) {
-            error_log("ServerPlatformCatalog: default_components is not a list for {$label}");
-            return [];
-        }
-
-        $bundle = [];
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-
-            $type = strtolower(trim((string)($row['type'] ?? '')));
-            $uuid = trim((string)($row['uuid'] ?? ''));
-
-            if ($type === '' || $uuid === '') {
-                error_log("ServerPlatformCatalog: bundle entry without type or uuid on {$label}");
-                continue;
-            }
-
-            if (!in_array($type, self::BUNDLE_TYPES, true)) {
-                error_log("ServerPlatformCatalog: bundle entry of type '{$type}' is not installable, dropped from {$label}");
-                continue;
-            }
-
-            $quantity = (int)($row['quantity'] ?? 1);
-            if ($quantity < 1) {
-                error_log("ServerPlatformCatalog: bundle entry {$type} {$uuid} on {$label} has quantity {$quantity}, dropped");
-                continue;
-            }
-
-            $bundle[] = [
-                'type' => $type,
-                'uuid' => $uuid,
-                'model' => trim((string)($row['model'] ?? '')),
-                'quantity' => $quantity,
-                'optional' => !empty($row['optional'])
-            ];
-        }
-
-        return $bundle;
-    }
-
-    /**
-     * Resolve each bundle entry against its spec file and current stock.
-     *
-     * An entry whose UUID does not resolve keeps its place with `spec_exists: false` —
-     * same reasoning as the boards: a bundle that quietly shrinks is a data error
-     * nobody ever sees.
-     */
-    private function annotateBundle(array $bundle): array
-    {
-        if (empty($bundle)) {
-            return [];
-        }
-
-        $service = ComponentDataService::getInstance();
-
-        foreach ($bundle as &$item) {
-            $spec = null;
-            try {
-                $spec = $service->findComponentByUuid($item['type'], $item['uuid']);
-            } catch (Exception $e) {
-                error_log("ServerPlatformCatalog: failed to resolve {$item['type']} {$item['uuid']} - " . $e->getMessage());
-            }
-
-            $item['spec_exists'] = is_array($spec) && !empty($spec);
-            if ($item['spec_exists']) {
-                // The spec file is authoritative for the name; the platform file's
-                // `model` is only a convenience label.
-                $item['model'] = $spec['model'] ?? ($spec['label'] ?? $item['model']);
-            }
-
-            $stock = $this->availableUnits($item['type']);
-            $item['available_units'] = (int)($stock[$item['uuid']] ?? 0);
-        }
-        unset($item);
-
-        return $bundle;
-    }
-
-    /** One platform, raw (no stock annotation). */
-    public function getPlatform(string $platformUuid): ?array
-    {
-        if ($platformUuid === '') {
+        if (empty($versionUuid)) {
             return null;
         }
 
         foreach ($this->loadPlatforms() as $platform) {
-            if (($platform['platform_uuid'] ?? '') === $platformUuid) {
-                return $platform;
-            }
-        }
-
-        return null;
-    }
-
-    /** Does this platform actually accept this system board? */
-    public function isBoardInPlatform(string $platformUuid, string $motherboardUuid): bool
-    {
-        $platform = $this->getPlatform($platformUuid);
-        if ($platform === null) {
-            return false;
-        }
-
-        foreach ($platform['system_boards'] ?? [] as $board) {
-            if (($board['uuid'] ?? '') === $motherboardUuid) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Which platform an installed board belongs to. Lets a configuration built before
-     * this feature existed (or one whose board was added through the normal component
-     * picker) still show its platform. Display only — nothing is written back.
-     *
-     * A board shared by several platforms resolves to the first match; the platform
-     * file is the place to disambiguate if that ever matters.
-     */
-    public function platformForBoard(string $motherboardUuid): ?array
-    {
-        if ($motherboardUuid === '') {
-            return null;
-        }
-
-        foreach ($this->loadPlatforms() as $platform) {
-            foreach ($platform['system_boards'] ?? [] as $board) {
-                if (($board['uuid'] ?? '') === $motherboardUuid) {
-                    return [
-                        'platform_uuid' => $platform['platform_uuid'] ?? '',
-                        'platform_name' => $this->displayName($platform)
-                    ];
+            foreach ($platform['models'] ?? [] as $version) {
+                if (($version['uuid'] ?? null) === $versionUuid) {
+                    return ['platform' => $platform, 'version' => $version];
                 }
             }
         }
@@ -262,144 +95,197 @@ class ServerPlatformCatalog
         return null;
     }
 
-    /** "HPE ProLiant DL360 Gen10" — what gets stamped on the configuration. */
-    public function displayName(array $platform): string
+    /**
+     * The same shape listPlatforms() reports, for a single version.
+     *
+     * The install handler needs `selectable` and `unavailable_reason` computed the same
+     * way the picker computed them — a second, subtly different rule here is how a
+     * greyed-out version becomes installable through a hand-crafted request.
+     *
+     * @return array|null
+     */
+    public function describeVersionByUuid($versionUuid)
     {
-        $brand = trim($platform['brand'] ?? '');
-        $name = trim($platform['platform'] ?? '');
+        $found = $this->getVersion($versionUuid);
+        if ($found === null) {
+            return null;
+        }
 
-        return trim($brand . ' ' . $name);
+        return $this->describeVersion(
+            $found['version'],
+            $this->availableUnits('serverplatform'),
+            $this->availableUnits('nic')
+        );
+    }
+
+    /** "HPE ProLiant DL360 Gen9 - 8SFF", the label stamped on a configuration. */
+    public function displayName(array $platform, array $version)
+    {
+        $parts = array_filter([
+            $platform['brand'] ?? null,
+            $platform['family'] ?? null,
+        ]);
+        $name = implode(' ', $parts);
+
+        $versionName = $version['version_name'] ?? null;
+        return $versionName ? trim($name . ' - ' . $versionName) : $name;
+    }
+
+    /** The board spec a version carries, as the compatibility engine will see it. */
+    public function boardSpec(array $version)
+    {
+        return $version['system_board'] ?? null;
+    }
+
+    /** The chassis spec a version carries. */
+    public function chassisSpec(array $version)
+    {
+        return $version['chassis'] ?? null;
+    }
+
+    // ---------------------------------------------------------------- internals
+
+    /**
+     * Flatten one version for the API: what it is, what it installs, whether it can be.
+     */
+    private function describeVersion(array $version, array $platformUnits, array $nicUnits)
+    {
+        $versionUuid = $version['uuid'] ?? null;
+        $board = $version['system_board'] ?? [];
+        $chassis = $version['chassis'] ?? [];
+        $includedNic = $version['included_nic'] ?? null;
+
+        $availableUnits = $versionUuid ? (int)($platformUnits[$versionUuid] ?? 0) : 0;
+
+        $nic = null;
+        if (is_array($includedNic) && !empty($includedNic['uuid'])) {
+            $nic = [
+                'uuid'            => $includedNic['uuid'],
+                'model'           => $includedNic['model'] ?? null,
+                'available_units' => (int)($nicUnits[$includedNic['uuid']] ?? 0),
+            ];
+        }
+
+        // Everything the box brings must be on the shelf, or the install would half
+        // succeed and leave a build that matches no catalogued product.
+        $selectable = true;
+        $reason = null;
+        if ($versionUuid === null) {
+            $selectable = false;
+            $reason = 'This version has no UUID in the catalog';
+        } elseif ($availableUnits < 1) {
+            $selectable = false;
+            $reason = 'Out of stock';
+        } elseif ($nic !== null && $nic['available_units'] < 1) {
+            $selectable = false;
+            $reason = 'Included network card is out of stock';
+        }
+
+        return [
+            'version_uuid'       => $versionUuid,
+            'version_name'       => $version['version_name'] ?? null,
+            'model'              => $version['model'] ?? null,
+            'part_number'        => $version['part_number'] ?? null,
+            'bay_summary'        => $version['bay_summary'] ?? $this->baySummary($chassis),
+            'available_units'    => $availableUnits,
+            'selectable'         => $selectable,
+            'unavailable_reason' => $reason,
+            'board' => [
+                'uuid'         => $board['uuid'] ?? null,
+                'model'        => $board['model'] ?? null,
+                'socket_type'  => $board['socket']['type'] ?? null,
+                'socket_count' => $board['socket']['count'] ?? null,
+                'memory_type'  => $board['memory']['type'] ?? null,
+                'memory_slots' => $board['memory']['slots'] ?? null,
+                'chipset'      => $board['chipset'] ?? null,
+                'onboard_nics' => count($board['networking']['onboard_nics'] ?? []),
+            ],
+            'chassis' => [
+                'uuid'        => $chassis['uuid'] ?? null,
+                'model'       => $chassis['model'] ?? null,
+                'form_factor' => $chassis['form_factor'] ?? null,
+                'total_bays'  => $chassis['drive_bays']['total_bays'] ?? null,
+            ],
+            'included_nic' => $nic,
+        ];
+    }
+
+    /** '8 x 2.5"' — the fallback when a version carries no precomputed bay_summary. */
+    private function baySummary(array $chassis)
+    {
+        $labels = ['2.5_inch' => '2.5"', '3.5_inch' => '3.5"'];
+        $parts = [];
+
+        foreach ($chassis['drive_bays']['bay_configuration'] ?? [] as $bay) {
+            $count = $bay['count'] ?? null;
+            if (!$count) {
+                continue;
+            }
+            $type = $bay['bay_type'] ?? '';
+            $parts[] = $count . ' x ' . ($labels[$type] ?? $type);
+        }
+
+        return implode(' + ', $parts);
     }
 
     /**
-     * Available units per spec UUID for one component type, in one grouped query.
-     * Status = 1 is "available" (0 = failed, 2 = in use).
+     * uuid => available unit count, one grouped query per type, cached per request.
      *
-     * Cached per type for the request, so a catalog where eight platforms bundle CPUs
-     * still costs exactly one query against `cpuinventory`.
+     * The table name is interpolated, so $componentType must come from this class's own
+     * fixed call sites — never from the spec file or a request parameter.
+     *
+     * A type whose inventory table has not been created yet reports zeros rather than
+     * throwing: code deploys ~20s after a save while seeders are applied by hand, so
+     * serverplatforminventory is legitimately absent for a while.
      */
-    private function availableUnits(string $type): array
+    private function availableUnits($componentType)
     {
-        if (isset(self::$unitCounts[$type])) {
-            return self::$unitCounts[$type];
+        if (isset(self::$unitCounts[$componentType])) {
+            return self::$unitCounts[$componentType];
         }
 
-        self::$unitCounts[$type] = [];
-
-        // The table name is interpolated, so the type must come from a fixed list and
-        // never from the JSON file unchecked.
-        if (!$this->pdo || ($type !== 'motherboard' && !in_array($type, self::BUNDLE_TYPES, true))) {
-            return self::$unitCounts[$type];
-        }
-
-        try {
-            $stmt = $this->pdo->query(
-                "SELECT UUID, COUNT(*) AS unit_count
-                 FROM {$type}inventory
-                 WHERE Status = 1
-                 GROUP BY UUID"
-            );
-
-            $counts = [];
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                $counts[$row['UUID']] = (int)$row['unit_count'];
+        $counts = [];
+        if ($this->pdo !== null) {
+            try {
+                $stmt = $this->pdo->query(
+                    "SELECT UUID, COUNT(*) AS unit_count
+                       FROM {$componentType}inventory
+                      WHERE Status = 1
+                   GROUP BY UUID"
+                );
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $counts[$row['UUID']] = (int)$row['unit_count'];
+                }
+            } catch (\Throwable $e) {
+                error_log("ServerPlatformCatalog: stock lookup failed for {$componentType}: " . $e->getMessage());
             }
-
-            self::$unitCounts[$type] = $counts;
-        } catch (Exception $e) {
-            error_log("ServerPlatformCatalog: failed to count available {$type} units - " . $e->getMessage());
         }
 
-        return self::$unitCounts[$type];
+        self::$unitCounts[$componentType] = $counts;
+        return $counts;
     }
 
-    /** The platform file, decoded. An unreadable file yields an empty catalog, never a fatal. */
-    private function loadPlatforms(): array
+    /**
+     * The raw platform catalog.
+     *
+     * Read through ComponentDataService so it shares the request cache and the spec
+     * cache with every other component type — the platform file is a normal spec file
+     * now, registered in ComponentSpecPaths::PATHS.
+     */
+    private function loadPlatforms()
     {
         if (self::$platforms !== null) {
             return self::$platforms;
         }
 
-        self::$platforms = [];
-
         try {
-            $path = ComponentSpecPaths::getPlatformPath();
-            if (!is_file($path)) {
-                error_log('ServerPlatformCatalog: platform spec file not found');
-                return self::$platforms;
-            }
-
-            $decoded = json_decode((string)file_get_contents($path), true);
-            if (!is_array($decoded)) {
-                error_log('ServerPlatformCatalog: platform spec file is not valid JSON - ' . json_last_error_msg());
-                return self::$platforms;
-            }
-
-            self::$platforms = $decoded;
-        } catch (Exception $e) {
-            error_log('ServerPlatformCatalog: failed to load platform specs - ' . $e->getMessage());
+            $data = ComponentDataService::getInstance()->loadJsonData('serverplatform');
+            self::$platforms = is_array($data) ? $data : [];
+        } catch (\Throwable $e) {
+            error_log('ServerPlatformCatalog: failed to load platform catalog: ' . $e->getMessage());
+            self::$platforms = [];
         }
 
         return self::$platforms;
     }
-
-    /**
-     * uuid => board spec summary, built from the motherboard spec file in one pass.
-     *
-     * Deliberately not ComponentDataService::validateComponentUuid(): that is one call
-     * per board with verbose error_log output on every hit, and it answers only
-     * yes/no — the picker also needs sockets and memory slots to label each board.
-     */
-    private function loadBoardIndex(): array
-    {
-        if (self::$boardIndex !== null) {
-            return self::$boardIndex;
-        }
-
-        self::$boardIndex = [];
-
-        try {
-            $path = ComponentSpecPaths::getPath('motherboard');
-            if (!is_file($path)) {
-                error_log('ServerPlatformCatalog: motherboard spec file not found');
-                return self::$boardIndex;
-            }
-
-            $decoded = json_decode((string)file_get_contents($path), true);
-            if (!is_array($decoded)) {
-                error_log('ServerPlatformCatalog: motherboard spec file is not valid JSON');
-                return self::$boardIndex;
-            }
-
-            foreach ($decoded as $group) {
-                foreach ($group['models'] ?? [] as $model) {
-                    $uuid = $model['uuid'] ?? $model['UUID'] ?? null;
-                    if (!$uuid) {
-                        continue;
-                    }
-
-                    $socket = $model['socket'] ?? [];
-                    $memory = $model['memory'] ?? [];
-
-                    self::$boardIndex[$uuid] = [
-                        'model' => $model['model'] ?? '',
-                        'specs' => [
-                            'brand' => $group['brand'] ?? ($model['brand'] ?? ''),
-                            'form_factor' => $model['form_factor'] ?? '',
-                            'socket_type' => is_array($socket) ? ($socket['type'] ?? '') : $socket,
-                            'socket_count' => is_array($socket) ? (int)($socket['count'] ?? 1) : 1,
-                            'memory_type' => $memory['type'] ?? '',
-                            'memory_slots' => (int)($memory['slots'] ?? 0),
-                            'chipset' => $model['chipset'] ?? ''
-                        ]
-                    ];
-                }
-            }
-        } catch (Exception $e) {
-            error_log('ServerPlatformCatalog: failed to index motherboard specs - ' . $e->getMessage());
-        }
-
-        return self::$boardIndex;
-    }
 }
-?>

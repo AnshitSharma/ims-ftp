@@ -4446,6 +4446,118 @@ class ServerBuilder {
     }
     
     /**
+     * Release every physical unit bound to a configuration back to available stock.
+     *
+     * Driven by the inventory rows' own ServerUUID, NOT by the config JSON.
+     * extractComponentsFromJson() does not carry serial_number for every type
+     * (motherboard and chassis among those it omits), so a JSON-driven release passed
+     * $serialNumber = null for those types, collapsing
+     * updateComponentStatusAndServerUuid()'s WHERE to `UUID = ?` alone -- which frees
+     * EVERY physical unit sharing that model UUID, in every other configuration. That is
+     * how motherboards 49/53/55 (model 4c8f5e1b, three different configs) were all
+     * released by a single delete at 2026-07-20 22:48:46.
+     *
+     * ServerUUID is the authoritative record of which PHYSICAL unit belongs to this
+     * config, so releasing by it is unit-precise by construction, and also covers
+     * quantity>1 entries and units missing from the JSON.
+     *
+     * A-P4: ONE statement per table rather than a SELECT plus a per-unit SELECT+UPDATE.
+     * A 30-component server cost ~80 round-trips; it now costs one per table. The
+     * release is unconditional and identical for every bound unit, and ServerUUID is
+     * already the exact per-unit predicate, so nothing is lost by doing it in bulk --
+     * including the ambiguity guard, which only ever mattered for UUID-keyed writes.
+     *
+     * serverplatforminventory is included even though it is not in $componentTables:
+     * the compute platform is a stocked box like any other unit and must go back on the
+     * shelf, but it is deliberately NOT a buildable component type (nothing may
+     * add-component it). A table that does not exist yet is skipped rather than fatal --
+     * code deploys ~20s after a save while seeders are run by hand.
+     *
+     * MUST be called inside a transaction.
+     *
+     * @return int units released
+     */
+    public function releaseAllComponents($configUuid) {
+        require_once __DIR__ . '/../state/StatusMap.php';
+        $statusV2 = StatusMap::INVENTORY_LEGACY_TO_V2[1] ?? null;
+
+        $tables = array_values($this->componentTables);
+        $tables[] = 'serverplatforminventory';
+
+        $released = 0;
+        foreach ($tables as $table) {
+            $setV2 = ($statusV2 !== null) ? ", status_v2 = ?" : "";
+            $sql = "UPDATE `$table`
+                    SET Status = 1{$setV2}, ServerUUID = NULL, InstallationDate = NULL,
+                        RackPosition = NULL, UpdatedAt = NOW()
+                    WHERE ServerUUID = ?";
+            $params = ($statusV2 !== null) ? [$statusV2, $configUuid] : [$configUuid];
+
+            try {
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute($params);
+                $released += $stmt->rowCount();
+            } catch (\Throwable $e) {
+                if ($table === 'serverplatforminventory') {
+                    // Seeder 2026_08_25_002 not applied yet on this database.
+                    error_log('releaseAllComponents: skipping ' . $table . ' - ' . $e->getMessage());
+                    continue;
+                }
+                throw $e;
+            }
+        }
+
+        return $released;
+    }
+
+    /**
+     * Empty a configuration: release every unit AND clear what the config records.
+     *
+     * This is the shared primitive behind both ways a compute platform can change --
+     * removing it, and installing a different one over an existing build. The user was
+     * explicit that either one releases the WHOLE build, not just the platform's own
+     * parts: a board and chassis that came out of a different product cannot be trusted
+     * to fit the CPUs, DIMMs and drives that were chosen around them.
+     *
+     * config_events is deliberately NOT deleted -- it is the audit trail of what
+     * happened to this configuration, and the configuration still exists.
+     *
+     * MUST be called inside a transaction.
+     *
+     * @return int units released
+     */
+    public function clearConfigurationComponents($configUuid) {
+        $released = $this->releaseAllComponents($configUuid);
+
+        $stmt = $this->pdo->prepare("DELETE FROM config_resources WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $this->purgeConfigComponentRows($configUuid);
+
+        $stmt = $this->pdo->prepare("
+            UPDATE server_configurations
+               SET cpu_configuration = NULL,
+                   ram_configuration = NULL,
+                   storage_configuration = NULL,
+                   caddy_configuration = NULL,
+                   nic_config = NULL,
+                   pciecard_configurations = NULL,
+                   hbacard_config = NULL,
+                   hbacard_uuid = NULL,
+                   sfp_configuration = NULL,
+                   motherboard_uuid = NULL,
+                   chassis_uuid = NULL,
+                   power_consumption = NULL,
+                   compatibility_score = NULL,
+                   validation_results = NULL,
+                   updated_at = NOW()
+             WHERE config_uuid = ?
+        ");
+        $stmt->execute([$configUuid]);
+
+        return $released;
+    }
+
+    /**
      * Delete configuration
      *
      * Refuses to delete a server that still has components installed: pulling
@@ -4495,52 +4607,10 @@ class ServerBuilder {
                     ];
                 }
 
-                // Release components back to available status and clear ServerUUID,
-                // installation date, and rack position.
-                //
-                // Driven by the inventory rows' own ServerUUID, NOT by the config JSON.
-                // extractComponentsFromJson() does not carry serial_number for every type
-                // (motherboard and chassis among those it omits), so a JSON-driven release
-                // passed $serialNumber = null for those types, collapsing
-                // updateComponentStatusAndServerUuid()'s WHERE to
-                // `UUID = ?` alone -- which frees EVERY physical unit sharing that model
-                // UUID, in every other configuration. That is how motherboards 49/53/55
-                // (model 4c8f5e1b, three different configs) were all released by a single
-                // delete at 2026-07-20 22:48:46. Same model-vs-unit conflation as the
-                // 2026-07-20 onboard-NIC fix, in a place that remediation did not cover.
-                //
-                // ServerUUID is the authoritative record of which PHYSICAL unit belongs to
-                // this config, so releasing by it is unit-precise by construction, and also
-                // covers quantity>1 entries and units missing from the JSON.
-                //
-                // The row ID is read and passed too: ServerUUID identifies the unit, but
-                // the release itself was still keyed on UUID + SerialNumber, so a unit
-                // with SerialNumber NULL (serial-less stock, addressed by AssetTag) fell
-                // back to the model-wide WHERE and was refused by the ambiguity guard --
-                // leaking it as Status=2 against a config that no longer exists. The ID
-                // is exact for every unit, serialised or not.
-                // A-P4: released with ONE statement per table instead of a SELECT plus a
-                // per-unit SELECT+UPDATE (updateComponentStatusAndServerUuid does both).
-                // A 30-component server cost ~80 round-trips; it now costs 10. The
-                // release is unconditional and identical for every bound unit, and
-                // ServerUUID is already the exact per-unit predicate, so nothing is lost
-                // by doing it in bulk -- including the ambiguity guard, which only ever
-                // mattered for UUID-keyed writes.
-                require_once __DIR__ . '/../state/StatusMap.php';
-                $statusV2 = StatusMap::INVENTORY_LEGACY_TO_V2[1] ?? null;
-
-                foreach ($this->componentTables as $componentType => $table) {
-                    $setV2 = ($statusV2 !== null) ? ", status_v2 = ?" : "";
-                    $sql = "UPDATE `$table`
-                            SET Status = 1{$setV2}, ServerUUID = NULL, InstallationDate = NULL,
-                                RackPosition = NULL, UpdatedAt = NOW()
-                            WHERE ServerUUID = ?";
-                    $params = ($statusV2 !== null) ? [$statusV2, $configUuid] : [$configUuid];
-
-                    $stmt = $this->pdo->prepare($sql);
-                    $stmt->execute($params);
-                    $releasedCount += $stmt->rowCount();
-                }
+                // Release every bound unit back to available stock. The rationale for
+                // driving this off ServerUUID rather than the config JSON, and for doing
+                // it in one statement per table, lives on releaseAllComponents().
+                $releasedCount += $this->releaseAllComponents($configUuid);
             }
 
             // Note: legacy component data lives in JSON columns, no separate table
@@ -4610,7 +4680,7 @@ class ServerBuilder {
      *
      * @return array{total:int, by_type:array<string,int>, summary:string}
      */
-    private function summarizeInstalledComponents($configUuid, $configData) {
+    public function summarizeInstalledComponents($configUuid, $configData) {
         $fromInventory = [];
         foreach ($this->componentTables as $componentType => $table) {
             $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE ServerUUID = ?");

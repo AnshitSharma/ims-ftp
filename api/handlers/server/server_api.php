@@ -135,7 +135,12 @@ switch ($action) {
 
     case 'set-platform':
     case 'server-set-platform':
-        handleSetPlatform($user);
+        handleSetPlatform($serverBuilder, $user);
+        break;
+
+    case 'remove-platform':
+    case 'server-remove-platform':
+        handleRemovePlatform($serverBuilder, $user);
         break;
 
     case 'debug-migration-flags':
@@ -514,6 +519,11 @@ function handleAddComponent($serverBuilder, $user) {
         if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
+
+        // A component the installed compute platform owns cannot be touched on its
+        // own. The guard sits here, ahead of the COMMAND_LAYER_ENABLED branch below,
+        // so it holds identically in off, shadow and enforce mode.
+        assertNotPlatformOwned($pdo, $config, $componentType);
         
         // Phase 2 Consolidation: Unified component validation in ServerBuilder
         //
@@ -986,6 +996,11 @@ function handleRemoveComponent($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
+        // A component the installed compute platform owns cannot be touched on its
+        // own. The guard sits here, ahead of the COMMAND_LAYER_ENABLED branch below,
+        // so it holds identically in off, shadow and enforce mode.
+        assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid);
+
         // Phase 3: NIC removal validation and NIC config update now handled in ServerBuilder::removeComponent()
 
         // U-C.3: COMMAND_LAYER_ENABLED dispatch (off by default -- zero behavior
@@ -1175,6 +1190,10 @@ function handleReplaceComponent($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
+        // Swapping a platform-owned board or chassis for a loose spare would leave a
+        // build that no longer matches the product it was installed from.
+        assertNotPlatformOwned($pdo, $config, $componentType, $oldComponentUuid);
+
         $cmd = new ReplaceComponentCommand(
             $pdo, $configUuid, $componentType, $oldComponentUuid, $oldSerial, $newComponentUuid,
             $options, (int)$user['id'], $expectedRevision
@@ -1344,23 +1363,15 @@ function handleGetConfiguration($serverBuilder, $user) {
             $networkConfig
         );
 
-        // Compute platform. A config built before this feature existed — or one whose
-        // board was added through the normal component picker rather than the platform
-        // flow — carries no stamp, so the platform is inferred from the installed board
-        // for display. Inference is never written back; only server-set-platform writes.
-        require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+        // Compute platform. Explicit now: it is either installed (a stocked box was
+        // consumed and stamped here) or it is not. The old inference — guessing a
+        // platform from the installed board — is gone with the model that made a board
+        // belong to a platform; a custom build's loose board belongs to nobody.
         $platformUuid = $config->get('platform_uuid');
+        $platformVersionUuid = $config->get('platform_version_uuid');
         $platformName = $config->get('platform_name');
-        $platformInferred = false;
-        if (empty($platformUuid)) {
-            $installedBoard = (string)($config->get('motherboard_uuid') ?? '');
-            $inferred = (new ServerPlatformCatalog($pdo))->platformForBoard($installedBoard);
-            if ($inferred !== null) {
-                $platformUuid = $inferred['platform_uuid'];
-                $platformName = $inferred['platform_name'];
-                $platformInferred = true;
-            }
-        }
+        // Which parts the platform owns, so the UI can lock them without guessing.
+        $platformLocked = array_keys(platformOwnedComponents($pdo, $config));
 
         send_json_response(1, 1, 200, "Configuration retrieved successfully", [
             'configuration' => [
@@ -1370,8 +1381,9 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'status' => $configuration['configuration_status'],
                 'location' => $configuration['location'] ?? '',
                 'platform_uuid' => $platformUuid,
+                'platform_version_uuid' => $platformVersionUuid,
                 'platform_name' => $platformName,
-                'platform_inferred' => $platformInferred,
+                'platform_locked' => $platformLocked,
                 'created_at' => $configuration['created_at'],
                 'updated_at' => $configuration['updated_at'] ?? $configuration['created_at']
             ],
@@ -3141,80 +3153,465 @@ function handleListPlatforms($user) {
     }
 }
 
+
 /**
- * Record which compute platform a configuration is built on.
+ * Which parts of a configuration the installed compute platform owns.
  *
- * Deliberately NOT an "apply platform that also adds the board": adding a component
- * has exactly one path (server-add-component), which routes through the command layer
- * whenever COMMAND_LAYER_ENABLED is shadow/enforce. A second entry point calling
- * ServerBuilder::addComponent() directly would bypass that layer the day the flag is
- * turned on. So the client adds the board through the normal action first, then stamps
- * the platform here — and this handler refuses to stamp a platform whose board is not
- * actually the one installed, which is what keeps the label honest.
+ * The lock is DERIVED, never stored: a config with platform_version_uuid set has its
+ * board, its chassis and the version's included NIC supplied by the platform box, so
+ * none of them can be removed or replaced on their own. Nothing to migrate, nothing to
+ * fall out of sync with the version catalog.
+ *
+ * @return array{motherboard:?string, chassis:?string, nic:?string} spec uuids, or an
+ *               empty array when no platform is installed
  */
-function handleSetPlatform($user) {
+function platformOwnedComponents($pdo, $config) {
+    $versionUuid = (string)($config->get('platform_version_uuid') ?? '');
+    if ($versionUuid === '') {
+        return [];
+    }
+
+    require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+    $found = (new ServerPlatformCatalog($pdo))->getVersion($versionUuid);
+    if ($found === null) {
+        // The version was removed from the catalog after this build was made. The
+        // installed board and chassis are still the platform's, so keep them locked
+        // using what the configuration itself records.
+        return array_filter([
+            'motherboard' => $config->get('motherboard_uuid'),
+            'chassis'     => $config->get('chassis_uuid'),
+        ]);
+    }
+
+    $version = $found['version'];
+    return array_filter([
+        'motherboard' => $version['system_board']['uuid'] ?? null,
+        'chassis'     => $version['chassis']['uuid'] ?? null,
+        'nic'         => $version['included_nic']['uuid'] ?? null,
+    ]);
+}
+
+/**
+ * Refuse to touch a component the platform owns.
+ *
+ * Called from add/remove/replace. Sends a 409 and exits when the component is locked;
+ * returns quietly otherwise.
+ */
+function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = null) {
+    $owned = platformOwnedComponents($pdo, $config);
+    if (!$owned) {
+        return;
+    }
+
+    // A board or chassis is single-instance: the type alone identifies it, and an ADD
+    // of either is refused outright because the slot is already filled by the platform.
+    $lockedTypes = ['motherboard', 'chassis'];
+    $isLocked = in_array($componentType, $lockedTypes, true)
+        || ($componentType === 'nic' && $componentUuid !== null && ($owned['nic'] ?? null) === $componentUuid);
+
+    if (!$isLocked) {
+        return;
+    }
+
+    $label = [
+        'motherboard' => 'system board',
+        'chassis'     => 'chassis',
+        'nic'         => 'network card',
+    ][$componentType] ?? $componentType;
+
+    $platformName = $config->get('platform_name') ?: 'compute platform';
+
+    send_json_response(0, 1, 409, "The $label comes with the $platformName. Remove the compute platform to change it.", [
+        'component_type'        => $componentType,
+        'error_type'            => 'platform_owned',
+        'platform_uuid'         => $config->get('platform_uuid'),
+        'platform_version_uuid' => $config->get('platform_version_uuid'),
+        'hint'                  => 'Use server-remove-platform, or install a different platform, which releases the whole build'
+    ]);
+}
+
+/**
+ * Install a server compute platform version into a configuration.
+ *
+ * A platform is a physical box we stock, and the VERSION is the stocked SKU. Installing
+ * one consumes a serverplatforminventory unit and autofills the configuration's system
+ * board and chassis from the specs that box carries. Those are then locked: they came
+ * out of this product and cannot be swapped for loose spares.
+ *
+ * ON THE SINGLE-ADD-PATH INVARIANT: step 4 writes motherboard_uuid and chassis_uuid
+ * directly instead of going through server-add-component. That is not a bypass of the
+ * command/validation layer -- that invariant governs units DRAWN FROM INVENTORY, and a
+ * platform's board and chassis are not stocked units, have no inventory row, and can
+ * never be double-allocated. The physical unit here is the box, and it is locked in
+ * step 3 with exactly the Status / status_v2 / ServerUUID discipline every other add
+ * uses. The included NIC, which IS a stocked unit, goes through the normal add path.
+ *
+ * Installing over an existing build releases the WHOLE build, not just the previous
+ * platform's parts: a board and chassis out of a different product cannot be trusted to
+ * fit the CPUs, DIMMs and drives that were chosen around the old ones. The client must
+ * confirm that with confirm_wipe; without it this answers 409 and names what would go.
+ */
+/**
+ * Can config_components hold BOTH rows a compute-platform unit backs?
+ *
+ * Backend code auto-deploys on save; seeders are run by hand afterwards. Between those
+ * two moments uq_inventory_once is still (inventory_table, inventory_id), and inserting
+ * the chassis row after the motherboard row would raise a duplicate-key error INSIDE the
+ * install transaction -- which is fail-closed by design, so it would roll the whole
+ * install back and break a feature that currently works.
+ *
+ * So the mirror is gated on the key actually being widened (seeder 2026_08_25_005).
+ * Before the seeder: installs keep working exactly as they do today, with the known gap
+ * logged. After it: the mirror switches itself on, no code change needed.
+ *
+ * Probed once per request. A probe that cannot run at all is treated as "not supported",
+ * because guessing wrong in the other direction breaks installs.
+ *
+ * @return bool
+ */
+function platformRowsSupported($pdo) {
+    static $supported = null;
+    if ($supported !== null) {
+        return $supported;
+    }
+
+    try {
+        $stmt = $pdo->query("SHOW INDEX FROM config_components WHERE Key_name = 'uq_inventory_once'");
+        $columns = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $columns[] = $row['Column_name'] ?? '';
+        }
+        $supported = in_array('component_type', $columns, true);
+    } catch (\Throwable $e) {
+        error_log('platformRowsSupported: index probe failed, assuming not widened: ' . $e->getMessage());
+        $supported = false;
+    }
+
+    if (!$supported) {
+        error_log('platformRowsSupported: uq_inventory_once is not widened yet -- '
+            . 'run seeder 2026_08_25_005. Platform builds will not write board/chassis '
+            . 'rows until then, and validation cannot see the platform board.');
+    }
+
+    return $supported;
+}
+
+function handleSetPlatform($serverBuilder, $user) {
     global $pdo;
 
-    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
-    $platformUuid = $_POST['platform_uuid'] ?? $_GET['platform_uuid'] ?? '';
+    $configUuid  = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    $versionUuid = $_POST['version_uuid'] ?? $_GET['version_uuid'] ?? '';
+    $confirmWipe = filter_var($_POST['confirm_wipe'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-    if (empty($configUuid) || empty($platformUuid)) {
-        send_json_response(0, 1, 400, "Configuration UUID and platform UUID are required");
+    if (empty($configUuid) || empty($versionUuid)) {
+        send_json_response(0, 1, 400, "Configuration UUID and platform version UUID are required");
     }
 
     try {
         require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
+        require_once __DIR__ . '/../../../core/models/compatibility/OnboardNICHandler.php';
 
         $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
         if (!$config) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
 
-        // Same ownership clause as handleAddComponent — stamping the platform is an edit.
         if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
+        if ((int)$config->get('configuration_status') === 3) {
+            send_json_response(0, 1, 409, "This server is finalized. Its compute platform can no longer be changed.");
+        }
+
         $catalog = new ServerPlatformCatalog($pdo);
-        $platform = $catalog->getPlatform($platformUuid);
-        if ($platform === null) {
-            send_json_response(0, 1, 404, "Server platform not found");
+        $found = $catalog->getVersion($versionUuid);
+        if ($found === null) {
+            send_json_response(0, 1, 404, "Server platform version not found");
         }
+        $platform = $found['platform'];
+        $version  = $found['version'];
 
-        $installedBoard = (string)($config->get('motherboard_uuid') ?? '');
-        if ($installedBoard === '') {
-            send_json_response(0, 1, 400, "Add the system board before setting the platform", [
-                'platform_uuid' => $platformUuid
+        // Selectability is computed by the catalog, the same way the picker computed it.
+        // A second rule here is how a greyed-out version becomes installable through a
+        // hand-crafted request.
+        $described = $catalog->describeVersionByUuid($versionUuid);
+        if (!$described['selectable']) {
+            send_json_response(0, 1, 409, $described['unavailable_reason'] ?: "This platform version cannot be installed", [
+                'version_uuid'    => $versionUuid,
+                'available_units' => $described['available_units']
             ]);
         }
 
-        if (!$catalog->isBoardInPlatform($platformUuid, $installedBoard)) {
-            send_json_response(0, 1, 400, "The installed system board does not belong to this platform", [
-                'platform_uuid' => $platformUuid,
-                'motherboard_uuid' => $installedBoard
+        $board   = $version['system_board'] ?? null;
+        $chassis = $version['chassis'] ?? null;
+        if (empty($board['uuid']) || empty($chassis['uuid'])) {
+            send_json_response(0, 1, 500, "This platform version is missing its system board or chassis specification");
+        }
+
+        // What is in the build right now, before anything is touched.
+        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $installed = $serverBuilder->summarizeInstalledComponents($configUuid, $configRow);
+
+        if ($installed['total'] > 0 && !$confirmWipe) {
+            send_json_response(0, 1, 409, "Installing a compute platform releases everything currently in this server ("
+                . $installed['summary'] . "). Confirm to continue.", [
+                'error_type'            => 'confirm_wipe_required',
+                'installed_total'       => $installed['total'],
+                'installed_components'  => $installed['by_type'],
+                'installed_summary'     => $installed['summary'],
+                'version_uuid'          => $versionUuid,
+                'hint'                  => 'Retry with confirm_wipe=true'
             ]);
         }
 
-        $platformName = $catalog->displayName($platform);
-        $updated = $config->update([
-            'platform_uuid' => $platformUuid,
-            'platform_name' => $platformName
-        ]);
+        $pdo->beginTransaction();
 
-        if (!$updated) {
-            send_json_response(0, 1, 500, "Failed to record the server platform");
+        $releasedCount = 0;
+        if ($installed['total'] > 0) {
+            $releasedCount = $serverBuilder->clearConfigurationComponents($configUuid);
         }
 
-        send_json_response(1, 1, 200, "Server platform recorded successfully", [
-            'config_uuid' => $configUuid,
-            'platform_uuid' => $platformUuid,
-            'platform_name' => $platformName,
-            'motherboard_uuid' => $installedBoard
+        // Claim one physical box. FOR UPDATE so two concurrent installs cannot take the
+        // same unit; ORDER BY ID so the oldest stock goes out first.
+        $unitStmt = $pdo->prepare("
+            SELECT ID, SerialNumber, AssetTag
+              FROM serverplatforminventory
+             WHERE UUID = ? AND Status = 1
+          ORDER BY ID
+             LIMIT 1
+            FOR UPDATE
+        ");
+        $unitStmt->execute([$versionUuid]);
+        $unit = $unitStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$unit) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, "No available unit of this platform version remains in stock", [
+                'version_uuid' => $versionUuid
+            ]);
+        }
+
+        $claim = $pdo->prepare("
+            UPDATE serverplatforminventory
+               SET Status = 2, status_v2 = 'installed', ServerUUID = ?, InstallationDate = NOW(), UpdatedAt = NOW()
+             WHERE ID = ?
+        ");
+        $claim->execute([$configUuid, (int)$unit['ID']]);
+
+        $platformName = $catalog->displayName($platform, $version);
+
+        $stampStmt = $pdo->prepare("
+            UPDATE server_configurations
+               SET platform_uuid = ?, platform_version_uuid = ?, platform_name = ?,
+                   motherboard_uuid = ?, chassis_uuid = ?, updated_at = NOW()
+             WHERE config_uuid = ?
+        ");
+        $stampStmt->execute([
+            $platform['platform_uuid'] ?? null,
+            $versionUuid,
+            $platformName,
+            $board['uuid'],
+            $chassis['uuid'],
+            $configUuid
         ]);
 
-    } catch (Exception $e) {
-        error_log("Error setting server platform: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to record the server platform");
+        // Mirror the board and the chassis into config_components, in this same
+        // transaction, BEFORE the onboard NICs are attached.
+        //
+        // WHY THIS IS NOT OPTIONAL (2026-08-25): at READ_FROM_ROWS=on -- production's
+        // setting -- ConfigReadRouter answers ONLY from these rows, and
+        // TargetStateBuilder::fromCurrent() switches to the rows path the moment ANY live
+        // row exists for the config. Without these two rows a platform build reported
+        // `components: []` to the builder AND, worse, silently lost its board during
+        // validation: cpu.socket_match took its "No motherboard to check against" branch
+        // and passed vacuously, so an LGA2011-3 CPU installed cleanly into an LGA3647
+        // board (reproduced in production before this fix).
+        //
+        // Both rows point at the SAME serverplatforminventory unit, because that box IS
+        // the physical thing -- its board and chassis are not separately stocked. That is
+        // what seeder 2026_08_25_005 widened uq_inventory_once to allow.
+        //
+        // Motherboard FIRST: ConfigComponentWriter::resolveParentId() parents board-hosted
+        // types (the onboard NICs below included) to the config's motherboard ROW, looked
+        // up from the motherboard_uuid just stamped above.
+        $rowsMirrored = false;
+        if (platformRowsSupported($pdo)) {
+            require_once __DIR__ . '/../../../core/models/config/ConfigComponentWriter.php';
+            foreach (['motherboard' => $board, 'chassis' => $chassis] as $rowType => $rowSpec) {
+                ConfigComponentWriter::afterLegacyAdd(
+                    $pdo,
+                    $configUuid,
+                    $rowType,
+                    $rowSpec['uuid'],
+                    $unit['SerialNumber'],
+                    null,                        // neither occupies a PCIe slot or bay
+                    'serverplatforminventory',   // the box is the unit behind both rows
+                    (int)$unit['ID'],
+                    (int)$user['id']
+                );
+            }
+            $rowsMirrored = true;
+        }
+
+        // The ports on this physical box. Identity is keyed on the platform unit, which
+        // is what those ports are physically attached to.
+        $onboard = (new OnboardNICHandler($pdo))->autoAddOnboardNICs($configUuid, $board['uuid'], (int)$unit['ID']);
+        if (isset($onboard['error'])) {
+            $pdo->rollBack();
+            error_log("handleSetPlatform: onboard NIC attach failed for $configUuid: " . $onboard['error']);
+            send_json_response(0, 1, 500, "The platform could not be installed: its onboard network ports could not be attached.");
+        }
+
+        // autoAddOnboardNICs() does NOT dual-write; the mirror for onboard ports lives in
+        // ServerBuilder::addComponent()'s motherboard branch (fix F-13), which this path
+        // does not go through. Mirroring here keeps the two stores in step: with the board
+        // now in rows, leaving the NICs out would make the rows path -- which the engine
+        // has just switched to -- see a board with no network at all.
+        if ($rowsMirrored && !empty($onboard['nics'])) {
+            foreach ($onboard['nics'] as $onboardNic) {
+                if (empty($onboardNic['inventory_id'])) {
+                    // A 'replaced' port is skipped by the handler and carries no identity.
+                    continue;
+                }
+                ConfigComponentWriter::afterLegacyAdd(
+                    $pdo,
+                    $configUuid,
+                    'nic',
+                    $onboardNic['uuid'],
+                    $onboardNic['serial_number'] ?? null,
+                    null,                        // onboard ports occupy no PCIe slot
+                    $onboardNic['inventory_table'] ?? 'nicinventory',
+                    $onboardNic['inventory_id'],
+                    (int)$user['id'],
+                    null                         // parent resolves via motherboard_uuid
+                );
+            }
+        }
+
+        $pdo->commit();
+
+        // The included NIC IS a stocked unit, so it goes in through the ordinary add
+        // path with its own validation and slot assignment -- after the board is
+        // committed, because that is what the slot check reads.
+        $nicResult = null;
+        if (!empty($version['included_nic']['uuid'])) {
+            $nicResult = $serverBuilder->addComponent($configUuid, 'nic', $version['included_nic']['uuid']);
+        }
+
+        logActivity($pdo, $user['id'], 'Compute platform installed', 'server', $config->get('id'),
+            "Installed $platformName (unit {$unit['ID']}) on server config $configUuid");
+
+        send_json_response(1, 1, 200, "$platformName installed", [
+            'config_uuid'           => $configUuid,
+            'platform_uuid'         => $platform['platform_uuid'] ?? null,
+            'platform_version_uuid' => $versionUuid,
+            'platform_name'         => $platformName,
+            'motherboard_uuid'      => $board['uuid'],
+            'chassis_uuid'          => $chassis['uuid'],
+            'serial_number'         => $unit['SerialNumber'],
+            'asset_tag'             => $unit['AssetTag'],
+            'onboard_nics_attached' => $onboard['count'] ?? 0,
+            'components_released'   => $releasedCount,
+            'included_nic_installed' => $nicResult === null ? null : (bool)($nicResult['success'] ?? false)
+        ]);
+
+    } catch (\Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("Error installing server platform: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to install the compute platform");
+    }
+}
+
+/**
+ * Remove the compute platform from a configuration.
+ *
+ * Releases the platform box back to stock AND releases the whole build with it, for the
+ * same reason installing over an existing build does: every other component was chosen
+ * against this board's sockets and slots and this chassis' bays.
+ */
+function handleRemovePlatform($serverBuilder, $user) {
+    global $pdo;
+
+    $configUuid  = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    $confirmWipe = filter_var($_POST['confirm_wipe'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "Configuration UUID is required");
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
+            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+        }
+
+        if ((int)$config->get('configuration_status') === 3) {
+            send_json_response(0, 1, 409, "This server is finalized. Its compute platform can no longer be removed.");
+        }
+
+        $versionUuid = (string)($config->get('platform_version_uuid') ?? '');
+        if ($versionUuid === '') {
+            send_json_response(0, 1, 400, "This server has no compute platform installed");
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+        $stmt->execute([$configUuid]);
+        $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $installed = $serverBuilder->summarizeInstalledComponents($configUuid, $configRow);
+
+        if (!$confirmWipe) {
+            send_json_response(0, 1, 409, "Removing the compute platform releases everything in this server ("
+                . $installed['summary'] . "). Confirm to continue.", [
+                'error_type'           => 'confirm_wipe_required',
+                'installed_total'      => $installed['total'],
+                'installed_components' => $installed['by_type'],
+                'installed_summary'    => $installed['summary'],
+                'hint'                 => 'Retry with confirm_wipe=true'
+            ]);
+        }
+
+        $platformName = $config->get('platform_name') ?: 'compute platform';
+
+        $pdo->beginTransaction();
+
+        // clearConfigurationComponents releases serverplatforminventory too, so the box
+        // goes back on the shelf by the same ServerUUID-driven statement as everything
+        // else -- one release path, not two.
+        $releasedCount = $serverBuilder->clearConfigurationComponents($configUuid);
+
+        $stmt = $pdo->prepare("
+            UPDATE server_configurations
+               SET platform_uuid = NULL, platform_version_uuid = NULL, platform_name = NULL,
+                   updated_at = NOW()
+             WHERE config_uuid = ?
+        ");
+        $stmt->execute([$configUuid]);
+
+        $pdo->commit();
+
+        logActivity($pdo, $user['id'], 'Compute platform removed', 'server', $config->get('id'),
+            "Removed $platformName from server config $configUuid, released $releasedCount unit(s)");
+
+        send_json_response(1, 1, 200, "$platformName removed and $releasedCount component(s) released", [
+            'config_uuid'         => $configUuid,
+            'components_released' => $releasedCount
+        ]);
+
+    } catch (\Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("Error removing server platform: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to remove the compute platform");
     }
 }
 

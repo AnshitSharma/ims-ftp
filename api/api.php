@@ -201,6 +201,7 @@ try {
         case 'risercard':
         case 'hbacard':
         case 'sfp':
+        case 'serverplatform':
             requireModulePermission($module, $operation, $user);
             require_once(__DIR__ . '/handlers/components/component_crud_api.php');
             handleComponentOperations($module, $operation, $user);
@@ -246,7 +247,7 @@ function requireModulePermission($module, $operation, $user) {
         $map = require __DIR__ . '/permission_map.php';
     }
 
-    // The 10 component types share the 'component' permission template.
+    // Every component type shares the 'component' permission template.
     $moduleKey = in_array($module, VALID_COMPONENT_TYPES, true) ? 'component' : $module;
 
     if (!isset($map[$moduleKey][$operation])) {

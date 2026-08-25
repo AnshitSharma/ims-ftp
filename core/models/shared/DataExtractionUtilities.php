@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/../components/ComponentSpecPaths.php';
+require_once __DIR__ . '/../components/PlatformSpecIndex.php';
 
 class DataExtractionUtilities {
     private $jsonCache = [];
@@ -55,8 +56,21 @@ class DataExtractionUtilities {
     
     /**
      * Find component by UUID in JSON data
+     *
+     * A board or chassis that comes inside a server compute platform is described in the
+     * platform catalog, not in motherboard-/chasis-level-3.json, so it is resolved FIRST
+     * -- before the per-type finders below, which would look in the wrong file and return
+     * null. Every validation rule reaches specs through this method (ResourceCatalog,
+     * CpuSocketMatchRule, ... via $this->dataUtils), so without this lookup a platform
+     * build cannot be validated at all. Shared with ComponentDataService so the two
+     * resolvers cannot drift apart again -- see PlatformSpecIndex.
      */
     private function findComponentByUuid($type, $uuid) {
+        $platformOwned = PlatformSpecIndex::find($type, $uuid);
+        if ($platformOwned !== null) {
+            return $platformOwned;
+        }
+
         $data = $this->loadJsonData($type);
 
         switch ($type) {

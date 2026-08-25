@@ -14,16 +14,8 @@ class ComponentSpecPaths {
         'hbacard' => 'hbacard/hbacard-level-3.json',
         'sfp' => 'sfp/sfp-level-3.json',
         'chassis' => 'chassis/chasis-level-3.json',
+        'serverplatform' => 'serverplatform/server-platform-level-3.json',
     ];
-
-    /**
-     * Server compute platforms (HPE ProLiant DL360 Gen10 and friends) — a grouping
-     * OVER motherboard specs, not a 12th component type. Deliberately kept out of
-     * PATHS: getAll() feeds ComponentDataLoader::loadComponentFromJSON() and
-     * DataExtractionUtilities, both of which treat every key there as a real
-     * component type with an inventory table behind it.
-     */
-    private const PLATFORM_PATH = 'serverplatform/server-platform-level-3.json';
 
     public static function getBasePath(): string {
         $configuredPath = self::getConfiguredBasePath();
@@ -54,10 +46,6 @@ class ComponentSpecPaths {
         }
 
         return self::getBasePath() . '/' . self::PATHS[$componentType];
-    }
-
-    public static function getPlatformPath(): string {
-        return self::getBasePath() . '/' . self::PLATFORM_PATH;
     }
 
     public static function getAll(): array {

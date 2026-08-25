@@ -197,6 +197,49 @@ final class RemoveComponentCommand extends BaseCommand
             }
         }
 
+        // Removing a motherboard must take its onboard NICs with it.
+        //
+        // The legacy path has always done this (ServerBuilder::removeComponent(), the
+        // A-E6 hardening); the command layer never did, and production runs
+        // COMMAND_LAYER_ENABLED=enforce. The rows-side cascade alone was not enough:
+        // an onboard port lives in the nic_config JSON blob as a synthetic
+        // "onboard-<board>-<unit>-<n>" entry, and nothing here rewrote that blob. The
+        // entry outlived its board with a dangling parent_motherboard_uuid, and
+        // server-delete-config counted it forever -- refusing to delete a server whose
+        // network view correctly reported zero NICs, with no way back.
+        //
+        // Fail-closed like the legacy path: a failed detach aborts the command rather
+        // than logging and carrying on, because leaving the board removed and its ports
+        // stranded is the exact state this repairs.
+        if (($this->targetRow['component_type'] ?? null) === 'motherboard') {
+            require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+            require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+
+            $detach = (new OnboardNICHandler($pdo))
+                ->removeOnboardNICs($this->targetRow['spec_uuid'], $this->configUuid);
+
+            if (empty($detach['success'])) {
+                throw new CommandFailed(
+                    'onboard_nic_detach_failed',
+                    "Could not detach this motherboard's onboard NICs. Nothing was removed.",
+                    500
+                );
+            }
+
+            // Keep the rows store in step with the JSON the handler just rewrote (F-13
+            // does the same thing on the legacy path's add side).
+            foreach ($detach['detached_rows'] ?? [] as $detached) {
+                ConfigComponentWriter::afterLegacyRemove(
+                    $pdo,
+                    $this->configUuid,
+                    'nic',
+                    $detached['UUID'],
+                    $detached['SerialNumber'] ?? null,
+                    $this->actor
+                );
+            }
+        }
+
         $sb->recalculateFormFactorLock($this->configUuid);
 
         // Chassis gone -> a racked server falls back to the 1U default. Shrinking

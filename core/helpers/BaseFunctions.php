@@ -24,7 +24,10 @@ JWTHelper::init($jwtSecret);
 $GLOBALS['_permission_cache'] = [];
 
 // Whitelist of valid component types (defense-in-depth for dynamic table names)
-define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp']);
+// 'serverplatform' (2026-08-25) is the shipped server product itself -- a physical box
+// we stock, whose system board and chassis live INSIDE it and are never stocked on
+// their own. It is a full component type: {type}inventory, ACL module, asset tags.
+define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform']);
 
 function validateComponentType($type) {
     if (!in_array($type, VALID_COMPONENT_TYPES, true)) {
@@ -963,6 +966,7 @@ function getComponentAssetTagCode($type) {
         'risercard'   => 'RSR',
         'hbacard'     => 'HBA',
         'sfp'         => 'SFP',
+        'serverplatform' => 'SPF',
     ];
 
     if (!isset($codes[$type])) {

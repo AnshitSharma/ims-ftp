@@ -440,6 +440,16 @@ class PipelineManager
                 if (!empty($effect['execution'])) {
                     $failure['execution'] = $effect['execution'];
                 }
+
+                // ...and record it, now that rollBack() has ended the
+                // transaction and this connection is back in autocommit. The
+                // response above dies with the page: the approver loses it on
+                // reload and the REQUESTER never sees it at all, which leaves
+                // them watching a request that was tried, failed, and looks
+                // untouched. Only the attempt is recorded — the work itself
+                // was rolled back and nothing was changed.
+                $this->recordExecutionFailure($ticketId, $userId, $effect);
+
                 return $failure;
             }
 
@@ -914,7 +924,15 @@ class PipelineManager
                     cur.assigned_to_role_id AS cur_role_id, sr.display_name AS cur_role_name,
                     cur.claimed_by_user_id AS cur_claimed_by, cu.username AS cur_claimed_name,
                     (SELECT COUNT(*) FROM ticket_stage_progress sp WHERE sp.ticket_id = t.id) AS stage_total,
-                    (SELECT COUNT(*) FROM ticket_stage_progress sp WHERE sp.ticket_id = t.id AND sp.status = 'completed') AS stage_done
+                    (SELECT COUNT(*) FROM ticket_stage_progress sp WHERE sp.ticket_id = t.id AND sp.status = 'completed') AS stage_done,
+                    -- The LATEST execution event, not merely whether one ever
+                    -- failed: a request that failed and was then approved
+                    -- successfully must not keep wearing the marker. id DESC
+                    -- breaks same-second ties deterministically.
+                    (SELECT h.action FROM ticket_history h
+                      WHERE h.ticket_id = t.id
+                        AND h.action IN ('execution_failed', 'actions_executed')
+                      ORDER BY h.created_at DESC, h.id DESC LIMIT 1) AS last_execution_event
                 FROM tickets t
                 LEFT JOIN users creator ON t.created_by = creator.id
                 LEFT JOIN pipeline_templates pt ON t.pipeline_template_id = pt.id
@@ -937,6 +955,7 @@ class PipelineManager
                     'status' => $row['status'],
                     'priority' => $row['priority'],
                     'pipeline_type' => $row['pipeline_type_name'],
+                    'last_attempt_failed' => ($row['last_execution_event'] === 'execution_failed'),
                     'created_by' => $row['created_by'] ? [
                         'id' => (int)$row['created_by'],
                         'username' => $row['created_by_username']
@@ -1147,6 +1166,53 @@ class PipelineManager
      * @param int   $userId the actor completing the stage
      * @return array ['success' => bool, 'errors' => [], 'applied' => array|null]
      */
+    /**
+     * Record a rolled-back approval on the request's timeline.
+     *
+     * MUST be called AFTER rollBack(), never before: that call ends the
+     * transaction, so this INSERT autocommits on the same connection and
+     * survives. Written inside the transaction it would roll back with the work
+     * it describes — which is exactly what happens to the 'failed' marker on
+     * ticket_actions (runTicketActions()), and why that marker cannot be the
+     * record. No second connection is opened for this; nothing to configure.
+     *
+     * Only the ATTEMPT is recorded. The work was rolled back, the step is still
+     * active and the request is still open and re-approvable.
+     *
+     * new_value is structured for the UI; notes is the human sentence. Both are
+     * written because ticket_history is read by people as well as by code.
+     */
+    private function recordExecutionFailure($ticketId, $userId, array $effect)
+    {
+        $execution = !empty($effect['execution']) && is_array($effect['execution'])
+            ? $effect['execution']
+            : [];
+
+        $message = isset($execution['message']) && $execution['message'] !== ''
+            ? $execution['message']
+            : (!empty($effect['errors']) ? implode('; ', $effect['errors']) : 'Action failed');
+
+        $detail = [
+            'position'    => isset($execution['position']) ? (int)$execution['position'] : null,
+            'action_type' => isset($execution['action_type']) ? $execution['action_type'] : null,
+            'error_code'  => isset($execution['error_code']) ? $execution['error_code'] : null,
+            'message'     => $message,
+        ];
+
+        $where = $detail['position'] !== null
+            ? "Action {$detail['position']}" . ($detail['action_type'] ? " ({$detail['action_type']})" : '')
+            : 'An action';
+
+        $this->historyService->logHistory(
+            $ticketId,
+            'execution_failed',
+            null,
+            json_encode($detail),
+            $userId,
+            "Approval rolled back — nothing was changed. $where failed: $message"
+        );
+    }
+
     private function applyStageEffect($ticketId, $stage, $userId)
     {
         $none = ['success' => true, 'errors' => [], 'applied' => null];

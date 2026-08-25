@@ -13,6 +13,9 @@
  * pre-echo of INV-3 — commands will be the only transaction owners).
  *
  * NOTE on insert()'s ON DUPLICATE KEY UPDATE: config_components.uq_inventory_once
+ * became (inventory_table, inventory_id, component_type) in seeder 2026_08_25_005 so a
+ * compute-platform box can back both its board and its chassis row; that file explains
+ * why this is a no-op for the 11 types whose table already implies their type.
  * is (inventory_table, inventory_id) with NO removed_at column (see
  * database/seeders/2026_07_06_001_create-config-components.sql and
  * migration/handoffs/U-1.1-20260706.md for the full reasoning — MySQL/MariaDB
@@ -88,10 +91,15 @@ class ConfigComponentRepository
         // unit is MOVING and any children still sitting in the old config would
         // keep pointing at a row that no longer belongs to them — see
         // repointChildrenAwayFrom() for why that has to be repaired here.
+        // component_type is part of the lookup because uq_inventory_once carries it
+        // (seeder 2026_08_25_005): one server compute platform unit legitimately backs
+        // TWO rows -- its system board and its chassis -- and without the type this
+        // would return an arbitrary one of them and mis-detect a move.
         $prior = $this->pdo->prepare(
-            'SELECT id, config_uuid FROM config_components WHERE inventory_table = ? AND inventory_id = ?'
+            'SELECT id, config_uuid FROM config_components
+              WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?'
         );
-        $prior->execute([$inventoryTable, $inventoryId]);
+        $prior->execute([$inventoryTable, $inventoryId, $componentType]);
         $priorRow = $prior->fetch(PDO::FETCH_ASSOC) ?: null;
 
         $stmt = $this->pdo->prepare('
@@ -120,9 +128,10 @@ class ConfigComponentRepository
         $id = (int)$this->pdo->lastInsertId();
         if ($id === 0) {
             $lookup = $this->pdo->prepare(
-                'SELECT id FROM config_components WHERE inventory_table = ? AND inventory_id = ?'
+                'SELECT id FROM config_components
+                  WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?'
             );
-            $lookup->execute([$inventoryTable, $inventoryId]);
+            $lookup->execute([$inventoryTable, $inventoryId, $componentType]);
             $id = (int)$lookup->fetchColumn();
         }
 

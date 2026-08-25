@@ -27,10 +27,17 @@ class OnboardNICHandler {
      * the 2nd+ board's INSERT died on a duplicate key that was swallowed here,
      * leaving that server silently without onboard NICs.
      *
+     * The parent physical unit is usually a motherboardinventory row, but for a build
+     * that came from a server compute platform it is the serverplatforminventory row --
+     * the board is inside that box and has no inventory row of its own. Either way the
+     * identity is "the ports on THIS physical thing", which is what an onboard NIC is.
+     *
      * @param string   $configUuid             Server configuration UUID
-     * @param string   $motherboardUuid        Motherboard SPEC uuid (ims-data JSON)
-     * @param int|null $motherboardInventoryId motherboardinventory.ID of the
-     *                                         physical board being added
+     * @param string   $motherboardUuid        Board SPEC uuid (ims-data JSON; for a
+     *                                         platform build, the platform-owned board)
+     * @param int|null $motherboardInventoryId Row id of the physical unit the board is
+     *                                         part of -- motherboardinventory.ID, or
+     *                                         serverplatforminventory.ID for a platform
      * @return array Result with count and NIC details
      */
     public function autoAddOnboardNICs($configUuid, $motherboardUuid, $motherboardInventoryId = null) {
@@ -69,12 +76,22 @@ class OnboardNICHandler {
 
             // Rows for THIS physical board, whatever config (if any) it was last
             // in -- an onboard NIC travels with the board between servers.
+            //
+            // Keyed on the board spec UUID AS WELL AS the row id (2026-08-25). The parent
+            // unit is no longer always a motherboardinventory row: a board that comes
+            // inside a server compute platform has its parent in serverplatforminventory,
+            // and the two tables have independent auto-increments, so id alone could match
+            // a different physical unit in the other table and "re-attach" its ports here.
+            // Board spec UUIDs are unique per model and platform-owned boards carry their
+            // own, so the pair is unique across both tables. A strict tightening: for a
+            // motherboard parent the same rows match as before.
             $checkExistingStmt = $this->pdo->prepare("
                 SELECT ID, UUID, SerialNumber, OnboardNICIndex, ServerUUID, Status, Flag FROM nicinventory
                 WHERE ParentInventoryID = ?
+                AND ParentComponentUUID = ?
                 AND SourceType = 'onboard'
             ");
-            $checkExistingStmt->execute([$motherboardInventoryId]);
+            $checkExistingStmt->execute([$motherboardInventoryId, $motherboardUuid]);
 
             $existingByIndex = [];
             foreach ($checkExistingStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
