@@ -63,7 +63,15 @@ final class AddComponentCommand extends BaseCommand
     {
         $this->resolvedInventoryRow = $this->lockAndCheckComponent();
         if ($this->resolvedInventoryRow === null) {
-            throw new CommandFailed('component_not_found', "Component {$this->componentUuid} not found in inventory", 404);
+            // 'inventory_component_not_found', NOT 'component_not_found': the
+            // model is in the ims-data catalogue but NO UNIT of it exists in
+            // stock, which is a different fact from "this configuration does not
+            // hold that component" (RemoveComponentCommand /
+            // ReplaceComponentCommand's old-row miss, which keeps the old type).
+            // Only this one is a "not yet" that a request can fix by raising an
+            // inventory.component.add prerequisite -- RequestActionExecutor::preflight()
+            // defers on exactly this errorType and on nothing else.
+            throw new CommandFailed('inventory_component_not_found', "Component {$this->componentUuid} not found in inventory", 404);
         }
         // Finding A (verify record 2026-07-12): legacy's post-lock availability
         // gate + override protocol, ported into BaseCommand.

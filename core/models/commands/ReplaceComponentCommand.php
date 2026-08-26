@@ -93,7 +93,12 @@ final class ReplaceComponentCommand extends BaseCommand
 
         $this->newInventoryRow = $this->lockAndCheckComponent();
         if ($this->newInventoryRow === null) {
-            throw new CommandFailed('component_not_found', "Replacement component {$this->newComponentUuid} not found in inventory", 404);
+            // 'inventory_component_not_found' — the REPLACEMENT has no unit in
+            // stock, which a request can fix by raising an
+            // inventory.component.add prerequisite. The miss above (the part
+            // being taken OUT is not in this configuration) keeps
+            // 'component_not_found': no amount of stock makes that true.
+            throw new CommandFailed('inventory_component_not_found', "Replacement component {$this->newComponentUuid} not found in inventory", 404);
         }
         // Finding A (verify record 2026-07-12): legacy's post-lock availability
         // gate + override protocol, ported into BaseCommand. The U-A.2

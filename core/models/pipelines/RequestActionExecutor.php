@@ -45,6 +45,8 @@ require_once(__DIR__ . '/../../config/WorkflowConfig.php');
 require_once(__DIR__ . '/../rack/ServerRelocation.php');
 require_once(__DIR__ . '/../location/LocationResolver.php');
 require_once(__DIR__ . '/../location/ComponentRelocation.php');
+// isCataloguedModel() asks it whether a model exists in ims-data at all.
+require_once(__DIR__ . '/../components/ComponentDataService.php');
 
 class RequestActionExecutor
 {
@@ -226,8 +228,16 @@ class RequestActionExecutor
             case 'inventory.component.add':
                 return "Add a {$type} to inventory";
             case 'inventory.component.edit':
+                // The FIELDS, not just the row. A request carries only what the
+                // requester actually changed, and an approver reading "Status,
+                // Location" can sanity-check it; "record #412" tells them only
+                // that something, somewhere in the row, is about to move.
+                $fields = (isset($payload['data']) && is_array($payload['data']))
+                    ? array_keys($payload['data'])
+                    : [];
                 return "Update {$type} inventory record #"
-                    . (isset($payload['inventory_id']) ? $payload['inventory_id'] : '?');
+                    . (isset($payload['inventory_id']) ? $payload['inventory_id'] : '?')
+                    . (empty($fields) ? '' : ' — ' . implode(', ', $fields));
             case 'inventory.component.relocate':
                 // Named, not uuid'd, for the same reason server.relocate is: an
                 // approver reading "Noida Yotta -> Jaipur Office" can sanity-check
@@ -306,13 +316,35 @@ class RequestActionExecutor
      * requester is still looking at it, rather than after it has cost an admin
      * an approval. dryRun() locks and rolls back, so it is a pure read.
      *
-     * @return array ['valid' => bool, 'errors' => string[]]
+     * ONE FAILURE IS NOT A REFUSAL: 'inventory_component_not_found' means the
+     * model exists in the hardware catalogue but no unit of it is in stock. That
+     * is a "not yet", and the fix is a prerequisite request that adds the unit --
+     * so this returns VALID and reports the gap as `deferred` for the caller to
+     * offer. Refusing it outright left the requester at a dead end: the dropdown
+     * offers every catalogued model, so they could not have known.
+     *
+     * Everything else stays a refusal, 'component_unavailable' (the unit exists
+     * but is failed or already in use) very much included -- more stock does not
+     * make that request possible, and softening it would let an approval be
+     * spent on a part somebody else is holding.
+     *
+     * @return array ['valid' => bool, 'errors' => string[], 'deferred' => array|null]
      */
     public function preflight($actionType, array $payload)
     {
         $errors = $this->validateShape($actionType, $payload);
         if (!empty($errors)) {
             return ['valid' => false, 'errors' => $errors];
+        }
+
+        // An edit names a ROW, not a configuration, so buildCommand() has nothing
+        // to dry-run for it. The one thing worth checking is the one thing that
+        // can already be wrong: does that row still exist? Refusing here tells
+        // the requester while they are still looking at the form, instead of
+        // letting an approval be spent on a record that has since been deleted.
+        if ($actionType === 'inventory.component.edit'
+            && !$this->inventoryRecordExists($payload['component_type'], $payload['inventory_id'])) {
+            return ['valid' => false, 'errors' => ['That inventory record no longer exists']];
         }
 
         // A dry run needs the configuration to exist already, so it applies to
@@ -330,6 +362,20 @@ class RequestActionExecutor
                 }
             }
         } catch (CommandFailed $e) {
+            if ($e->errorType === 'inventory_component_not_found') {
+                $gap = self::stockGap($actionType, $payload);
+
+                // "No unit of a REAL model" is a not-yet. A uuid the hardware
+                // catalogue has never heard of is not: no inventory record can be
+                // created for it either (addComponent validates against ims-data
+                // and refuses), so deferring would only move the dead end further
+                // down the line. The dropdowns cannot produce one of these -- a
+                // hand-built request can.
+                if (!$this->isCataloguedModel($gap['component_type'], $gap['component_uuid'])) {
+                    return ['valid' => false, 'errors' => [$e->getMessage()]];
+                }
+                return ['valid' => true, 'errors' => [], 'deferred' => $gap];
+            }
             return ['valid' => false, 'errors' => [$e->getMessage()]];
         } catch (Exception $e) {
             error_log('RequestActionExecutor::preflight error: ' . $e->getMessage());
@@ -337,6 +383,57 @@ class RequestActionExecutor
         }
 
         return ['valid' => true, 'errors' => []];
+    }
+
+    /**
+     * Does the hardware catalogue know this model at all?
+     *
+     * The same check inventory insertion itself runs (rule 1: UUID validation is
+     * never bypassed), asked here only to tell "we have none of these yet" apart
+     * from "there is no such thing". FAILS CLOSED: if the catalogue cannot be
+     * read, the answer is no and the action is refused, because the alternative
+     * is a request nobody can ever fulfil sitting in an approver's queue.
+     */
+    private function isCataloguedModel($componentType, $uuid)
+    {
+        if ($componentType === '' || $uuid === '') {
+            return false;
+        }
+
+        try {
+            $service = ComponentDataService::getInstance();
+            return $service->validateComponentUuid($componentType, $uuid) === true;
+        } catch (Exception $e) {
+            error_log('RequestActionExecutor::isCataloguedModel error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Which model an action wanted, when the answer was "none of it is in stock".
+     *
+     * A REPLACE names two models, and only the incoming one can be missing from
+     * inventory -- the outgoing one is missing from the CONFIGURATION, which is a
+     * different errorType and never reaches here.
+     *
+     * The serial number is carried through because a requester who typed one was
+     * naming a specific unit, and the record they are about to raise should be
+     * for that unit rather than an unlabelled one.
+     *
+     * @return array{reason:string, component_type:string, component_uuid:string, serial_number:?string}
+     */
+    public static function stockGap($actionType, array $payload)
+    {
+        $uuidKey = $actionType === 'server.component.replace' ? 'new_component_uuid' : 'component_uuid';
+
+        return [
+            'reason'          => 'stock_missing',
+            'component_type'  => isset($payload['component_type']) ? (string)$payload['component_type'] : '',
+            'component_uuid'  => isset($payload[$uuidKey]) ? (string)$payload[$uuidKey] : '',
+            'serial_number'   => isset($payload['serial_number']) && $payload['serial_number'] !== ''
+                ? (string)$payload['serial_number']
+                : null,
+        ];
     }
 
     /**
@@ -570,12 +667,27 @@ class RequestActionExecutor
                 );
 
             case 'server.config.transition':
+                // systemAuthorized: the requester does not hold the edge's
+                // permission and is never given it -- that is the whole design.
+                // The command still refuses an ILLEGAL edge, which is the part
+                // the request form promises the requester.
+                //
+                // It matters in BOTH directions this method is called: preflight
+                // passes actor 0 (nobody, so every edge would be denied at submit
+                // time) and execute passes the REQUESTER (denied again, at
+                // approval). Without this flag the action could neither be raised
+                // nor approved.
                 return new TransitionStatusCommand(
                     $this->pdo,
                     $payload['config_uuid'],
                     $payload['to_status'],
-                    (string)(isset($payload['notes']) ? $payload['notes'] : 'Applied by an approved Request'),
-                    (int)$actor
+                    // The requester's own "Why", or nothing. It used to default
+                    // to a house string, which the notes write then stamped over
+                    // whatever the server's notes column already held.
+                    (string)(isset($payload['notes']) ? $payload['notes'] : ''),
+                    (int)$actor,
+                    null,
+                    true
                 );
         }
         return null;
@@ -980,11 +1092,51 @@ class RequestActionExecutor
         ];
     }
 
+    /**
+     * Is there still a row to correct?
+     *
+     * updateComponent() reports success on an UPDATE that matched nothing, so
+     * without this an edit naming a deleted (or simply wrong) id would be marked
+     * executed and the approver told the correction had been applied. Asked at
+     * preflight AND at execution because the two are days apart: the row can be
+     * deleted in between.
+     *
+     * FAILS CLOSED. An unreadable table is not a licence to claim the edit
+     * worked.
+     */
+    private function inventoryRecordExists($componentType, $inventoryId)
+    {
+        // The same whitelist validateShape() checks the payload against — the
+        // table name is interpolated, so it may only ever come from this list.
+        if (!in_array($componentType, WorkflowConfig::getValidComponentTypes(), true)
+            || (int)$inventoryId <= 0) {
+            return false;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT 1 FROM `" . $componentType . "inventory` WHERE ID = ? LIMIT 1");
+            $stmt->execute([(int)$inventoryId]);
+            return $stmt->fetchColumn() !== false;
+        } catch (Exception $e) {
+            error_log('RequestActionExecutor::inventoryRecordExists error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
     private function editInventoryComponent(array $payload, $subjectUserId)
     {
         if (!function_exists('updateComponent')) {
             error_log('RequestActionExecutor: updateComponent() unavailable');
             return ['success' => false, 'errors' => ['Inventory functions are unavailable'], 'result' => null];
+        }
+
+        if (!$this->inventoryRecordExists($payload['component_type'], $payload['inventory_id'])) {
+            return [
+                'success' => false,
+                'errors'  => ['That inventory record no longer exists'],
+                'result'  => null,
+            ];
         }
 
         $ok = updateComponent(

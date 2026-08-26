@@ -25,6 +25,10 @@ require_once(__DIR__ . '/../tickets/TicketHistoryService.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
 require_once(__DIR__ . '/../../helpers/SchemaHelper.php');
 require_once(__DIR__ . '/RequestActionExecutor.php');
+// Reached transitively through the commands, but named here too: stockMissingActions()
+// asks it for the {type}inventory table name, and a require it does not own is a
+// fatal waiting for somebody to tidy an include list.
+require_once(__DIR__ . '/../server/ServerBuilder.php');
 require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
 require_once(__DIR__ . '/../state/StatusMap.php');
 
@@ -119,6 +123,9 @@ class PipelineManager
         // dry-run through the real validation engine here, so an impossible
         // request is refused while the requester is still looking at it rather
         // than after it has cost an admin an approval.
+        // Actions whose part is not in stock yet. NOT errors: see the deferred
+        // branch below, and RequestActionExecutor::preflight()'s own note.
+        $stockMissing = [];
         $actions = $this->normaliseActions($data['actions'] ?? null);
         if ($actions === null) {
             $errors[] = 'actions must be a list of {action_type, payload} objects';
@@ -154,6 +161,16 @@ class PipelineManager
                     foreach ($check['errors'] as $message) {
                         $errors[] = "$label: $message";
                     }
+                    continue;
+                }
+
+                // Valid, but the part it names has no unit in inventory yet. The
+                // request is created and the gap is REPORTED, so the requester can
+                // raise the inventory record as a prerequisite while they are
+                // still in the flow. Approval remains the boundary: with no
+                // stock, applyStageEffect() still fails and rolls back whole.
+                if (!empty($check['deferred'])) {
+                    $stockMissing[] = ['position' => $index + 1] + $check['deferred'];
                 }
             }
         }
@@ -383,6 +400,25 @@ class PipelineManager
             $this->historyService->logHistory($ticketId, 'pipeline_created', null, $template['name'], $userId, "Pipeline started from type '{$template['name']}'");
             $this->historyService->logHistory($ticketId, 'stage_activated', null, $resolvedStages[0]['name'], $userId, "Stage '{$resolvedStages[0]['name']}' activated");
 
+            // The part is not in stock. Written to the timeline as well as
+            // returned, because the two serve different readers: the return
+            // value drives the offer the requester sees NOW, and this line is
+            // what an approver reading the request next week needs in order to
+            // understand why it was raised against nothing.
+            if (!empty($stockMissing)) {
+                foreach ($stockMissing as $gap) {
+                    $this->historyService->logHistory(
+                        $ticketId,
+                        'stock_pending',
+                        null,
+                        json_encode($gap),
+                        $userId,
+                        "Action {$gap['position']}: no {$gap['component_type']} of this model is in inventory yet. "
+                        . 'This request cannot be approved until one is added.'
+                    );
+                }
+            }
+
             // Logged on BOTH timelines, because both are read by different
             // people for different reasons: the parent's approver needs to see
             // why it stopped moving, and the child's owner needs to see that
@@ -421,6 +457,9 @@ class PipelineManager
                 'success' => true,
                 'ticket_id' => $ticketId,
                 'ticket_number' => $ticketNumber,
+                // Empty on the overwhelmingly common path. Non-empty means the
+                // request was created but names a part nobody has yet.
+                'stock_missing' => $stockMissing,
                 'errors' => []
             ];
         } catch (Exception $e) {
@@ -1010,6 +1049,12 @@ class PipelineManager
                 'actions' => $this->getRequestActions($ticketId)
             ];
 
+            // Parts this request needs that nobody has yet. DERIVED on every
+            // read, never stored, for the same reason `blocked` is: stock
+            // arrives and leaves without this request being touched, so a stored
+            // flag would be a lie within the hour.
+            $pipeline['stock_missing'] = $this->stockMissingActions($pipeline['actions']);
+
             // Prerequisites, in both directions. `blocked` is DERIVED from the
             // children on every read and never stored, so it cannot drift from
             // the rows it summarises — see PipelineConfig::getParentBlockingStatuses().
@@ -1346,6 +1391,80 @@ class PipelineManager
             error_log("PipelineManager::getRequestActions error: " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Which of a request's PENDING actions name a model with no unit in stock.
+     *
+     * The same gap RequestActionExecutor::preflight() reports at create time,
+     * re-derived on every read so the notice disappears by itself the moment the
+     * inventory record exists -- and reappears if the unit is deleted again.
+     *
+     * Only 'pending' actions are probed: an action that has already run either
+     * found its unit or failed with its own recorded reason, and either way this
+     * is no longer the question.
+     *
+     * FAILS OPEN. A read that cannot answer returns no gaps rather than an
+     * error: this is a courtesy notice, and the approval-time executor is the
+     * boundary that actually refuses the work.
+     *
+     * @param array $actions rows from getRequestActions()
+     * @return array list of ['position','action_type','component_type','component_uuid','serial_number']
+     */
+    private function stockMissingActions(array $actions)
+    {
+        $wanted = ['server.component.add', 'server.component.replace'];
+        $gaps = [];
+
+        try {
+            $sb = new ServerBuilder($this->pdo);
+
+            foreach ($actions as $action) {
+                if (($action['status'] ?? '') !== 'pending') {
+                    continue;
+                }
+                if (!in_array($action['action_type'], $wanted, true)) {
+                    continue;
+                }
+
+                $gap  = RequestActionExecutor::stockGap($action['action_type'], $action['payload']);
+                $type = $gap['component_type'];
+                if ($type === '' || $gap['component_uuid'] === '' || !$sb->isValidComponentType($type)) {
+                    continue;
+                }
+
+                // An onboard pseudo-component is part of the motherboard and has
+                // no inventory row by design -- see AddComponentCommand's own
+                // 'onboard-' guard. Absence there is not a gap.
+                if (strpos($gap['component_uuid'], 'onboard-') === 0) {
+                    continue;
+                }
+
+                // Probed the same way lockAndCheckComponent() looks it up: a
+                // requester who named a serial named one physical unit, and
+                // another unit of the same model is not the one they asked for.
+                $table = $sb->getComponentInventoryTable($type);
+                if ($gap['serial_number'] !== null) {
+                    $stmt = $this->pdo->prepare("SELECT 1 FROM `$table` WHERE UUID = ? AND SerialNumber = ? LIMIT 1");
+                    $stmt->execute([$gap['component_uuid'], $gap['serial_number']]);
+                } else {
+                    $stmt = $this->pdo->prepare("SELECT 1 FROM `$table` WHERE UUID = ? LIMIT 1");
+                    $stmt->execute([$gap['component_uuid']]);
+                }
+
+                if ($stmt->fetchColumn() === false) {
+                    $gaps[] = [
+                        'position'    => (int)$action['position'],
+                        'action_type' => $action['action_type'],
+                    ] + $gap;
+                }
+            }
+        } catch (Exception $e) {
+            error_log('PipelineManager::stockMissingActions error: ' . $e->getMessage());
+            return [];
+        }
+
+        return $gaps;
     }
 
     /**

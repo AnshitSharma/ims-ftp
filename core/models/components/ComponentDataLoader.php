@@ -8,6 +8,7 @@
  */
 
 require_once __DIR__ . '/ComponentSpecPaths.php';
+require_once __DIR__ . '/PlatformSpecIndex.php';
 
 class ComponentDataLoader {
     private $pdo;
@@ -106,6 +107,12 @@ class ComponentDataLoader {
      * @return array Result with 'found', 'error', and 'data' keys
      */
     public function loadComponentFromJSON($componentType, $uuid) {
+        // Platform-owned board/chassis resolve through the shared index (see PlatformSpecIndex).
+        $platformSpec = PlatformSpecIndex::find($componentType, $uuid);
+        if ($platformSpec !== null) {
+            return ['found' => true, 'error' => null, 'data' => $platformSpec];
+        }
+
         $jsonPaths = $this->getJSONFilePaths();
 
         if (!isset($jsonPaths[$componentType])) {
@@ -257,6 +264,12 @@ class ComponentDataLoader {
      * @return array|null Component data from JSON
      */
     public function loadJSONData($type, $uuid) {
+        // Platform-owned board/chassis resolve through the shared index (see PlatformSpecIndex).
+        $platformSpec = PlatformSpecIndex::find($type, $uuid);
+        if ($platformSpec !== null) {
+            return $platformSpec;
+        }
+
         $jsonPaths = $this->getJSONFilePaths();
 
         if (!isset($jsonPaths[$type])) {
@@ -405,6 +418,13 @@ class ComponentDataLoader {
      * @return array|null Motherboard specifications
      */
     public function loadMotherboardSpecs($uuid) {
+        // Platform-owned boards go through the SAME extractor as catalog boards, so callers
+        // cannot tell the two apart (see PlatformSpecIndex).
+        $platformSpec = PlatformSpecIndex::find('motherboard', $uuid);
+        if ($platformSpec !== null) {
+            return $this->dataExtractor->extractMotherboardSpecifications($platformSpec);
+        }
+
         $jsonPath = ComponentSpecPaths::getPath('motherboard');
 
         if (!file_exists($jsonPath)) {
@@ -436,6 +456,12 @@ class ComponentDataLoader {
      * @return array|null Chassis specifications
      */
     public function loadChassisSpecs($uuid) {
+        // Platform-owned chassis go through the SAME extractor as catalog chassis (see PlatformSpecIndex).
+        $platformSpec = PlatformSpecIndex::find('chassis', $uuid);
+        if ($platformSpec !== null) {
+            return $this->dataExtractor->extractChassisSpecifications($platformSpec);
+        }
+
         $jsonPath = ComponentSpecPaths::getPath('chassis');
 
         if (!file_exists($jsonPath)) {
@@ -467,6 +493,12 @@ class ComponentDataLoader {
      * @return array Chassis specifications
      */
     public function getChassisData($uuid) {
+        // Platform-owned chassis resolve through the shared index (see PlatformSpecIndex).
+        $platformSpec = PlatformSpecIndex::find('chassis', $uuid);
+        if ($platformSpec !== null) {
+            return $platformSpec;
+        }
+
         // Parse chassis JSON to get specifications
         $chassisJsonPath = ComponentSpecPaths::getPath('chassis');
 

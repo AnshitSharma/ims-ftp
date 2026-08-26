@@ -1825,6 +1825,202 @@ class ServerBuilder {
     }
 
     /**
+     * Decide, for each candidate spec, whether adding it to $configUuid would be allowed --
+     * using the SAME authority the add button uses (ValidationEngine at Trigger::ADD).
+     *
+     * WHY THIS EXISTS (2026-08-26)
+     *
+     *   Production runs ENGINE_MODE=enforce, so an add is decided by ValidationEngine,
+     *   while this listing still asked the legacy ComponentCompatibility universe. Two
+     *   implementations of one question, free to drift -- and they had: a platform-imported
+     *   R740xd offered ZERO compatible drives while its own component_options said storage
+     *   could be added. Asking the engine makes list and add unable to disagree.
+     *
+     *   Three deliberate details:
+     *   - BASELINE DIFF. Failures already present in the current state are pre-existing and
+     *     are never attributed to a candidate; without this one broken existing component
+     *     would blank the entire list.
+     *   - DEDUPE BY SPEC. Compatibility is a property of the model, not the physical unit,
+     *     so N units of one model cost one evaluation.
+     *   - CANDIDATE ROW MIRRORS AddComponentCommand::buildTarget(). Same slot planning,
+     *     same sfp parent resolution -- anything else would be a third answer.
+     *
+     * @param array  $candidates rows from the inventory scan (UUID, SerialNumber, ...)
+     * @return array<string,array{compatible:bool,reason:string,warnings:string[]}>|null
+     *         keyed by spec UUID; null when the engine is off or unusable (caller falls
+     *         back to the legacy branches).
+     */
+    private function evaluateCandidatesWithEngine($configUuid, $componentType, array $candidates, $parentNicUuid = null) {
+        require_once __DIR__ . '/../validation/ValidationEngine.php';
+
+        if (ValidationEngine::mode() === 'off') {
+            return null;
+        }
+
+        require_once __DIR__ . '/../validation/TargetStateBuilder.php';
+        require_once __DIR__ . '/../validation/Trigger.php';
+        require_once __DIR__ . '/../validation/SlotPlanner.php';
+
+        try {
+            $current = TargetStateBuilder::fromCurrent($this->pdo, $configUuid);
+            $baseline = (new ValidationEngine())->evaluate($current, Trigger::ADD);
+        } catch (\Throwable $e) {
+            // The listing must never 500 because the engine could not build state.
+            error_log("getCompatibleComponents: engine baseline failed for $configUuid: " . $e->getMessage());
+            return null;
+        }
+
+        $baselineFailed = [];
+        foreach ($baseline->failures() as $failure) {
+            $baselineFailed[$failure->ruleId()] = true;
+        }
+
+        $engine = new ValidationEngine();
+        $results = [];
+
+        foreach ($candidates as $candidate) {
+            $specUuid = $candidate['UUID'] ?? null;
+            if ($specUuid === null || isset($results[$specUuid])) {
+                continue; // dedupe by spec
+            }
+
+            try {
+                $results[$specUuid] = $this->evaluateOneCandidate(
+                    $engine, $current, $baselineFailed, $componentType, $specUuid, $candidate, $parentNicUuid
+                );
+            } catch (\Throwable $e) {
+                error_log("getCompatibleComponents: engine evaluation failed for $specUuid: " . $e->getMessage());
+                $results[$specUuid] = [
+                    'compatible' => false,
+                    'reason' => 'Compatibility could not be determined',
+                    'warnings' => []
+                ];
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * One candidate spec, evaluated against $current and diffed against $baselineFailed.
+     * @return array{compatible:bool,reason:string,warnings:string[]}
+     */
+    private function evaluateOneCandidate($engine, $current, array $baselineFailed, $componentType, $specUuid, array $candidate, $parentNicUuid) {
+        $row = [
+            'component_type' => $componentType,
+            'spec_uuid' => $specUuid,
+            'serial_number' => $candidate['SerialNumber'] ?? null,
+            'parent_id' => null,
+            'slot_ref' => null,
+        ];
+
+        // Slotted types: plan a slot the way the add path does, so PcieSlotPlacementRule
+        // judges the same placement. A failed plan leaves slot_ref null and the rule
+        // decides -- identical to AddComponentCommand.
+        if (in_array($componentType, ['nic', 'pciecard', 'hbacard', 'risercard'], true)
+            && strpos($specUuid, 'onboard-') !== 0
+        ) {
+            $plan = $this->planCandidateSlot($current, $componentType, $specUuid);
+            if (!empty($plan['ok'])) {
+                $row['slot_ref'] = $plan['slot_ref'];
+            }
+        }
+
+        // SFP: NetSfpPortRule treats parent_id === null as "staged, allowed" (TP-4A), so a
+        // parentless probe would call EVERY transceiver compatible. Anchor it to a real NIC:
+        // the caller's if given, otherwise the first installed NIC that yields a pass.
+        if ($componentType === 'sfp') {
+            return $this->evaluateSfpCandidate($engine, $current, $baselineFailed, $row, $parentNicUuid);
+        }
+
+        $verdict = $engine->evaluate(TargetStateBuilder::withAdd($current, $row), Trigger::ADD);
+        return $this->verdictToListingResult($verdict, $baselineFailed);
+    }
+
+    /** Try each candidate parent NIC; first pass wins, else report the last failure. */
+    private function evaluateSfpCandidate($engine, $current, array $baselineFailed, array $row, $parentNicUuid) {
+        $nics = $current->byType('nic');
+
+        $parentIds = [];
+        foreach ($nics as $nic) {
+            if ($parentNicUuid !== null && $parentNicUuid !== '' && ($nic['spec_uuid'] ?? null) !== $parentNicUuid) {
+                continue;
+            }
+            $parentIds[] = $nic['id'];
+        }
+
+        if (empty($parentIds)) {
+            // No NIC to anchor to -- the staged-add case the rule explicitly allows.
+            $verdict = $engine->evaluate(TargetStateBuilder::withAdd($current, $row), Trigger::ADD);
+            return $this->verdictToListingResult($verdict, $baselineFailed);
+        }
+
+        $last = null;
+        foreach ($parentIds as $parentId) {
+            $row['parent_id'] = $parentId;
+            $verdict = $engine->evaluate(TargetStateBuilder::withAdd($current, $row), Trigger::ADD);
+            $last = $this->verdictToListingResult($verdict, $baselineFailed);
+            if ($last['compatible']) {
+                return $last;
+            }
+        }
+
+        return $last;
+    }
+
+    /** SlotPlanner plan for a candidate, mirroring AddComponentCommand::planSlot(). */
+    private function planCandidateSlot($current, $componentType, $specUuid) {
+        switch ($componentType) {
+            case 'nic':       $spec = $this->dataUtils->getNICByUUID($specUuid); break;
+            case 'hbacard':   $spec = $this->dataUtils->getHBACardByUUID($specUuid); break;
+            case 'pciecard':  $spec = $this->dataUtils->getPCIeCardByUUID($specUuid); break;
+            case 'risercard': $spec = $this->dataUtils->getRiserCardByUUID($specUuid); break;
+            default:          return ['ok' => false, 'slot_ref' => null];
+        }
+        if (!is_array($spec)) {
+            return ['ok' => false, 'slot_ref' => null];
+        }
+
+        $isRiser = $componentType === 'risercard' || ($spec['component_subtype'] ?? null) === 'Riser Card';
+        $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
+
+        return SlotPlanner::plan($current, $resource, SlotPlanner::extractCardWidth($spec), null);
+    }
+
+    /**
+     * Verdict -> listing shape, counting only failures NEW relative to the baseline.
+     * Blocking severity follows Verdict::blocking() semantics: at ADD only ERROR blocks,
+     * so a VALIDATION_FAILURE (e.g. storage.caddy_pairing) surfaces as a warning here --
+     * exactly as the add button already accepts it, with the block landing at finalize.
+     * @return array{compatible:bool,reason:string,warnings:string[]}
+     */
+    private function verdictToListingResult($verdict, array $baselineFailed) {
+        $blocking = [];
+        $warnings = [];
+
+        foreach ($verdict->failures() as $failure) {
+            if (isset($baselineFailed[$failure->ruleId()])) {
+                continue; // pre-existing; not this candidate's fault
+            }
+            if ($failure->severity() === Severity::ERROR) {
+                $blocking[] = $failure->message();
+            } else {
+                $warnings[] = $failure->message();
+            }
+        }
+
+        if (!empty($blocking)) {
+            return ['compatible' => false, 'reason' => $blocking[0], 'warnings' => $warnings];
+        }
+
+        return [
+            'compatible' => true,
+            'reason' => 'Compatible - validated by the same rules applied when adding',
+            'warnings' => $warnings
+        ];
+    }
+
+    /**
      * Phase 4: Get compatible components for a given component type
      * Consolidated from handleGetCompatible() in server_api.php
      * Enables all code paths (HTTP, batch, CLI) to query compatible components
@@ -1849,8 +2045,14 @@ class ServerBuilder {
                 $availableOnly = false;
             }
 
-            // Step 2: Get existing components in configuration
-            $existingComponents = $this->extractComponentsFromJson($config->getData(), true);
+            // Step 2: Get existing components in configuration.
+            //
+            // Through ConfigReadRouter, not extractComponentsFromJson() directly: at
+            // READ_FROM_ROWS=on config identity lives in config_components, and this was
+            // the last reader still going straight to the JSON columns.
+            require_once __DIR__ . '/../config/ConfigReadRouter.php';
+            require_once __DIR__ . '/../config/ConfigComponentRepository.php';
+            $existingComponents = ConfigReadRouter::components($this, $this->pdo, $config->getData(), true);
 
             // Process existing components for compatibility checking.
             //
@@ -1858,30 +2060,61 @@ class ServerBuilder {
             // component (N+1 on a hot, user-facing endpoint). Batched to one query per
             // TYPE. The rows are still keyed by model UUID -- as before -- because the
             // compatibility checks below only read model-level spec fields.
-            $uuidsByType = [];
+            //
+            // The table is taken from config_components.inventory_table where a row
+            // exists, NOT assumed to be `{type}inventory`: a platform-imported build's
+            // board and chassis are backed by serverplatforminventory (the stocked unit
+            // is the box), so the old assumption found no row and DROPPED them from
+            // $existingComponentsData -- which is why every drive came back "No chassis
+            // bays available" on a platform config.
+            $tableByTypeUuid = [];
+            try {
+                foreach ((new ConfigComponentRepository($this->pdo))->liveRows($configUuid) as $ccRow) {
+                    $ccType = $ccRow['component_type'] ?? null;
+                    $ccSpec = $ccRow['spec_uuid'] ?? null;
+                    $ccTable = $ccRow['inventory_table'] ?? null;
+                    if ($ccType !== null && $ccSpec !== null && !empty($ccTable)) {
+                        $tableByTypeUuid[$ccType][$ccSpec] = $ccTable;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // No rows side available (pre-backfill config, or the table absent):
+                // fall through to the per-type default below, which is the old behaviour.
+                error_log('getCompatibleComponents: config_components lookup failed for ' . $configUuid . ': ' . $e->getMessage());
+            }
+
+            // Group the wanted UUIDs by the table they actually live in.
+            $uuidsByTable = [];
+            $tableForTypeUuid = [];
             foreach ($existingComponents as $existing) {
                 $type = $existing['component_type'] ?? null;
                 $uuid = $existing['component_uuid'] ?? null;
                 if ($type === null || $uuid === null) {
                     continue;
                 }
-                $uuidsByType[$type][$uuid] = true;
-            }
-
-            $rowsByTypeUuid = [];
-            foreach ($uuidsByType as $type => $uuidSet) {
-                $table = $this->getComponentInventoryTable($type);
+                $table = $tableByTypeUuid[$type][$uuid] ?? $this->getComponentInventoryTable($type);
                 if (!$table) {
                     continue;
                 }
+                $uuidsByTable[$table][$uuid] = true;
+                $tableForTypeUuid[$type][$uuid] = $table;
+            }
+
+            $rowsByTableUuid = [];
+            foreach ($uuidsByTable as $table => $uuidSet) {
                 $uuids = array_keys($uuidSet);
                 $placeholders = implode(',', array_fill(0, count($uuids), '?'));
-                $stmt = $this->pdo->prepare("SELECT * FROM `$table` WHERE UUID IN ($placeholders)");
-                $stmt->execute($uuids);
+                try {
+                    $stmt = $this->pdo->prepare("SELECT * FROM `$table` WHERE UUID IN ($placeholders)");
+                    $stmt->execute($uuids);
+                } catch (\Throwable $e) {
+                    error_log("getCompatibleComponents: inventory lookup failed for table $table: " . $e->getMessage());
+                    continue;
+                }
                 foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
                     // First row per UUID wins, matching the previous LIMIT 1 behaviour.
-                    if (!isset($rowsByTypeUuid[$type][$row['UUID']])) {
-                        $rowsByTypeUuid[$type][$row['UUID']] = $row;
+                    if (!isset($rowsByTableUuid[$table][$row['UUID']])) {
+                        $rowsByTableUuid[$table][$row['UUID']] = $row;
                     }
                 }
             }
@@ -1890,13 +2123,20 @@ class ServerBuilder {
             foreach ($existingComponents as $existing) {
                 $type = $existing['component_type'] ?? null;
                 $uuid = $existing['component_uuid'] ?? null;
-                if (isset($rowsByTypeUuid[$type][$uuid])) {
-                    $existingComponentsData[] = [
-                        'type' => $type,
-                        'uuid' => $uuid,
-                        'data' => $rowsByTypeUuid[$type][$uuid]
-                    ];
+                $table = $tableForTypeUuid[$type][$uuid] ?? null;
+                if ($table === null) {
+                    continue;
                 }
+                // A platform-owned board/chassis is described by the platform catalog and
+                // may have no row of its own even in serverplatforminventory (the row is
+                // keyed by the platform's UUID). Its IDENTITY still belongs in the list --
+                // dropping it is what emptied $storageRequirements. Carry a minimal
+                // descriptor when no inventory row is found.
+                $existingComponentsData[] = [
+                    'type' => $type,
+                    'uuid' => $uuid,
+                    'data' => $rowsByTableUuid[$table][$uuid] ?? ['UUID' => $uuid, 'Status' => 2]
+                ];
             }
 
             // Step 3: Get all components of requested type with availability filtering
@@ -2006,14 +2246,36 @@ class ServerBuilder {
                 }, $allComponents);
                 } // end if ($includeDebug)
 
+                // The engine answers the listing whenever it answers the add (ENGINE_MODE
+                // != off), so the two cannot disagree. Null => engine off/unusable, and
+                // the legacy branches below remain the authority.
+                $engineVerdicts = $this->evaluateCandidatesWithEngine(
+                    $configUuid, $componentType, $allComponents, $options['parent_nic_uuid'] ?? null
+                );
+                if ($includeDebug) {
+                    $debugInfo['verdict_source'] = $engineVerdicts === null ? 'legacy' : 'validation_engine';
+                }
+
                 // Run compatibility checks for each component
                 foreach ($allComponents as $component) {
                     $isCompatible = true;
                     $compatibilityReasons = [];
                     $fullChassisResult = null;
+                    $engineWarnings = [];
 
+                    if ($engineVerdicts !== null) {
+                        $verdictForSpec = $engineVerdicts[$component['UUID']] ?? null;
+                        if ($verdictForSpec === null) {
+                            $isCompatible = false;
+                            $compatibilityReasons = ['Compatibility could not be determined'];
+                        } else {
+                            $isCompatible = $verdictForSpec['compatible'];
+                            $compatibilityReasons = [$verdictForSpec['reason']];
+                            $engineWarnings = $verdictForSpec['warnings'];
+                        }
+                    }
                     // If no existing components, all components are compatible
-                    if (empty($existingComponentsData)) {
+                    elseif (empty($existingComponentsData)) {
                         $isCompatible = true;
                         $compatibilityReasons[] = "No existing components - all components available";
                     } else {
@@ -2177,8 +2439,10 @@ class ServerBuilder {
                     // checkComponentPairCompatibility(), which has no cpu-cpu handler -- so an
                     // unpairable second CPU would be offered here and only rejected later at
                     // add-time. Decide it up front, using the same authority as the add path.
+                    // Skipped under the engine: CpuMixedModelsRule already decides pairing
+                    // there, and running this too would apply two authorities to one type.
                     $cpuPairingWarnings = [];
-                    if ($componentType === 'cpu' && $isCompatible) {
+                    if ($engineVerdicts === null && $componentType === 'cpu' && $isCompatible) {
                         $cpuMatcher = new CpuIdentityMatcher($this->dataUtils);
                         foreach ($existingComponentsData as $existingComp) {
                             if (($existingComp['type'] ?? '') !== 'cpu') {
@@ -2220,6 +2484,13 @@ class ServerBuilder {
                     }
                     if ($componentType === 'chassis' && isset($fullChassisResult['warnings']) && !empty($fullChassisResult['warnings'])) {
                         $compatibleComponent['warnings'] = $fullChassisResult['warnings'];
+                    }
+
+                    // Engine warnings (non-blocking failures new to this candidate) so the
+                    // operator sees them before the add -- e.g. an uncaddied drive, which
+                    // is addable now and blocks only at finalize.
+                    if (!empty($engineWarnings)) {
+                        $compatibleComponent['warnings'] = array_values(array_unique($engineWarnings));
                     }
 
                     // SKU-variant pairing warnings, so the operator sees them before the add

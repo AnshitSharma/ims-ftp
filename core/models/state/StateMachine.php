@@ -23,9 +23,27 @@ class StateMachine
     /**
      * Is $to legal from the config's current status_v2, and does $userId hold
      * the permission the edge requires? Read-only.
+     *
+     * TWO QUESTIONS, NOT ONE. Legality ("is draft -> building an edge at all")
+     * is a property of the CONFIGURATION and is never optional. Permission
+     * ("may this person walk that edge") is a property of the ACTOR, and there
+     * is one caller for which there is no actor: an approved Request, where the
+     * engine performs the work and the requester deliberately never holds the
+     * permission (see RequestActionExecutor's header). $systemAuthorized is
+     * that caller saying so explicitly.
+     *
+     * It skips ONLY the ACL half. An illegal move is still refused, which is
+     * what the request form promises the requester. The transition table's own
+     * 'SYSTEM' sentinel says the same thing per-edge; this says it per-call,
+     * because whether a Request is behind a transition is not knowable from the
+     * edge.
+     *
+     * Defaults to false, so every ordinary caller (the transition endpoint,
+     * ServerBuilder's finalize) is unchanged and still checks the actor.
+     *
      * @return array{allowed: bool, requires_validation: bool, reason: string}
      */
-    public static function assertConfigTransition(PDO $pdo, string $configUuid, string $to, int $userId): array
+    public static function assertConfigTransition(PDO $pdo, string $configUuid, string $to, int $userId, bool $systemAuthorized = false): array
     {
         $stmt = $pdo->prepare('SELECT status_v2 FROM server_configurations WHERE config_uuid = ?');
         $stmt->execute([$configUuid]);
@@ -48,7 +66,7 @@ class StateMachine
         }
 
         $requiresValidation = $edge['requires_validation'] === 'full';
-        if ($edge['required_permission'] !== 'SYSTEM') {
+        if (!$systemAuthorized && $edge['required_permission'] !== 'SYSTEM') {
             if (!class_exists('ACL')) {
                 require_once __DIR__ . '/../../auth/ACL.php';
             }

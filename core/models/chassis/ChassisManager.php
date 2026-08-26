@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/../components/ComponentSpecPaths.php';
+require_once __DIR__ . '/../components/PlatformSpecIndex.php';
 
 class ChassisManager {
     private $chassisJsonPath;
@@ -81,6 +82,20 @@ class ChassisManager {
      * Load chassis specifications by UUID
      */
     public function loadChassisSpecsByUUID($uuid) {
+        // Platform-owned chassis live in the serverplatform catalog, not chasis-level-3.json,
+        // and have no inventory row of their own. Resolve through the shared index first so
+        // this resolver cannot disagree with ComponentDataService / DataExtractionUtilities.
+        $platformSpec = PlatformSpecIndex::find('chassis', $uuid);
+        if ($platformSpec !== null) {
+            return [
+                'found' => true,
+                'specifications' => $platformSpec,
+                'manufacturer' => $platformSpec['platform_name'] ?? ($platformSpec['manufacturer'] ?? 'Unknown'),
+                'series_name' => $platformSpec['platform_name'] ?? 'Server Platform',
+                'platform_owned' => true
+            ];
+        }
+
         try {
             $result = $this->traverseChassisModels(function($model, $manufacturer, $series) use ($uuid) {
                 if (isset($model['uuid']) && $model['uuid'] === $uuid) {

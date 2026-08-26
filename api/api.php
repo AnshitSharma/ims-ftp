@@ -320,6 +320,9 @@ function handlePipelineOperations($operation, $user) {
     // someone without server.view (the handler gates on pipeline.create instead).
     // 'component-location' and 'users' feed the same form's location warning and
     // its "who is carrying this?" picker, and gate on pipeline.create the same way.
+    // 'inventory-record' joins them for Update Inventory Record: a correction
+    // cannot be written blind, and the requester who needs to see the record's
+    // current values is by definition someone without {type}.view.
     //
     // 'claim' and 'complete' JOINED THIS SET ON 2026-08-26, and this is a fix as
     // much as a feature. A step can be owned by a named user or a role, and the
@@ -343,7 +346,7 @@ function handlePipelineOperations($operation, $user) {
     // act than confirming your own step, and it remains admin work.
     $selfServiceOperations = [
         'create', 'list', 'get', 'template-list', 'servers',
-        'component-location', 'users',
+        'component-location', 'users', 'inventory-record',
         'claim', 'complete',
     ];
 
@@ -374,6 +377,7 @@ function handlePipelineOperations($operation, $user) {
             'servers'         => 'pipeline-servers.php',
             'users'              => 'pipeline-users.php',
             'component-location' => 'pipeline-component-location.php',
+            'inventory-record'   => 'pipeline-inventory-record.php',
             'list'            => 'pipeline-list.php',
             'get'             => 'pipeline-get.php',
             'claim'           => 'pipeline-claim.php',

@@ -44,7 +44,15 @@ foreach (['trigger', 'buildTarget', 'apply'] as $m) {
 
 $src = file_get_contents("$ROOT/core/models/commands/TransitionStatusCommand.php");
 check('no beginTransaction in TransitionStatusCommand.php (INV-3)', stripos($src, 'beginTransaction') === false);
-check('trigger() is FINALIZE (full validation always runs for this command)', strpos($src, 'return Trigger::FINALIZE;') !== false);
+// 2026-08-26: this used to assert `return Trigger::FINALIZE;` literally, from
+// when the command served finalize alone. It now serves any edge and reads the
+// trigger off that edge's requires_validation column, so the contract worth
+// pinning is the one finalize depends on: FINALIZE unless the edge explicitly
+// said 'none', and FINALIZE when the answer is not known yet (fail-closed).
+check('trigger() is FINALIZE unless the edge says requires_validation=none',
+    strpos($src, "return (\$this->requiresFullValidation === false) ? Trigger::TRANSITION : Trigger::FINALIZE;") !== false);
+check('the edge\'s requires_validation is read inside buildTarget, under the lock',
+    strpos($src, "\$this->requiresFullValidation = (bool)\$transitionCheck['requires_validation'];") !== false);
 check('buildTarget() runs assertConfigTransition (legality+permission) under the SAME lock BaseCommand already holds', strpos($src, 'StateMachine::assertConfigTransition') !== false);
 check('apply() uses StateMachine::applyConfigTransition (status_v2 + legacy int + revision/event, atomically)', strpos($src, 'StateMachine::applyConfigTransition') !== false);
 check('apply() promotes allocated inventory to installed post-finalize', strpos($src, "'allocated'") !== false && strpos($src, "'installed'") !== false);

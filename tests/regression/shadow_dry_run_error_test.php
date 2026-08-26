@@ -5,10 +5,10 @@
  * command_parity_report has distinguished two meanings of a thrown dryRun()
  * since 2026-07-29:
  *   - 'command_failed:<type>' -- a REFUSAL. component_unavailable /
- *     component_not_found / transition_denied / config_immutable /
- *     revision_mismatch / config_not_found are the answer the caller actually
- *     receives at COMMAND_LAYER=enforce, so the row IS comparable and counts as
- *     command_blocked=true.
+ *     component_not_found / inventory_component_not_found / transition_denied /
+ *     config_immutable / revision_mismatch / config_not_found are the answer the
+ *     caller actually receives at COMMAND_LAYER=enforce, so the row IS
+ *     comparable and counts as command_blocked=true.
  *   - 'exception' (or the field absent) -- a CRASH. Uncomparable, gate-RED.
  *
  * Only the finalize hook ever wrote that field. handleAddComponent and

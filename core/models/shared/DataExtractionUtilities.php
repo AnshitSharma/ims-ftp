@@ -10,7 +10,13 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
 require_once __DIR__ . '/../components/PlatformSpecIndex.php';
 
 class DataExtractionUtilities {
-    private $jsonCache = [];
+    /**
+     * Shared across every instance: ValidationEngine builds a fresh rule object per
+     * evaluate() call and each rule constructs its own DataExtractionUtilities, so a
+     * per-instance cache re-read and re-decoded every spec file on every evaluation.
+     * Mirrors PlatformSpecIndex::$index / clearCache().
+     */
+    private static $jsonCache = [];
     private $cacheTimeout = 3600; // 1 hour
     private $paths = [];
 
@@ -29,9 +35,9 @@ class DataExtractionUtilities {
      * Load JSON data with caching
      */
     private function loadJsonData($type) {
-        if (isset($this->jsonCache[$type]) &&
-            (time() - $this->jsonCache[$type]['timestamp']) < $this->cacheTimeout) {
-            return $this->jsonCache[$type]['data'];
+        if (isset(self::$jsonCache[$type]) &&
+            (time() - self::$jsonCache[$type]['timestamp']) < $this->cacheTimeout) {
+            return self::$jsonCache[$type]['data'];
         }
 
         $path = $this->getPaths()[$type] ?? null;
@@ -49,7 +55,7 @@ class DataExtractionUtilities {
             throw new Exception("Invalid JSON in file for type: $type - " . json_last_error_msg());
         }
 
-        $this->jsonCache[$type] = ['data' => $data, 'timestamp' => time()];
+        self::$jsonCache[$type] = ['data' => $data, 'timestamp' => time()];
 
         return $data;
     }
@@ -689,8 +695,8 @@ class DataExtractionUtilities {
     /**
      * Clear JSON cache
      */
-    public function clearCache() {
-        $this->jsonCache = [];
+    public static function clearCache() {
+        self::$jsonCache = [];
     }
 
     /**
@@ -698,7 +704,7 @@ class DataExtractionUtilities {
      */
     public function getCacheStats() {
         $stats = [];
-        foreach ($this->jsonCache as $type => $entry) {
+        foreach (self::$jsonCache as $type => $entry) {
             $stats[$type] = [
                 'cached' => true,
                 'timestamp' => $entry['timestamp'],

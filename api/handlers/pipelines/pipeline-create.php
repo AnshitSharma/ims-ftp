@@ -109,6 +109,11 @@ try {
     send_json_response(true, true, 201, "Pipeline created successfully", [
         'pipeline_id' => $result['ticket_id'],
         'ticket_number' => $result['ticket_number'],
+        // Parts this request names that no unit of exists in inventory yet. The
+        // request WAS created -- this is not an error -- and the client offers to
+        // raise the inventory record as a prerequisite. Absent/empty on the
+        // normal path.
+        'stock_missing' => $result['stock_missing'] ?? [],
         'pipeline' => $pipeline
     ]);
 } catch (Exception $e) {

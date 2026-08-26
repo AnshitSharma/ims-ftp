@@ -726,10 +726,10 @@ function handleCreateStart($serverBuilder, $user) {
  *
  * command_parity_report distinguishes two things a thrown dryRun() can mean:
  *   - a DECISION -- 'command_failed:<type>'. component_unavailable /
- *     component_not_found / transition_denied / config_immutable /
- *     revision_mismatch / config_not_found / invalid_component_type are the
- *     answer the caller actually gets at enforce, so the row is comparable and
- *     counts as command_blocked=true.
+ *     component_not_found / inventory_component_not_found / transition_denied /
+ *     config_immutable / revision_mismatch / config_not_found /
+ *     invalid_component_type are the answer the caller actually gets at
+ *     enforce, so the row is comparable and counts as command_blocked=true.
  *   - a CRASH -- 'exception'. No verdict in any sense; stays gate-RED.
  *
  * The report has read that distinction since 2026-07-29, but only the finalize
@@ -2812,6 +2812,9 @@ function handleGetCompatible($serverBuilder, $user) {
     $configUuid = $_GET['config_uuid'] ?? $_POST['config_uuid'] ?? '';
     $componentType = $_GET['component_type'] ?? $_POST['component_type'] ?? '';
     $availableOnly = filter_var($_GET['available_only'] ?? $_POST['available_only'] ?? true, FILTER_VALIDATE_BOOLEAN);
+    // Optional: which installed NIC an SFP would be anchored to. Without it the listing
+    // tries every installed NIC and reports the first that passes.
+    $parentNicUuid = $_GET['parent_nic_uuid'] ?? $_POST['parent_nic_uuid'] ?? null;
 
     // Validate required parameters
     if (empty($configUuid)) {
@@ -2845,7 +2848,8 @@ function handleGetCompatible($serverBuilder, $user) {
             $componentType,
             [
                 'available_only' => $availableOnly,
-                'include_debug' => true
+                'include_debug' => true,
+                'parent_nic_uuid' => $parentNicUuid
             ]
         );
 
