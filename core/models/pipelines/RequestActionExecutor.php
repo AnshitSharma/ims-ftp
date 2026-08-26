@@ -77,7 +77,14 @@ class RequestActionExecutor
             'label'    => 'Replace a component in a server',
             'scope'    => 'server',
             'required' => ['config_uuid', 'component_type', 'old_component_uuid', 'new_component_uuid'],
-            'optional' => ['old_serial_number', 'serial_number', 'slot_position', 'notes'],
+            // old_inventory_id (2026-08-26) names the exact unit coming out.
+            // old_component_uuid names a MODEL, and a build with four identical
+            // DIMMs -- none of which carries a serial number -- gave the request
+            // form four choices that produced one identical payload. The
+            // inventory row id is the only thing that separates them. Optional,
+            // never required: it cannot be known for a configuration whose state
+            // comes from the legacy JSON columns, where it is always NULL.
+            'optional' => ['old_serial_number', 'old_inventory_id', 'serial_number', 'slot_position', 'notes'],
         ],
         'server.config.create' => [
             'label'    => 'Create a new server configuration',
@@ -605,6 +612,12 @@ class RequestActionExecutor
             $errors[] = 'inventory_id must be numeric';
         }
 
+        if ($actionType === 'server.component.replace'
+            && isset($payload['old_inventory_id']) && $payload['old_inventory_id'] !== ''
+            && !ctype_digit((string)$payload['old_inventory_id'])) {
+            $errors[] = 'old_inventory_id must be numeric -- it names one physical unit, not a model';
+        }
+
         if ($actionType === 'inventory.component.relocate') {
             if (!ctype_digit((string)$payload['inventory_id'])) {
                 $errors[] = 'inventory_id must be numeric -- a handover names one physical unit, not a model';
@@ -663,7 +676,9 @@ class RequestActionExecutor
                     $this->optionalString($payload, 'old_serial_number'),
                     $payload['new_component_uuid'],
                     $this->addOptions($payload),
-                    $actor
+                    $actor,
+                    null,
+                    $this->optionalInt($payload, 'old_inventory_id')
                 );
 
             case 'server.config.transition':
@@ -696,6 +711,12 @@ class RequestActionExecutor
     private function optionalString(array $payload, $key)
     {
         return (isset($payload[$key]) && $payload[$key] !== '') ? (string)$payload[$key] : null;
+    }
+
+    /** An optional numeric identifier, or null. Shape is checked by validateShape(). */
+    private function optionalInt(array $payload, $key)
+    {
+        return (isset($payload[$key]) && $payload[$key] !== '') ? (int)$payload[$key] : null;
     }
 
     /** The ServerBuilder options vocabulary, built from whatever the payload carries. */

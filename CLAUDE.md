@@ -1,97 +1,85 @@
-# CLAUDE.md — BDC Inventory Management System (IMS)
+# ims-ftp — BDC IMS backend
 
-PHP REST API for server hardware inventory with JSON-driven component compatibility validation.
-**Stack**: PHP 7.4+ · MySQL/MariaDB (PDO) · JWT auth (HS256) · ACL authorization · No framework, no Composer — plain `require` structure.
+PHP REST API for hardware inventory with JSON-driven compatibility validation. PHP 7.4+ ·
+MariaDB via PDO · JWT HS256 · custom ACL · no framework, no Composer — plain `require`.
+The root CLAUDE.md holds the API contract, the data contract and the seeder rules.
 
-## Deployment & testing (production-only)
+Config lives in `.env` on the server (DB creds, `JWT_SECRET`, `IMS_DATA_PATH`, rate limits,
+engine flags). Never print its values.
 
-There is NO local dev server. Saving a file in VS Code auto-uploads it to production via SFTP (`uploadOnSave`, ~8s delay + transfer ≈ 20s total).
+## Request flow
 
-- **After any code change: wait ~20 seconds, then test against production directly.**
-- Production API: `https://ims.bdcms.bharatdatacenter.com/Ims_backend/api/api.php`
+`api/api.php` (single entrypoint) -> JWT auth -> ACL gate -> `api/handlers/{module}/` ->
+`send_json_response()`. Modules: `auth`, `server`, `compatibility`, `rack`, `pipelines`,
+`location`, the 12 component types, `dashboard`, `search`, `users`, `vendors`, `acl`.
 
-```bash
-# Smoke-test auth (all requests go through this one endpoint, action={module}-{operation}):
-curl -X POST https://ims.bdcms.bharatdatacenter.com/Ims_backend/api/api.php \
-  -d "action=auth-login" -d "username=superadmin" -d "password=password"
-```
+- `api/permission_map.php` is strict for `server`, `compatibility`, `rack` and every component
+  action (components share one `component` template with `{module}` substitution). An unmapped
+  operation is rejected as "Unknown operation".
+- Pipeline handlers are one file per operation and check permissions inside the file (via the
+  `$acl` / `$user_id` globals) rather than through the map.
+- `rack` and `pipeline` carry a role gate to admin / super_admin in code on top of ACL. Keep
+  both gates.
+- ACL reads the `permissions` table only. `acl_permissions` was dropped in seeder
+  `2026_06_11_002` — never reference it.
 
-- **NOT auto-deployed** (per SFTP ignore list): `*.sql`, `*.md`, `*.txt`, `tests/`, `docs/`, `tasks/`, `logs/`. Seeder SQL must therefore be applied to the production DB manually — writing the file alone changes nothing.
-- Config is in `.env` on the server (DB creds, `JWT_SECRET`, `JWT_EXPIRY_HOURS=24`, `IMS_DATA_PATH`, `APP_ENV`, rate-limit settings). Never print or expose `.env` values.
+## Compatibility validation — two generations, both live
 
-## Architecture (mental model — read code for detail)
+The newer one is `core/models/validation/`: `ValidationEngine` dispatching ~20 rules from
+`rules/`, with `TargetStateBuilder`, `ShadowRunner` and `SlotPlanner`. **`ENGINE_MODE` is
+`enforce` in production** even though the code default reads `off`, so editing a rule is a live
+behavioural change on deploy — read the flags before predicting blast radius.
 
-- **Routing**: single entrypoint `api/api.php`. Actions are `{module}-{operation}` kebab-case (`cpu-list`, `server-add-component`). Flow: HTTP → `api/api.php` → JWT auth → ACL gate → `api/handlers/{module}/` → `send_json_response()`.
-- **Modules**: `auth`, `server`, `compatibility`, `rack`, `pipeline`, the 11 component types, `dashboard`, `search`, `users`, `vendor`, `acl`, `roles`, `permissions`.
-- **11 component types**: cpu, ram, storage, motherboard, nic, caddy, chassis, pciecard, risercard, hbacard, sfp. Inventory tables are `{type}inventory`. (`risercard` was split out of `pciecard` on 2026-08-14 — risers occupy riser bays and PROVIDE pcie_slots; plain PCIe cards consume them.)
-- **Specs live outside the DB**: canonical hardware specs are JSON in `ims-data/{type}/*.json`, resolved by `core/models/components/ComponentSpecPaths.php` (`IMS_DATA_PATH` or `../ims-data/`). DB = inventory rows; JSON = what the hardware *is*.
-- **Compatibility engine** (`core/models/compatibility/`): `ComponentCompatibility.php` orchestrates pair checks; add-time validation runs through **authority classes** — `SlotAuthority` (PCIe slots), `StorageConnectionAuthority`, `MemoryAuthority` (finalize-time RAM), plus `UnifiedSlotTracker`, `StorageConnectionValidator`, `PcieLaneBudgetValidator`, `NICPortTracker`, `SFPCompatibilityResolver`, `OnboardNICHandler`, and shared `ServerState`. `ValidationPipeline.php` is the coordination shell being phased in.
-- **Feature flags** (env: `SLOT_AUTHORITY_ENABLED`, `STORAGE_BAY_AUTHORITY_ENABLED`, `MEMORY_AUTHORITY_ENABLED`, `VALIDATION_PIPELINE_ENABLED`) use `off` / `shadow` / `enforce` modes. Read the file header of `ValidationPipeline.php` before touching validation flow — the migration plan lives there.
-- **Pipelines replaced tickets**: the legacy `ticket` module was retired; tickets are now pipeline instances (`tickets.pipeline_template_id`, per-stage progress in `ticket_stage_progress`). Handlers: `api/handlers/pipelines/pipeline-*.php` (one file per operation); models: `core/models/pipelines/`; config: `core/config/PipelineConfig.php`. Remaining `core/models/tickets/*` files serve the pipeline engine — there is no `TicketManager.php`.
-- **Server build workflow**: create-start → add-component (validated per add) → get-compatible → validate-config → finalize-config (locks config, marks components in_use). `ServerBuilder.php` = state, `ServerConfiguration.php` = persistence, `ConfigurationReverseLookup.php` = component→config lookups.
+The older one is `core/models/compatibility/`: `ComponentCompatibility` orchestrating pair
+checks, with authority classes (`SlotAuthority`, `StorageConnectionAuthority`, `MemoryAuthority`),
+plus `UnifiedSlotTracker`, `PcieLaneBudgetValidator`, `NICPortTracker`, `SFPCompatibilityResolver`,
+`OnboardNICHandler` and the shared `ServerState`.
 
-## Hard rules (violating any of these is a bug)
+`COMMAND_LAYER_ENABLED=shadow` means `ServerBuilder::addComponent` is still the real mutation
+path, so a compatibility change usually has to land in both the legacy path and the rule. Flags
+(`ENGINE_MODE`, `COMMAND_LAYER_ENABLED`, `STATE_MACHINE_ENABLED`, `DUAL_WRITE_ENABLED`,
+`READ_FROM_ROWS`, and the older `*_AUTHORITY_ENABLED` set) use `off` / `shadow` / `enforce`.
+The `ValidationPipeline.php` file header carries the migration plan.
 
-1. **UUID validation is never bypassed.** Every component UUID must exist in `ims-data/{type}/*.json` before inventory insertion (`BaseFunctions::addComponent()` → `ComponentDataService::validateComponentUuid()`).
-2. **Every DB change ships as a NEW seeder** in `database/seeders/`, named `YYYY_MM_DD_NNN_short-description.sql`, self-contained. Never edit an existing seeder. Show the SQL to the user after writing it — seeders are not auto-deployed and must be run on the server manually.
-3. **Never hardcode hardware specifications.** Load specs via `ComponentDataService` (request-level cache).
-4. **`api/permission_map.php` is strict** for `server`, `compatibility`, `rack`, and all component actions (components share the `component` template with `{module}` substitution). Unmapped operations are rejected with "Unknown operation" — new actions MUST be added there.
-5. **`rack` and `pipeline` are role-gated in code** to `admin` / `super_admin` on top of ACL — keep both gates intact.
-6. **ACL uses the `permissions` table only.** `acl_permissions` was dropped (seeder `2026_06_11_002`) — never reference it.
-7. **Do NOT rename `ims-data/chassis/chasis-level-3.json`.** The typo is load-bearing (`ComponentSpecPaths.php` maps to it).
-8. **Never expose credentials, secrets, or filesystem paths in API responses.** `error_log()` for exceptions; proper HTTP codes (400/401/403/404/500).
+## Server build
+
+create-start -> add-component (validated per add) -> get-compatible -> validate-config ->
+finalize-config (locks the config, marks components in_use). `ServerBuilder.php` holds state,
+`ServerConfiguration.php` persistence, `ConfigurationReverseLookup.php` component->config lookups.
+
+## Specs are not in the DB
+
+Hardware specs are JSON in `ims-data/`; the DB holds inventory rows. Load them through
+`ComponentDataService` (request-level cache) — never hardcode a specification.
+`ComponentSpecPaths.php` resolves paths via `IMS_DATA_PATH`, else by walking relative paths to
+`../ims-data/`, so watch `../` depth if files move.
 
 ## Gotchas
 
-- Component types are lowercase (`cpu`) but tables carry the suffix (`cpuinventory`).
-- Inventory status values: `0` = failed, `1` = available, `2` = in_use. `faildate` column exists on all inventory tables (seeder `2026_06_15_001`).
-- `compatibility` operations use **underscores** (`check_pair`), unlike everything else (kebab-case) — they match handler switch cases.
-- Pipeline handlers are one-file-per-operation and check permissions inside each file (via `$acl` / `$user_id` globals), not in the map.
-- `ComponentSpecPaths.php` auto-discovers `ims-data/` via relative paths — watch `../` depth when moving files.
-- JWT required for everything except `auth-*`. Rate limiting is per-IP per-endpoint + per-username failed-login throttle (`RateLimiter.php`).
+- Types are lowercase (`cpu`); tables carry the suffix (`cpuinventory`).
+- `risercard` split out of `pciecard` on 2026-08-14 — risers occupy riser bays and *provide*
+  pcie_slots; plain PCIe cards consume them.
+- `serverplatform` became the 12th type on 2026-08-25. The version UUID, not the platform UUID,
+  is the stocked SKU — see `ims-data/CLAUDE.md`.
+- Tickets are retired as an engine: `core/models/tickets/*` (`TicketValidator`, `TicketItemService`,
+  `TicketHistoryService`) now serve `PipelineManager`. There is no `TicketManager.php`.
+- Errors: `error_log()` the exception, return a proper HTTP code, leak no paths or secrets.
 
-## Tests (local CLI only — never deployed)
+## Tests (local CLI, never deployed)
 
-- `tests/characterize_compatibility.php` — golden-master harness: captures current engine behaviour per real `server_configurations` row into `tests/golden/compatibility_baseline.json`. Run against an isolated scratch DB seeded via `tests/golden/setup_scratch_db.sql` — it never touches production data.
-- `tests/*_authority_unit.php` — per-authority unit tests (slot/storage, memory, lane, nic_sfp, storage_bay); `tests/serverstate_equivalence.php`.
-- **Any refactor of the compatibility engine must be proven at parity against the golden baseline** (or intended diffs explicitly reviewed).
-- `scripts/audit-orphans.php` — orphaned-record audit utility.
+`php` isn't on PATH; XAMPP's is at `/c/xampp/php/php.exe`. Lint changed files with `php -l`
+before they auto-upload — a syntax error here is a live 500.
 
-## Adding a new component type (checklist)
+- `php tests/run_tests.php` — full suite (~41), needs real MariaDB on a pristine datadir.
+- `tests/*_authority_unit.php` — per-authority units; `tests/serverstate_equivalence.php`.
+- `tests/characterize_compatibility.php` — golden master over real `server_configurations` rows
+  into `tests/golden/`. A compatibility-engine refactor should be shown at parity against that
+  baseline, or its diffs explicitly reviewed.
+- `scripts/audit-orphans.php` — orphaned-record audit.
 
-1. Table `{type}inventory` via a new seeder (mirror an existing table)
-2. JSON specs at `ims-data/{type}/{type}-level-3.json`
-3. Register path in `ComponentSpecPaths.php`
-4. Add the type to `VALID_COMPONENT_TYPES` and the dispatch cases in `api/api.php`
-5. Seeder adding ACL perms: `{type}.view/.create/.edit/.delete`
+## Deeper reference (local-only, never deployed)
 
-## Conventions
-
-| Category | Pattern | Example |
-|---|---|---|
-| Classes | PascalCase | `ServerBuilder` |
-| Functions | camelCase | `validateComponentUuid()` |
-| DB tables | snake_case | `server_configurations` |
-| API actions | kebab-case | `server-add-component` |
-| ACL perms | dot notation | `server.create` |
-
-Standard response shape: `{success, authenticated, code, message, timestamp, data}` via `send_json_response()`.
-
-## Deep reference (local-only — gitignored & not deployed; read only when the task needs it)
-
-- `docs/api/API_REFERENCE.md` — full endpoint/parameter catalog
-- `docs/architecture/DATABASE_SCHEMA.md` — full schema
-- `docs/architecture/ARCHITECTURE.md` — request-flow detail
-- `docs/development/DEVELOPMENT_GUIDELINES.md` — extended coding standards
-- `IMS API Development.postman_collection.json` — request examples
-- In-repo, always current: file headers of `ValidationPipeline.php` and `tests/characterize_compatibility.php` (migration plan + test methodology), and `database/seeders/*.sql` (schema change history).
-
-If a doc contradicts the code, the code wins — flag the stale doc to the user.
-
-## Workflow
-
-- For non-trivial tasks: write a plan to `tasks/todo.md`, get approval, execute one item at a time, mark complete as you go, finish with a short summary.
-- Fix root causes, not symptoms. No temporary patches.
-- Prefer editing existing files over creating new ones. Never create documentation files unless explicitly asked.
-- Change only what the task requires — the right solution is the simplest one that fully solves the problem.
-- Remember every save deploys to production ~20s later: keep edits atomic and never save a file in a half-broken state.
+`docs/ARCHITECTURE.md` and `docs/OPERATIONS.md` (written 2026-08-24, every claim `file:line`
+cited), `BACKLOG.md`, `migration/` (the target design — several packs describe intent that was
+never built), and `database/seeders/*.sql` as schema history. Where a doc contradicts the code,
+the code wins; flag the stale doc.

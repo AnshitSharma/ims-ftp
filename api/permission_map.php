@@ -39,6 +39,9 @@ return [
         'remove-component' => 'server.edit',
         'replace-component' => 'server.replace', // U-A.2 -- mirrors add/remove's own edit-family gating
         'transition-status' => 'server.transition', // U-A.2 -- mirrors finalize-config's create-family gating
+        // Read-only: which lifecycle moves this user could make on one config.
+        // Gated on view, not transition -- it ANSWERS whether they may transition.
+        'allowed-transitions' => 'server.view',
         'get-compatible' => 'server.view',
         'validate-config' => 'server.view',
         'save-config' => 'server.create',

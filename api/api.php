@@ -323,6 +323,12 @@ function handlePipelineOperations($operation, $user) {
     // 'inventory-record' joins them for Update Inventory Record: a correction
     // cannot be written blind, and the requester who needs to see the record's
     // current values is by definition someone without {type}.view.
+    // 'component-options' is the same bargain once more, and it is what stops the
+    // model dropdowns offering hardware we do not own or parts that are not in
+    // the server being changed. Every read that could answer those two questions
+    // -- server-get-config, server-get-compatible, get-available-components --
+    // is gated on server.view, so without this the lists would be empty for
+    // exactly the people raising the request.
     //
     // 'claim' and 'complete' JOINED THIS SET ON 2026-08-26, and this is a fix as
     // much as a feature. A step can be owned by a named user or a role, and the
@@ -346,7 +352,7 @@ function handlePipelineOperations($operation, $user) {
     // act than confirming your own step, and it remains admin work.
     $selfServiceOperations = [
         'create', 'list', 'get', 'template-list', 'servers',
-        'component-location', 'users', 'inventory-record',
+        'component-location', 'users', 'inventory-record', 'component-options',
         'claim', 'complete',
     ];
 
@@ -378,6 +384,7 @@ function handlePipelineOperations($operation, $user) {
             'users'              => 'pipeline-users.php',
             'component-location' => 'pipeline-component-location.php',
             'inventory-record'   => 'pipeline-inventory-record.php',
+            'component-options'  => 'pipeline-component-options.php',
             'list'            => 'pipeline-list.php',
             'get'             => 'pipeline-get.php',
             'claim'           => 'pipeline-claim.php',

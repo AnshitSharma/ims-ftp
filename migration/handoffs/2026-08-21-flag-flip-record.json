@@ -1,0 +1,52 @@
+{
+  "_README": [
+    "PROPOSED INSERTION into migration/phase-status.json. NOT applied by the session that wrote this file.",
+    "This session does not own phase-status.json (another agent held it), so the block is drafted here and",
+    "handed over rather than merged. Insert the single key below as a sibling of the other *_session_* keys,",
+    "immediately BEFORE 'twenty_seventh_session_2026_08_22' so the file stays newest-first. Change nothing else.",
+    "",
+    "WHY THIS EXISTS: phase-status.json's own $schema line reads 'Every session MUST update this file as its",
+    "LAST action.' The 2026-08-21 promotion of COMMAND_LAYER_ENABLED to enforce and READ_FROM_ROWS to on is the",
+    "single most consequential change in the entire cutover -- it made the command layer the authoritative",
+    "mutation path and the rows store the authoritative read path in one step -- and it is the ONE change with no",
+    "session record. Every later session has had to re-derive it from an .env mtime.",
+    "",
+    "WHAT THIS RECORD IS NOT: it is not a session that performed the flip. The flip was an owner action,",
+    "discovered after the fact. Everything below is reconstructed from artifacts that already existed",
+    "(.env mtime, the owner's own report, and the two defects the flip exposed), and each claim names the",
+    "artifact it rests on. Nothing here was observed at the time it happened, and the record says so."
+  ],
+  "insert_key": "flag_promotion_2026_08_21",
+  "insert_before_key": "twenty_seventh_session_2026_08_22",
+  "block": {
+    "flag_promotion_2026_08_21": {
+      "date": "2026-08-21",
+      "record_type": "RECONSTRUCTED -- written 2026-08-26, five days after the event, from artifacts. This is NOT a session record in the ordinary sense: no session was present. It exists because phase-status.json's $schema mandates a record and none was written, and because every session since has had to re-derive this from an .env mtime.",
+      "actor": "OWNER, out of band. No agent session performed or was consulted on this change.",
+      "note": "THE DOUBLE FLAG FLIP. COMMAND_LAYER_ENABLED shadow -> enforce and READ_FROM_ROWS sample -> on, in one .env edit. This made the command layer the authoritative MUTATION path and the config_components rows the authoritative READ path simultaneously. No unit status changed, no code changed, no seeder ran.",
+      "flags_changed": {
+        "COMMAND_LAYER_ENABLED": "shadow -> enforce",
+        "READ_FROM_ROWS": "sample -> on"
+      },
+      "flags_unchanged_and_already_terminal": {
+        "DUAL_WRITE_ENABLED": "on (promotion date not recorded, unrecoverable)",
+        "STATE_MACHINE_ENABLED": "enforce (promotion date not recorded, unrecoverable)",
+        "ENGINE_MODE": "enforce (promotion date not recorded, unrecoverable)"
+      },
+      "evidence": {
+        "timestamp": ".env mtime 2026-08-21T14:31:09Z, read live on 2026-08-22 via the role-gated server-debug-migration-flags action.",
+        "corroboration": "Owner report of the change, independently. The mtime and the report agree; neither alone would date it.",
+        "limits": "A single .env mtime cannot distinguish two edits in one save from two saves in the same minute, and cannot prove WHICH flags that save changed. What it does establish is that the file was written at that moment and that both flags read terminal immediately afterwards. The three earlier promotions share this mtime and are therefore NOT dated by it -- see reports/cutover-signoff-20260822.md section 1 and BACKLOG.md B-11."
+      },
+      "soak_status_at_the_time": "NONE. READ_FROM_ROWS went sample -> on without the >=72h zero-divergence sample window U-X.2's procedure requires. The 2026-08-22 owner decision that waived all remaining soaks was made the following day, so at the moment of the flip this was an unwaived gate being skipped rather than a waived one. tasks/migration-completion.md:14-16 records it as such: 'The owner already waived one on 2026-08-21 by flipping READ_FROM_ROWS without the 72h clean window.'",
+      "what_the_flip_EXPOSED_rather_than_caused": {
+        "1_sfp_slot_ref_shape": "SFP slot_ref was being written bare-numeric ('1') by the legacy dual-write hook while ConfigReadRouter::portIndexFromSlotRef() requires the canonical 'port_N' shape. This predates the flip -- server_api.php accepts slot_position as an alias for port_index and the hook passed the raw alias through -- and is why the sample-mode gate had never gone green. slot_ref is not part of the read contract, so the flip was safe for reads even while the bad rows existed, which is why nothing was observably broken. Fixed at the write site in ServerBuilder::addComponent; data repaired by seeder 2026_08_22_001_normalize-sfp-slot-ref.sql (RUN AND VERIFIED 2026-08-22).",
+        "2_live_command_layer_bypass": "handleImportVirtual() (server_api.php) called ServerBuilder::addComponent() with NO flag check. From the moment COMMAND_LAYER_ENABLED reached enforce, the virtual-import path ran the LEGACY builder while every other add ran through AddComponentCommand -- two validation regimes over one dataset, for one day, undetected. This is exactly the bypass the compute-platform note predicted would 'appear the day someone flips it, silently'. Closed 2026-08-22 by routing through AddComponentCommand at enforce, preserving the outer transaction and the legacy quantity semantics."
+      },
+      "consequence_for_the_evidence_chain": "At COMMAND_LAYER=enforce, ShadowRunner no longer writes a comparison row on the add path, and at READ_FROM_ROWS=on the read router no longer compares. So the flip PERMANENTLY ENDED the accumulation of the very shadow-log evidence U-C.6's and U-X.2's soak criteria are written against. Those criteria are not merely unmet; they became structurally unobtainable on this date. Any later reading of parity_report/command_parity_report/read_report as 'zero divergences' must be read as 'zero comparisons', which is the F-27 distinction. This is the root of U-R.5's undischargeable shadow-log criterion.",
+      "rollback_posture": "Both flags remain rollback-capable as of 2026-08-26: the off and shadow branches still call legacyValidateComponentAddition(), and ConfigReadRouter retains its non-'on' branches. That is precisely why U-D.2 and U-D.4 are COUPLED -- deleting the legacy body forecloses rolling either flag back.",
+      "unit_status_changes": "NONE. This record changes no unit status and asserts no verification. U-C.6 and U-X.2 remain in_progress; their soak preconditions were not met by this flip and cannot be met after it.",
+      "written_by": "U-P.2 session 2026-08-26, as a handoff. Insert verbatim; do not promote any unit on the strength of it."
+    }
+  }
+}

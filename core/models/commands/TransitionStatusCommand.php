@@ -96,6 +96,23 @@ final class TransitionStatusCommand extends BaseCommand
         return ($this->requiresFullValidation === false) ? Trigger::TRANSITION : Trigger::FINALIZE;
     }
 
+    /**
+     * A transition is not a content change, so StateGuard's "is this config
+     * currently mutable" rule does not apply to it -- see BaseCommand::
+     * guardsMutation(). Without this override every state outside
+     * {draft, building, maintenance} was terminal: finalized -> building (the
+     * un-finalize edge) and validated -> finalized among others were refused
+     * with 'config_immutable' before assertConfigTransition() below ever ran.
+     *
+     * This is not an ungating. buildTarget() asserts the edge and the actor's
+     * permission under the SAME lock, and a 'full' edge still runs the whole
+     * FINALIZE suite through trigger().
+     */
+    protected function guardsMutation(): bool
+    {
+        return false;
+    }
+
     protected function buildTarget(TargetState $current, array $lockedRow): TargetState
     {
         $transitionCheck = StateMachine::assertConfigTransition(

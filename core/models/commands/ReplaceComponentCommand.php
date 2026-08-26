@@ -44,6 +44,8 @@ final class ReplaceComponentCommand extends BaseCommand
     private $oldComponentUuid;
     /** @var string|null */
     private $oldSerialNumber;
+    /** @var int|null the exact inventory row coming out, when the caller knows it */
+    private $oldInventoryId;
     /** @var string */
     private $newComponentUuid;
     /** @var array */
@@ -58,7 +60,7 @@ final class ReplaceComponentCommand extends BaseCommand
     /** @var string|null */
     private $newSlotRef;
 
-    public function __construct(PDO $pdo, string $configUuid, string $componentType, string $oldComponentUuid, ?string $oldSerialNumber, string $newComponentUuid, array $options = [], $actor = 0, ?int $expectedRevision = null)
+    public function __construct(PDO $pdo, string $configUuid, string $componentType, string $oldComponentUuid, ?string $oldSerialNumber, string $newComponentUuid, array $options = [], $actor = 0, ?int $expectedRevision = null, ?int $oldInventoryId = null)
     {
         parent::__construct($pdo, $configUuid, $actor, $expectedRevision);
         $this->componentType = $componentType;
@@ -66,6 +68,7 @@ final class ReplaceComponentCommand extends BaseCommand
         $this->oldSerialNumber = $oldSerialNumber;
         $this->newComponentUuid = $newComponentUuid;
         $this->options = $options;
+        $this->oldInventoryId = $oldInventoryId;
     }
 
     protected function trigger(): string
@@ -75,20 +78,60 @@ final class ReplaceComponentCommand extends BaseCommand
 
     protected function buildTarget(TargetState $current, array $lockedRow): TargetState
     {
+        $candidates = $current->byType($this->componentType);
+
+        // WHICH unit is coming out. spec_uuid names a MODEL, so on a build with
+        // four identical DIMMs and no serial numbers it names all four equally,
+        // and the first match wins arbitrarily. inventory_id is the only thing
+        // that separates them, so it is preferred where the caller supplied it
+        // AND the state actually carries ids.
+        //
+        // THAT SECOND CONDITION IS NOT DEFENSIVE PADDING. TargetStateBuilder's
+        // JSON-fallback path sets inventory_id to NULL on every row (the legacy
+        // columns have nowhere to keep it), so a config still being read from
+        // JSON would match nothing and a replace that works today would start
+        // failing 404. Falling back to the model+serial match there keeps that
+        // case byte-identical to its previous behaviour; the id only ever makes
+        // the choice MORE precise, never less possible.
+        $byId = null;
+        if ($this->oldInventoryId !== null) {
+            $stateHasIds = false;
+            foreach ($candidates as $row) {
+                if (($row['inventory_id'] ?? null) !== null) {
+                    $stateHasIds = true;
+                    break;
+                }
+            }
+            if ($stateHasIds) {
+                $byId = $this->oldInventoryId;
+            }
+        }
+
         $this->oldRow = null;
-        foreach ($current->byType($this->componentType) as $row) {
+        foreach ($candidates as $row) {
+            // The model is checked in BOTH modes. An inventory_id paired with the
+            // wrong old_component_uuid is a malformed request, and honouring the
+            // id alone would quietly remove a part nobody named.
             if ($row['spec_uuid'] !== $this->oldComponentUuid) {
                 continue;
             }
-            if ($this->oldSerialNumber !== null && $row['serial_number'] !== $this->oldSerialNumber) {
+            if ($byId !== null) {
+                if ((int)($row['inventory_id'] ?? 0) !== $byId) {
+                    continue;
+                }
+            } elseif ($this->oldSerialNumber !== null && $row['serial_number'] !== $this->oldSerialNumber) {
                 continue;
             }
             $this->oldRow = $row;
             break;
         }
         if ($this->oldRow === null) {
-            $serialInfo = $this->oldSerialNumber ? " with SerialNumber '{$this->oldSerialNumber}'" : '';
-            throw new CommandFailed('component_not_found', "Component to replace not found in configuration$serialInfo", 404);
+            if ($byId !== null) {
+                $which = " (inventory row #{$byId})";
+            } else {
+                $which = $this->oldSerialNumber ? " with SerialNumber '{$this->oldSerialNumber}'" : '';
+            }
+            throw new CommandFailed('component_not_found', "Component to replace not found in configuration$which", 404);
         }
 
         $this->newInventoryRow = $this->lockAndCheckComponent();

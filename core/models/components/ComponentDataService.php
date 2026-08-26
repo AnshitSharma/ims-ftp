@@ -392,6 +392,92 @@ class ComponentDataService {
     }
 
     /**
+     * The human name of one model — "Intel Xeon Gold 6338".
+     *
+     * WHY THIS LIVES HERE
+     * -------------------
+     * The brand + model rules had grown THREE copies: the private
+     * ServerBuilder::getComponentNameFromSpec() (unreachable from a handler),
+     * an inline block in api/handlers/components/component_crud_api.php, and
+     * componentModelName() in the frontend's requests.js. This is the shared
+     * one, on the class that already owns findComponentByUuid() and the spec
+     * cache. The other two are candidates for folding in later — ServerBuilder's
+     * carries an onboard-NIC special case and sits inside the compatibility
+     * engine, so that belongs in its own reviewed change.
+     *
+     * RAM AND STORAGE HAVE NO `model` FIELD. Their specs describe the part
+     * instead of naming it, so a label has to be composed — "Samsung DDR4 32GB
+     * RDIMM", "Kingston SSD 512GB". A model dropdown showing "Component" eleven
+     * times is the failure this avoids.
+     *
+     * @param string $componentType one of the 11 types (or serverplatform)
+     * @param string $uuid          the MODEL uuid from ims-data
+     * @return string|null null when the uuid is in no spec file — a synthetic
+     *                     onboard-nic- uuid, or a model that was removed from
+     *                     the catalogue. The caller decides what to show
+     *                     instead; guessing here would invent hardware.
+     */
+    public function modelLabel($componentType, $uuid) {
+        if (empty($componentType) || empty($uuid)) {
+            return null;
+        }
+
+        try {
+            $spec = $this->findComponentByUuid($componentType, $uuid);
+        } catch (Exception $e) {
+            error_log("ComponentDataService::modelLabel lookup failed for {$componentType}/{$uuid}: " . $e->getMessage());
+            return null;
+        }
+        if (!is_array($spec)) {
+            return null;
+        }
+
+        $brand = isset($spec['brand']) ? $spec['brand'] : (isset($spec['manufacturer']) ? $spec['manufacturer'] : null);
+        $model = null;
+        foreach (['model', 'name', 'model_name', 'product_name', 'part_number'] as $field) {
+            if (!empty($spec[$field])) {
+                $model = $spec[$field];
+                break;
+            }
+        }
+
+        if ($model !== null) {
+            return $brand ? trim($brand . ' ' . $model) : (string)$model;
+        }
+
+        // Composed labels for the two types whose specs never name themselves.
+        if ($componentType === 'ram') {
+            $parts = array_filter([
+                $brand,
+                isset($spec['memory_type']) ? $spec['memory_type'] : null,
+                isset($spec['capacity_GB']) ? $spec['capacity_GB'] . 'GB' : null,
+                isset($spec['module_type']) ? $spec['module_type'] : null,
+            ]);
+            return $parts ? implode(' ', $parts) : null;
+        }
+
+        if ($componentType === 'storage') {
+            $capacity = null;
+            if (isset($spec['capacity_GB'])) {
+                // TB above a terabyte: "1.9TB" reads as a drive, "1920GB" does not.
+                $capacity = $spec['capacity_GB'] >= 1000
+                    ? round($spec['capacity_GB'] / 1000, 1) . 'TB'
+                    : $spec['capacity_GB'] . 'GB';
+            }
+            $parts = array_filter([
+                $brand,
+                isset($spec['storage_type']) ? $spec['storage_type'] : null,
+                $capacity,
+            ]);
+            return $parts ? implode(' ', $parts) : null;
+        }
+
+        // A spec that names neither a model nor a brand tells the caller nothing,
+        // so it gets null rather than a bare brand standing in for a model.
+        return null;
+    }
+
+    /**
      * Validate if a component UUID exists in JSON files
      * Used by component-add APIs to ensure component exists before adding to inventory
      *

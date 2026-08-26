@@ -75,6 +75,13 @@ switch ($action) {
         handleTransitionStatus($serverBuilder, $user);
         break;
 
+    // Read-only companion to transition-status: the legal moves from where this
+    // config actually stands, with this user's ACL verdict on each.
+    case 'allowed-transitions':
+    case 'server-allowed-transitions':
+        handleAllowedTransitions($user);
+        break;
+
     case 'get-config':
     case 'server-get-config':
         handleGetConfiguration($serverBuilder, $user);
@@ -478,43 +485,44 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         
         // Get current configuration status to prevent updates on finalized configs
         $currentStatus = $config->get('configuration_status');
-        $requestedStatus = isset($_POST['configuration_status']) ? (int)$_POST['configuration_status'] : null;
-        
-        // Prevent modification of finalized configurations (status 3) unless admin
+
+        // Prevent modification of finalized configurations (status 3) unless admin.
+        // The way back for everyone else is a status change, so the message names it.
         if ($currentStatus == 3 && !hasPermission($pdo, 'server.edit_finalized', $user['id'])) {
-            send_json_response(0, 1, 403, "Cannot modify finalized configurations without proper permissions");
-        }
-        
-        // Prevent status change from finalized to lower status unless admin
-        if ($currentStatus == 3 && $requestedStatus !== null && $requestedStatus < 3 && !hasPermission($pdo, 'server.edit_finalized', $user['id'])) {
-            send_json_response(0, 1, 403, "Cannot change status of finalized configuration without proper permissions");
+            send_json_response(0, 1, 403,
+                "This configuration is finalized, so its details cannot be changed. "
+                . "Move it back to a mutable status with server-transition-status first.");
         }
 
-        // An empty string means "field left alone" -- the field loop below maps
-        // it to null rather than to status 0, so the gates must agree.
-        $statusPosted   = isset($_POST['configuration_status']) && trim((string)$_POST['configuration_status']) !== '';
-        $statusChanging = $statusPosted && $requestedStatus !== (int)$currentStatus;
-
-        // Finalizing is server-finalize-config's job, not this action's.
+        // STATUS IS NOT A DETAIL (2026-08-26).
         //
-        // That handler refuses virtual configs, runs comprehensive validation and
-        // passes allowScoped = false to userCanActOnConfig -- a temporary grant may
-        // CHANGE a build, never lock one. Writing status 3 straight into the column
-        // here skipped all three, and left the grantee shut out of their own build
-        // by the finalized guard above. One door to Finalized, for everyone.
-        if ($statusChanging && $requestedStatus === 3) {
-            send_json_response(0, 1, 400, "Finalizing a configuration goes through server-finalize-config, which validates the build first");
-        }
-
-        // Every other lifecycle move is what server.transition gates on
-        // server-transition-status; this action must not be a way around it. The
-        // scoped fallback keeps a per-configuration Server Changes grant working on
-        // the build it names -- requireModulePermission's own fallback only ever
-        // looked at server.edit_details, the permission that gated this call.
-        if ($statusChanging
-            && !hasPermission($pdo, 'server.transition', $user['id'])
-            && !hasScopedPermissionForRequest($pdo, 'server.transition', $user['id'])) {
-            send_json_response(0, 1, 403, "Insufficient permissions: server.transition required to change configuration status");
+        // This handler used to accept configuration_status and write it straight
+        // into the column. That left status_v2 stale -- and status_v2 is what
+        // StateGuard consults FIRST (STATE_MACHINE_ENABLED=enforce in production),
+        // so a server's real mutability stopped matching the status anyone could
+        // see, and no revision bump or config_events('transition') row was written
+        // for the move either.
+        //
+        // StateMachine::applyConfigTransition() is the one place that writes
+        // status_v2 + the mapped legacy int atomically, and it is reached through
+        // server-transition-status (any edge) or server-finalize-config (into
+        // finalized, which also runs full validation first). The old code already
+        // refused status 3 here for exactly this class of reason -- "one door to
+        // Finalized, for everyone" -- so every other edge now uses the same door.
+        // RequestActionExecutor::UPDATABLE_CONFIG_FIELDS draws the seam in the
+        // same place and says the same thing to a Request author.
+        //
+        // A no-op (the status already posted back unchanged) is still tolerated:
+        // it asks for nothing, and an empty string means "field left alone", never
+        // "status 0".
+        $requestedStatus = (isset($_POST['configuration_status']) && trim((string)$_POST['configuration_status']) !== '')
+            ? (int)$_POST['configuration_status']
+            : null;
+        if ($requestedStatus !== null && $requestedStatus !== (int)$currentStatus) {
+            send_json_response(0, 1, 400,
+                "configuration_status cannot be changed here -- a status change is a separate action. "
+                . "Use server-transition-status, or server-finalize-config to finalize. Either one "
+                . "validates the move against the state machine and keeps status_v2 in step.");
         }
 
         // rack_position is DERIVED, and accepting it here was a hole in that
@@ -528,11 +536,12 @@ function handleUpdateConfiguration($serverBuilder, $user) {
                 . "Use rack-assign-server to move the server, or rack-unassign-server to take it out.");
         }
 
-        // Define updatable fields (excluding calculated and derived fields)
+        // Define updatable fields (excluding calculated, derived and lifecycle
+        // fields -- configuration_status left this list when the refusal above
+        // replaced it; see that comment).
         $updatableFields = [
             'server_name',
             'description',
-            'configuration_status',
             'location',
             'notes'
         ];
@@ -554,10 +563,6 @@ function handleUpdateConfiguration($serverBuilder, $user) {
                         if (empty($newValue)) {
                             send_json_response(0, 1, 400, "Server name cannot be empty");
                         }
-                        break;
-                        
-                    case 'configuration_status':
-                        $newValue = $newValue !== '' ? (int)$newValue : null;
                         break;
                         
                     default:
@@ -1599,6 +1604,119 @@ function handleTransitionStatus($serverBuilder, $user) {
     } catch (\Throwable $e) {
         error_log("Error transitioning status: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to transition status");
+    }
+}
+
+/**
+ * Which status moves this user could actually make on this config, right now.
+ *
+ * Read-only companion to server-transition-status. It exists because the legal
+ * state graph is DATA (config_status_transitions, U-SM.2) and the frontend must
+ * not carry a second copy of it: a status dropdown built from a hardcoded list
+ * offers moves TransitionStatusCommand then refuses, which is exactly how the
+ * card's "change the status" control would look broken.
+ *
+ * The ACL verdict is computed with the SAME checker StateMachine::
+ * assertConfigTransition() uses -- ACL::hasPermission(), which is a pure
+ * role/user grant lookup with NO admin bypass -- so `allowed` here and the
+ * command's own answer cannot disagree. SYSTEM edges are reported as allowed
+ * for the same reason: assertConfigTransition skips the ACL half for them.
+ *
+ * legacy_status rides along from StatusMap so the caller can say which badge a
+ * move produces without owning a second copy of the (lossy) v2 -> int mapping.
+ */
+function handleAllowedTransitions($user) {
+    global $pdo;
+
+    $configUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "Configuration UUID is required");
+    }
+
+    require_once __DIR__ . '/../../../core/models/state/StatusMap.php';
+    if (!class_exists('ACL')) {
+        require_once __DIR__ . '/../../../core/auth/ACL.php';
+    }
+
+    try {
+        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+        if (!$config) {
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
+            send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
+        }
+
+        $legacyStatus = (int)$config->get('configuration_status');
+        $from = $config->get('status_v2');
+        $fromSource = 'status_v2';
+
+        // A config that pre-dates the status_v2 backfill has no lifecycle state
+        // of its own yet. assertConfigTransition refuses those outright (F-21),
+        // so reporting "no moves available" would be honest but useless; the
+        // legacy int is what that row's status actually means, and it is the
+        // same map U-SM.1's backfill used.
+        if ($from === null || $from === '') {
+            $from = StatusMap::CONFIG_LEGACY_TO_V2[$legacyStatus] ?? null;
+            $fromSource = 'legacy';
+        }
+
+        if ($from === null) {
+            send_json_response(1, 1, 200, "No lifecycle state recorded for this configuration", [
+                'config_uuid'      => $configUuid,
+                'from_status'      => null,
+                'from_status_source' => $fromSource,
+                'legacy_status'    => $legacyStatus,
+                'transitions'      => [],
+            ]);
+        }
+
+        // Probed rather than assumed: this file deploys ~20s after a save while
+        // seeders are run by hand, and "no moves offered" is a far better answer
+        // than a 500 on a table the database has not been given yet.
+        if (!SchemaHelper::hasTable($pdo, 'config_status_transitions')) {
+            send_json_response(1, 1, 200, "The status lifecycle is not available on this database yet", [
+                'config_uuid'        => $configUuid,
+                'from_status'        => $from,
+                'from_status_source' => $fromSource,
+                'legacy_status'      => $legacyStatus,
+                'transitions'        => [],
+            ]);
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT to_status, required_permission, requires_validation
+               FROM config_status_transitions
+              WHERE from_status = ?
+              ORDER BY to_status'
+        );
+        $stmt->execute([$from]);
+        $edges = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $acl = $GLOBALS['acl'] ?? new ACL($pdo);
+        $transitions = [];
+        foreach ($edges as $edge) {
+            $required = $edge['required_permission'];
+            $allowed = ($required === 'SYSTEM') || $acl->hasPermission((int)$user['id'], $required);
+            $transitions[] = [
+                'to_status'           => $edge['to_status'],
+                'legacy_status'       => StatusMap::CONFIG_V2_TO_LEGACY[$edge['to_status']] ?? null,
+                'required_permission' => $required,
+                'requires_validation' => $edge['requires_validation'] === 'full',
+                'allowed'             => $allowed,
+            ];
+        }
+
+        send_json_response(1, 1, 200, "Allowed transitions retrieved successfully", [
+            'config_uuid'        => $configUuid,
+            'from_status'        => $from,
+            'from_status_source' => $fromSource,
+            'legacy_status'      => $legacyStatus,
+            'transitions'        => $transitions,
+        ]);
+    } catch (Throwable $e) {
+        error_log("Error listing allowed transitions: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to list the allowed status changes");
     }
 }
 

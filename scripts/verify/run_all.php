@@ -108,6 +108,37 @@ const REGISTRY = [
     // NOT in QUICK_SET (P9-scoped, needs a captured snapshot), so nightly.sh is
     // unaffected.
     'deploy_skew' => ['script' => __DIR__ . '/deploy_skew_report.php', 'available' => true, 'lands_in' => null],
+    // invariants (2026-08-26): U-P.1. Runs every CHECK block in
+    // migration/ARCHITECTURAL_INVARIANTS.md, extracted VERBATIM at run time by
+    // scripts/ci/inv_extract.php -- no check text lives in either script, so
+    // editing the document changes what this gate enforces with no code change.
+    //
+    // WHY IT IS HERE AND NOT ONLY IN scripts/ci/invariants.sh: this registry
+    // launches its children as `php <script>`, so a POSIX sh entry point cannot
+    // be a registry entry at all. Until this landed, the invariants were
+    // enforced by whoever remembered to call invariants.sh and by NO gate --
+    // including P10, whose entire stated objective (migration/12-post-cutover/
+    // README.md) is "make the invariants permanent (CI)" and whose gate reads
+    // ['all']. The phase that exists to make the rules permanent was not
+    // checking them.
+    //
+    // NOT A DUPLICATE RUN: invariants_report.php is section 1 of invariants.sh
+    // only (the CHECK blocks). Sections 2 and 3 of that script are `--quick` and
+    // tests/run_tests.php, which are QUICK_SET and the `regression` entry here,
+    // so nothing runs twice inside one gate -- and registering the .sh would
+    // have made the gate call the battery that calls the gate.
+    //
+    // Expected RED today, for reasons already filed rather than unknown ones:
+    // INV-1/1 (three legacy-compatibility quantity surfaces, BACKLOG.md B-1),
+    // INV-8/1 (one equivalence diff, B-8) and INV-9/1 (unpaired seeder
+    // rollbacks, B-2). It is registered RED deliberately: those are real,
+    // and a gate suppressed until it is convenient is not a gate.
+    //
+    // Fail-closed: an unreachable DB, a missing POSIX shell or an unparseable
+    // invariants document exits 2 -- never 0. NOT in QUICK_SET (it shells out
+    // per check and INV-8 runs the full equivalence sweep), so nightly.sh's
+    // --quick leg is unaffected; it reaches nightly through --gate P10.
+    'invariants'  => ['script' => __DIR__ . '/invariants_report.php', 'available' => true, 'lands_in' => null],
     'baseline'    => ['script' => null, 'available' => false, 'lands_in' => 'tests/characterize_compatibility.php (capture-only: no compare mode, always exits 0 -- cannot gate)'],
     // regression (2026-08-24): now wired to tests/run_tests.php, the discovery-
     // based local suite runner. It was 'available' => false since this registry
@@ -154,6 +185,12 @@ const GATE_REPORTS = [
     // that the corpus deadcode scanned is the source of truth. Mirrored into
     // migration/phase-status.json's P9 gate_reports.
     'P9'  => ['deadcode', 'partial_rows', 'deploy_skew', 'equivalence', 'regression'],
+    // P10 reads ['all'], which expands to array_keys(REGISTRY) -- so the
+    // 'invariants' entry added 2026-08-26 reaches P10's gate automatically, with
+    // no edit here and no mirroring needed in phase-status.json's gate_reports.
+    // That is the point: P10's objective is "make the invariants permanent", and
+    // an invariant enforced by a list someone has to remember to extend is not
+    // permanent.
     'P10' => ['all'],
 ];
 

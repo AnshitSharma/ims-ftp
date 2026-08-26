@@ -157,6 +157,43 @@ abstract class BaseCommand
     }
 
     /**
+     * Does StateGuard's mutability rule apply to this command? (2026-08-26)
+     *
+     * StateGuard answers ONE question: may this config's CONTENTS be changed —
+     * its own docblock says "may be mutated (add/remove component)" — and it
+     * answers it by asking which lifecycle state the config sits in
+     * (draft/building/maintenance yes, anything else no).
+     *
+     * A STATUS TRANSITION is not a content change. It is the operation that
+     * moves a config between those states, so gating it on "are you already in a
+     * mutable state" made every state outside that set terminal: at
+     * STATE_MACHINE_ENABLED=enforce, finalized -> building (the un-finalize
+     * edge), finalized -> deployed, validated -> finalized, validated ->
+     * building, validating -> validated and deployed -> maintenance were ALL
+     * refused with 'config_immutable' before StateMachine was ever consulted.
+     * A finalized server could never be reopened, and a validated one could
+     * never be finalized -- config_status_transitions described a graph whose
+     * edges the guard had already cut.
+     *
+     * The legacy finalize path draws the line correctly and is the precedent
+     * followed here: ServerBuilder::finalizeConfiguration() at
+     * StateGuard::mode()==='enforce' calls StateMachine::assertConfigTransition()
+     * and NOT StateGuard::checkMutation(). A transition is gated by the
+     * transition table (does the edge exist, does the actor hold the permission
+     * it names, does it require full validation first); contents are gated by
+     * StateGuard.
+     *
+     * Defaults to true, so Add/Remove/ReplaceComponentCommand -- every command
+     * that really does change contents -- are untouched. Only
+     * TransitionStatusCommand overrides it, and it is not thereby ungated:
+     * assertConfigTransition() runs under the same lock, inside buildTarget().
+     */
+    protected function guardsMutation(): bool
+    {
+        return true;
+    }
+
+    /**
      * Replicates ServerBuilder::lockAndLoadConfigRow() (was 425-435) exactly
      * as its own copy — commands must not depend on ServerBuilder for this.
      * @return array|null
@@ -246,9 +283,11 @@ abstract class BaseCommand
                 throw new CommandFailed('config_not_found', "Configuration {$this->configUuid} not found", 404);
             }
 
-            $guardVerdict = StateGuard::checkMutation($this->pdo, $lockedRow);
-            if ($guardVerdict !== null) {
-                throw new CommandFailed($guardVerdict['error_type'] ?? 'config_immutable', $guardVerdict['message'] ?? 'Mutation not allowed', 409);
+            if ($this->guardsMutation()) {
+                $guardVerdict = StateGuard::checkMutation($this->pdo, $lockedRow);
+                if ($guardVerdict !== null) {
+                    throw new CommandFailed($guardVerdict['error_type'] ?? 'config_immutable', $guardVerdict['message'] ?? 'Mutation not allowed', 409);
+                }
             }
 
             if ($this->expectedRevision !== null && (int)($lockedRow['revision'] ?? 0) !== $this->expectedRevision) {
@@ -316,9 +355,11 @@ abstract class BaseCommand
             if ($lockedRow === null) {
                 throw new CommandFailed('config_not_found', "Configuration {$this->configUuid} not found", 404);
             }
-            $guardVerdict = StateGuard::checkMutation($this->pdo, $lockedRow);
-            if ($guardVerdict !== null) {
-                throw new CommandFailed($guardVerdict['error_type'] ?? 'config_immutable', $guardVerdict['message'] ?? 'Mutation not allowed', 409);
+            if ($this->guardsMutation()) {
+                $guardVerdict = StateGuard::checkMutation($this->pdo, $lockedRow);
+                if ($guardVerdict !== null) {
+                    throw new CommandFailed($guardVerdict['error_type'] ?? 'config_immutable', $guardVerdict['message'] ?? 'Mutation not allowed', 409);
+                }
             }
             $current = TargetStateBuilder::fromCurrent($this->pdo, $this->configUuid);
             $target = $this->buildTarget($current, $lockedRow);
