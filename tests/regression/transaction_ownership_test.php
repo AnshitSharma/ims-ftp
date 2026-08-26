@@ -84,6 +84,10 @@ $allowed = [
         => 'autoAddOnboardNICs/replaceOnboardNIC — begin-guarded (A-L7), joins a command transaction',
     'core/models/server/ServerConfiguration.php'
         => 'configuration persistence helper — legacy, outside the command layer',
+    'core/models/rack/ServerRelocation.php'
+        => 'move()/swap() — nestable ownTransaction (same guard as ServerBuilder), joins a command/request transaction when one is open; predates this allowlist (2026-08-26 location migration), added 2026-08-26',
+    'core/models/location/ComponentRelocation.php'
+        => 'move() — nestable ownTransaction, same pattern as ServerRelocation.php; backs inventory.component.relocate (Hardware Handover), 2026-08-26',
 
     // --- outside this migration entirely ----------------------------------
     'core/auth/ACL.php'                                 => 'ACL/role writes — not a configuration mutation',

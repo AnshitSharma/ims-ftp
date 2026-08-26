@@ -1709,3 +1709,34 @@ function logActivity($pdo, $userId, $action, $module, $objectId = null, $descrip
         return false;
     }
 }
+
+/**
+ * Build WHERE clauses + bindings for filtering inventory_log listings
+ * (search keyword, user, date range). Shared by any handler that lists
+ * activity logs so filtering stays consistent across them.
+ *
+ * @return array [string[] $where, array $bindings]
+ */
+function buildInventoryLogFilters(array $params) {
+    $where = [];
+    $bindings = [];
+
+    if (!empty($params['search'])) {
+        $where[] = "(u.username LIKE :search OR il.action LIKE :search OR il.notes LIKE :search OR CAST(il.component_id AS CHAR) LIKE :search)";
+        $bindings[':search'] = '%' . $params['search'] . '%';
+    }
+    if (!empty($params['user_id'])) {
+        $where[] = "il.user_id = :user_id";
+        $bindings[':user_id'] = (int)$params['user_id'];
+    }
+    if (!empty($params['date_from'])) {
+        $where[] = "il.created_at >= :date_from";
+        $bindings[':date_from'] = $params['date_from'] . ' 00:00:00';
+    }
+    if (!empty($params['date_to'])) {
+        $where[] = "il.created_at <= :date_to";
+        $bindings[':date_to'] = $params['date_to'] . ' 23:59:59';
+    }
+
+    return [$where, $bindings];
+}

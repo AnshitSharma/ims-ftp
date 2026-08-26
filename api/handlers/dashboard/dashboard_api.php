@@ -32,20 +32,42 @@ function handleDashboardOperations($operation, $user) {
             }
             $limit = max(1, min(200, (int)(($_GET['limit'] ?? $_POST['limit'] ?? 50))));
             $offset = max(0, (int)(($_GET['offset'] ?? $_POST['offset'] ?? 0)));
+
+            $filterParams = [
+                'search' => $_GET['search'] ?? $_POST['search'] ?? '',
+                'user_id' => $_GET['user_id'] ?? $_POST['user_id'] ?? '',
+                'date_from' => $_GET['date_from'] ?? $_POST['date_from'] ?? '',
+                'date_to' => $_GET['date_to'] ?? $_POST['date_to'] ?? '',
+            ];
+            [$where, $bindings] = buildInventoryLogFilters($filterParams);
+            $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
             $stmt = $pdo->prepare("
                 SELECT il.id, il.user_id, u.username, il.component_type, il.component_id,
                        il.action, il.notes, il.ip_address, il.created_at
                 FROM inventory_log il
                 LEFT JOIN users u ON il.user_id = u.id
+                $whereSql
                 ORDER BY il.created_at DESC
                 LIMIT :limit OFFSET :offset
             ");
+            foreach ($bindings as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
             $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
             $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
             $stmt->execute();
             $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $countStmt = $pdo->query("SELECT COUNT(*) FROM inventory_log");
+            $countStmt = $pdo->prepare("
+                SELECT COUNT(*) FROM inventory_log il
+                LEFT JOIN users u ON il.user_id = u.id
+                $whereSql
+            ");
+            foreach ($bindings as $key => $value) {
+                $countStmt->bindValue($key, $value);
+            }
+            $countStmt->execute();
             $total = (int)$countStmt->fetchColumn();
 
             send_json_response(1, 1, 200, "Activity logs retrieved", [
