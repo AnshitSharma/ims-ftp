@@ -99,6 +99,10 @@ if ($pdo === null) {
         'ram' => '9e1a4532-b693-4a59-b832-d8690bdb62fa',
         'storageA' => 'f54497fd-5cd3-4b5a-8cd2-276a68af11ac',
         'storageB' => 'a82df310-cb82-4f9e-bd48-2f1d171cf9a9',
+        // 3.5" SATA HDD. StorageBayCapacityRule gives 3.5" NO fallback pool
+        // (only 2.5" falls back, via a caddy), so this drive cannot be placed in
+        // chassisA's 16x 2.5"/0x 3.5" bays -- the deterministic block below.
+        'storageC' => 'ad663268-fc44-4465-a52f-9c011ec8e9d1',
     ];
 
     $suffix = substr(md5(uniqid('', true)), 0, 8);
@@ -174,20 +178,50 @@ if ($pdo === null) {
         ]);
         check('replace happy path (storage A->B): HTTP 200, success=true', $code === 200 && ($body['success'] ?? false) === true);
 
-        // -- Replace blocked: chassis A -> chassis B (2.5in bays -> 0x 2.5in bays, storage B still occupying) --
+        // -- Replace BLOCKED: storage 2.5" -> 3.5" while the chassis is chassisA
+        //    (16x 2.5" bays, 0x 3.5"). StorageBayCapacityRule's pools are asymmetric
+        //    on purpose: a 2.5" drive may fall back to a 3.5" bay via a caddy adapter,
+        //    a 3.5" drive has NO fallback (see the rule's docblock, legacy parity with
+        //    ComponentValidator::validateChassisBayStorage()). So this direction is the
+        //    one that must be refused, and it is refused for a stated reason rather
+        //    than by fixture luck.
+        //
+        //    MUST run before the chassis A->B replace below, which swaps in 12x 3.5"
+        //    bays and would make this drive placeable.
+        $invStC = h_insertInv($pdo, $created, 'storageinventory', $specs['storageC'], "HTTP-$suffix-ST-C");
+        [$code, $body] = $harness->post('server-replace-component', [
+            'config_uuid' => $cfg1, 'component_type' => 'storage',
+            'old_component_uuid' => $specs['storageB'], 'old_serial' => "HTTP-$suffix-ST-B",
+            'new_component_uuid' => $specs['storageC'],
+        ]);
+        check('replace blocked (3.5" drive into a 0x 3.5"-bay chassis, no caddy fallback): success=false', ($body['success'] ?? true) === false);
+        check('replace blocked: NOT a 2xx (a real validation/command rejection, not silently accepted)', $code >= 400);
+        if ($code < 400) { echo "        (expected a bay-capacity rejection, got HTTP $code: " . ($body['message'] ?? '?') . ")\n"; }
+
+        // -- Replace ALLOWED: chassis A -> chassis B (16x 2.5" -> 0x 2.5", 12x 3.5"),
+        //    with the 2.5" storage B still installed. This USED to assert a block, on
+        //    a comment citing replace_command_test.php as its authority -- which
+        //    asserts the opposite (replace_command_test.php:340, "2.5\" drive fits a
+        //    3.5\" bay with a caddy (legacy parity)"). The two tests contradicted each
+        //    other and it went unseen because this one only runs with a harness.
+        //    Pinned here in the direction the rule and legacy actually agree on.
         [$code, $body] = $harness->post('server-replace-component', [
             'config_uuid' => $cfg1, 'component_type' => 'chassis',
             'old_component_uuid' => $specs['chassisA'], 'old_serial' => "HTTP-$suffix-CH-A",
             'new_component_uuid' => $specs['chassisB'],
         ]);
-        check('replace blocked (chassis bay-capacity, real incompatible pair): HTTP failure, success=false', ($body['success'] ?? true) === false);
-        check('replace blocked: NOT a 2xx (a real validation/command rejection, not silently accepted)', $code >= 400);
+        check('replace allowed (chassis A->B): a 2.5" drive fits a 3.5" bay via caddy -- HTTP 200, success=true', $code === 200 && ($body['success'] ?? false) === true);
+        if ($code !== 200) { echo "        (chassis A->B: HTTP $code, " . ($body['message'] ?? '?') . ")\n"; }
 
         // -- Transition legal walk: draft->building->validating->validated (fully-equipped config, all real edges) --
         [$code1, $body1] = $harness->post('server-transition-status', ['config_uuid' => $cfg1, 'to_status' => 'building']);
         [$code2, $body2] = $harness->post('server-transition-status', ['config_uuid' => $cfg1, 'to_status' => 'validating']);
         [$code3, $body3] = $harness->post('server-transition-status', ['config_uuid' => $cfg1, 'to_status' => 'validated']);
-        check('transition legal: draft->building succeeds (fully-equipped config passes system.required_set)', $code1 === 200 && ($body1['success'] ?? false) === true);
+        // NB: draft->building carries requires_validation='none', so it evaluates
+        // under Trigger::TRANSITION and system.required_set (VALIDATE|FINALIZE) does
+        // NOT run on it. The old label claimed this edge proved required_set; it
+        // could not. required_set is pinned below, on an edge that does run it.
+        check('transition legal: draft->building succeeds (requires_validation=none edge)', $code1 === 200 && ($body1['success'] ?? false) === true);
         check('transition legal: building->validating succeeds', $code2 === 200 && ($body2['success'] ?? false) === true);
         check('transition legal: validating->validated succeeds (SYSTEM permission edge)', $code3 === 200 && ($body3['success'] ?? false) === true);
         if ($code1 !== 200) { echo "        (draft->building: HTTP $code1, " . ($body1['message'] ?? '?') . ")\n"; }
@@ -196,8 +230,21 @@ if ($pdo === null) {
 
         // ---- CFG2: empty config -- transition illegal (blocked by validation, not by a missing edge) ----
         $cfg2 = h_makeConfig($pdo, $created, "HTTP-HARNESS-CFG2-EMPTY-$suffix");
+        // draft->building is requires_validation='none'. An EMPTY config leaving
+        // draft is therefore allowed, and deliberately so: hardcoding FINALIZE here
+        // was a live bug (TransitionStatusCommand::trigger() docblock) precisely
+        // because it ran the full deployability suite and stranded empty drafts.
+        // This assertion previously demanded the 422 that fix removed.
         [$code, $body] = $harness->post('server-transition-status', ['config_uuid' => $cfg2, 'to_status' => 'building']);
-        check('transition illegal: empty config draft->building is blocked (422, system.required_set)', $code === 422 && ($body['success'] ?? true) === false);
+        check('transition: empty config draft->building is ALLOWED (none edge -- required_set does not gate it)', $code === 200 && ($body['success'] ?? false) === true);
+        if ($code !== 200) { echo "        (empty draft->building: HTTP $code, " . ($body['message'] ?? '?') . ")\n"; }
+
+        // ...and the gate that DOES apply: building->finalized carries
+        // requires_validation='full', so the empty config must be refused there.
+        // This is the assertion the old one was reaching for, on an edge that runs it.
+        [$code, $body] = $harness->post('server-transition-status', ['config_uuid' => $cfg2, 'to_status' => 'finalized']);
+        check('transition illegal: empty config building->finalized is blocked (full edge, system.required_set)', $code >= 400 && ($body['success'] ?? true) === false);
+        if ($code < 400) { echo "        (expected empty building->finalized to be refused, got HTTP $code)\n"; }
 
         // ---- CFG3: 409 real-revision-after-concurrent-mutation over real HTTP ----
         $cfg3 = h_makeConfig($pdo, $created, "HTTP-HARNESS-CFG3-409-$suffix");

@@ -165,9 +165,29 @@ if ($pdo === null) {
         // docblock) evaluated by dryRun() BEFORE apply() ever runs, the old
         // board row is untouched in the DB regardless -- asserted below by
         // re-reading it after the blocked dryRun().
-        $mbA = $pdo->query("SELECT id, UUID FROM motherboardinventory WHERE UUID = 'd2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
-        $mbB = $pdo->query("SELECT id, UUID FROM motherboardinventory WHERE UUID = '4c8f5e1b-2b4a-4c8d-b9e7-f6d2a3c1e9b8' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
-        $cpuLga3647 = $pdo->query("SELECT id, UUID FROM cpuinventory WHERE UUID = '6def2015-bbf6-478d-8e48-4ae32d5443c1' AND Status = 1")->fetch(PDO::FETCH_ASSOC);
+        // 2026-08-29: each of these must be a unit NO config has ever held.
+        // config_components.uq_inventory_once is (inventory_table, inventory_id,
+        // component_type) and is UNCONDITIONAL -- it ignores removed_at -- so a
+        // Status=1 unit that some config once held and released still collides.
+        // On the current dump cpuinventory#82 is exactly that, and the insert below
+        // died with an uncaught 1062 mid-suite: exit 255, every result printed
+        // above it lost. Filtering on Status alone was never sufficient; the
+        // fixture must ask the table the constraint actually reads.
+        $freeUnitOfSpec = function (string $table, string $specUuid) use ($pdo) {
+            $stmt = $pdo->prepare("
+                SELECT i.id, i.UUID
+                  FROM {$table} i
+                 WHERE i.UUID = ? AND i.Status = 1
+                   AND NOT EXISTS (SELECT 1 FROM config_components cc
+                                    WHERE cc.inventory_table = ? AND cc.inventory_id = i.id)
+                 LIMIT 1
+            ");
+            $stmt->execute([$specUuid, $table]);
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        };
+        $mbA = $freeUnitOfSpec('motherboardinventory', 'd2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a');
+        $mbB = $freeUnitOfSpec('motherboardinventory', '4c8f5e1b-2b4a-4c8d-b9e7-f6d2a3c1e9b8');
+        $cpuLga3647 = $freeUnitOfSpec('cpuinventory', '6def2015-bbf6-478d-8e48-4ae32d5443c1');
         // This scenario needs a config with NO motherboard of its own: it inserts
         // board A and then replaces it. It used to borrow `SELECT config_uuid ...
         // LIMIT 1`, which assumed the arbitrary first config in the fleet was a

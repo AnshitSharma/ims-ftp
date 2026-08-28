@@ -167,8 +167,18 @@ final class RemoveComponentCommand extends BaseCommand
                 ], $this->actor);
             }
 
+            // Address the JSON entry by the PHYSICAL unit, not the model: the row
+            // being tombstoned already names it, and without it
+            // removeOneComponentEntry() matches on the model UUID alone (the same gap
+            // the add side had). Entries written before the add-side fix carry no
+            // inventory_id, and componentEntryMatches() only compares it when BOTH
+            // sides have one -- so those still fall back to serial/model and stay
+            // removable.
             $sb->updateServerConfigurationTable(
-                $this->configUuid, $row['component_type'], $row['spec_uuid'], 1, 'remove', $row['serial_number']
+                $this->configUuid, $row['component_type'], $row['spec_uuid'], 1, 'remove', $row['serial_number'],
+                ['inventory_id' => isset($row['inventory_id']) && $row['inventory_id'] !== null
+                    ? (int)$row['inventory_id']
+                    : null]
             );
 
             if ($row['inventory_table'] !== null) {

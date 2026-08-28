@@ -190,6 +190,10 @@ file_put_contents("$tmpImsData/nic/nic-level-3.json", json_encode([
 file_put_contents("$tmpImsData/hbacard/hbacard-level-3.json", json_encode([
     ['brand' => 'Broadcom', 'models' => [['UUID' => $hbaUuid, 'interface' => 'PCIe 4.0 x8']]],
 ]));
+// Kept so the fleet-wide section at the bottom can put it back. That section
+// resolves REAL specs in-process, and $tmpImsData is rrmdir()'d before it runs --
+// leaving the override in place points every spec lookup at a deleted directory.
+$realImsDataPath = getenv('IMS_DATA_PATH');
 putenv("IMS_DATA_PATH=$tmpImsData");
 
 // -----------------------------------------------------------------------
@@ -432,6 +436,39 @@ $knownFleetFindings = [
     'slot_report' => [
         ['type' => 'slotless_card', 'config_uuid' => '4dee234b-d4ab-447a-95cd-e321313b1af8',
          'component_id' => 10291, 'component_type' => 'nic'],
+
+        // Added 2026-08-29. Six expansion cards added 2026-08-27 carry no
+        // slot_ref. Listed here only because the CODE was checked first and is
+        // NOT producing them -- an allowlist entry written without that check is
+        // the "widen it until it goes green" move this repo has already logged
+        // four times (F-11, F-18, F-21, F-24).
+        //
+        // The evidence, taken against this same replica: AddComponentCommand::
+        // buildTarget() plans the slot and apply() writes it, and a live
+        // AddComponentCommand->execute() of pciecard 07dc91dd into three separate
+        // real configs produced slot_ref='pcie_1_x16' every time. SlotPlanner::
+        // plan() also resolves cleanly for BOTH of these specs against the very
+        // config the rows sit in (pciecard x16 -> pcie_1_x16, hbacard x8 ->
+        // pcie_3_x8), so the planner is not failing on them either. These are
+        // historical rows that predate the planned-slot write path, the same
+        // class and the same remedy as the nic above -- a data repair someone
+        // owns, not a live defect.
+        //
+        // The 'the current add path plans a slot' assertion further down turns
+        // that evidence into a standing check, so this list cannot quietly
+        // absorb a real regression later.
+        ['type' => 'slotless_card', 'config_uuid' => '0b434826-4aad-4842-a150-cc4d2084e469',
+         'component_id' => 10421, 'component_type' => 'pciecard'],
+        ['type' => 'slotless_card', 'config_uuid' => '0b434826-4aad-4842-a150-cc4d2084e469',
+         'component_id' => 10422, 'component_type' => 'hbacard'],
+        ['type' => 'slotless_card', 'config_uuid' => '17f7274a-5adf-40e9-9cf8-840a4f3058fa',
+         'component_id' => 10432, 'component_type' => 'pciecard'],
+        ['type' => 'slotless_card', 'config_uuid' => '78fd8e38-43d2-4cb8-99ac-e787edfa2467',
+         'component_id' => 10404, 'component_type' => 'hbacard'],
+        ['type' => 'slotless_card', 'config_uuid' => 'cf399cdf-5f7a-422e-9db3-872ac41fd845',
+         'component_id' => 10412, 'component_type' => 'pciecard'],
+        ['type' => 'slotless_card', 'config_uuid' => 'cf399cdf-5f7a-422e-9db3-872ac41fd845',
+         'component_id' => 10413, 'component_type' => 'hbacard'],
     ],
 ];
 
@@ -473,6 +510,77 @@ foreach (['ledger_report' => '/scripts/verify/ledger_report.php',
 
     foreach (array_diff($known, $seen) as $goneFp) {
         echo "  NOTE  a known $reportName finding is gone -- tighten the list: $goneFp" . PHP_EOL;
+    }
+}
+
+// -----------------------------------------------------------------------
+// The standing counterpart to the slotless_card allowlist above.
+//
+// That list says "these rows are historical, the code does not make new ones".
+// Only the first half is enforced by the list itself. This is the second half:
+// a live AddComponentCommand->execute() of a slotted card must come out of
+// apply() with a slot_ref. Without it, the day the planner breaks, every new
+// slotless row lands in the report, someone appends it to the allowlist for
+// the same stated reason, and the suite stays green through a real regression.
+//
+// Rolled back, like every other DB write in this file.
+// -----------------------------------------------------------------------
+if ($pdo !== null) {
+    // Back to the real catalog: every fixture above ran against $tmpImsData, which
+    // no longer exists. Without this the adds below fail on spec_not_found and the
+    // check self-skips for a reason that has nothing to do with slot planning.
+    if ($realImsDataPath === false || $realImsDataPath === '') {
+        putenv('IMS_DATA_PATH');
+    } else {
+        putenv("IMS_DATA_PATH=$realImsDataPath");
+    }
+    require_once $ROOT . '/core/models/commands/AddComponentCommand.php';
+    // Every distinct spare card spec, not just the first: one spec's width may
+    // fit no free slot anywhere in the replica, and "the first spare card did
+    // not fit" is not evidence about the planner.
+    $cardSpecs = $pdo->query("
+        SELECT DISTINCT i.UUID FROM pciecardinventory i
+         WHERE i.Status = 1
+           AND NOT EXISTS (SELECT 1 FROM config_components cc
+                            WHERE cc.inventory_table = 'pciecardinventory' AND cc.inventory_id = i.id)
+    ")->fetchAll(PDO::FETCH_COLUMN);
+    // Any config the card actually fits -- the point is the slot_ref on a
+    // SUCCESSFUL add, so a config that legitimately blocks (no lanes, no free
+    // x16) is simply not this check's subject and we move to the next one.
+    $candidates = $pdo->query("
+        SELECT config_uuid FROM config_components WHERE removed_at IS NULL
+         GROUP BY config_uuid
+        HAVING SUM(component_type = 'motherboard') > 0 AND SUM(component_type = 'cpu') > 0
+    ")->fetchAll(PDO::FETCH_COLUMN);
+
+    $planned = null;
+    foreach ($cardSpecs as $cardSpec) {
+        foreach ($candidates as $candidate) {
+            $pdo->beginTransaction();
+            try {
+                (new AddComponentCommand($pdo, $candidate, 'pciecard', $cardSpec, [], 0))->execute();
+                $planned = $pdo->query("
+                    SELECT slot_ref FROM config_components
+                     WHERE config_uuid = " . $pdo->quote($candidate) . "
+                       AND component_type = 'pciecard' AND removed_at IS NULL
+                     ORDER BY id DESC LIMIT 1
+                ")->fetchColumn();
+            } catch (Throwable $e) {
+                // blocked by a rule on this config -- try the next one
+            } finally {
+                if ($pdo->inTransaction()) { $pdo->rollBack(); }
+            }
+            if ($planned !== null) { break 2; }
+        }
+    }
+
+    if ($planned === null) {
+        // Honest skip: no config in this replica accepted the card, so the
+        // check did not run. It must not read as a pass.
+        echo "  SKIPPED  the current add path plans a slot (no config in this replica accepts a spare pciecard)\n";
+    } else {
+        check('the current add path plans a slot: a live pciecard add writes a non-null slot_ref (guards the slotless_card allowlist above)',
+            is_string($planned) && $planned !== '');
     }
 }
 

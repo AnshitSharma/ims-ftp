@@ -257,10 +257,25 @@ if ($pdo === null) {
         } else {
             $noidaLoc = 'aaaaaaaa-0000-4000-8000-000000000001';
             $jaipurLoc = 'aaaaaaaa-0000-4000-8000-000000000002';
-            foreach ([$noidaLoc => 'Noida Yotta', $jaipurLoc => 'Jaipur Office'] as $uuid => $name) {
+            // 2026-08-29: the names carry a test marker, and the insert is asserted.
+            //
+            // These used to be the bare strings 'Noida Yotta' and 'Jaipur Office',
+            // which are REAL site names in the fleet -- locations.uq_locations_name
+            // is UNIQUE on name, so `ON DUPLICATE KEY UPDATE name = VALUES(name)`
+            // collided with the real rows, updated their name to itself, and created
+            // NO row for either synthetic uuid. ComponentRelocation::move() then
+            // correctly refused a destination that does not exist (404), and the
+            // checks above it were passing vacuously against locations the fixture
+            // had never actually made. The marker removes the collision; the check
+            // below removes the possibility of not noticing next time.
+            foreach ([$noidaLoc => 'LOC-TEST Noida Yotta', $jaipurLoc => 'LOC-TEST Jaipur Office'] as $uuid => $name) {
                 $pdo->prepare("INSERT INTO locations (location_uuid, name, is_active) VALUES (?, ?, 1)
-                               ON DUPLICATE KEY UPDATE name = VALUES(name)")->execute([$uuid, $name]);
+                               ON DUPLICATE KEY UPDATE name = VALUES(name), is_active = 1")->execute([$uuid, $name]);
             }
+            $locStmt = $pdo->prepare("SELECT COUNT(*) FROM locations WHERE location_uuid IN (?, ?) AND is_active = 1");
+            $locStmt->execute([$noidaLoc, $jaipurLoc]);
+            check('fixture precondition: both synthetic locations exist and are active (a name collision here silently voids every check below)',
+                (int)$locStmt->fetchColumn() === 2);
 
             $insNoida = $pdo->prepare("INSERT INTO raminventory (UUID, Status, SerialNumber, location_uuid) VALUES (?, 1, ?, ?)");
             $insNoida->execute([$ramSpecUuid, 'LOC-TEST-NOIDA-' . mt_rand(1000, 9999), $noidaLoc]);
@@ -316,9 +331,27 @@ if ($pdo === null) {
                         }
                     }
 
-                    // A no-op move (already there) must be refused.
+                    // A no-op move (already there) is IDEMPOTENT SUCCESS, not a
+                    // refusal: move() returns 200 with moved=false and writes no
+                    // movement row ("A no-op move must not write a movement row
+                    // that records no movement", ComponentRelocation::move()).
+                    //
+                    // 2026-08-29: this used to assert success === false, which the
+                    // implementation has never done. It passed only because the
+                    // fixture's locations did not exist, so every call 404'd -- the
+                    // wrong answer for the wrong reason. Asserted on the real
+                    // contract now, and on the row count as well as the return
+                    // shape, since "no row was written" is the half that actually
+                    // matters and the boolean alone never checked it.
+                    $movesBeforeNoop = (int)$pdo->query("SELECT COUNT(*) FROM component_movements WHERE inventory_id = $noidaId")->fetchColumn();
                     $noopResult = ComponentRelocation::move($pdo, 'ram', $noidaId, ['location_uuid' => $jaipurLoc], []);
-                    check('ComponentRelocation::move() refuses a no-op move (already at that location)', $noopResult['success'] === false);
+                    check('ComponentRelocation::move() treats a no-op move as idempotent success, not an error',
+                        $noopResult['success'] === true && (int)$noopResult['code'] === 200);
+                    check('the no-op reports moved=false rather than claiming a move',
+                        ($noopResult['data']['moved'] ?? null) === false);
+                    $movesAfterNoop = (int)$pdo->query("SELECT COUNT(*) FROM component_movements WHERE inventory_id = $noidaId")->fetchColumn();
+                    check('the no-op writes NO component_movements row (a movement row that records no movement)',
+                        $movesAfterNoop === $movesBeforeNoop);
                 }
             }
         }

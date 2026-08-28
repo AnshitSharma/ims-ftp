@@ -209,9 +209,13 @@ check('its button reuses the same prefill route',
     $js !== null && preg_match("/plRaiseStockRecord[\s\S]{0,900}this\.showCreate\(p\)/", $js) === 1);
 check('the notice names the model from the ims-data catalogue',
     $js !== null && strpos($js, 'modelLabel(type, uuid)') !== false);
+// Widened 2026-08-29: the detail now names models for a SECOND gap as well
+// (location_gap), and both blocks need the catalogue. The point of the check is
+// unchanged — eleven static fetches must not be paid for by someone merely
+// reading a request that has no gap at all.
 check('the catalogue is loaded only when there is a gap to name',
     $js !== null
-    && preg_match("/stock_missing\) && this\.currentDetail\.stock_missing\.length\) \{\s*await this\.loadComponentData\(\);/", $js) === 1);
+    && preg_match("/stock_missing\.length\)\s*\|\|\s*\(Array\.isArray\(this\.currentDetail\.location_gap\) && this\.currentDetail\.location_gap\.length\)\) \{\s*await this\.loadComponentData\(\);/", $js) === 1);
 
 // The compiled Tailwind is hand-built, so a class absent from it renders as
 // nothing — mt-2.5 in particular is NOT emitted.

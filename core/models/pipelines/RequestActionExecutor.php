@@ -323,17 +323,27 @@ class RequestActionExecutor
      * requester is still looking at it, rather than after it has cost an admin
      * an approval. dryRun() locks and rolls back, so it is a pure read.
      *
-     * ONE FAILURE IS NOT A REFUSAL: 'inventory_component_not_found' means the
-     * model exists in the hardware catalogue but no unit of it is in stock. That
-     * is a "not yet", and the fix is a prerequisite request that adds the unit --
-     * so this returns VALID and reports the gap as `deferred` for the caller to
-     * offer. Refusing it outright left the requester at a dead end: the dropdown
-     * offers every catalogued model, so they could not have known.
+     * TWO FAILURES ARE NOT A REFUSAL, and they are the same failure wearing
+     * different clothes:
+     *   - 'inventory_component_not_found' -- the model is catalogued but no unit
+     *     of it has ever been recorded;
+     *   - 'component_unavailable' -- units exist, but every one of them is in
+     *     another server or marked failed.
+     * From the requester's chair those are one situation: nothing they can fit.
+     * The fix for both is the same prerequisite request adding a unit, so both
+     * return VALID and report the gap as `deferred` for the caller to offer.
+     * Refusing either left the requester at a dead end -- the dropdown offers
+     * every catalogued model, so they could not have known.
      *
-     * Everything else stays a refusal, 'component_unavailable' (the unit exists
-     * but is failed or already in use) very much included -- more stock does not
-     * make that request possible, and softening it would let an approval be
-     * spent on a part somebody else is holding.
+     * The 2026-08-23 rule that 'component_unavailable' is ALWAYS a refusal is
+     * deliberately narrowed rather than dropped, because its reasoning still
+     * holds wherever more stock would not help. isPureStockShortage() is that
+     * line: a requester who named a SERIAL named one physical unit, and adding a
+     * different record does not give them that one, so a named serial stays a
+     * refusal. So does any model that still has a free unit -- if one is free
+     * and the add failed anyway, the answer is not "buy another".
+     *
+     * Everything else stays a refusal.
      *
      * @return array ['valid' => bool, 'errors' => string[], 'deferred' => array|null]
      */
@@ -369,7 +379,11 @@ class RequestActionExecutor
                 }
             }
         } catch (CommandFailed $e) {
-            if ($e->errorType === 'inventory_component_not_found') {
+            $deferrable = $e->errorType === 'inventory_component_not_found'
+                || ($e->errorType === 'component_unavailable'
+                    && $this->isPureStockShortage($actionType, $payload));
+
+            if ($deferrable) {
                 $gap = self::stockGap($actionType, $payload);
 
                 // "No unit of a REAL model" is a not-yet. A uuid the hardware
@@ -381,6 +395,12 @@ class RequestActionExecutor
                 if (!$this->isCataloguedModel($gap['component_type'], $gap['component_uuid'])) {
                     return ['valid' => false, 'errors' => [$e->getMessage()]];
                 }
+
+                // How many we hold but cannot fit, so the offer can say "we hold
+                // 2, both in use" rather than the flatly wrong "not in inventory".
+                $counts = self::stockCounts($this->pdo, $gap['component_type'], $gap['component_uuid']);
+                $gap['held'] = $counts === null ? 0 : $counts['held'];
+
                 return ['valid' => true, 'errors' => [], 'deferred' => $gap];
             }
             return ['valid' => false, 'errors' => [$e->getMessage()]];
@@ -413,6 +433,82 @@ class RequestActionExecutor
         } catch (Exception $e) {
             error_log('RequestActionExecutor::isCataloguedModel error: ' . $e->getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Is this 'component_unavailable' really just "we have none free"?
+     *
+     * The narrowing that keeps the old rule where it was right. Two cases are
+     * still refusals and must stay so:
+     *   - a NAMED SERIAL. They asked for one physical unit; recording a
+     *     different one does not hand it to them, so a prerequisite request
+     *     would satisfy nothing.
+     *   - a model that still has a FREE unit. Something else refused that add,
+     *     and adding more stock is not the answer to it.
+     *
+     * FAILS CLOSED: an unreadable count is not a shortage, so the refusal
+     * stands. Better a refusal the requester can question than a prerequisite
+     * they cannot fulfil.
+     */
+    private function isPureStockShortage($actionType, array $payload)
+    {
+        $gap = self::stockGap($actionType, $payload);
+        if ($gap['serial_number'] !== null) {
+            return false;
+        }
+
+        $counts = self::stockCounts($this->pdo, $gap['component_type'], $gap['component_uuid']);
+        return $counts !== null && $counts['free'] === 0;
+    }
+
+    /**
+     * How many units of one model inventory holds, and how many can be fitted.
+     *
+     * FREE is what every add path means by it: Status = 1 and not already bound
+     * to a configuration. HELD is everything else — in use, failed, or an
+     * unknown status — carried so a notice can distinguish "we have never had
+     * one of these" from "we have two and both are busy". Those read the same to
+     * the code and completely differently to a person.
+     *
+     * Static, and taking its PDO, because two callers need one definition of the
+     * word from different objects: preflight() here, and
+     * PipelineManager::stockMissingActions() re-deriving the same gap on every
+     * read.
+     *
+     * FAILS OPEN with null; each caller decides what an unanswerable count means
+     * for it.
+     *
+     * @return array{free:int,held:int}|null
+     */
+    public static function stockCounts($pdo, $componentType, $componentUuid)
+    {
+        // The table name is interpolated, so the type may only ever come from
+        // the whitelist — the same one validateShape() checks payloads against.
+        if (!in_array($componentType, WorkflowConfig::getValidComponentTypes(), true)
+            || (string)$componentUuid === '') {
+            return null;
+        }
+
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT COUNT(*) AS total,
+                        SUM(CASE WHEN Status = 1 AND (ServerUUID IS NULL OR ServerUUID = '')
+                                 THEN 1 ELSE 0 END) AS free
+                   FROM `" . $componentType . "inventory`
+                  WHERE UUID = ?");
+            $stmt->execute([(string)$componentUuid]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row === false) {
+                return null;
+            }
+
+            $total = (int)$row['total'];
+            $free  = (int)$row['free'];
+            return ['free' => $free, 'held' => max(0, $total - $free)];
+        } catch (Exception $e) {
+            error_log('RequestActionExecutor::stockCounts error: ' . $e->getMessage());
+            return null;
         }
     }
 

@@ -138,6 +138,14 @@ final class AddComponentCommand extends BaseCommand
         if ($this->plannedSlotRef !== null) {
             $legacyOptions['slot_position'] = $this->plannedSlotRef;
         }
+        // The legacy add path this command replaced stamped the PHYSICAL unit's row id
+        // into the JSON entry (ServerBuilder::addComponent, A-L5). Without it
+        // componentEntryMatches() falls back to the model UUID, so a second unit of one
+        // model merges into the first entry as quantity:2 and removing either then takes
+        // BOTH -- which is how config 1f61541b lost its cpu_configuration. Invisible at
+        // READ_FROM_ROWS=on; it bites a rollback to =off, the sole remaining purpose of
+        // these columns until U-D.3 drops them.
+        $legacyOptions['inventory_id'] = (int)$inventoryData['ID'];
         $sb->updateServerConfigurationTable(
             $this->configUuid, $this->componentType, $this->componentUuid, 1, 'add', $serialNumber, $legacyOptions
         );

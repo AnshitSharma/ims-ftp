@@ -167,8 +167,24 @@ check("the read report is registered and wired into P8's gate",
     && preg_match("/'P8'\s*=>\s*\[[^\]]*'read'/", $runAllSrc) === 1);
 
 // U-X.1 checklist item 3: the cache sits ABOVE the router.
-$cachePos  = strpos($sbSrc, '$this->configCache->getConfiguration($configUuid)');
-$routerPos = strpos($sbSrc, 'ConfigReadRouter::components(');
+//
+// 2026-08-29: scoped to getConfigurationDetails()'s own body. Both positions were
+// strpos over the WHOLE file, so they pinned "the first router call anywhere is
+// after the cache" -- not the ordering inside the routed entrypoint. Commit
+// 3c87a20 routed a SECOND, legitimate reader (getCompatibleComponents(), which was
+// the last caller still reading identity straight out of the JSON columns at
+// READ_FROM_ROWS=on) and it sits EARLIER in the file, so the file-wide $routerPos
+// moved to it and the check went red while the invariant it names still held.
+// Scoping is also strictly stronger than the positions it replaces: the cache read
+// and the router call must both be inside getConfigurationDetails, in that order --
+// where before, a cache read in any other method would have satisfied it.
+$gcdStart = strpos($sbSrc, 'function getConfigurationDetails(');
+$gcdNext  = $gcdStart !== false ? strpos($sbSrc, "\n    public function ", $gcdStart + 1) : false;
+$gcdBody  = $gcdStart === false
+    ? ''
+    : ($gcdNext === false ? substr($sbSrc, $gcdStart) : substr($sbSrc, $gcdStart, $gcdNext - $gcdStart));
+$cachePos  = $gcdBody !== '' ? strpos($gcdBody, '$this->configCache->getConfiguration($configUuid)') : false;
+$routerPos = $gcdBody !== '' ? strpos($gcdBody, 'ConfigReadRouter::components(') : false;
 check('ServerBuilder routes getConfigurationDetails through ConfigReadRouter', $routerPos !== false);
 check('the configuration cache is checked BEFORE the router is reached (cache cannot be poisoned by a mode)',
     $cachePos !== false && $routerPos !== false && $cachePos < $routerPos);
@@ -186,9 +202,26 @@ check('the configuration cache is checked BEFORE the router is reached (cache ca
 // not violated, and had been failing the gate on a count rather than on drift.
 // Raised deliberately and recorded here; routing it belongs to U-D.3 with the
 // other thirteen.
+//
+// 2026-08-29: lowered 14 -> 13. Commit 3c87a20 routed getCompatibleComponents()'s
+// direct extraction through ConfigReadRouter -- a READ caller, and the last one
+// still going straight to the JSON columns at READ_FROM_ROWS=on. That is the pin
+// moving in the intended direction (one fewer direct reader), not the carve-out
+// leaking. Lowering a pin can hide a deletion the way raising one hides a drift,
+// so the routing is asserted POSITIVELY below rather than merely subtracted here:
+// the count may only fall when the caller that left shows up on the router.
 $directCalls = substr_count($sbSrc, '$this->extractComponentsFromJson(');
-check("exactly 14 mutation/validation-path callers still extract directly (found $directCalls) and the carve-out is documented",
-    $directCalls === 14 && strpos($sbSrc, 'MUTATION-PATH CALLERS THAT STAY DIRECT') !== false);
+check("exactly 13 mutation/validation-path callers still extract directly (found $directCalls) and the carve-out is documented",
+    $directCalls === 13 && strpos($sbSrc, 'MUTATION-PATH CALLERS THAT STAY DIRECT') !== false);
+$gccStart = strpos($sbSrc, 'function getCompatibleComponents(');
+$gccNext  = $gccStart !== false ? strpos($sbSrc, "\n    public function ", $gccStart + 1) : false;
+$gccBody  = $gccStart === false
+    ? ''
+    : ($gccNext === false ? substr($sbSrc, $gccStart) : substr($sbSrc, $gccStart, $gccNext - $gccStart));
+check('getCompatibleComponents reads through ConfigReadRouter, not extractComponentsFromJson (the caller the pin above lost)',
+    $gccBody !== ''
+    && strpos($gccBody, 'ConfigReadRouter::components(') !== false
+    && strpos($gccBody, '$this->extractComponentsFromJson(') === false);
 
 // portIndexFromSlotRef is the inverse of the writer's slot_ref format.
 foreach ([['port_0', 0], ['port_3', 3], ['port_12', 12], [null, null], ['', null],

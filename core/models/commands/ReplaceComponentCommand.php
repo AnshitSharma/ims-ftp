@@ -233,19 +233,22 @@ final class ReplaceComponentCommand extends BaseCommand
             $stmt->execute([$newRowId, $this->oldRow['id']]);
         }
 
+        // Both sides are identified by inventory row ID -- the outgoing unit from its
+        // config_components row, the incoming one from the row this command locked.
+        // Serial alone cannot address serial-less stock (SerialNumber NULL). The JSON
+        // writes below need the same identity for the same reason: without it they
+        // match on the model UUID and can hit the wrong unit's entry.
+        $oldUnitId = isset($this->oldRow['inventory_id']) && $this->oldRow['inventory_id'] !== null
+            ? (int)$this->oldRow['inventory_id']
+            : null;
+
         $legacyOptions = $this->options;
         if ($this->newSlotRef !== null) {
             $legacyOptions['slot_position'] = $this->newSlotRef;
         }
-        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->oldComponentUuid, 1, 'remove', $oldSerial);
+        $legacyOptions['inventory_id'] = (int)$newInventoryData['ID'];
+        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->oldComponentUuid, 1, 'remove', $oldSerial, ['inventory_id' => $oldUnitId]);
         $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->newComponentUuid, 1, 'add', $newSerial, $legacyOptions);
-
-        // Both sides are identified by inventory row ID -- the outgoing unit from its
-        // config_components row, the incoming one from the row this command locked.
-        // Serial alone cannot address serial-less stock (SerialNumber NULL).
-        $oldUnitId = isset($this->oldRow['inventory_id']) && $this->oldRow['inventory_id'] !== null
-            ? (int)$this->oldRow['inventory_id']
-            : null;
         $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
         $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, (int)$newInventoryData['ID']);
 

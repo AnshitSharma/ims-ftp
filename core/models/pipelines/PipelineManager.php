@@ -31,6 +31,8 @@ require_once(__DIR__ . '/RequestActionExecutor.php');
 require_once(__DIR__ . '/../server/ServerBuilder.php');
 require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
 require_once(__DIR__ . '/../state/StatusMap.php');
+// locationGapActions() asks it whether the stock is at the server's own site.
+require_once(__DIR__ . '/../location/LocationResolver.php');
 
 class PipelineManager
 {
@@ -1055,6 +1057,14 @@ class PipelineManager
             // flag would be a lie within the hour.
             $pipeline['stock_missing'] = $this->stockMissingActions($pipeline['actions']);
 
+            // Parts this request needs that exist, but in the wrong city.
+            // Derived for the same reason and re-read for a second one: the
+            // stock a request is waiting on is often created by its OWN
+            // prerequisite, so this field is empty when the request is raised
+            // and appears the moment that child is approved. That transition is
+            // what puts the handover prompt in front of the requester.
+            $pipeline['location_gap'] = $this->locationGapActions($pipeline['actions']);
+
             // Prerequisites, in both directions. `blocked` is DERIVED from the
             // children on every read and never stored, so it cannot drift from
             // the rows it summarises — see PipelineConfig::getParentBlockingStatuses().
@@ -1394,7 +1404,14 @@ class PipelineManager
     }
 
     /**
-     * Which of a request's PENDING actions name a model with no unit in stock.
+     * Which of a request's PENDING actions name a model with nothing fittable.
+     *
+     * "NOTHING FITTABLE", not "no row at all" — widened 2026-08-29 to match what
+     * a requester means. A model whose only two units are already inside other
+     * servers is, to the person waiting for one, exactly as absent as a model
+     * nobody has ever bought, and the fix is the same prerequisite request. The
+     * gap therefore carries `held`: the count that lets the notice say "we hold
+     * 2, both in use" instead of the flatly wrong "not in inventory yet".
      *
      * The same gap RequestActionExecutor::preflight() reports at create time,
      * re-derived on every read so the notice disappears by itself the moment the
@@ -1409,7 +1426,7 @@ class PipelineManager
      * boundary that actually refuses the work.
      *
      * @param array $actions rows from getRequestActions()
-     * @return array list of ['position','action_type','component_type','component_uuid','serial_number']
+     * @return array list of ['position','action_type','component_type','component_uuid','serial_number','held']
      */
     private function stockMissingActions(array $actions)
     {
@@ -1440,27 +1457,115 @@ class PipelineManager
                     continue;
                 }
 
-                // Probed the same way lockAndCheckComponent() looks it up: a
-                // requester who named a serial named one physical unit, and
-                // another unit of the same model is not the one they asked for.
+                // A requester who named a SERIAL named one physical unit, and
+                // another unit of the same model is not the one they asked for —
+                // so that case keeps its exact probe, unwidened. Existence is
+                // the only question there: whether the named unit is free is
+                // preflight()'s to answer, and it refuses rather than defers.
                 $table = $sb->getComponentInventoryTable($type);
                 if ($gap['serial_number'] !== null) {
                     $stmt = $this->pdo->prepare("SELECT 1 FROM `$table` WHERE UUID = ? AND SerialNumber = ? LIMIT 1");
                     $stmt->execute([$gap['component_uuid'], $gap['serial_number']]);
-                } else {
-                    $stmt = $this->pdo->prepare("SELECT 1 FROM `$table` WHERE UUID = ? LIMIT 1");
-                    $stmt->execute([$gap['component_uuid']]);
+                    if ($stmt->fetchColumn() === false) {
+                        $gaps[] = [
+                            'position'    => (int)$action['position'],
+                            'action_type' => $action['action_type'],
+                            'held'        => 0,
+                        ] + $gap;
+                    }
+                    continue;
                 }
 
-                if ($stmt->fetchColumn() === false) {
+                // No serial: the question is stock, and the definition of a free
+                // unit lives in one place for both this read and preflight().
+                $counts = RequestActionExecutor::stockCounts($this->pdo, $type, $gap['component_uuid']);
+                if ($counts !== null && $counts['free'] === 0) {
                     $gaps[] = [
                         'position'    => (int)$action['position'],
                         'action_type' => $action['action_type'],
+                        'held'        => $counts['held'],
                     ] + $gap;
                 }
             }
         } catch (Exception $e) {
             error_log('PipelineManager::stockMissingActions error: ' . $e->getMessage());
+            return [];
+        }
+
+        return $gaps;
+    }
+
+    /**
+     * Which of a request's PENDING actions want a part that is at another site.
+     *
+     * The second of the two questions a fit has to answer — asked only after the
+     * first, because a model with no free unit anywhere cannot be at the wrong
+     * site, it is simply not there. Callers render at most one of the two.
+     *
+     * ONLY match === false counts. checkComponentForConfig() answers three ways
+     * on purpose: true (fine), false (elsewhere) and null (it cannot tell —
+     * the location seeders have not run, the server has no site, the unit has
+     * none). Null never becomes a gap, which is what keeps this feature inert
+     * rather than obstructive on a database that has not been migrated yet.
+     *
+     * FAILS OPEN, like its sibling: this is a courtesy prompt, and locationGate()
+     * at approval time is the boundary that actually refuses the work.
+     *
+     * @param array $actions rows from getRequestActions()
+     * @return array list of gaps carrying the server and the units elsewhere
+     */
+    private function locationGapActions(array $actions)
+    {
+        $wanted = ['server.component.add', 'server.component.replace'];
+        $gaps = [];
+
+        try {
+            foreach ($actions as $action) {
+                if (($action['status'] ?? '') !== 'pending') {
+                    continue;
+                }
+                if (!in_array($action['action_type'], $wanted, true)) {
+                    continue;
+                }
+
+                $payload    = is_array($action['payload'] ?? null) ? $action['payload'] : [];
+                $configUuid = isset($payload['config_uuid']) ? (string)$payload['config_uuid'] : '';
+                $gap        = RequestActionExecutor::stockGap($action['action_type'], $payload);
+
+                if ($configUuid === '' || $gap['component_type'] === '' || $gap['component_uuid'] === '') {
+                    continue;
+                }
+                // Onboard pseudo-components have no inventory row and so no
+                // location — the same exemption stockMissingActions() makes.
+                if (strpos($gap['component_uuid'], 'onboard-') === 0) {
+                    continue;
+                }
+
+                $check = LocationResolver::checkComponentForConfig(
+                    $this->pdo,
+                    $configUuid,
+                    $gap['component_type'],
+                    $gap['component_uuid'],
+                    $gap['serial_number']
+                );
+
+                if (empty($check['supported']) || ($check['match'] ?? null) !== false) {
+                    continue;
+                }
+
+                $gaps[] = [
+                    'position'        => (int)$action['position'],
+                    'action_type'     => $action['action_type'],
+                    'component_type'  => $gap['component_type'],
+                    'component_uuid'  => $gap['component_uuid'],
+                    'serial_number'   => $gap['serial_number'],
+                    'config_uuid'     => $configUuid,
+                    'server'          => $check['server'] ?? null,
+                    'units_elsewhere' => $check['units_elsewhere'] ?? [],
+                ];
+            }
+        } catch (Exception $e) {
+            error_log('PipelineManager::locationGapActions error: ' . $e->getMessage());
             return [];
         }
 
