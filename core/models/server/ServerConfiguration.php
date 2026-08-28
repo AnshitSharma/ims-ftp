@@ -142,6 +142,12 @@ class ServerConfiguration {
         try {
             $this->pdo->beginTransaction();
 
+            // The rack placement has no real FK, so it does not cascade -- drop it
+            // with the config or Rack View keeps the U occupied by a server that
+            // no longer exists. Same reason as ServerBuilder::deleteConfiguration().
+            $stmt = $this->pdo->prepare("DELETE FROM rack_servers WHERE config_uuid = ?");
+            $stmt->execute([$this->data['config_uuid']]);
+
             // Delete the configuration (components are stored in JSON columns, no separate delete needed)
             $stmt = $this->pdo->prepare("DELETE FROM server_configurations WHERE config_uuid = ?");
             $result = $stmt->execute([$this->data['config_uuid']]);

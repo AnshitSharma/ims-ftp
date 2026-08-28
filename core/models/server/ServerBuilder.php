@@ -4983,6 +4983,15 @@ class ServerBuilder {
                 error_log("Could not delete history (table might not exist): " . $historyError->getMessage());
             }
 
+            // The rack placement is a logical FK only (rack_servers has no real
+            // constraint against server_configurations), so nothing cascades and
+            // deleting the config used to leave the placement behind. Rack View
+            // then rendered that orphan as "(deleted server)" and, worse, kept
+            // counting its U as occupied -- a slot no one could free from the UI.
+            // Same transaction as the config delete: the two are one fact.
+            $stmt = $this->pdo->prepare("DELETE FROM rack_servers WHERE config_uuid = ?");
+            $stmt->execute([$configUuid]);
+
             // Delete configuration
             $stmt = $this->pdo->prepare("DELETE FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
