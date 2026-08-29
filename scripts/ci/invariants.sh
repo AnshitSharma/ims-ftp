@@ -20,11 +20,13 @@
 #   3. Every suite in tests/regression/ and tests/unit/rules/.
 #
 # EXIT
-#   0  GREEN — every gating check passed.
+#   0  GREEN — every gating check passed AND every check ran.
 #   1  RED   — at least one gating check failed.
-#   2  Could not run (bad environment, unparseable invariants document). Never
-#      confused with 0: "we did not check" is not "it passed". That distinction
-#      is this repo's most expensive recurring bug (F-10, F-18, F-21, F-23).
+#   2  Could not run, or INCOMPLETE: nothing failed but at least one check was
+#      skipped (bad environment, unparseable invariants document, --static-only).
+#      Never confused with 0: "we did not check" is not "it passed". That
+#      distinction is this repo's most expensive recurring bug (F-10, F-18,
+#      F-21, F-23), so a skip can only ever reach 2, never 0.
 #
 # ENVIRONMENT
 #   PHP_BIN            php binary                        (default: php)
@@ -36,12 +38,16 @@
 #   GOLDEN_DB_PASS_FILE  file containing the password. Honoured here for BOTH the
 #                      mysql client and the PHP suites: this script exports
 #                      GOLDEN_DB_PASS from it when GOLDEN_DB_PASS is unset. That
-#                      is a workaround at the CI boundary, not the fix — only
-#                      tests/regression/serial_less_unit_identity_test.php reads
-#                      the file form itself, so anyone running the suites WITHOUT
-#                      this script still needs both variables. See migration/BACKLOG.md.
+#                      was a workaround at the CI boundary when exactly one suite
+#                      (tests/regression/serial_less_unit_identity_test.php) read
+#                      the file form itself. Since 2026-08-24 a shared credential
+#                      resolver honours it across the DB-backed suites, so the
+#                      export here is now belt-and-braces rather than the only
+#                      thing making it work. See ../../BACKLOG.md §B-14.
 #   IMS_DATA_PATH      absolute path to the ims-data component-spec tree
 #   IMS_CI_REBUILD_DB=1        rebuild the scratch DB before running (see below)
+#   IMS_CI_STATIC_ONLY=1       run only the grep-form invariants; skip everything
+#                      that needs the scratch DB. Never exits 0 (see --static-only)
 #   IMS_CI_ALLOW_NONSCRATCH=1  permit a DB name that does not look like a scratch DB
 #
 # THE SCRATCH DB
@@ -66,14 +72,21 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PHP="${PHP_BIN:-php}"
 MYSQL="${MYSQL_BIN:-mysql}"
 REBUILD="${IMS_CI_REBUILD_DB:-0}"
+STATIC_ONLY="${IMS_CI_STATIC_ONLY:-0}"
 
 for arg in "$@"; do
     case "$arg" in
         --rebuild-db) REBUILD=1 ;;
+        --static-only) STATIC_ONLY=1 ;;
         -h|--help) sed -n '2,70p' "$0"; exit 0 ;;
         *) echo "invariants: unknown argument '$arg'" >&2; exit 2 ;;
     esac
 done
+
+if [ "$STATIC_ONLY" = "1" ] && [ "$REBUILD" = "1" ]; then
+    echo "invariants: --static-only and --rebuild-db are contradictory" >&2
+    exit 2
+fi
 
 if ! command -v "$PHP" >/dev/null 2>&1; then
     echo "invariants: php not found (set PHP_BIN to its full path)" >&2
@@ -154,14 +167,31 @@ fi
 # The DB must be reachable BEFORE anything runs. A missing DB used to make
 # several suites print "ALL CHECKS PASS" and exit 0; the runner is not allowed
 # to inherit that.
-if command -v "$MYSQL" >/dev/null 2>&1; then
+#
+# --static-only (2026-08-29) is the ONE exception, and it does not weaken that
+# rule: it never reports a skipped check as passing and it never exits 0. It
+# exists because the grep-form invariants need no database at all, yet an
+# unreachable DB aborted the run before a single one of them executed — which
+# made INV-5's negative proof (U-P.1's last open gate) unrunnable anywhere the
+# scratch DB is not provisioned. Static-only runs those checks, marks every
+# DB-backed one SKIPPED, and exits 1 on a static violation or 2 otherwise.
+INCOMPLETE=0
+if [ "$STATIC_ONLY" = "1" ]; then
+    DB_DOWN=1
+    INCOMPLETE=1
+    echo "invariants: --static-only — the database is not consulted."
+    echo "            DB-backed checks are SKIPPED, never passed. This run cannot exit 0."
+elif command -v "$MYSQL" >/dev/null 2>&1; then
     if ! mysql_q "SELECT 1" >/dev/null 2>&1; then
         echo "invariants: cannot reach $GOLDEN_DB_NAME on $GOLDEN_DB_HOST." >&2
         echo "            The DB-backed checks cannot run and will not be reported as passing." >&2
+        echo "            (--static-only runs the grep-form invariants alone; it still cannot exit 0.)" >&2
         exit 2
     fi
+    DB_DOWN=0
 else
     echo "invariants: mysql client not found (set MYSQL_BIN) — SQL invariants cannot run." >&2
+    echo "            (--static-only runs the grep-form invariants alone; it still cannot exit 0.)" >&2
     exit 2
 fi
 
@@ -200,6 +230,17 @@ while IFS="$US" read -r INV SEQ KIND ASSERT GATING NOTE CMDFILE; do
     fi
 
     CMD=$(cat "$CMDFILE")
+
+    # Static-only: `sql` reads the DB directly and `exit0` launches a verify
+    # report that connects to it. Neither can be evaluated, so neither is
+    # evaluated — they are reported SKIPPED and counted as incomplete. Only the
+    # `sh` (grep-form) checks, which read the source tree and nothing else, run.
+    if [ "${DB_DOWN:-0}" = "1" ] && [ "$KIND" != "sh" ]; then
+        printf '  %-10s %-8s (needs the scratch DB) %s\n' "$LABEL" "SKIPPED" "$NOTE"
+        INCOMPLETE=1
+        continue
+    fi
+
     OUT=""
     RC=0
     case "$KIND" in
@@ -258,6 +299,10 @@ done < "$WORK/inv/manifest.tsv"
 # ---------------------------------------------------------------------------
 echo
 echo "--- 2/3  scripts/verify/run_all.php --quick ---"
+if [ "${DB_DOWN:-0}" = "1" ]; then
+    echo "  SKIPPED — the battery reads the scratch DB. Not run, not passed."
+    INCOMPLETE=1
+else
 QRC=0
 # Not a pipe: a pipeline would report sed's status, not run_all's, and this
 # runner must never mistake "the formatter succeeded" for "the battery passed".
@@ -269,12 +314,17 @@ if [ "$QRC" -ne 0 ]; then
 else
     echo "  run_all --quick: GREEN"
 fi
+fi
 
 # ---------------------------------------------------------------------------
 # 3. tests/regression/ and tests/unit/rules/.
 # ---------------------------------------------------------------------------
 echo
 echo "--- 3/3  tests/regression/ + tests/unit/rules/ ---"
+if [ "${DB_DOWN:-0}" = "1" ]; then
+    echo "  SKIPPED — these suites provision against the scratch DB. Not run, not passed."
+    INCOMPLETE=1
+else
 SUITES=0; PASSED=0; FAILED=0; NOTHING=0
 for f in "$ROOT"/tests/regression/*.php "$ROOT"/tests/unit/rules/*.php; do
     [ -f "$f" ] || continue
@@ -305,6 +355,7 @@ if [ "$SUITES" -eq 0 ]; then
     exit 2
 fi
 echo "  $SUITES suite(s): $PASSED passed, $FAILED failed, $NOTHING ran nothing"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary.
@@ -314,7 +365,7 @@ echo "================================================================"
 if [ -n "$MANUAL_LIST" ]; then
     echo " NOT MECHANICALLY ENFORCED — a human still has to check these:$MANUAL_LIST"
     echo " (this list comes from the document, not from a list kept here;"
-    echo "  see migration/BACKLOG.md for the amendment that would shrink it)"
+    echo "  see ../../BACKLOG.md for the amendment that would shrink it)"
     echo "----------------------------------------------------------------"
 fi
 if [ "$INFO_FAIL" -gt 0 ]; then
@@ -323,10 +374,19 @@ if [ "$INFO_FAIL" -gt 0 ]; then
     echo " gate the moment it is."
     echo "----------------------------------------------------------------"
 fi
-if [ "$RED" -eq 0 ]; then
-    echo " RESULT: GREEN"
-else
+if [ "$RED" -ne 0 ]; then
     echo " RESULT: RED"
+    echo "================================================================"
+    exit 1
 fi
+if [ "${INCOMPLETE:-0}" -ne 0 ]; then
+    # Not green. Nothing failed, but checks were skipped, and "we did not check"
+    # has never been allowed to read as "it passed" in this repo (F-10, F-18,
+    # F-21, F-23). Exit 2 is the same code an unrunnable environment returns.
+    echo " RESULT: INCOMPLETE — checks were SKIPPED. This is not a pass."
+    echo "================================================================"
+    exit 2
+fi
+echo " RESULT: GREEN"
 echo "================================================================"
-exit "$RED"
+exit 0

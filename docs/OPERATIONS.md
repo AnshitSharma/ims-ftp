@@ -89,7 +89,7 @@ and lossless for behaviour; data already written by the new path stays written. 
 - Rolling `READ_FROM_ROWS` down to `sample` is safe; `off` returns reads to the legacy JSON,
   which dual-write still maintains.
 
-Full playbook: `migration/rollback-playbook.md` (R-UNIT, R-MIXED, R-SCHEMA).
+Full playbook: `migration/rollback-playbook.md` (R-UNIT, R-MIXED, R-MIXED-2, R-SCHEMA).
 
 ---
 
@@ -547,5 +547,5 @@ it. Tracked in `../BACKLOG.md` §C.
 
 `migration/rollback-playbook.md`. Order of preference: flag down (§2, instant) → `git revert`
 (R-UNIT; note R-MIXED for commit `2c8ab2f`, which mixes migration and non-migration hunks in
-shared files) → restore from backup (R-SCHEMA, last resort). Post-U-D.3 there is no rollback,
+shared files, and R-MIXED-2 for `0fa3fcf`, mixed at file level only) → restore from backup (R-SCHEMA, last resort). Post-U-D.3 there is no rollback,
 only roll-forward.

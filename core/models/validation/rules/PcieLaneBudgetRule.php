@@ -25,9 +25,8 @@ require_once __DIR__ . '/../Trigger.php';
  * non-M.2 NVMe storage, via ResourceCatalog::consumesPcieLanes()/consumesStorage())
  * — see core/models/config/ResourceCatalog.php's class docblock (U-L.4/U-L.5).
  *
- * INV-7: no env read here (unlike PcieLaneBudgetValidator's own
- * PCIE_LANE_CHECK_ENABLED) — ENGINE_MODE alone governs whether this rule
- * runs at all.
+ * INV-7: no env read here. Since P9 there is no flag to read anyway — this rule
+ * is the only add-time lane authority.
  */
 final class PcieLaneBudgetRule implements RuleInterface
 {

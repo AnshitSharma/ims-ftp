@@ -1,22 +1,40 @@
-# FLAGS.md — the only flags this migration may create (INV-12)
+# FLAGS.md — all nine flags are GONE (U-D.4, 2026-08-30)
 
-Read pattern (copy exactly, one static method per flag, in the class that consumes it):
-see PcieLaneBudgetValidator::currentMode() core/models/compatibility/PcieLaneBudgetValidator.php:50-65
-(getenv → $_ENV fallback → default → whitelist).
+**There are no migration flags in this codebase any more.** INV-12 is satisfied by the
+strongest possible means: the things it constrained do not exist. `grep -rn "getenv(" api/ core/`
+returns only infrastructure config (DB, JWT, mail, `IMS_DATA_PATH`) — nothing behavioural.
 
-| Flag | Values | Default | Introduced | Consumed by | Deleted in |
-|---|---|---|---|---|---|
-| DUAL_WRITE_ENABLED | off, on | off | U-1.5 | ConfigComponentWriter | U-D.4 |
-| STATE_MACHINE_ENABLED | off, shadow, enforce | off | U-SM.4 | StateGuard | U-D.4 |
-| ENGINE_MODE | off, shadow, enforce | off | U-V.3 | ValidationEngine | U-D.4 |
-| COMMAND_LAYER_ENABLED | off, shadow, enforce | off | U-C.2 | server_api dispatch | U-D.4 |
-| READ_FROM_ROWS | off, sample, on | off | U-X.1 | ConfigReadRouter | U-D.4 |
+Do not reintroduce one to make a change "safe to roll back". Rollback for this codebase is a
+git revert of a single-purpose commit, not a runtime branch that doubles every path's state
+space. That was the whole cost this migration paid to get here.
 
-Semantics:
-- off: new code path not executed (legacy behavior byte-identical).
-- shadow: new path executes, result LOGGED/COMPARED, legacy result returned. Shadow must never
-  write user-visible state except its own log/report tables/files.
-- on/enforce: new path is authoritative.
-Progression per flag: off → shadow (soak ≥ the period in the phase README) → enforce. Never skip shadow.
-Legacy flags PCIE_LANE_CHECK_ENABLED, VALIDATION_PIPELINE_ENABLED, SLOT_AUTHORITY_ENABLED,
-STORAGE_CONNECTION_AUTHORITY_ENABLED remain untouched until U-D.4 deletes them.
+## What was deleted, and what its terminal value became
+
+| Flag | Terminal value | Consumed by | What replaced the branch |
+|---|---|---|---|
+| `DUAL_WRITE_ENABLED` | `on` | `ConfigComponentWriter` | Writes are unconditional. `config_components` is not a mirror any more — it is the store. |
+| `STATE_MACHINE_ENABLED` | `enforce` | `StateGuard` | `checkMutation()` is authoritative. `TEMP-GUARD(U-0.2)` deleted with the `off`/`shadow` branch it lived in. |
+| `ENGINE_MODE` | `enforce` | `ValidationEngine` | The rule registry is the sole validation authority. |
+| `COMMAND_LAYER_ENABLED` | `enforce` | `server_api` dispatch | The commands ARE the write path. The `CommandLayer` class is gone. |
+| `READ_FROM_ROWS` | `on` | `ConfigReadRouter` | Rows answer every read. Legacy JSON extraction survives only for a config row with no uuid. |
+| `PCIE_LANE_CHECK_ENABLED` | `warn` | `PcieLaneBudgetValidator` | `PcieLaneBudgetRule` owns add-time lane budgeting. |
+| `VALIDATION_PIPELINE_ENABLED` | `off` | `ValidationPipeline` | File deleted. |
+| `SLOT_AUTHORITY_ENABLED` | `off` | `SlotAuthority` | File deleted. |
+| `STORAGE_CONNECTION_AUTHORITY_ENABLED` | `off` | `StorageConnectionAuthority` | File deleted. |
+
+The three authority flags never left `off`. Their classes were built for a rollout that the
+ValidationEngine overtook, so the flags were deleted along with the code they gated rather
+than being flipped first — there was nothing to flip them *to*.
+
+## The `.env` entries
+
+The server's `.env` may still carry these keys. They are inert: nothing reads them. Removing
+them is tidy-up, not a deploy step, and can happen whenever convenient.
+
+## Historical note — the read pattern
+
+Every flag used the same reader: `getenv` → `$_ENV` fallback → default → whitelist, one static
+method on the class that consumed it. `PcieLaneBudgetValidator::currentMode()` was the
+canonical example this file used to cite. It is deleted too; the pattern is recorded here only
+so the shape is legible when reading the migration packs, which still describe it in the
+present tense.

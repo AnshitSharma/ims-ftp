@@ -11,7 +11,8 @@ unfinished, wrong, or unverified today.
 `migration/BACKLOG.md`, and U-P.2's pack names that path too. This file is `ims-ftp/BACKLOG.md`
 (root of the backend sub-project) because the register covers more than the migration. The two
 pointers in `invariants.sh` should be repointed here in whatever unit next touches that file —
-they are comments, so this is cosmetic, but it is a dangling reference.
+they are comments, so this is cosmetic, but it is a dangling reference. **Repointed 2026-08-29**
+(`invariants.sh:44`, `:366`) — both now read `../../BACKLOG.md`.
 
 Status vocabulary: **OPEN** · **BLOCKED** (on a named item) · **OWNER** (cannot be done from a
 code session) · **CLOSED** (recorded because a live document still says otherwise).
@@ -676,7 +677,7 @@ migration files).
 |---|---|---|
 | `migration/00-overview/IMS_TARGET_ARCHITECTURE.md:226` | `replaceOnboardNIC` "is reimplemented as a ReplaceComponent specialization" | Never happened; `ReplaceComponentCommand.php:105-107` excludes `onboard-` (C-5) |
 | `core/models/validation/TargetStateBuilder.php:13` | JSON fallback is "today's actual production reality, since `DUAL_WRITE_ENABLED` is off" | `DUAL_WRITE_ENABLED` has been `on` since ~2026-07-19; the rows path is the normal path |
-| `scripts/ci/invariants.sh:36-42` | only `serial_less_unit_identity_test.php` honours `GOLDEN_DB_PASS_FILE` | 20 test files now share one resolver (B-14) |
+| ~~`scripts/ci/invariants.sh:36-42`~~ | only `serial_less_unit_identity_test.php` honours `GOLDEN_DB_PASS_FILE` | 20 test files now share one resolver (B-14). **CORRECTED 2026-08-29** |
 | `migration/phase-status.json` `root_cause_NOT_fixed` | shared credential resolver "is the real fix; ~10 test files. BACKLOG" | Done 2026-08-24 (B-14) |
 | `migration/phase-status.json` `registration_PENDING` | `partial_rows` registry entry + P9 gate addition "drafted but NOT applied" | Applied: `run_all.php:91`, `:133` (B-15) |
 | `reports/regression-green-20260824.md` | the credential resolver "is NOT done here" | Done later the same day (B-14) |
@@ -691,7 +692,23 @@ The last row deserves a note: `ims-ftp/CLAUDE.md` has been directing readers to 
 non-existent documents. `docs/ARCHITECTURE.md` now exists but is not the "request-flow detail"
 document that entry describes. Either write the missing ones or correct the pointer list.
 
-### D-6 · U-P.1 is complete but reads `not_started` — OPEN
+### D-6 · CLOSED · U-P.1 is complete but reads `not_started`
+
+**Closed 2026-08-29.** The negative proof was run and archived
+(`reports/inv5-negative-proof-20260829.md`); `U-P.1` is now `implemented` in `phase-status.json`.
+Running it first required a change to `invariants.sh`: it aborted on an unreachable scratch DB
+before any grep-form invariant executed, so the proof was impossible on a host without the
+fixture. `--static-only` runs those checks alone, marks DB-backed ones SKIPPED rather than
+passed, and cannot exit 0. `U-P.2` was promoted to `implemented` in the same pass on existing
+evidence — all three deliverables exist and the origin-citation checklist item holds.
+
+Two limits carried forward, which is why neither unit is `verified`: the negative proof's exit
+code proves nothing on its own (the tree is already statically RED on INV-9, §B-2), so the
+evidence is at check granularity only and wants one rerun where INV-9 is green; and U-P.2's
+second checklist item — the ops doc followed cold by a human — cannot be discharged by a code
+session. The original entry follows.
+
+### D-6 (original) · U-P.1 is complete but reads `not_started` — was OPEN
 
 **What.** `phase-status.json` records `U-P.1: not_started`. Its two deliverables exist and run:
 `scripts/ci/invariants.sh` (332 lines) and `scripts/ci/nightly.sh` (152 lines), plus

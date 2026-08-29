@@ -213,11 +213,43 @@
     "all"
    ],
    "units": {
-    "U-P.1": "not_started",
-    "U-P.2": "not_started"
+    "U-P.1": "implemented",
+    "U-P.2": "implemented"
    }
   }
  ],
+ "thirty_first_session_2026_08_29": {
+  "date": "2026-08-29",
+  "note": "NEWEST SESSION -- supersedes thirtieth_session_2026_08_26. Scope: complete what is completable, per owner instruction. P9 remains HELD by the 2026-08-29 owner decision: hold-condition (b) still has rate_limiter_concurrency_test at 'ran nothing', it needs pcntl, and this host has neither WSL nor Docker (both probed absent this session), so the run is not possible here and was NOT waived. Work done instead: U-P.1's outstanding negative proof, which was the only open gate on that unit. Nothing under api/, core/ or database/seeders/ was modified. No flag changed. No DB written. No commit made.",
+  "files_written": [
+   "scripts/ci/invariants.sh  (added --static-only; two BACKLOG pointer fixes; EXIT header)",
+   "reports/inv5-negative-proof-20260829.md",
+   "reports/archive/inv5-negative-proof-before-20260829.log",
+   "reports/archive/inv5-negative-proof-after-20260829.log",
+   "migration/phase-status.json  (this record)",
+   "BACKLOG.md  (D-6 closed, D-5 two rows closed)",
+   "tasks/migration-completion.md  (session record; three stale open items corrected)"
+  ],
+  "U_P_1_negative_proof": {
+   "requirement": "U-P.1 pack, Tests: 'Intentionally violate INV-5 in a scratch branch: CI RED (proof)'. Never run until today; it is why BACKLOG.md D-6 held the unit at not_started.",
+   "isolation": "No scratch branch was used: ims-ftp deploys on write, so planting a fail-open string under core/ would have shipped it. A full copy of the tree in a temp directory was used instead and deleted afterwards. Nothing under core/ or api/ in the real tree was touched.",
+   "blocker_removed_first": "invariants.sh verified the scratch DB was reachable BEFORE running anything and exited 2 otherwise, so on a host without the fixture NOT ONE grep-form invariant ran. Added --static-only / IMS_CI_STATIC_ONLY=1: runs sh-kind checks, marks sql- and exit0-kind checks SKIPPED (never passed), skips sections 2 and 3, and CANNOT exit 0 -- a skip reaches exit 2 / RESULT: INCOMPLETE. The 'we did not check is not it passed' rule is preserved; only its overreach is removed.",
+   "result": "INV-5/2 (the grep) flipped PASS -> FAIL (gating), naming core/models/validation/TargetStateBuilder.php:323 as the offending line. Logs archived before/after.",
+   "HONEST_LIMIT": "Both runs exit 1 and both print RESULT: RED, so the EXIT CODE alone proves nothing here -- the tree is already statically red on INV-9 (BACKLOG B-2, 41 seeders now with no paired rollback). The proof is at check granularity only. INV-5/1 (fail_closed_test.php) is exit0-kind, needs the scratch DB, and was SKIPPED in both runs; that half of INV-5 is not claimed.",
+   "status_set": "U-P.1 implemented, NOT verified -- D-6 wants the proof independently reproduced, and the limit above wants one run where INV-9 is green."
+  },
+  "U_P_2_promotion": "U-P.2 set to implemented on evidence, not on new work: all three deliverables already exist -- docs/ARCHITECTURE.md, docs/OPERATIONS.md, and the register at ims-ftp/BACKLOG.md (the pack names migration/BACKLOG.md; BACKLOG.md:9-14 records the deliberate relocation). Its first checklist item -- every backlog item cites its origin unit or finding -- holds. NOT verified: the second item is 'Ops doc tested by a human following it cold', which no code session can discharge.",
+  "plan_items_found_already_done": {
+   "phase_status_flag_flip_record": "tasks/migration-completion.md listed 'Record the 2026-08-21 double flag flip in phase-status.json' as open. It is NOT open: twenty_seventh_session_2026_08_22.BACKFILL_flag_flip_2026_08_21 records it, including the gates-not-met and undated-promotions notes. The plan line was stale; corrected there.",
+   "U_P_1_and_U_P_2": "Both were listed open in the plan and read not_started here while their artifacts had existed since 2026-08-24. Bookkeeping drift, not missing work."
+  },
+  "still_open_and_owner_side": [
+   "Sync core/models/commands/{Add,Remove,Replace}ComponentCommand.php to production -- tool writes do not trigger uploadOnSave. Add and Remove are CRLF, Replace is LF.",
+   "Run database/seeders/2026_08_29_001_repair-cpu-configuration-divergence.sql against production.",
+   "Run tests/unit/rate_limiter_concurrency_test.php once on a Linux host with pcntl -- the entire residual on hold-condition (b), and the gate on P9.",
+   "U-C.6 stays BLOCKED per BACKLOG C-1, which also rules its scope wrong as written. U-D.1/U-D.2 blocked on C-1; U-D.3 is RECOMMENDED: DO NOT RUN per C-3; U-D.4 blocked on C-2/C-3."
+  ]
+ },
  "thirtieth_session_2026_08_26": {
   "date": "2026-08-26",
   "note": "NEWEST SESSION -- supersedes twenty_ninth_session_2026_08_24. Scope: STREAM 1 -- adjudicate the 11 implemented-but-unverified units (U-1.5, U-L.1, U-L.2, U-SM.3, U-V.2, U-V.3, U-R.5, U-C.3, U-C.5, U-A.1, U-X.1) against their packs' literal acceptance criteria. EVIDENCE WORK ONLY: nothing under api/, core/ or database/seeders/ was modified, no flag changed, no seeder written, no DB written. Files written: this file plus three execution-pack .md files (U-A.1, U-L.1, U-R.5 amendment sections). NET UNIT STATUS CHANGES: ZERO -- see promotions_applied.",

@@ -3,11 +3,11 @@
 /**
  * ConfigComponentWriter
  *
- * U-1.5 dual-write hook. When DUAL_WRITE_ENABLED=on, every legacy JSON
+ * U-1.5 dual-write hook, unconditional since U-D.4. Every legacy JSON
  * mutation in ServerBuilder also writes through ConfigComponentRepository,
- * in the SAME transaction as the legacy write. Default off => legacy
- * behavior is byte-identical (this class is not even required by
- * ServerBuilder's call sites unless the flag is on... actually it is always
+ * in the SAME transaction as the legacy write — and since ConfigReadRouter
+ * answers every read from those rows, this is the write that matters.
+ * (Historical note, kept because it explains the require pattern: this class
  * required but mode() short-circuits before touching the repository).
  *
  * Fail-closed (INV-5): neither method catches exceptions. A repository
@@ -94,23 +94,11 @@ class ConfigComponentWriter
      */
     const BOARD_HOSTED_TYPES = ['cpu', 'ram', 'pciecard', 'risercard', 'hbacard', 'nic'];
 
-    /**
-     * Current rollout mode. Reads env; falls back to "off" per FLAGS.md.
-     *
-     * @return string one of "on", "off"
+    /*
+     * U-D.4: the DUAL_WRITE_ENABLED reader lived here. config_components is now
+     * the read model (ConfigReadRouter), so these writes are not a mirror of the
+     * authoritative store -- they ARE it, and are never conditional.
      */
-    public static function mode(): string
-    {
-        $mode = getenv('DUAL_WRITE_ENABLED');
-        if (!is_string($mode) || $mode === '') {
-            $mode = $_ENV['DUAL_WRITE_ENABLED'] ?? 'off';
-        }
-        $mode = strtolower(trim((string)$mode));
-        if (!in_array($mode, ['on', 'off'], true)) {
-            return 'off';
-        }
-        return $mode;
-    }
 
     /**
      * Call after ServerBuilder's legacy add write succeeds, still inside the
@@ -133,9 +121,6 @@ class ConfigComponentWriter
         $actor,
         $parentSpecUuid = null
     ) {
-        if (self::mode() !== 'on') {
-            return;
-        }
         if ($slotRef === '') {
             // '' is "no slot assigned" in legacy POST data, not a slot named ''
             // — same normalization as Extractor::resolveEntry() (slot_report
@@ -177,9 +162,6 @@ class ConfigComponentWriter
      */
     public static function afterLegacyRemove(PDO $pdo, $configUuid, $type, $specUuid, $serial, $actor)
     {
-        if (self::mode() !== 'on') {
-            return;
-        }
 
         require_once __DIR__ . '/ConfigComponentRepository.php';
         $repo = new ConfigComponentRepository($pdo);

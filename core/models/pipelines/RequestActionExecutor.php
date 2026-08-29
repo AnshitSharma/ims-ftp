@@ -829,17 +829,6 @@ class RequestActionExecutor
 
     private function runCommand($actionType, array $payload, $subjectUserId)
     {
-        if (CommandLayer::mode() === 'off') {
-            // Refuse rather than silently fall back to the legacy path: an
-            // approval must do exactly what the request said, through the same
-            // engine every other write goes through.
-            return [
-                'success' => false,
-                'errors'  => ['The command layer is disabled on this server, so approvals cannot perform hardware changes'],
-                'result'  => null,
-            ];
-        }
-
         $command = $this->buildCommand($actionType, $payload, $subjectUserId);
         $result = $command->execute();
 

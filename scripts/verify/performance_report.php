@@ -2,10 +2,16 @@
 /**
  * performance_report.php — 11-verification/README.md #7.
  *
- * Replays the real-component scenarios from tests/fixture_scenarios_real.php (same shapes,
- * same operations: validateComponentAddition for adds, validateConfiguration +
- * validateConfigurationEnhanced for finalize), records wall-time p50/p95 per operation
- * ("add" vs "finalize"), and compares against reports/perf-baseline.json.
+ * Replays the real-component scenarios from tests/fixture_scenarios_real.php, records
+ * wall-time p50/p95 per operation ("add" vs "finalize"), and compares against
+ * reports/perf-baseline.json.
+ *
+ * P9 (2026-08-30) repointed both operations at the ValidationEngine: adds evaluate
+ * Trigger::ADD over a TargetStateBuilder::withAdd() state, finalize runs
+ * ValidateConfigService::evaluate(). The legacy methods this used to time
+ * (validateComponentAddition / validateConfiguration / validateConfigurationEnhanced)
+ * no longer exist. **Any perf-baseline.json captured before that date is measuring
+ * different code and is not comparable -- re-capture before trusting a verdict.**
  *
  * Unlike tests/fixture_scenarios_real.php (which hardcodes the production DB name), this
  * script honors GOLDEN_DB_HOST / GOLDEN_DB_NAME / GOLDEN_DB_USER / GOLDEN_DB_PASS so it can
@@ -67,6 +73,10 @@ try {
 
 require_once $ROOT . '/core/models/server/ServerBuilder.php';
 require_once $ROOT . '/core/models/compatibility/ComponentCompatibility.php';
+require_once $ROOT . '/core/models/validation/ValidateConfigService.php';
+require_once $ROOT . '/core/models/validation/ValidationEngine.php';
+require_once $ROOT . '/core/models/validation/TargetStateBuilder.php';
+require_once $ROOT . '/core/models/validation/Trigger.php';
 
 $builder = new ServerBuilder($pdo);
 $compat = new ComponentCompatibility($pdo);
@@ -171,13 +181,17 @@ function replayScenarios(PDO $pdo, ServerBuilder $builder, ComponentCompatibilit
             $row = insertRow($pdo, $cfg, $colsFn($U));
             $start = hrtime(true);
             if ($action === 'finalize') {
-                $r1 = $builder->validateConfiguration($cfg);
-                $r2 = $builder->validateConfigurationEnhanced($cfg);
+                $r1 = ValidateConfigService::evaluate($pdo, $cfg);
                 $op = 'finalize';
             } else {
                 [$t, $uF, $pF, $pi] = array_pad($action, 4, null);
                 $parent = $pF ? $pF($U) : null;
-                $r = $builder->validateComponentAddition($cfg, $t, $uF($U), $compat, $row, $parent, $pi, 1);
+                $state = TargetStateBuilder::withAdd(
+                    TargetStateBuilder::fromCurrent($pdo, $cfg),
+                    ['component_type' => $t, 'component_uuid' => $uF($U),
+                     'parent_uuid' => $parent, 'port_index' => $pi]
+                );
+                $r = (new ValidationEngine())->evaluate($state, Trigger::ADD);
                 $op = 'add';
             }
             $elapsedMs = (hrtime(true) - $start) / 1e6;

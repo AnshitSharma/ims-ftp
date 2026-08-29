@@ -35,8 +35,8 @@ require_once __DIR__ . '/rules/DependencyBlockedRemovalRule.php';
  * empty (U-V.1..U-V.4 ship no rules); U-R.* units append to RULES as each
  * family is ported.
  *
- * Rollout mode follows FLAGS.md's ENGINE_MODE / PcieLaneBudgetValidator::currentMode()
- * pattern exactly: getenv -> $_ENV fallback -> default 'off' -> whitelist.
+ * U-D.4 removed ENGINE_MODE: this registry is the sole validation authority and
+ * has no rollout mode left to consult.
  */
 /**
  * Not final (unlike the U-V.1 value objects): tests extend this to swap
@@ -79,21 +79,10 @@ class ValidationEngine
         DependencyBlockedRemovalRule::class,
     ];
 
-    /**
-     * @return string one of "off", "shadow", "enforce"
+    /*
+     * U-D.4: the ENGINE_MODE reader lived here. The registry below is the sole
+     * validation authority now -- there is no 'off' to fall back to.
      */
-    public static function mode(): string
-    {
-        $mode = getenv('ENGINE_MODE');
-        if (!is_string($mode) || $mode === '') {
-            $mode = $_ENV['ENGINE_MODE'] ?? 'off';
-        }
-        $mode = strtolower(trim((string)$mode));
-        if (!in_array($mode, ['off', 'shadow', 'enforce'], true)) {
-            return 'off';
-        }
-        return $mode;
-    }
 
     /**
      * F-26 (2026-07-29): FINALIZE SUBSUMES VALIDATE.

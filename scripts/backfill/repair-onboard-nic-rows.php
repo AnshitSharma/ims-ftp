@@ -29,9 +29,10 @@
  *   php scripts/backfill/repair-onboard-nic-rows.php --execute
  *   php scripts/backfill/repair-onboard-nic-rows.php --config <uuid> [--execute]
  *
- * Requires DUAL_WRITE_ENABLED=on (the writer is a documented no-op otherwise --
- * this script refuses to run rather than silently repairing nothing).
  * Idempotent: a second --execute run finds nothing to do.
+ *
+ * The DUAL_WRITE_ENABLED=on precondition this used to assert went away with the
+ * flag (U-D.4): ConfigComponentWriter always writes now.
  */
 
 error_reporting(E_ALL);
@@ -59,12 +60,6 @@ foreach ($argv as $i => $arg) {
     if ($arg === '--config' && isset($argv[$i + 1])) {
         $onlyConfig = $argv[$i + 1];
     }
-}
-
-if (ConfigComponentWriter::mode() !== 'on') {
-    fwrite(STDERR, "repair-onboard-nic-rows: DUAL_WRITE_ENABLED is not 'on' -- the writer would\n"
-                 . "no-op and this script would report success having done nothing. Refusing.\n");
-    exit(1);
 }
 
 // Onboard NIC units currently attached to a config, per the inventory table.

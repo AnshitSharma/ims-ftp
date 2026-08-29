@@ -12,11 +12,10 @@ require_once __DIR__ . '/StatusMap.php';
  * Never opens/commits a transaction (spirit of INV-3) and never locks a row
  * itself — every method here requires the caller to already hold both.
  *
- * U-SM.3 wires only the WRITE side (apply*) into ServerBuilder, unconditionally,
- * so status_v2 starts tracking legacy status immediately. The READ side
- * (assert*) has no enforcing caller yet — that's U-SM.4 (StateGuard), gated
- * behind STATE_MACHINE_ENABLED. Until then this class changes zero
- * user-visible behavior: same legacy ints, same JSON responses.
+ * U-SM.3 wired the WRITE side (apply*) into ServerBuilder so status_v2 tracks
+ * legacy status. The READ side (assert*) enforces through StateGuard and, for
+ * transitions, BaseCommand — unconditionally since U-D.4 removed
+ * STATE_MACHINE_ENABLED.
  */
 class StateMachine
 {

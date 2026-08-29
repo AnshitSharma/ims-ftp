@@ -6,30 +6,10 @@ require_once __DIR__ . '/../validation/ValidationEngine.php';
 require_once __DIR__ . '/../validation/Verdict.php';
 require_once __DIR__ . '/../state/StateGuard.php';
 
-/**
- * COMMAND_LAYER_ENABLED reader (FLAGS.md, INV-12) — same getenv -> $_ENV ->
- * default 'off' -> whitelist pattern as ValidationEngine::mode()/StateGuard::mode().
- * shadow: an API handler builds+evaluates a command WITHOUT calling
- * execute()'s apply() (a dry verdict — see each command's own shadow-hook
- * site), compares to the legacy call's real outcome, logs divergence, then
- * runs the legacy path as today. enforce: the handler calls execute()
- * instead of the legacy method entirely.
+/*
+ * U-D.4: the CommandLayer flag reader lived here. COMMAND_LAYER_ENABLED is
+ * gone -- the commands below ARE the write path, unconditionally.
  */
-class CommandLayer
-{
-    public static function mode(): string
-    {
-        $mode = getenv('COMMAND_LAYER_ENABLED');
-        if (!is_string($mode) || $mode === '') {
-            $mode = $_ENV['COMMAND_LAYER_ENABLED'] ?? 'off';
-        }
-        $mode = strtolower(trim((string)$mode));
-        if (!in_array($mode, ['off', 'shadow', 'enforce'], true)) {
-            return 'off';
-        }
-        return $mode;
-    }
-}
 
 /**
  * Thrown by BaseCommand::execute() for EVERY failure mode (fail-closed,

@@ -40,9 +40,11 @@
       "unit": "U-D.1",
       "retain": true,
       "allowed_callers": [
-        "api/handlers/server/compatibility_api.php"
+        "api/handlers/server/compatibility_api.php",
+        "core/models/server/ServerBuilder.php",
+        "core/models/tickets/TicketValidator.php"
       ],
-      "note": "RETAINED, not deleted. allowed_callers reason (a): documented external contract. U-D.1 removes only ServerBuilder's loop over it; the compatibility API's check_pair operation keeps its callers. GREEN here means 'no callers left outside compatibility_api.php'. Remaining blockers to clear in U-D.1: ServerBuilder (the Phase 1.5 loop, two sites) and TicketValidator, which needs its own decision before deletion."
+      "note": "RETAINED, not deleted. allowed_callers reason (a): documented external contract. U-D.1 (2026-08-30) removed ServerBuilder's Phase 1.5 loop as scheduled -- it lived inside validateComponentCompatibility(), which is gone. The ServerBuilder site that remains is getCompatibleComponents(), the UI picker, which is a legitimate keeper and not the loop. TicketValidator's 'own decision before deletion' was taken the same day: it serves PipelineManager and is live, so it stays. Both are allow-listed rather than left blocking, because a permanently-RED retained symbol tells the reader nothing."
     },
     {
       "symbol": "validateConfiguration",
@@ -166,7 +168,8 @@
       "defined_in": "core/models/compatibility/OnboardNICHandler.php",
       "unit": "U-D.2",
       "sub_unit": "U-D.2c",
-      "note": "Replaced by ReplaceComponentCommand at COMMAND_LAYER=enforce. Only this method of OnboardNICHandler is scheduled; the class itself stays."
+      "note": "RETAINED by the 2026-08-24 finding (migration/10-cleanup/FINDING-20260824-replaceOnboardNIC-not-superseded.md): DO NOT DELETE. It holds the sole Flag='replaced' write in the codebase, and three branches in OnboardNICHandler read that flag and exist only to honour it. The supersession claim was false. retain:true added 2026-08-30 so the scan stops counting a decided keep as red -- the decision was already on record, the manifest just had not been updated to match.",
+      "retain": true
     },
     {
       "symbol": "MemoryAuthority",
@@ -207,12 +210,11 @@
       "unit": "U-D.2",
       "sub_unit": "U-D.2c",
       "allowed_callers": [
-        "scripts/verify/ledger_report.php"
+        "scripts/verify/ledger_report.php",
+        "core/models/compatibility/StorageConnectionValidator.php"
       ],
-      "harness_call_sites_to_edit": [
-        "scripts/verify/ledger_report.php -- checkConfigLedger()'s parameter type plus two instantiations (the --self-test path and the batch sweep); repoint at PcieLaneBudgetRule in the same commit."
-      ],
-      "note": "Superseded by PcieLaneBudgetRule. NOTE: FLAGS.md cites this class's currentMode() as the canonical flag-read pattern -- update that reference when deleting. allowed_callers reason (c). Real production blockers remaining: StorageConnectionValidator (evaluateAssembledStorageLaneBudget) and ServerBuilder. The verify harness is allow-listed, not excluded, so its three references stay visible in the report and are recorded above as commit work."
+      "note": "PARTIALLY deleted 2026-08-30, then RETAINED. P9 removed what was actually superseded: validateAddition() (the add-time entry point, replaced by PcieLaneBudgetRule) and currentMode() (the PCIE_LANE_CHECK_ENABLED reader, removed by U-D.4). The ServerBuilder blocker went with legacyValidateComponentAddition(). What remains is NOT dead and was never superseded: StorageConnectionValidator::checkPCIeLaneBudget() calls evaluateAssembledStorageLaneBudget() on a live path, and ledger_report.php recomputes lane arithmetic against the same methods. The pre-2026-08-30 entry read retain:false, which was wrong -- deleting the class would have broken a live storage check. FLAGS.md's citation of currentMode() as the canonical flag-read pattern is moot: there are no flags left.",
+      "retain": true
     },
     {
       "symbol": "checkPowerCompatibility",

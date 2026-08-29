@@ -9,8 +9,7 @@ require_once __DIR__ . '/../config/ResourceCatalog.php';
  * fromCurrent() reads rows if config_components has any live rows for the
  * config (post-backfill / dual-write reality); otherwise it falls back to
  * mirroring server_configurations' legacy JSON columns via
- * ServerBuilder::extractComponentsFromJson() (today's actual production
- * reality, since DUAL_WRITE_ENABLED is off) — flagged 'source'=>'json' on
+ * ServerBuilder::extractComponentsFromJson() — flagged 'source'=>'json' on
  * every row it produces so parity_report.php (U-V.4) can segment rows-path
  * evaluations from json-fallback-path evaluations separately.
  *

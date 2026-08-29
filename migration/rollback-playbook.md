@@ -77,5 +77,59 @@ database/seeders/2026_08_22_001_normalize-sfp-slot-ref.sql
 `core/models/tickets/TicketValidator.php`, and seeders
 `2026_08_22_002` / `_003` / `_004` with their rollbacks.
 
-Every migration commit after 2026-08-23 is single-purpose again; R-UNIT applies
-to those normally.
+Migration commits between 2026-08-23 and 2026-08-28 are single-purpose; R-UNIT applies
+to those normally. The next mixed commit is `0fa3fcf` — see R-MIXED-2 below.
+
+## R-MIXED-2 — reverting migration work out of commit `0fa3fcf`
+
+`0fa3fcf "Updates"` (2026-08-29) is the second commit to break R-UNIT's
+one-commit-per-unit assumption. It carries the command-layer unit-identity fix
+together with in-flight Request/location work (`PipelineManager.php`,
+`RequestActionExecutor.php`).
+
+It is on `origin/main`, so — like `2c8ab2f` — it is **not to be split**. Use a
+path-scoped revert:
+
+```
+git revert -n 0fa3fcf -- <paths>
+git commit -m "Revert migration portion of 0fa3fcf"
+```
+
+Unlike `2c8ab2f`, **no single file mixes migration and non-migration hunks**, so
+the map is whole-file and the revert is exact.
+
+**Migration-owned (revert these):**
+```
+core/models/commands/AddComponentCommand.php
+core/models/commands/RemoveComponentCommand.php
+core/models/commands/ReplaceComponentCommand.php
+database/seeders/2026_08_29_001_repair-cpu-configuration-divergence.sql
+```
+
+The seeder has no rollback file **by design** — it writes a `cpu_configuration`
+value that the rows store and `cpuinventory` already agree on, so undoing it would
+re-create the divergence it repaired. Reverting the code above without unwinding the
+seeder is correct.
+
+**Not migration at all** (leave untouched):
+```
+core/models/pipelines/PipelineManager.php
+core/models/pipelines/RequestActionExecutor.php
+tests/regression/stock_missing_prerequisite_test.php
+```
+
+**Test-only fixes — do NOT revert with the migration.** These are hold-condition (b)
+repairs to suites that were failing or passing vacuously. Every one is a test defect
+fix; no production behaviour depends on them, and reverting re-introduces a known
+broken assertion:
+```
+tests/api/new_actions_test.php
+tests/backfill/ledger_backfill_test.php
+tests/regression/location_aware_requests_test.php
+tests/regression/read_router_test.php
+tests/regression/remove_command_test.php
+tests/regression/replace_command_test.php
+```
+
+Migration commits between 2026-08-23 and 2026-08-28 are single-purpose; R-UNIT
+applies to those normally.

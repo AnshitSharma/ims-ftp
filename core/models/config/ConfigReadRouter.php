@@ -4,22 +4,16 @@ require_once __DIR__ . '/ConfigComponentRepository.php';
 require_once __DIR__ . '/../components/ComponentSpecPaths.php';
 
 /**
- * ConfigReadRouter — U-X.1. The read-path seam for READ_FROM_ROWS (off|sample|on).
+ * ConfigReadRouter — U-X.1, completed by U-D.4. The single read entrypoint for
+ * "what components does this config contain?".
  *
- * One question, three answers: "what components does this config contain?"
- *   off    => ServerBuilder::extractComponentsFromJson() verbatim (identity; the
- *             router is a pass-through and adds one function call, nothing else).
- *   sample => run BOTH sides, compare canonical tuples, append the OUTCOME --
- *             agreement included -- to reports/shadow/read-<Ymd>.jsonl, and
- *             return the LEGACY result UNCONDITIONALLY. Nothing a caller sees
- *             depends on the rows side.
- *   on     => rows become the answer, mapped back to the legacy output shape.
- *
- * F-27: sample mode logged divergences ONLY until 2026-07-29, which made an
- * empty log unreadable -- "every read agreed" and "no read ever reached this
- * router" produce the identical artifact. Every row now carries a 'kind'
- * (compared | divergence | skipped_virtual) so the log has a denominator and
- * scripts/verify/read_report.php can distinguish silence from success.
+ * config_components rows ARE the answer, mapped back to the legacy output shape.
+ * READ_FROM_ROWS and its off/sample modes are gone; the legacy JSON extraction
+ * survives in exactly one place, for a config row carrying no uuid to look rows
+ * up by. sample() and the whole json-vs-rows comparison apparatus it drove went
+ * with the flag: with nothing left to compare against, a comparator can only
+ * report that rows equal themselves. scripts/verify/read_report.php still reads
+ * the historical reports/shadow/read-*.jsonl those runs produced.
  *
  * The configuration cache in ServerBuilder::getConfigurationDetails() sits ABOVE
  * this router (it short-circuits before the row is even fetched), so a cached
@@ -68,10 +62,11 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
  *   c. aggregated 'quantity'. A legacy JSON entry may carry quantity > 1 for one
  *      model; rows are per unit and always quantity 1. Component TOTALS agree
  *      (n rows of 1 == 1 entry of n) but the per-entry shape does not.
- * sample mode does not compare any of the three (canonicalTuple ignores
- * quantity/added_at/connection), which is what makes a zero-divergence sample
- * window meaningful about IDENTITY -- who is in the config -- and silent about
- * these three. tests/regression/read_router_test.php pins all of it.
+ * The sample-mode comparison never covered any of the three -- it compared
+ * IDENTITY (who is in the config) and was deliberately silent about these. They
+ * are documented here because they describe what the rows path returns TODAY,
+ * which is now the only thing it returns.
+ * tests/regression/read_router_test.php pins all of it.
  */
 final class ConfigReadRouter
 {
@@ -89,8 +84,8 @@ final class ConfigReadRouter
      * is the closest match — it is the order Extractor::extractPciecards() writes
      * (risers resolve first so plain cards can parent to them), and the order adds
      * naturally happen in (a riser must exist before a card can sit on it).
-     * A config that genuinely interleaves them will show as an ORDER divergence in
-     * sample mode; that is a reporting artifact of the split, not a data problem.
+     * A config that genuinely interleaves them cannot be reproduced exactly; that
+     * is a consequence of the type split, not a data problem.
      */
     private const LEGACY_TYPE_ORDER = [
         'cpu', 'ram', 'storage', 'caddy', 'nic', 'hbacard',
@@ -100,33 +95,11 @@ final class ConfigReadRouter
     /** Legacy hardcodes added_at = null for components that come from scalar columns. */
     private const SCALAR_COLUMN_TYPES = ['motherboard', 'chassis'];
 
-    /**
-     * Row kinds in reports/shadow/read-<Ymd>.jsonl (F-27).
-     *
-     * BACKWARD COMPATIBILITY: rows written before 2026-07-29 carry no 'kind' at
-     * all, and the only rows that existed then were divergences. A reader MUST
-     * treat a missing 'kind' as KIND_DIVERGENCE -- never as a comparison, which
-     * would let historical rows manufacture a denominator they never measured.
+    /*
+     * U-D.4: the READ_FROM_ROWS reader lived here. config_components IS the read
+     * model now; the legacy JSON extraction survives only as the answer for a
+     * config that has no uuid to look rows up by.
      */
-    public const KIND_COMPARED        = 'compared';
-    public const KIND_DIVERGENCE      = 'divergence';
-    public const KIND_SKIPPED_VIRTUAL = 'skipped_virtual';
-
-    /**
-     * @return string one of "off", "sample", "on"
-     */
-    public static function mode(): string
-    {
-        $mode = getenv('READ_FROM_ROWS');
-        if (!is_string($mode) || $mode === '') {
-            $mode = $_ENV['READ_FROM_ROWS'] ?? 'off';
-        }
-        $mode = strtolower(trim((string)$mode));
-        if (!in_array($mode, ['off', 'sample', 'on'], true)) {
-            return 'off';
-        }
-        return $mode;
-    }
 
     /**
      * The routed read.
@@ -138,287 +111,32 @@ final class ConfigReadRouter
      */
     public static function components(ServerBuilder $builder, PDO $pdo, array $configRow, bool $minimalOutput = false): array
     {
-        $legacy = $builder->extractComponentsFromJson($configRow, $minimalOutput);
-        $mode = self::mode();
-
-        if ($mode === 'off') {
-            return $legacy;
-        }
-
         $configUuid = (string)($configRow['config_uuid'] ?? '');
         if ($configUuid === '') {
-            // No uuid means no rows side to consult. Never a divergence -- there is
-            // nothing to compare -- and at =on there is nothing to return but legacy.
-            return $legacy;
+            // No uuid means no rows side to consult, so legacy extraction is the
+            // only answer available. The one surviving use of it.
+            return $builder->extractComponentsFromJson($configRow, $minimalOutput);
         }
 
-        if ($mode === 'sample') {
-            // A read must never fail because the SHADOW side of it failed. Sample
-            // mode is observation only: anything at all going wrong below leaves
-            // the caller with the byte-identical legacy answer it would have got
-            // at =off, and leaves a line in the error log for the operator.
-            try {
-                self::sample($pdo, $builder, $configRow, $configUuid, $legacy);
-            } catch (Throwable $e) {
-                error_log('ConfigReadRouter sample-mode comparison failed for ' . $configUuid . ': ' . $e->getMessage());
-            }
-            return $legacy;
-        }
-
-        // =on. A throw here is NOT swallowed: at =on the rows side is the answer,
-        // and silently serving legacy instead would be a lie about which store is
-        // authoritative -- exactly the "fail open, look green" class this migration
-        // has now hit four times (F-11, F-18, F-21, F-24). Let it surface.
+        // A throw here is NOT swallowed: the rows side IS the answer, and silently
+        // serving legacy instead would be a lie about which store is authoritative
+        // -- exactly the "fail open, look green" class this migration has now hit
+        // four times (F-11, F-18, F-21, F-24). Let it surface.
         $rows = (new ConfigComponentRepository($pdo))->liveRows($configUuid);
         return self::rowsToLegacyShape($pdo, $rows, $configRow, $minimalOutput);
     }
 
-    /**
-     * Compare both sides and log a divergence row if they disagree. Returns
-     * nothing -- sample mode's only output is the log.
-     */
-    private static function sample(PDO $pdo, ServerBuilder $builder, array $configRow, string $configUuid, array $legacy): void
-    {
-        // Virtual configs legitimately have no rows: BOTH dual-write hooks skip
-        // them by their own guard (ServerBuilder's is_virtual checks), which is
-        // also why every migration report scans is_virtual = 0. Comparing them
-        // would manufacture a divergence for every virtual config on every read.
-        //
-        // The skip is RECORDED rather than silent (F-27): a window containing
-        // nothing but virtual reads has performed no comparison, and must not be
-        // read as "sample mode found nothing wrong". Same row, different kind.
-        if ((int)($configRow['is_virtual'] ?? 0) === 1) {
-            self::logRead([
-                'kind'        => self::KIND_SKIPPED_VIRTUAL,
-                'config_uuid' => $configUuid,
-            ]);
-            return;
-        }
 
-        $rows = (new ConfigComponentRepository($pdo))->liveRows($configUuid);
-
-        $jsonTuples = self::canonicalizeJsonSide($builder, $configRow);
-        $rowTuples = self::canonicalizeRowSide($rows);
-
-        $onlyInJson = array_values(array_diff($jsonTuples, $rowTuples));
-        $onlyInRows = array_values(array_diff($rowTuples, $jsonTuples));
-
-        if (empty($onlyInJson) && empty($onlyInRows)) {
-            // THE DENOMINATOR (F-27). Before this, agreement was silent and the
-            // log held divergences only -- so an empty log meant either "every
-            // read agreed" or "no read ever reached the router", and nothing
-            // could tell them apart. U-X.2's acceptance criterion is literally
-            // "divergence log must stay empty over >=72h", which a router that
-            // never executes satisfies perfectly. That is the same fail-open
-            // shape as F-10 (reports exiting 0 having run nothing) and F-8/F-23
-            // (a ratio whose denominator was never established).
-            //
-            // Recording agreement costs one appended line per config-detail read
-            // -- getConfigurationDetails() has exactly two callers and neither
-            // loops -- against a comparison that already ran a liveRows() query
-            // and canonicalized both sides. The write is the cheap part.
-            self::logRead([
-                'kind'         => self::KIND_COMPARED,
-                'config_uuid'  => $configUuid,
-                'legacy_count' => count($legacy),
-                'rows_count'   => count($rows),
-            ]);
-            return;
-        }
-
-        // An entirely empty rows side is ONE finding ("this config was never
-        // dual-written or backfilled"), not N component divergences -- but it is
-        // still a finding and is still logged. The fleet is supposed to be fully
-        // backfilled, so zero rows on a real config means the backfill missed it
-        // or dual-write is off; either way the operator needs to see it, and
-        // excusing it is the fail-open mistake F-21 was.
-        self::logRead([
-            'kind'           => self::KIND_DIVERGENCE,
-            'config_uuid'    => $configUuid,
-            'rows_side_empty' => empty($rows),
-            'legacy_count'   => count($legacy),
-            'rows_count'     => count($rows),
-            'only_in_json'   => array_map(fn($t) => json_decode($t, true), $onlyInJson),
-            'only_in_rows'   => array_map(fn($t) => json_decode($t, true), $onlyInRows),
-        ]);
-    }
-
-    private static function logRead(array $record): void
-    {
-        $dir = __DIR__ . '/../../../reports/shadow';
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0777, true);
-        }
-        $record = array_merge([
-            'ts' => date('c'),
-            // Which SAPI produced this row -- production requests are litespeed, a
-            // local harness replay is always cli. Same field, same reason, as
-            // ShadowRunner and CommandShadowLog (finding F-23): without it a reader
-            // cannot tell real traffic from the test suite talking to itself, and
-            // U-X.2's soak criterion is only meaningful if a local test run cannot
-            // dirty that log.
-            //
-            // This was not hypothetical. On 2026-07-29 the production copy of
-            // read-20260728.jsonl held 6 rows, ALL sapi=cli and ALL stamped
-            // +02:00 -- production runs UTC, so they were written by a local tree
-            // and carried up by SFTP (reports/ is not in the ignore list). Under
-            // U-X.2's original wording those rows alone would have restarted a
-            // 72h clock for a reason that had nothing to do with production.
-            // read_report.php therefore filters on this field, exactly as the
-            // other two parity reports do.
-            'sapi' => PHP_SAPI,
-        ], $record);
-        @file_put_contents(
-            $dir . '/read-' . date('Ymd') . '.jsonl',
-            json_encode($record) . "\n",
-            FILE_APPEND | LOCK_EX
-        );
-    }
 
     // ------------------------------------------------------------------
     // Canonicalization. DUPLICATE of equivalence_report.php:97-131 -- see the
     // class docblock, correction 3. Change both or neither.
     // ------------------------------------------------------------------
 
-    /**
-     * Is this LEGACY-JSON pciecard entry actually a riser?
-     *
-     * The legacy pciecard_configurations column still holds risers after the
-     * 2026-08-14 type split (see ServerBuilder::updatePcieCardConfiguration()'s
-     * case comment for why no 11th JSON column was added), while the ROWS side
-     * types them 'risercard'. Without this bridge every riser would read as a
-     * divergence in sample mode and as the wrong type in =on mode.
-     *
-     * The historical 'riser-' UUID-prefix test only ever caught SYNTHETIC uuids —
-     * none of the 20 real riser spec UUIDs carry that prefix — so catalog
-     * membership is the test that actually works. Both are kept.
-     *
-     * Dies together with the *_configuration(s) columns at U-D.3.
-     */
-    private static function isRiserPciecard(string $type, ?string $uuid): bool
-    {
-        if ($type !== 'pciecard' || $uuid === null) {
-            return false;
-        }
-        if (strpos($uuid, 'riser-') === 0) {
-            return true;
-        }
-        return self::isKnownRiserSpecUuid($uuid);
-    }
 
-    /**
-     * Membership test against the risercard catalog, memoized per request.
-     * Never throws: an unreadable/absent spec file means "not a riser", which
-     * degrades to the pre-split behaviour rather than breaking every read.
-     */
-    private static function isKnownRiserSpecUuid(string $uuid): bool
-    {
-        static $riserUuids = null;
 
-        if ($riserUuids === null) {
-            $riserUuids = [];
-            try {
-                $path = ComponentSpecPaths::getPath('risercard');
-                $groups = is_file($path) ? json_decode((string)file_get_contents($path), true) : null;
-                if (is_array($groups)) {
-                    foreach ($groups as $group) {
-                        foreach (($group['models'] ?? []) as $model) {
-                            $specUuid = $model['UUID'] ?? ($model['uuid'] ?? null);
-                            if (is_string($specUuid) && $specUuid !== '') {
-                                $riserUuids[$specUuid] = true;
-                            }
-                        }
-                    }
-                }
-            } catch (\Throwable $e) {
-                $riserUuids = [];
-            }
-        }
 
-        return isset($riserUuids[$uuid]);
-    }
 
-    /**
-     * @return array [$type, $specUuid, $serial, $slotRef]
-     *
-     * serial is compared for cpu only and slot for sfp only, because
-     * extractComponentsFromJson() is the only decoder on the legacy side and it
-     * reads a serial back out for cpu alone and exposes sfp's slot alone. Any
-     * wider comparison diverges on every config that HAS the field row-side,
-     * regardless of whether the two stores actually agree about the hardware.
-     */
-    private static function canonicalTuple(string $type, ?string $specUuid, ?string $serial, ?string $slotRef): array
-    {
-        if (self::isRiserPciecard($type, $specUuid)) {
-            $type = 'risercard';
-        }
-        return [
-            $type,
-            $specUuid,
-            $type === 'cpu' ? $serial : null,
-            $type === 'sfp' ? $slotRef : null,
-        ];
-    }
-
-    /** @return string[] JSON-encoded tuples, sorted */
-    private static function canonicalizeJsonSide(ServerBuilder $builder, array $configRow): array
-    {
-        $entries = $builder->extractComponentsFromJson($configRow);
-
-        // hbacard edge case, mirrored from equivalence_report.php: the scalar
-        // hbacard_uuid column is the one live hbacard when hbacard_config is empty,
-        // and extractComponentsFromJson()'s elseif already covers that -- but only
-        // when hbacard_config is empty(), which '[]' is NOT.
-        $hbacardConfigEmpty = empty($configRow['hbacard_config']) || $configRow['hbacard_config'] === '[]';
-        if (!empty($configRow['hbacard_uuid']) && $hbacardConfigEmpty) {
-            $alreadyPresent = false;
-            foreach ($entries as $existing) {
-                if (($existing['component_type'] ?? null) === 'hbacard') {
-                    $alreadyPresent = true;
-                    break;
-                }
-            }
-            if (!$alreadyPresent) {
-                $entries[] = ['component_type' => 'hbacard', 'component_uuid' => $configRow['hbacard_uuid']];
-            }
-        }
-
-        $tuples = [];
-        foreach ($entries as $entry) {
-            $type = $entry['component_type'] ?? null;
-            $specUuid = $entry['component_uuid'] ?? null;
-            if ($type === null || $specUuid === null) {
-                continue;
-            }
-            $slotRef = isset($entry['port_index']) && $entry['port_index'] !== null
-                ? 'port_' . $entry['port_index']
-                : null;
-            $tuples[] = json_encode(self::canonicalTuple(
-                (string)$type,
-                (string)$specUuid,
-                $entry['serial_number'] ?? null,
-                $slotRef
-            ));
-        }
-        sort($tuples);
-        return $tuples;
-    }
-
-    /** @return string[] JSON-encoded tuples, sorted */
-    private static function canonicalizeRowSide(array $rows): array
-    {
-        $tuples = [];
-        foreach ($rows as $row) {
-            $tuples[] = json_encode(self::canonicalTuple(
-                (string)$row['component_type'],
-                $row['spec_uuid'] === null ? null : (string)$row['spec_uuid'],
-                $row['serial_number'] ?? null,
-                $row['slot_ref'] ?? null
-            ));
-        }
-        sort($tuples);
-        return $tuples;
-    }
 
     // ------------------------------------------------------------------
     // =on: rows mapped back into extractComponentsFromJson()'s output shape.

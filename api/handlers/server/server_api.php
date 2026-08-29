@@ -165,11 +165,6 @@ switch ($action) {
         handleRemovePlatform($serverBuilder, $user);
         break;
 
-    case 'debug-migration-flags':
-    case 'server-debug-migration-flags':
-        handleDebugMigrationFlags($user);
-        break;
-
     case 'debug-config-dualwrite':
     case 'server-debug-config-dualwrite':
         handleDebugConfigDualWrite($user);
@@ -725,36 +720,6 @@ function handleCreateStart($serverBuilder, $user) {
 }
 
 
-/**
- * F-30 (2026-07-30): classify a shadow dry-run throw for CommandShadowLog's
- * `dry_run_error`, so every shadow hook labels it the same way.
- *
- * command_parity_report distinguishes two things a thrown dryRun() can mean:
- *   - a DECISION -- 'command_failed:<type>'. component_unavailable /
- *     component_not_found / inventory_component_not_found / transition_denied /
- *     config_immutable / revision_mismatch / config_not_found /
- *     invalid_component_type are the answer the caller actually gets at
- *     enforce, so the row is comparable and counts as command_blocked=true.
- *   - a CRASH -- 'exception'. No verdict in any sense; stays gate-RED.
- *
- * The report has read that distinction since 2026-07-29, but only the finalize
- * hook ever wrote the field: add/remove recorded a bare dry_run_failed=true, so
- * every legitimate refusal fell into the crash bucket and hard-RED the command
- * gate even when BOTH sides refused (perfect agreement). Found live 2026-07-29
- * -- 7 rows, all adds of a unit another draft already held, legacy_blocked=true
- * with command_blocked=null.
- *
- * 'command_exception' is special: BaseCommand wraps a genuine Throwable in a
- * CommandFailed carrying that type (500). Labelling it 'command_failed:...'
- * would let the report's prefix test promote a crash into a verdict, which is
- * the green-wash the report exists to prevent -- so it maps to 'exception'.
- */
-function shadowDryRunErrorLabel(CommandFailed $failure): string
-{
-    return $failure->errorType === 'command_exception'
-        ? 'exception'
-        : 'command_failed:' . $failure->errorType;
-}
 
 /**
  * FIXED: Add component to server configuration with proper ServerUUID handling
@@ -836,95 +801,15 @@ function handleAddComponent($serverBuilder, $user) {
         // so it holds identically in off, shadow and enforce mode.
         assertNotPlatformOwned($pdo, $config, $componentType);
         
-        // Phase 2 Consolidation: Unified component validation in ServerBuilder
-        //
-        // NOTE (Concurrency hardening, Phase 1): this pre-transaction validation
-        // runs against an UNLOCKED snapshot, so its verdict is advisory only.
-        // The authoritative check is ServerBuilder::validateComponentAddition()
-        // re-invoked inside addComponent() AFTER lockAndLoadConfigRow() acquires
-        // SELECT ... FOR UPDATE on the server_configurations row. Any TOCTOU
-        // gap here is closed there: if the unlocked verdict becomes stale
-        // between this block and addComponent()'s lock acquisition, the
-        // locked revalidation will catch it and roll back. This block is
-        // retained because it surfaces `validationWarnings` to the response.
-        //
-        // U-A.1 (redesigned flag-gated per owner decision -- see
-        // migration/08-api-adapters/DEPRECATION.md): the pack's literal text
-        // deletes this block unconditionally ("commands validate
-        // authoritatively now"). That is only actually true once
-        // COMMAND_LAYER_ENABLED=enforce is what runs the add (AddComponentCommand
-        // ::execute() evaluates the SAME ValidationEngine registry, under lock,
-        // before ever writing) -- at off/shadow the legacy addComponent() path
-        // below is still the one enforcing/persisting, so skipping this block
-        // there would silently drop the only pre-transaction feedback
-        // (validationWarnings) users see today, for zero benefit. Skipped ONLY
-        // at enforce, mirroring U-C.5's identical precedent in
-        // handleFinalizeConfiguration.
-        require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
-        if (CommandLayer::mode() !== 'enforce') {
-            try {
-                require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
-                $compatibility = new ComponentCompatibility($pdo);
-
-                // Load configuration data (unlocked snapshot - advisory only)
-                $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
-                if (!$config) {
-                    throw new Exception("Configuration not found");
-                }
-
-                // Advisory pre-check; authoritative check runs under FOR UPDATE inside addComponent()
-                //
-                // F-8 (2026-07-26): the trailing 'advisory' labels the shadow row
-                // this evaluation emits. Both this call and addComponent()'s locked
-                // re-invocation record to reports/shadow/engine-*.jsonl; unlabeled
-                // they were byte-identical, so parity_report.php counted ONE
-                // operation as two. Only the authoritative row is a real
-                // enforcement decision — see ShadowRunner::record().
-                $validationResult = $serverBuilder->validateComponentAddition(
-                    $configUuid,
-                    $componentType,
-                    $componentUuid,
-                    $compatibility,
-                    $config->getData(),
-                    $parentNicUuid,
-                    $portIndex,
-                    $quantity,
-                    'advisory'
-                );
-
-                if (!$validationResult['success']) {
-                    // Format error response based on validation result
-                    $errorResponse = [
-                        'component_type' => $componentType,
-                        'component_uuid' => $componentUuid,
-                        'validation_status' => 'blocked',
-                        'error' => $validationResult['message']
-                    ];
-
-                    // Include additional details if available
-                    if (!empty($validationResult['details'])) {
-                        $errorResponse['details'] = $validationResult['details'];
-                    }
-                    if (!empty($validationResult['recommendations'])) {
-                        $errorResponse['recommendations'] = $validationResult['recommendations'];
-                    }
-
-                    send_json_response(0, 1, 400, $validationResult['message'], $errorResponse);
-                }
-
-                // Store warnings for response (will be added if successful)
-                $validationWarnings = $validationResult['warnings'] ?? [];
-                $validationInfo = [];
-
-            } catch (Exception $validationError) {
-                error_log("Validation error: " . $validationError->getMessage());
-                error_log("Stack trace: " . $validationError->getTraceAsString());
-                send_json_response(0, 1, 500, "Validation unavailable - request rejected (fail-closed)");
-            }
-        } else {
-            $validationWarnings = [];
-            $validationInfo = [];
-        }
+        // P9/U-A.1: the advisory pre-transaction validation that used to run here
+        // is gone with the command layer's flag. AddComponentCommand::execute()
+        // evaluates the SAME ValidationEngine registry under the row lock before
+        // it writes anything, so this unlocked second opinion added no safety --
+        // only a TOCTOU window and a duplicate shadow row. Its one user-visible
+        // contribution, `validationWarnings`, is carried by the command's Verdict
+        // instead (VerdictShim), which is why both accumulators start empty.
+        $validationWarnings = [];
+        $validationInfo = [];
 
         // Use original component addition method
         $componentOptions = [
@@ -941,107 +826,58 @@ function handleAddComponent($serverBuilder, $user) {
             $componentOptions['port_index'] = $portIndex;
         }
 
-        // U-C.2: COMMAND_LAYER_ENABLED dispatch (off by default -- zero behavior
-        // change). shadow builds+evaluates AddComponentCommand as a dry run
-        // (never applies, always rolls back -- INV-8) and logs any legacy/command
-        // blocking divergence; the legacy call below still runs as today either
-        // way. enforce replaces the legacy call with the real command.
+        // P9/U-C.2: the command layer IS the add path. AddComponentCommand
+        // evaluates the ValidationEngine registry under the row lock and applies
+        // atomically, so the shadow-comparison branch and the legacy
+        // addComponent() fallback that used to flank it are gone with
+        // COMMAND_LAYER_ENABLED.
         require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
-        $commandLayerMode = CommandLayer::mode();
-        if ($commandLayerMode !== 'off') {
-            $addCommand = new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id'], $expectedRevision);
-        }
-        if ($commandLayerMode === 'shadow') {
-            $commandVerdict = null;
-            $shadowDryRunFailed = false;
-            $shadowDryRunError = null;
-            try {
-                $commandVerdict = $addCommand->dryRun();
-            } catch (CommandFailed $shadowFailure) {
-                // A REFUSAL, not necessarily a crash -- see shadowDryRunErrorLabel (F-30).
-                $shadowDryRunFailed = true;
-                $shadowDryRunError = shadowDryRunErrorLabel($shadowFailure);
-                error_log('AddComponentCommand shadow dry-run refused: ' . $shadowFailure->getMessage());
-            } catch (\Throwable $shadowFailure) {
-                // dryRun() uses finally, not a catch-all, so a raw Throwable (PDOException,
-                // TypeError) escapes it. Catching only CommandFailed here meant a fault in
-                // SHADOW-only code propagated out of a real add-component request and 500'd
-                // it -- shadow forking behavior is exactly what INV-8 forbids. Gate-RED.
-                $shadowDryRunFailed = true;
-                $shadowDryRunError = 'exception';
-                error_log('AddComponentCommand shadow dry-run error: ' . $shadowFailure->getMessage());
-            }
-            // The legacy call is the ONLY mutation path in shadow mode (INV-8: shadow
-            // must never fork behavior) -- its real outcome is what the command verdict
-            // is compared against, not a hardcoded precheck-passed assumption.
-            $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
-            $legacyBlocked = !$result['success'];
-            // 2026-07-27: record EVERY shadow evaluation, not just divergences. The
-            // previous `if (... !== $legacyBlocked)` guard meant the log had no
-            // denominator, so "the command layer agreed on N operations" and "nothing
-            // ran" were indistinguishable -- see CommandShadowLog's header. The helper
-            // is required defensively so that if this file lands on the server before
-            // CommandShadowLog.php does, the request degrades to "no shadow row"
-            // instead of fataling on every add-component.
-            $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
-            if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
-            if (class_exists('CommandShadowLog')) {
-                CommandShadowLog::record('add', $configUuid, [
-                    'component_type' => $componentType,
-                    'component_uuid' => $componentUuid,
-                ], $legacyBlocked, $shadowDryRunFailed ? null : $commandVerdict, [
-                    'dry_run_error' => $shadowDryRunError,
-                ], $shadowDryRunFailed);
-            }
-        } elseif ($commandLayerMode === 'enforce') {
-            try {
-                // U-A.2: quantity > 1 maps to N sequential command dispatches
-                // inside ONE outer transaction, all-or-nothing (a later unit,
-                // U-D.3, removes multi-unit quantity support entirely). Each
-                // dispatch re-locks the same UUID's inventory rows
-                // (AddComponentCommand::lockAndCheckComponent, which orders
-                // available units first -- A-L1) -- the row the previous
-                // iteration just claimed is no longer Status=1, so each
-                // iteration naturally claims the NEXT available physical unit
-                // of this component model.
-                if ($quantity > 1) {
-                    $ownTx = !$pdo->inTransaction();
-                    if ($ownTx) { $pdo->beginTransaction(); }
-                    try {
-                        $commandResult = $addCommand->execute();
-                        for ($i = 1; $i < $quantity; $i++) {
-                            $commandResult = (new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id']))->execute();
-                        }
-                        if ($ownTx) { $pdo->commit(); }
-                    } catch (\Throwable $inner) {
-                        if ($ownTx && $pdo->inTransaction()) { $pdo->rollBack(); }
-                        throw $inner;
-                    }
-                } else {
+        $addCommand = new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id'], $expectedRevision);
+        try {
+            // U-A.2: quantity > 1 maps to N sequential command dispatches
+            // inside ONE outer transaction, all-or-nothing (a later unit,
+            // U-D.3, removes multi-unit quantity support entirely). Each
+            // dispatch re-locks the same UUID's inventory rows
+            // (AddComponentCommand::lockAndCheckComponent, which orders
+            // available units first -- A-L1) -- the row the previous
+            // iteration just claimed is no longer Status=1, so each
+            // iteration naturally claims the NEXT available physical unit
+            // of this component model.
+            if ($quantity > 1) {
+                $ownTx = !$pdo->inTransaction();
+                if ($ownTx) { $pdo->beginTransaction(); }
+                try {
                     $commandResult = $addCommand->execute();
+                    for ($i = 1; $i < $quantity; $i++) {
+                        $commandResult = (new AddComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $componentOptions, (int)$user['id']))->execute();
+                    }
+                    if ($ownTx) { $pdo->commit(); }
+                } catch (\Throwable $inner) {
+                    if ($ownTx && $pdo->inTransaction()) { $pdo->rollBack(); }
+                    throw $inner;
                 }
-                $result = ['success' => true, 'slot_position' => null, 'revision' => $commandResult->revision];
-            } catch (CommandFailed $commandFailure) {
-                if ($commandFailure->errorType === 'revision_mismatch') {
-                    $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
-                    $stmt->execute([$configUuid]);
-                    send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
-                }
-                // U-A.3: a blocking Verdict gets the legacy-shaped envelope
-                // (error_type/warnings/details/recommendations) callers of the
-                // OLD validateComponentAddition() result already expect.
-                if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
-                    require_once __DIR__ . '/VerdictShim.php';
-                    $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
-                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], [
-                        'component_type' => $componentType, 'component_uuid' => $componentUuid,
-                        'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
-                    ]);
-                }
-                send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
+            } else {
+                $commandResult = $addCommand->execute();
             }
-        } else {
-            $result = $serverBuilder->addComponent($configUuid, $componentType, $componentUuid, $componentOptions);
+            $result = ['success' => true, 'slot_position' => null, 'revision' => $commandResult->revision];
+        } catch (CommandFailed $commandFailure) {
+            if ($commandFailure->errorType === 'revision_mismatch') {
+                $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+                $stmt->execute([$configUuid]);
+                send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
+            }
+            // U-A.3: a blocking Verdict gets the legacy-shaped envelope
+            // (error_type/warnings/details/recommendations) callers of the
+            // OLD validateComponentAddition() result already expect.
+            if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
+                require_once __DIR__ . '/VerdictShim.php';
+                $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
+                send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], [
+                    'component_type' => $componentType, 'component_uuid' => $componentUuid,
+                    'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+                ]);
+            }
+            send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
         }
 
         if ($result['success']) {
@@ -1314,88 +1150,43 @@ function handleRemoveComponent($serverBuilder, $user) {
 
         // Phase 3: NIC removal validation and NIC config update now handled in ServerBuilder::removeComponent()
 
-        // U-C.3: COMMAND_LAYER_ENABLED dispatch (off by default -- zero behavior
-        // change), identical shadow/enforce pattern to handleAddComponent (U-C.2).
-        // cascade is opt-in via $_POST['cascade'] -- default false matches legacy's
-        // own behavior (single-component removal only).
+        // P9/U-C.3: RemoveComponentCommand is the removal path -- the
+        // shadow-comparison branch and the legacy removeComponent() fallback are
+        // gone with COMMAND_LAYER_ENABLED. cascade stays opt-in via
+        // $_POST['cascade']; without it a removal is single-component, as before.
         require_once __DIR__ . '/../../../core/models/commands/RemoveComponentCommand.php';
-        $commandLayerMode = CommandLayer::mode();
         $cascade = filter_var($_POST['cascade'] ?? false, FILTER_VALIDATE_BOOLEAN);
         // U-A.2: optional If-Match-style revision check, same as add-component.
         $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
-        if ($commandLayerMode !== 'off') {
-            $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision);
-        }
-        if ($commandLayerMode === 'shadow') {
-            // 2026-07-27: restructured to mirror handleAddComponent's shadow block.
-            // Previously this logged from INSIDE `if ($commandVerdict->blocking())`,
-            // i.e. BEFORE removeComponent() had run, so `legacy_blocked` was not just
-            // absent from the row -- it was unknowable at write time, and a row where
-            // legacy blocked too (agreement) could not be told apart from a real
-            // divergence. The dry run still happens first (it must: legacy mutates),
-            // but the row is now written AFTER legacy's real outcome is known and
-            // carries both sides. See CommandShadowLog's header.
-            $commandVerdict = null;
-            $shadowDryRunFailed = false;
-            $shadowDryRunError = null;
-            try {
-                $commandVerdict = $removeCommand->dryRun();
-            } catch (CommandFailed $shadowFailure) {
-                // A REFUSAL, not necessarily a crash -- see shadowDryRunErrorLabel (F-30).
-                $shadowDryRunFailed = true;
-                $shadowDryRunError = shadowDryRunErrorLabel($shadowFailure);
-                error_log('RemoveComponentCommand shadow dry-run refused: ' . $shadowFailure->getMessage());
-            } catch (\Throwable $shadowFailure) {
-                // See handleAddComponent's twin catch: a shadow-only fault must not
-                // escape into the real remove-component request (INV-8). Gate-RED.
-                $shadowDryRunFailed = true;
-                $shadowDryRunError = 'exception';
-                error_log('RemoveComponentCommand shadow dry-run error: ' . $shadowFailure->getMessage());
+        $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision);
+        try {
+            $commandResult = $removeCommand->execute();
+            $result = ['success' => true, 'revision' => $commandResult->revision];
+            $cascadeRemoved = $removeCommand->cascadeRemovedRows();
+            if (!empty($cascadeRemoved)) {
+                $result['cascade_removed'] = $cascadeRemoved;
             }
-            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
-            $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
-            if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
-            if (class_exists('CommandShadowLog')) {
-                CommandShadowLog::record('remove', $configUuid, [
-                    'component_type' => $componentType,
-                    'component_uuid' => $componentUuid,
-                ], !$result['success'], $shadowDryRunFailed ? null : $commandVerdict, [
-                    'cascade' => $cascade,
-                    'dry_run_error' => $shadowDryRunError,
-                ], $shadowDryRunFailed);
+        } catch (CommandFailed $commandFailure) {
+            if ($commandFailure->errorType === 'revision_mismatch') {
+                $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
+                $stmt->execute([$configUuid]);
+                send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
             }
-        } elseif ($commandLayerMode === 'enforce') {
-            try {
-                $commandResult = $removeCommand->execute();
-                $result = ['success' => true, 'revision' => $commandResult->revision];
-                $cascadeRemoved = $removeCommand->cascadeRemovedRows();
-                if (!empty($cascadeRemoved)) {
-                    $result['cascade_removed'] = $cascadeRemoved;
+            if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
+                require_once __DIR__ . '/VerdictShim.php';
+                $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
+                $blockedData = [
+                    'component_type' => $componentType, 'component_uuid' => $componentUuid,
+                    'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
+                ];
+                if ($shimmed['error_type'] === 'dependency_blocked' && !$cascade) {
+                    // The dependents blocking this removal are listed in details;
+                    // same hint convention as the legacy NIC->SFP block above.
+                    $blockedData['hint'] = 'Retry with cascade=true to remove this component together with the listed dependents';
                 }
-            } catch (CommandFailed $commandFailure) {
-                if ($commandFailure->errorType === 'revision_mismatch') {
-                    $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
-                    $stmt->execute([$configUuid]);
-                    send_json_response(0, 1, 409, $commandFailure->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
-                }
-                if ($commandFailure->errorType === 'validation_blocked' && $commandFailure->verdict !== null) {
-                    require_once __DIR__ . '/VerdictShim.php';
-                    $shimmed = VerdictShim::fromVerdict($commandFailure->verdict);
-                    $blockedData = [
-                        'component_type' => $componentType, 'component_uuid' => $componentUuid,
-                        'error_type' => $shimmed['error_type'], 'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
-                    ];
-                    if ($shimmed['error_type'] === 'dependency_blocked' && !$cascade) {
-                        // The dependents blocking this removal are listed in details;
-                        // same hint convention as the legacy NIC->SFP block above.
-                        $blockedData['hint'] = 'Retry with cascade=true to remove this component together with the listed dependents';
-                    }
-                    send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], $blockedData);
-                }
-                send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
+                send_json_response(0, 1, $commandFailure->httpStatus, $shimmed['message'], $blockedData);
             }
-        } else {
-            $result = $serverBuilder->removeComponent($configUuid, $componentType, $componentUuid, $serialNumber);
+            send_json_response(0, 1, $commandFailure->httpStatus, $commandFailure->getMessage());
         }
 
         if ($result['success']) {
@@ -1451,24 +1242,14 @@ function handleRemoveComponent($serverBuilder, $user) {
  * RULE_MAP.md documents this as zero-diffs-by-construction). Additive action
  * -- does not touch add-component/remove-component's own dispatch.
  *
- * Gated behind CommandLayer::mode() !== 'off' (a deliberate deviation from
- * the pack's literal text, documented in
- * migration/08-api-adapters/DEPRECATION.md): ReplaceComponentCommand has
- * never run against production data, so exposing it while the flag is off
- * (production's default) would mean this action either silently no-ops or
- * errors confusingly with no way to have ever been shadow-verified first.
- * Requiring shadow/enforce keeps it inert in production today, same as
- * every other command-layer surface this migration has shipped.
+ * Ungated since P9: COMMAND_LAYER_ENABLED is gone, so the off-mode 403 that
+ * used to front this handler has nothing left to test.
  */
 function handleReplaceComponent($serverBuilder, $user) {
     global $pdo;
 
     header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
 
-    require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
-    if (CommandLayer::mode() === 'off') {
-        send_json_response(0, 1, 403, "server-replace-component is not yet enabled (COMMAND_LAYER_ENABLED is off)");
-    }
     require_once __DIR__ . '/../../../core/models/commands/ReplaceComponentCommand.php';
 
     $configUuid = $_POST['config_uuid'] ?? '';
@@ -1543,21 +1324,15 @@ function handleReplaceComponent($serverBuilder, $user) {
  * U-A.2 — move a server configuration's status_v2 forward via the command
  * layer's TransitionStatusCommand. Additive action; the existing
  * finalize-config action is UNCHANGED by this unit (it still calls
- * ServerBuilder::finalizeConfiguration(), which itself only delegates to
- * TransitionStatusCommand at CommandLayer::mode()==='enforce', per U-C.5).
- * This new action exposes the SAME command directly for any status_v2
- * target (not just 'finalized'), gated off/shadow/enforce identically to
- * handleReplaceComponent above, for the same reason.
+ * ServerBuilder::finalizeConfiguration(), which delegates to
+ * TransitionStatusCommand, per U-C.5). This action exposes the SAME command
+ * directly for any status_v2 target, not just 'finalized'.
  */
 function handleTransitionStatus($serverBuilder, $user) {
     global $pdo;
 
     header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
 
-    require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
-    if (CommandLayer::mode() === 'off') {
-        send_json_response(0, 1, 403, "server-transition-status is not yet enabled (COMMAND_LAYER_ENABLED is off)");
-    }
     require_once __DIR__ . '/../../../core/models/commands/TransitionStatusCommand.php';
 
     $configUuid = $_POST['config_uuid'] ?? '';
@@ -1771,7 +1546,11 @@ function handleGetConfiguration($serverBuilder, $user) {
         $networkConfig = $serverBuilder->getNetworkConfiguration($configUuid);
 
         // Get configuration warnings
-        $configWarnings = $serverBuilder->getConfigurationWarnings($details['components'] ?? []);
+        // U-D.2: the advisory warning list now comes from the ValidationEngine
+        // registry, the same rules every write path is judged by, instead of
+        // ServerBuilder's own parallel M.2/caddy/required-set logic.
+        require_once __DIR__ . '/../../../core/models/validation/ValidateConfigService.php';
+        $configWarnings = ValidateConfigService::warnings($pdo, $configUuid);
 
         // Get storage connectivity tracking
         $storageConnectivity = $serverBuilder->getStorageConnectivity($configUuid, $details['components'] ?? []);
@@ -2154,57 +1933,33 @@ function handleImportVirtual($serverBuilder, $user) {
                     $options['slot_position'] = $component['slot_position'];
                 }
 
-                // U-A.1 leftover, found 2026-08-22: this call site was never routed
-                // through the command layer, so at COMMAND_LAYER_ENABLED=enforce the
-                // virtual-import path still dispatched to the LEGACY builder while
-                // every other add went through AddComponentCommand. That is the
-                // silent bypass ServerBuilder's own platform-feature note warned
-                // would "appear the day someone flips the flag" -- it appeared on
-                // 2026-08-21. It also kept ServerBuilder::addComponent() reachable,
-                // and with it the whole legacy validation chain P9 is meant to
-                // delete (validateComponentCompatibility / validateCPUAddition /
-                // validateRAMAddition / validateComponentQuantity /
-                // assignComponentSlot), every one of which is called only from
-                // addComponent().
-                //
                 // BaseCommand uses the nestable ownTransaction pattern: inside this
                 // handler's outer transaction it neither begins nor rolls back, so a
                 // CommandFailed propagates here without destroying the import, and
                 // the per-component "collect a warning and carry on" behaviour is
                 // preserved exactly. The command also evaluates before it applies,
-                // so a blocked component fails with no partial write -- strictly
-                // safer than the legacy path it replaces.
-                // One more asymmetry to preserve: legacy addComponent() reads
-                // $options['quantity'] (ServerBuilder:621) and reserves N units in a
-                // single call, whereas a command adds exactly ONE unit. So quantity
-                // maps to N sequential dispatches, the same way handleAddComponent
-                // does it -- each dispatch re-locks the UUID's inventory rows and
-                // naturally claims the next available physical unit.
+                // so a blocked component fails with no partial write.
+                //
+                // A command adds exactly ONE unit, so an import entry carrying
+                // quantity N maps to N sequential dispatches, the same way
+                // handleAddComponent does it -- each dispatch re-locks the UUID's
+                // inventory rows and naturally claims the next available unit.
                 require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
-                if (CommandLayer::mode() === 'enforce') {
-                    $importQuantity = max(1, (int)($options['quantity'] ?? 1));
-                    try {
-                        for ($unit = 0; $unit < $importQuantity; $unit++) {
-                            (new AddComponentCommand(
-                                $pdo,
-                                $realConfigUuid,
-                                $componentType,
-                                $uuid,
-                                $options,
-                                (int)$user['id']
-                            ))->execute();
-                        }
-                        $addResult = ['success' => true];
-                    } catch (CommandFailed $importFailure) {
-                        $addResult = ['success' => false, 'message' => $importFailure->getMessage()];
+                $importQuantity = max(1, (int)($options['quantity'] ?? 1));
+                try {
+                    for ($unit = 0; $unit < $importQuantity; $unit++) {
+                        (new AddComponentCommand(
+                            $pdo,
+                            $realConfigUuid,
+                            $componentType,
+                            $uuid,
+                            $options,
+                            (int)$user['id']
+                        ))->execute();
                     }
-                } else {
-                    $addResult = $serverBuilder->addComponent(
-                        $realConfigUuid,
-                        $componentType,
-                        $uuid,
-                        $options
-                    );
+                    $addResult = ['success' => true];
+                } catch (CommandFailed $importFailure) {
+                    $addResult = ['success' => false, 'message' => $importFailure->getMessage()];
                 }
 
                 if ($addResult['success']) {
@@ -2297,121 +2052,15 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to finalize this configuration");
         }
         
-        // U-C.5: at COMMAND_LAYER_ENABLED=enforce, TransitionStatusCommand runs
-        // full validation (Trigger::FINALIZE) INSIDE the row lock (closes V-1
-        // structurally) -- this unlocked API-layer pre-check becomes redundant
-        // and is dropped so finalize has exactly one comprehensive validation
-        // site, not two that can disagree under a race. off/shadow keep it
-        // (shadow's own divergence logging lives in TransitionStatusCommand's
-        // dry-run path, wired at U-A.2 once an API action reaches it directly;
-        // this handler still calls finalizeConfiguration() either way, and
-        // that method's own enforce branch, U-C.5, delegates to the command).
-        require_once __DIR__ . '/../../../core/models/commands/BaseCommand.php';
-        $commandLayerMode = CommandLayer::mode();
-        if ($commandLayerMode !== 'enforce') {
-            $validation = $serverBuilder->validateConfigurationComprehensive($configUuid);
-
-            // U-A.2 (2026-07-29): the finalize shadow hook the U-C.5 comment above
-            // promised. Without it COMMAND_LAYER's soak was unfalsifiable rather
-            // than merely unproven: the FOUR rules that run at Trigger::FINALIZE
-            // (system.singleton, system.inventory_state, system.psu_capacity,
-            // system.required_set) had never executed in production, and enforce
-            // is exactly the flip that DROPS this legacy pre-check in their favour.
-            // No amount of traffic could have produced evidence for that swap.
-            //
-            // The DRY RUN happens here, before the early return and before
-            // finalizeConfiguration() mutates anything, so the command evaluates
-            // the same pre-finalize state legacy is judging. dryRun() locks,
-            // evaluates and ALWAYS rolls back (INV-8) -- a pure read; shadow does
-            // not fork behavior.
-            //
-            // The ROW, though, is written from two places, and that split is the
-            // point:
-            //   - legacy rejected  -> logged just below, because
-            //     send_json_response() exits and anything logged after the early
-            //     return would record only the configs legacy already approved
-            //     (the selection bias CommandShadowLog exists to prevent);
-            //   - legacy accepted  -> logged AFTER finalizeConfiguration() returns,
-            //     against its REAL outcome.
-            //
-            // That second case was wrong in this hook's first version (2026-07-29):
-            // it recorded legacy_blocked = !$validation['valid'], i.e. the
-            // PRE-CHECK's answer, which is exactly the "hardcoded precheck-passed
-            // assumption" handleAddComponent's own shadow hook warns against. The
-            // pre-check passing does not mean the finalize succeeded --
-            // finalizeConfiguration() can still refuse (e.g. an already-finalized
-            // config: comprehensive validation is happy, the status transition is
-            // not). Such a row was logged as legacy_blocked=false while legacy had
-            // in fact returned 400, which is a false agreement/divergence input.
-            if ($commandLayerMode === 'shadow') {
-                $finalizeVerdict = null;
-                $finalizeDryRunFailed = false;
-                $finalizeDryRunError = null;
-                try {
-                    require_once __DIR__ . '/../../../core/models/commands/TransitionStatusCommand.php';
-                    $finalizeVerdict = (new TransitionStatusCommand(
-                        $pdo, $configUuid, 'finalized', $finalNotes, (int)$user['id']
-                    ))->dryRun();
-                } catch (CommandFailed $finalizeFailure) {
-                    // A DECISION, not a missing answer. assertConfigTransition
-                    // (edge legality / server.finalize permission), StateGuard and
-                    // the revision check all reject before evaluate() is reached --
-                    // and at enforce that rejection IS what the caller would get.
-                    // Recorded as dry_run_error='command_failed' so the report can
-                    // compare it against legacy instead of discarding it; see
-                    // command_parity_report's own note on the distinction.
-                    $finalizeDryRunFailed = true;
-                    // Via the shared classifier (F-30): a CommandFailed carrying
-                    // 'command_exception' is a WRAPPED CRASH, and spelling it
-                    // 'command_failed:command_exception' here would let the report's
-                    // prefix test read it as a decision.
-                    $finalizeDryRunError = shadowDryRunErrorLabel($finalizeFailure);
-                    error_log('TransitionStatusCommand shadow dry-run refused: ' . $finalizeFailure->getMessage());
-                } catch (\Throwable $finalizeFailure) {
-                    // A CRASH. There is no verdict here in any sense, and this must
-                    // stay gate-RED -- never let a broken dry run read as agreement.
-                    $finalizeDryRunFailed = true;
-                    $finalizeDryRunError = 'exception';
-                    error_log('TransitionStatusCommand shadow dry-run error: ' . $finalizeFailure->getMessage());
-                }
-                // Legacy's messages are free text and the command's are rule ids,
-                // so they can never string-match (the engine-log trap) -- but
-                // legacy's `type` slugs ARE stable identifiers, and they are the
-                // ONLY discriminator available on a legacy-blocked/command-allowed
-                // row: the command failed nothing there, so no rule id exists for
-                // an expected-diff entry to cite. Without them, exempting one such
-                // diff would silently exempt every diff in that direction.
-                $recordFinalizeShadow = function (bool $legacyBlocked) use (
-                    $configUuid, $validation, $finalizeVerdict, $finalizeDryRunFailed, $finalizeDryRunError
-                ) {
-                    $shadowLogClass = __DIR__ . '/../../../core/models/commands/CommandShadowLog.php';
-                    if (is_file($shadowLogClass)) { require_once $shadowLogClass; }
-                    if (!class_exists('CommandShadowLog')) { return; }
-                    CommandShadowLog::record('finalize', $configUuid, [
-                        'component_type' => null,
-                        'component_uuid' => null,
-                    ], $legacyBlocked, $finalizeDryRunFailed ? null : $finalizeVerdict, [
-                        'legacy_error_count' => count($validation['errors'] ?? []),
-                        'legacy_error_types' => array_values(array_unique(array_map(function ($e) {
-                            return is_array($e) ? ($e['type'] ?? 'unknown') : 'unknown';
-                        }, $validation['errors'] ?? []))),
-                        'dry_run_error' => $finalizeDryRunError,
-                    ], $finalizeDryRunFailed);
-                };
-            }
-
-            if (!$validation['valid']) {
-                if (isset($recordFinalizeShadow)) { $recordFinalizeShadow(true); }
-                send_json_response(0, 1, 400, "Configuration is not valid for finalization", [
-                    'validation_errors' => $validation['errors']
-                ]);
-            }
-        }
+        // U-C.5 / P9: finalize has exactly ONE comprehensive validation site.
+        // TransitionStatusCommand runs the full Trigger::FINALIZE evaluation
+        // INSIDE the row lock (closing V-1 structurally), so the unlocked
+        // API-layer pre-check that used to sit here -- and the shadow logging
+        // that compared the two -- are gone. finalizeConfiguration() below
+        // delegates to that command.
 
         $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes, $user['id']);
 
-        // Legacy passed its pre-check and actually ran: record the REAL outcome.
-        if (isset($recordFinalizeShadow)) { $recordFinalizeShadow(empty($result['success'])); }
 
         if ($result['success']) {
             $configId = $config->get('id');
@@ -2563,56 +2212,6 @@ function handleGetServerLogs($serverBuilder, $user) {
     }
 }
 
-/**
- * TEMPORARY diagnostic (command-layer migration, U-B.4 soak troubleshooting):
- * reports what THIS live PHP process actually reads for each of the 5
- * FLAGS.md migration flags, using the exact same getenv -> $_ENV -> default
- * -> whitelist pattern every flag-consuming class uses (see FLAGS.md).
- * Read-only, no DB writes, no .env content exposed (values only + whether
- * the file was found, not its path). Admin/super_admin only, on top of the
- * server.view ACL gate — remove once the dual-write soak question is settled.
- */
-function handleDebugMigrationFlags($user) {
-    global $pdo;
-
-    if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
-        send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
-    }
-
-    $readFlag = function ($name, $allowed) {
-        $v = getenv($name);
-        if (!is_string($v) || $v === '') {
-            $v = $_ENV[$name] ?? null;
-        }
-        $raw = $v;
-        $v = strtolower(trim((string)$v));
-        return [
-            'value' => in_array($v, $allowed, true) ? $v : 'off',
-            'raw_seen' => $raw === null ? null : (string)$raw,
-        ];
-    };
-
-    $flags = [
-        'DUAL_WRITE_ENABLED' => $readFlag('DUAL_WRITE_ENABLED', ['off', 'on']),
-        'STATE_MACHINE_ENABLED' => $readFlag('STATE_MACHINE_ENABLED', ['off', 'shadow', 'enforce']),
-        'ENGINE_MODE' => $readFlag('ENGINE_MODE', ['off', 'shadow', 'enforce']),
-        'COMMAND_LAYER_ENABLED' => $readFlag('COMMAND_LAYER_ENABLED', ['off', 'shadow', 'enforce']),
-        'READ_FROM_ROWS' => $readFlag('READ_FROM_ROWS', ['off', 'sample', 'on']),
-    ];
-
-    $envPath = __DIR__ . '/../../../.env';
-    $envInfo = [
-        'found' => file_exists($envPath),
-        'mtime' => file_exists($envPath) ? date('c', filemtime($envPath)) : null,
-    ];
-
-    send_json_response(1, 1, 200, "Migration flag diagnostic (this process)", [
-        'flags' => $flags,
-        'env_file' => $envInfo,
-        'php_sapi' => PHP_SAPI,
-        'server_time' => date('c'),
-    ]);
-}
 
 /**
  * TEMPORARY diagnostic (shadow-soak verification): tail of ONE shadow stream's
@@ -2696,7 +2295,7 @@ function handleDebugShadowLog($user) {
  * syntax error in these files 500s every request that touches them, so exercising
  * the API after a deletion is the working substitute.
  *
- * Admin/super_admin only, same gate as handleDebugMigrationFlags(). Remove
+ * Admin/super_admin only, on top of the server.view ACL gate. Remove
  * alongside the rest of the debug-* actions when P9 closes.
  */
 function handleDebugDeadcode($user) {
@@ -2779,7 +2378,7 @@ function handleDebugDeadcode($user) {
  * round-trip the owner has had to do by hand for every soak check so far.
  * Read-only SELECTs only, no writes, no data outside these two tables for
  * the one config_uuid given. Admin/super_admin only, same gate as
- * handleDebugMigrationFlags(). Remove alongside it once U-B.4 closes.
+ * the sibling debug actions. Remove once it stops earning its keep.
  */
 function handleDebugConfigDualWrite($user) {
     global $pdo;
@@ -2883,7 +2482,12 @@ function handleValidateConfiguration($serverBuilder, $user) {
         }
 
         // Use the NEW comprehensive validation method
-        $validation = $serverBuilder->validateConfigurationComprehensive($configUuid);
+        // U-D.2: one validation authority. The registry that decides an add,
+        // a removal and a finalize now also answers this endpoint, so the
+        // 'validates clean but refuses to finalize' divergence is structurally
+        // impossible rather than merely unobserved.
+        require_once __DIR__ . '/../../../core/models/validation/ValidateConfigService.php';
+        $validation = ValidateConfigService::evaluate($pdo, $configUuid);
 
         // Update database with validation results
         try {
@@ -3966,9 +3570,21 @@ function handleSetPlatform($serverBuilder, $user) {
         // The included NIC IS a stocked unit, so it goes in through the ordinary add
         // path with its own validation and slot assignment -- after the board is
         // committed, because that is what the slot check reads.
+        //
+        // 2026-08-29: this call had NO CommandLayer::mode() gate, so at enforce it ran
+        // the legacy addComponent() unconditionally -- the same class of bypass fixed in
+        // handleImportVirtual() on 2026-08-21 (compute-platform support post-dates that
+        // fix, 2026-08-25, which is how a fourth ungated call site reappeared). P9 then
+        // removed the flag and the legacy branch with it.
         $nicResult = null;
         if (!empty($version['included_nic']['uuid'])) {
-            $nicResult = $serverBuilder->addComponent($configUuid, 'nic', $version['included_nic']['uuid']);
+            require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
+            try {
+                (new AddComponentCommand($pdo, $configUuid, 'nic', $version['included_nic']['uuid'], [], (int)$user['id']))->execute();
+                $nicResult = ['success' => true];
+            } catch (CommandFailed $nicFailure) {
+                $nicResult = ['success' => false, 'message' => $nicFailure->getMessage()];
+            }
         }
 
         logActivity($pdo, $user['id'], 'Compute platform installed', 'server', $config->get('id'),

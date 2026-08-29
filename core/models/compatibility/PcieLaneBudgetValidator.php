@@ -22,11 +22,12 @@ require_once __DIR__ . '/ServerState.php';
  * legitimate configurations it rejects is exactly the set of configurations
  * that were silently over-subscribed.
  *
- * Rollout flag: PCIE_LANE_CHECK_ENABLED (env / .env)
- *   - "enforce"  : reject over-subscribed additions (HTTP 4xx).
- *   - "warn"     : allow the addition, log a warning (default during rollout).
- *   - "off"      : skip entirely (legacy behaviour).
- *   - unset      : defaults to "warn" on first deploy.
+ * SCOPE AFTER P9 (2026-08-30). The add-time entry point (validateAddition()) and
+ * the PCIE_LANE_CHECK_ENABLED flag that gated it are gone — PcieLaneBudgetRule in
+ * the ValidationEngine registry owns add-time lane budgeting now. What survives is
+ * evaluateAssembledStorageLaneBudget(), still called live from
+ * StorageConnectionValidator::checkPCIeLaneBudget(), plus the lane arithmetic
+ * scripts/verify/ledger_report.php recomputes against.
  */
 class PcieLaneBudgetValidator
 {
@@ -46,93 +47,7 @@ class PcieLaneBudgetValidator
         $this->componentDataService = ComponentDataService::getInstance();
     }
 
-    /**
-     * Current rollout mode. Reads env; falls back to "warn" so a fresh deploy
-     * does not silently bypass the check.
-     *
-     * @return string one of "enforce", "warn", "off"
-     */
-    public static function currentMode(): string
-    {
-        $mode = getenv('PCIE_LANE_CHECK_ENABLED');
-        if (!is_string($mode) || $mode === '') {
-            $mode = $_ENV['PCIE_LANE_CHECK_ENABLED'] ?? 'warn';
-        }
-        $mode = strtolower(trim((string)$mode));
-        if (!in_array($mode, ['enforce', 'warn', 'off'], true)) {
-            return 'warn';
-        }
-        return $mode;
-    }
 
-    /**
-     * Validate a proposed component addition against the total PCIe lane
-     * budget of the existing configuration.
-     *
-     * @param array  $configData     Row from server_configurations (the locked snapshot)
-     * @param string $componentType  'nic' | 'hbacard' | 'pciecard' | 'risercard' | 'storage'
-     * @param string $componentUuid  UUID of the component being added
-     * @param array|null $componentSpec Optional pre-loaded spec to avoid a second disk read
-     * @return array {
-     *   ok:        bool,   // true if the check executed cleanly (independent of allowed)
-     *   allowed:   bool,   // true if the addition fits within the budget
-     *   mode:      string, // "enforce" | "warn" | "off"
-     *   budget:    int,    // total lanes available
-     *   used:      int,    // lanes already consumed
-     *   requested: int,    // lanes this new component would consume
-     *   message:   string, // human-readable explanation
-     * }
-     */
-    public function validateAddition(array $configData, string $componentType, string $componentUuid, ?array $componentSpec = null, int $quantity = 1): array
-    {
-        $mode = self::currentMode();
-
-        if ($mode === 'off' || !in_array($componentType, ['nic', 'hbacard', 'pciecard', 'risercard', 'storage'], true)) {
-            return [
-                'ok' => true, 'allowed' => true, 'mode' => $mode,
-                'budget' => 0, 'used' => 0, 'requested' => 0,
-                'message' => 'PCIe lane check skipped'
-            ];
-        }
-
-        try {
-            $budget = $this->computeLaneBudget($configData);
-            $used = $this->computeLanesUsed($configData);
-
-            if ($componentSpec === null) {
-                $componentSpec = $this->componentDataService->getComponentSpecifications($componentType, $componentUuid) ?: [];
-            }
-            $qty = max(1, $quantity);
-            $perCard = $this->extractLaneCount($componentSpec);
-            $requested = $perCard * $qty;
-
-            $allowed = ($requested === 0) || (($used + $requested) <= $budget);
-
-            $message = $allowed
-                ? "PCIe lane budget OK: $used + $requested ≤ $budget"
-                : "PCIe lane budget exceeded: $budget total, $used already allocated, " .
-                  ($qty > 1 ? "$qty x{$perCard} cards" : "this x{$perCard} card") .
-                  " needs $requested more lanes";
-
-            return [
-                'ok'        => true,
-                'allowed'   => $allowed,
-                'mode'      => $mode,
-                'budget'    => $budget,
-                'used'      => $used,
-                'requested' => $requested,
-                'message'   => $message,
-            ];
-        } catch (Throwable $e) {
-            error_log("PcieLaneBudgetValidator error: " . $e->getMessage());
-            // Never block on validator bugs — fail-open.
-            return [
-                'ok' => false, 'allowed' => true, 'mode' => $mode,
-                'budget' => 0, 'used' => 0, 'requested' => 0,
-                'message' => 'PCIe lane check errored (fail-open): ' . $e->getMessage()
-            ];
-        }
-    }
 
     /**
      * Single-authority lane evaluation over an ALREADY-ASSEMBLED component map
