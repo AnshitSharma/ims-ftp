@@ -389,108 +389,42 @@ class TicketValidator
     }
 
     /**
-     * Extract all components from server configuration
-     * 
+     * Extract all components from a server configuration.
+     *
+     * U-D.3b: reads config_components rows through ConfigReadRouter instead of decoding
+     * the nine JSON columns. The output shape (['type' => …, 'uuid' => …]) is unchanged,
+     * so every caller is untouched.
+     *
+     * The risercard/pciecard disambiguation the old body did by catalog membership is no
+     * longer needed for rows: the split landed 2026-08-14 and config_components carries
+     * 'risercard' as its own component_type. The catalog test is kept ONLY for entries
+     * that still arrive typed 'pciecard', so a row written before the split is still
+     * classified the way it always was.
+     *
      * @param array $server Server configuration row
      * @return array List of ['type' => string, 'uuid' => string]
      */
     private function getServerComponents($server)
     {
+        require_once __DIR__ . '/../config/ConfigReadRouter.php';
+        require_once __DIR__ . '/../server/ServerBuilder.php';
+
         $components = [];
+        $routed = ConfigReadRouter::components(
+            new ServerBuilder($this->pdo), $this->pdo, is_array($server) ? $server : []
+        );
 
-        // 1. Motherboard
-        if (!empty($server['motherboard_uuid'])) {
-            $components[] = ['type' => 'motherboard', 'uuid' => $server['motherboard_uuid']];
-        }
-
-        // 2. Chassis
-        if (!empty($server['chassis_uuid'])) {
-            $components[] = ['type' => 'chassis', 'uuid' => $server['chassis_uuid']];
-        }
-
-        // 3. CPU (JSON object with 'cpus' array)
-        if (!empty($server['cpu_configuration'])) {
-            $cpuConfig = json_decode($server['cpu_configuration'], true);
-            if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                foreach ($cpuConfig['cpus'] as $cpu) {
-                    if (!empty($cpu['uuid'])) {
-                        $components[] = ['type' => 'cpu', 'uuid' => $cpu['uuid']];
-                    }
-                }
+        foreach ($routed as $entry) {
+            $type = $entry['component_type'] ?? null;
+            $uuid = $entry['component_uuid'] ?? null;
+            if ($type === null || empty($uuid)) {
+                continue;
             }
-        }
-
-        // 4. RAM (JSON array)
-        if (!empty($server['ram_configuration'])) {
-            $ramConfig = json_decode($server['ram_configuration'], true);
-            if (is_array($ramConfig)) {
-                foreach ($ramConfig as $ram) {
-                    if (!empty($ram['uuid'])) {
-                        $components[] = ['type' => 'ram', 'uuid' => $ram['uuid']];
-                    }
-                }
+            if ($type === 'pciecard'
+                && $this->componentDataService->validateComponentUuid('risercard', $uuid)) {
+                $type = 'risercard';
             }
-        }
-
-        // 5. Storage (JSON array)
-        if (!empty($server['storage_configuration'])) {
-            $storageConfig = json_decode($server['storage_configuration'], true);
-            if (is_array($storageConfig)) {
-                foreach ($storageConfig as $storage) {
-                    if (!empty($storage['uuid'])) {
-                        $components[] = ['type' => 'storage', 'uuid' => $storage['uuid']];
-                    }
-                }
-            }
-        }
-
-        // 6. NIC (JSON object with 'nics' array)
-        if (!empty($server['nic_config'])) {
-            $nicConfig = json_decode($server['nic_config'], true);
-            if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                foreach ($nicConfig['nics'] as $nic) {
-                    if (!empty($nic['uuid'])) {
-                        $components[] = ['type' => 'nic', 'uuid' => $nic['uuid']];
-                    }
-                }
-            }
-        }
-
-        // 7. Caddy (JSON array)
-        if (!empty($server['caddy_configuration'])) {
-            $caddyConfig = json_decode($server['caddy_configuration'], true);
-            if (is_array($caddyConfig)) {
-                foreach ($caddyConfig as $caddy) {
-                    if (!empty($caddy['uuid'])) {
-                        $components[] = ['type' => 'caddy', 'uuid' => $caddy['uuid']];
-                    }
-                }
-            }
-        }
-
-        // 8. HBA Card
-        if (!empty($server['hbacard_uuid'])) {
-            $components[] = ['type' => 'hbacard', 'uuid' => $server['hbacard_uuid']];
-        }
-
-        // 9. PCIe Cards (JSON array).
-        // The legacy column holds risers too (see ServerBuilder::updatePcieCardConfiguration()),
-        // so each entry is typed by catalog membership — otherwise a riser would be
-        // compat-checked against the pciecard spec file, which stops containing risers
-        // once step 7 of the 2026-08-14 split lands.
-        if (!empty($server['pciecard_configurations'])) {
-            $pcieConfig = json_decode($server['pciecard_configurations'], true);
-            if (is_array($pcieConfig)) {
-                foreach ($pcieConfig as $card) {
-                    if (!empty($card['uuid'])) {
-                        $isRiser = $this->componentDataService->validateComponentUuid('risercard', $card['uuid']);
-                        $components[] = [
-                            'type' => $isRiser ? 'risercard' : 'pciecard',
-                            'uuid' => $card['uuid'],
-                        ];
-                    }
-                }
-            }
+            $components[] = ['type' => $type, 'uuid' => $uuid];
         }
 
         return $components;

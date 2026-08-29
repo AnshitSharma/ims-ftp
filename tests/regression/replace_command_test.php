@@ -66,16 +66,35 @@ $rpFnNext  = $rpFnStart !== false ? strpos($apiSrc, "\nfunction ", $rpFnStart + 
 $rpFnBody  = $rpFnStart === false
     ? ''
     : ($rpFnNext === false ? substr($apiSrc, $rpFnStart) : substr($apiSrc, $rpFnStart, $rpFnNext - $rpFnStart));
-$rpGateAt   = $rpFnBody !== '' ? strpos($rpFnBody, "if (CommandLayer::mode() === 'off')") : false;
-$rpGateEnd  = $rpGateAt !== false ? strpos($rpFnBody, "ReplaceComponentCommand.php'", $rpGateAt) : false;
-$rpGateBody = ($rpGateAt !== false && $rpGateEnd !== false && $rpGateEnd > $rpGateAt)
-    ? substr($rpFnBody, $rpGateAt, $rpGateEnd - $rpGateAt)
-    : '';
-$rpNewCmdAt = $rpFnBody !== '' ? strpos($rpFnBody, 'new ReplaceComponentCommand(') : false;
-check('the new action is flag-gated (CommandLayer::mode() !== off), not reachable in production by default',
-    $rpGateBody !== ''
-    && strpos($rpGateBody, 'send_json_response(') !== false
-    && $rpNewCmdAt !== false && $rpGateAt < $rpNewCmdAt);
+// REWRITTEN 2026-08-30 (P9/U-D.4). The assertion here used to be the exact
+// OPPOSITE of what it is now: it pinned that server-replace-component was
+// CommandLayer-gated and therefore "not reachable in production by default",
+// which is what U-A.2's rollout posture required at the time. The flag is gone
+// and the action is live, so the same line of defence has to be re-stated
+// against the gates that actually remain -- ACL and the platform-ownership
+// guard -- and both must sit AHEAD of the command construction, which is the
+// real "cannot be invoked by just anyone" claim.
+$rpNewCmdAt   = $rpFnBody !== '' ? strpos($rpFnBody, 'new ReplaceComponentCommand(') : false;
+$rpPermAt     = $rpFnBody !== '' ? strpos($rpFnBody, 'userCanActOnConfig(') : false;
+$rpPlatformAt = $rpFnBody !== '' ? strpos($rpFnBody, 'assertNotPlatformOwned(') : false;
+$rpRequiredAt = $rpFnBody !== '' ? strpos($rpFnBody, 'are required') : false;
+
+check('the action reaches ReplaceComponentCommand with no rollout flag in the way',
+    $rpFnBody !== ''
+    && $rpNewCmdAt !== false
+    && strpos($rpFnBody, 'getenv(') === false
+    && preg_match('/\b(CommandLayer|StateGuard|ValidationEngine|ConfigReadRouter)::mode\(\)/', $rpFnBody) !== 1);
+check('required-parameter validation precedes the command',
+    $rpRequiredAt !== false && $rpNewCmdAt !== false && $rpRequiredAt < $rpNewCmdAt);
+check('the ACL check (userCanActOnConfig, server.edit_all) precedes the command',
+    $rpPermAt !== false && $rpNewCmdAt !== false && $rpPermAt < $rpNewCmdAt
+    && strpos($rpFnBody, "'server.edit_all'") !== false);
+check('the platform-ownership guard precedes the command',
+    $rpPlatformAt !== false && $rpNewCmdAt !== false && $rpPlatformAt < $rpNewCmdAt);
+check('a missing configuration is a 404 before any of the above can matter',
+    $rpFnBody !== '' && strpos($rpFnBody, 'Server configuration not found') !== false);
+check('the action is registered in permission_map.php (an unmapped operation is rejected outright)',
+    strpos(file_get_contents("$ROOT/api/permission_map.php"), 'replace-component') !== false);
 
 // =========================================================================
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";

@@ -3,9 +3,9 @@
  * NIC Port Tracker
  *
  * Stateless calculator for tracking NIC port assignments and SFP compatibility.
- * Similar pattern to UnifiedSlotTracker - reads from database JSON on-demand.
  *
- * Data Source: server_configurations.sfp_configuration JSON column
+ * Data Source: config_components rows, read through ServerState / ConfigReadRouter
+ *              (U-D.3b; was server_configurations.sfp_configuration + nic_config)
  * Purpose: Track which SFPs are assigned to which NIC ports
  */
 
@@ -60,7 +60,7 @@ class NICPortTracker {
             ];
         }
 
-        // Get current SFP assignments from sfp_configuration JSON
+        // Get current SFP assignments from the config_components rows (U-D.3b)
         $assignments = $this->getSfpAssignments($configUuid);
 
         // Mark occupied ports
@@ -101,20 +101,23 @@ class NICPortTracker {
      * @return array Port tracking data for all NICs
      */
     public function getPortUtilizationForConfig($configUuid) {
-        // P2 (M11): read nic_config through the single guarded read-model instead of a
-        // local SELECT + raw json_decode (TP-5B). Behaviour is unchanged — empty / null /
-        // malformed nic_config yields [], which the guard below treats as "no NICs",
-        // exactly as the previous null check did.
+        // U-D.3b: the NIC list comes from config_components rows via ServerState's typed
+        // accessor, not from the nic_config column. source_type survives the move --
+        // ConfigReadRouter derives it from the synthetic "onboard-" spec_uuid, which is
+        // what actually distinguishes an onboard port from a card everywhere else.
         $state = ServerState::fromConfigUuid($this->pdo, $configUuid);
-        $nicConfig = $state ? $state->getDecodedColumn('nic_config') : [];
-        if (!$nicConfig || !isset($nicConfig['nics'])) {
+        $nics = $state ? $state->getNics() : [];
+        if (!$nics) {
             return ['nics' => []];
         }
 
         $result = ['nics' => []];
 
-        foreach ($nicConfig['nics'] as $nic) {
-            $nicUuid = $nic['uuid'];
+        foreach ($nics as $nic) {
+            $nicUuid = $nic['component_uuid'] ?? null;
+            if (empty($nicUuid)) {
+                continue;
+            }
             $sourceType = $nic['source_type'] ?? 'component';
 
             // Get NIC specs
@@ -162,27 +165,35 @@ class NICPortTracker {
     }
 
     /**
-     * Get all SFP assignments from sfp_configuration JSON
+     * Get all SFP assignments for a configuration
      *
      * @param string $configUuid Server configuration UUID
      * @return array List of SFP assignments
      */
     private function getSfpAssignments($configUuid) {
-        // P2 (M11): read sfp_configuration through the single guarded read-model instead
-        // of a local SELECT + raw json_decode (TP-5B). Behaviour unchanged.
+        // U-D.3b: SFP assignments come from config_components rows. A row's parent_id
+        // resolves to its NIC's spec_uuid and its slot_ref ("port_3") to the port index,
+        // both already mapped by ConfigReadRouter -- the same two fields the
+        // sfp_configuration blob carried, from the store that is now authoritative.
+        //
+        // Only ASSIGNED modules belong here: the caller matches on parent uuid + port,
+        // so an unassigned SFP (no parent row) was never in the old 'sfps' list either
+        // -- it sat in 'unassigned_sfps', which this method skipped.
         $state = ServerState::fromConfigUuid($this->pdo, $configUuid);
-        $sfpConfig = $state ? $state->getDecodedColumn('sfp_configuration') : [];
+        $sfps = $state ? $state->getSfps() : [];
 
-        if (!$sfpConfig || !isset($sfpConfig['sfps'])) {
-            return [];
-        }
-
-        // Enrich with SFP model info
         $assignments = [];
-        foreach ($sfpConfig['sfps'] as $sfp) {
-            $sfpSpecs = $this->componentDataService->getComponentSpecifications('sfp', $sfp['uuid']);
-            $sfp['sfp_model'] = $sfpSpecs['model'] ?? null;
-            $assignments[] = $sfp;
+        foreach ($sfps as $sfp) {
+            if (empty($sfp['component_uuid']) || empty($sfp['parent_nic_uuid'])) {
+                continue;
+            }
+            $sfpSpecs = $this->componentDataService->getComponentSpecifications('sfp', $sfp['component_uuid']);
+            $assignments[] = [
+                'uuid'            => $sfp['component_uuid'],
+                'parent_nic_uuid' => $sfp['parent_nic_uuid'],
+                'port_index'      => $sfp['port_index'] ?? null,
+                'sfp_model'       => $sfpSpecs['model'] ?? null,
+            ];
         }
 
         return $assignments;

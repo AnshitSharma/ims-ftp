@@ -4,7 +4,7 @@
  *
  * Proves ConfigComponentWriter's ledger hooks (wired into afterLegacyAdd/afterLegacyRemove):
  *   - flag off: zero config_resources writes.
- *   - add motherboard/chassis (flag on): ResourceCatalog::provides() rows land in the SAME
+ *   - add motherboard/chassis: ResourceCatalog::provides() rows land in the SAME
  *     transaction as the component row, provider_id = the new component, consumer_id NULL.
  *   - scalar consumption (pcie_lane): adding NVMe storage against a pre-seeded CPU-provided
  *     lane budget inserts a consumption row (provider_id = the CPU's row, consumer_id = the
@@ -164,31 +164,18 @@ file_put_contents("$tmpImsData/pciecard/pci-level-3.json", json_encode([
 
 putenv("IMS_DATA_PATH=$tmpImsData");
 
-// -----------------------------------------------------------------------
-// A. Flag off: no config_resources writes at all
-// -----------------------------------------------------------------------
-$configA = 'TEST-LDW-OFF-' . substr(md5(uniqid()), 0, 8);
-try {
-    putenv('DUAL_WRITE_ENABLED'); // unset -> off
-    makeConfig($pdo, $configA);
-
-    $pdo->beginTransaction();
-    ConfigComponentWriter::afterLegacyAdd($pdo, $configA, 'motherboard', $mbUuid, null, null, 'motherboardinventory', 1001, 1);
-    $pdo->commit();
-    $count = (int)$pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configA))->fetchColumn();
-    check('flag off: no config_resources rows written', $count === 0);
-    $componentCount = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configA))->fetchColumn();
-    check('flag off: no config_components row written either (whole hook is a no-op)', $componentCount === 0);
-} finally {
-    cleanupConfig($pdo, $configA);
-}
+// SECTION A REMOVED 2026-08-30 (P9/U-D.4). It asserted that with
+// DUAL_WRITE_ENABLED unset the ledger hook was a complete no-op: no
+// config_resources row and no config_components row. The flag is deleted and
+// the hook runs unconditionally, so there is no "off" state to assert. The
+// sections below drop their putenv and their "flag on:" prefixes -- the same
+// guarantees, now stated without a precondition, which is strictly stronger.
 
 // -----------------------------------------------------------------------
-// B. Flag on: motherboard add -> provider rows (pcie_slot, m2_slot, riser_slot)
+// B. motherboard add -> provider rows (pcie_slot, m2_slot, riser_slot)
 // -----------------------------------------------------------------------
 $configB = 'TEST-LDW-MB-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configB);
 
     $pdo->beginTransaction();
@@ -223,7 +210,6 @@ try {
 // -----------------------------------------------------------------------
 $configC = 'TEST-LDW-CH-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configC);
 
     $pdo->beginTransaction();
@@ -244,7 +230,6 @@ try {
 // -----------------------------------------------------------------------
 $configD = 'TEST-LDW-LANE-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configD);
 
     $repo = new ConfigComponentRepository($pdo);
@@ -290,7 +275,6 @@ try {
 // -----------------------------------------------------------------------
 $configD2 = 'TEST-LDW-LANE-M2-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configD2);
 
     $repo = new ConfigComponentRepository($pdo);
@@ -320,13 +304,15 @@ try {
 // -----------------------------------------------------------------------
 $configE = 'TEST-LDW-FAIL-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configE);
 
     $pdo->beginTransaction();
-    // Legacy write analog (what updateServerConfigurationTable would have done).
-    $pdo->prepare('UPDATE server_configurations SET nic_config = ? WHERE config_uuid = ?')
-        ->execute([json_encode(['should-not-persist' => true]), $configE]);
+    // U-D.3c: a companion write by the caller, standing in for whatever else an add
+    // does around the writer call. It was an UPDATE of nic_config; that column is
+    // dropped, so this uses notes -- an ordinary column the drop does not touch, which
+    // keeps this rollback proof runnable instead of dying with the store it named.
+    $pdo->prepare('UPDATE server_configurations SET notes = ? WHERE config_uuid = ?')
+        ->execute(['SHOULD-NOT-PERSIST', $configE]);
 
     $threw = false;
     try {
@@ -340,8 +326,8 @@ try {
         $pdo->rollback();
     }
 
-    $legacyAfter = $pdo->query("SELECT nic_config FROM server_configurations WHERE config_uuid = " . $pdo->quote($configE))->fetchColumn();
-    check('induced failure: legacy write rolled back', $legacyAfter === null);
+    $companionAfter = $pdo->query("SELECT notes FROM server_configurations WHERE config_uuid = " . $pdo->quote($configE))->fetchColumn();
+    check("induced failure: the caller's own write rolled back", $companionAfter === null);
     $componentCount = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configE))->fetchColumn();
     check('induced failure: no config_components row leaked', $componentCount === 0);
     $resourceCount = (int)$pdo->query("SELECT COUNT(*) FROM config_resources WHERE config_uuid = " . $pdo->quote($configE))->fetchColumn();
@@ -362,7 +348,6 @@ try {
 // -----------------------------------------------------------------------
 $configF = 'TEST-LDW-CPU-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configF);
 
     $pdo->beginTransaction();
@@ -384,7 +369,6 @@ try {
 
 $configG = 'TEST-LDW-NIC-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configG);
 
     $pdo->beginTransaction();
@@ -409,7 +393,6 @@ try {
 // attach to; adding the CPU itself is proven separately in Scenario F.
 $configH = 'TEST-LDW-HBA-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configH);
 
     $repo = new ConfigComponentRepository($pdo);
@@ -442,7 +425,6 @@ try {
 
 $configI = 'TEST-LDW-PCIE-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configI);
 
     $repo = new ConfigComponentRepository($pdo);
@@ -482,7 +464,6 @@ try {
 // -----------------------------------------------------------------------
 $configJ = 'TEST-LDW-DEFER-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     makeConfig($pdo, $configJ);
 
     // 1. CPU first, no chassis: must not throw; psu_watt consumption deferred.

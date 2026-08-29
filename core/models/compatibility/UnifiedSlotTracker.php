@@ -584,9 +584,9 @@ class UnifiedSlotTracker {
             $riserCount = 0;
             if ($config) {
                 $configData = $config->getData();
-                if (!empty($configData['pciecard_configurations'])) {
-                    $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                    if (is_array($pcieConfigs)) {
+                {
+                    $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                    {
                         foreach ($pcieConfigs as $pcie) {
                             // Count risers = cards seated in a motherboard riser BAY.
                             // Audit D: the bare `riser_` prefix also matched ordinary
@@ -669,9 +669,9 @@ class UnifiedSlotTracker {
             $pcieSlotComponents = [];
             if ($config) {
                 $configData = $config->getData();
-                if (!empty($configData['pciecard_configurations'])) {
-                    $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                    if (is_array($pcieConfigs)) {
+                {
+                    $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                    {
                         foreach ($pcieConfigs as $pcie) {
                             if (!empty($pcie['slot_position']) &&
                                 strpos($pcie['slot_position'], 'pcie_') === 0) {
@@ -957,9 +957,93 @@ class UnifiedSlotTracker {
     }
 
     /**
+     * U-D.3b: the config's component list, from config_components rows through the one
+     * router every other reader uses. Replaces this class's eleven direct reads of the
+     * nine JSON columns.
+     *
+     * Two fields make that possible and were added to ConfigReadRouter for it:
+     * 'slot_position' (from the row's slot_ref -- the legacy extractor never carried it,
+     * which is why this class had to read raw columns at all) and, for NICs,
+     * 'source_type'. safeJsonDecode() is no longer needed for them: a malformed blob is
+     * not a failure mode a typed row can have.
+     *
+     * @param string $configUuid
+     * @param mixed  $preloadedConfig ServerConfiguration, if the caller already has one
+     * @param string|null $type restrict to one component_type
+     * @return array[] routed component entries
+     */
+    private function routedComponents($configUuid, $preloadedConfig = null, $type = null) {
+        $config = $preloadedConfig ?: ServerConfiguration::loadByUuid($this->pdo, $configUuid);
+        if (!$config) {
+            return [];
+        }
+        require_once __DIR__ . '/../config/ConfigReadRouter.php';
+        require_once __DIR__ . '/../server/ServerBuilder.php';
+        $all = ConfigReadRouter::components(new ServerBuilder($this->pdo), $this->pdo, $config->getData());
+        if ($type === null) {
+            return $all;
+        }
+        $out = [];
+        foreach ($all as $c) {
+            if (($c['component_type'] ?? null) === $type) {
+                $out[] = $c;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * U-D.3b: config_components rows for one or more component types, re-presented in
+     * the flat entry shape ('uuid', 'slot_position', 'quantity', 'serial_number') that
+     * each caller below already indexes by.
+     *
+     * Shaped rather than typed on purpose: every call site used to decode one JSON
+     * column and read those key names off its entries, so this keeps the loop bodies
+     * unchanged and confines the migration to the line that produces the list.
+     *
+     * WHY SOME CALLERS PASS TWO TYPES. The retired pciecard_configurations column held
+     * riser cards as well as plain PCIe cards -- ServerBuilder's writer put both there
+     * -- and the 2026-08-14 split gave risers their own component_type. A reader after
+     * riser BAYS (getUsedRiserSlots, getRiserCardsInConfig) must therefore ask for
+     * ['risercard', 'pciecard'], or it stops seeing the very thing it is looking for.
+     *
+     * @param array    $configData server_configurations row
+     * @param string[] $types      component types to include
+     * @return array[] entries in the flat shape
+     */
+    private function routedTypes($configData, array $types) {
+        if (!is_array($configData) || empty($configData['config_uuid']) || !$types) {
+            return [];
+        }
+
+        require_once __DIR__ . '/../config/ConfigReadRouter.php';
+        require_once __DIR__ . '/../server/ServerBuilder.php';
+        $all = ConfigReadRouter::components(new ServerBuilder($this->pdo), $this->pdo, $configData);
+
+        $entries = [];
+        foreach ($all as $c) {
+            if (!in_array($c['component_type'] ?? null, $types, true)) {
+                continue;
+            }
+            $entry = [
+                'uuid'          => $c['component_uuid'] ?? null,
+                'quantity'      => $c['quantity'] ?? 1,
+                'slot_position' => $c['slot_position'] ?? null,
+            ];
+            if (isset($c['serial_number'])) {
+                $entry['serial_number'] = $c['serial_number'];
+            }
+            if (($c['component_type'] ?? null) === 'nic') {
+                $entry['source_type'] = $c['source_type'] ?? 'component';
+            }
+            $entries[] = $entry;
+        }
+        return $entries;
+    }
+
+    /**
      * TP-1D: Count installed CPUs (populated sockets) in a configuration.
-     * Sums the quantity of every CPU entry in cpu_configuration.cpus[]; a missing
-     * quantity counts as 1. Used to decide which socket-gated PCIe slots are live.
+     * Sums the quantity of every CPU row; rows are one-per-unit, so each counts 1. Used to decide which socket-gated PCIe slots are live.
      *
      * @param string $configUuid Server configuration UUID
      * @return int Number of populated CPU sockets (0 if none / on error)
@@ -970,17 +1054,8 @@ class UnifiedSlotTracker {
             if (!$config) {
                 return 0;
             }
-            $configData = $config->getData();
-            $cpuJson = $configData['cpu_configuration'] ?? null;
-            if (empty($cpuJson)) {
-                return 0;
-            }
-            $cpuData = $this->safeJsonDecode($cpuJson, 'cpu_configuration');
-            if (!isset($cpuData['cpus']) || !is_array($cpuData['cpus'])) {
-                return 0;
-            }
             $count = 0;
-            foreach ($cpuData['cpus'] as $cpu) {
+            foreach ($this->routedComponents($configUuid, $config, 'cpu') as $cpu) {
                 $count += max(1, (int)($cpu['quantity'] ?? 1));
             }
             return $count;
@@ -988,31 +1063,6 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::getInstalledCpuCount error: " . $e->getMessage());
             return 0;
         }
-    }
-
-    /**
-     * TP-5B: Safe JSON decode for server_configurations columns.
-     *
-     * The slot tracker reads the config's JSON columns directly (the domain model
-     * exposes only a flat UUID list), so it must guard decoding itself instead of
-     * silently turning malformed JSON into null. Mirrors
-     * ServerBuilder::safeJsonDecode; logs parse errors and always returns an array.
-     *
-     * @param string|null $jsonString Raw column value
-     * @param string $fieldName Column name, for error logging
-     * @return array Decoded array, or [] on empty/invalid input
-     */
-    private function safeJsonDecode($jsonString, $fieldName = 'unknown') {
-        if (empty($jsonString)) {
-            return [];
-        }
-        $decoded = json_decode($jsonString, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            error_log("UnifiedSlotTracker JSON ERROR in $fieldName: " . json_last_error_msg()
-                . " | Raw: " . substr((string)$jsonString, 0, 100));
-            return [];
-        }
-        return is_array($decoded) ? $decoded : [];
     }
 
     /**
@@ -1204,75 +1254,33 @@ class UnifiedSlotTracker {
                 return [];
             }
 
-            $configData = $config->getData();
             // L1: accumulate ALL occupants per slot first, so two cards persisted to
             // the same slot_position are detected instead of silently overwriting each
             // other. The flattened slot=>uuid map (first occupant) is rebuilt at the
             // end to preserve the return contract for existing callers.
             $occupants = [];
 
-            // Check PCIe cards configuration
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
-                    foreach ($pcieConfigs as $pcie) {
-                        if (!empty($pcie['slot_position']) &&
-                            self::isPcieSlotPosition($pcie['slot_position'])) {
-                            $occupants[$pcie['slot_position']][] = $pcie['uuid'];
-                        }
-                    }
+            // pciecard / hbacard / component-nic / AIC storage all occupy a PCIe slot;
+            // an onboard NIC never does. One pass over the routed rows replaces four
+            // per-column decodes -- and it finally SEES the hbacard the legacy body could
+            // only warn about, because a row carries slot_ref where the hbacard_uuid
+            // scalar column had nowhere to put one.
+            foreach ($this->routedComponents($configUuid, $config) as $entry) {
+                $entryType = $entry['component_type'] ?? null;
+                if (!in_array($entryType, ['pciecard', 'hbacard', 'nic', 'storage'], true)) {
+                    continue;
                 }
-            }
-
-            // HBA-TRACK FIX: Check HBA cards with JSON array format (includes slot_position)
-            if (!empty($configData['hbacard_config'])) {
-                $hbaConfigs = $this->safeJsonDecode($configData['hbacard_config'], 'hbacard_config');
-                if (is_array($hbaConfigs)) {
-                    // Handle migration: single object vs array
-                    if (isset($hbaConfigs['uuid'])) {
-                        $hbaConfigs = [$hbaConfigs];
-                    }
-                    foreach ($hbaConfigs as $hba) {
-                        if (!empty($hba['slot_position']) && self::isPcieSlotPosition($hba['slot_position'])) {
-                            $occupants[$hba['slot_position']][] = $hba['uuid'];
-                            error_log("HBA-TRACK: HBA card occupies slot: {$hba['slot_position']}");
-                        }
-                    }
+                if ($entryType === 'nic' && ($entry['source_type'] ?? 'component') !== 'component') {
+                    continue;
                 }
-            }
-            // BACKWARD COMPATIBILITY: Check legacy hbacard_uuid column
-            else if (!empty($configData['hbacard_uuid'])) {
-                error_log("HBA-TRACK WARNING: HBA card {$configData['hbacard_uuid']} has no slot position (legacy format)");
-            }
-
-            // Check NIC config
-            if (!empty($configData['nic_config'])) {
-                $nicConfig = $this->safeJsonDecode($configData['nic_config'], 'nic_config');
-                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                    foreach ($nicConfig['nics'] as $nic) {
-                        // Only component NICs use PCIe slots, not onboard NICs
-                        if (($nic['source_type'] ?? 'component') === 'component' &&
-                            !empty($nic['slot_position']) &&
-                            self::isPcieSlotPosition($nic['slot_position'])) {
-                            $occupants[$nic['slot_position']][] = $nic['uuid'];
-                        }
-                    }
+                $slot = $entry['slot_position'] ?? null;
+                if (empty($slot) || !self::isPcieSlotPosition($slot)) {
+                    continue;
                 }
-            }
-
-            // BUGFIX (TP-1E): PCIe add-in-card SSDs persisted under storage_configuration
-            // physically occupy an expansion slot. They were invisible here, so a NIC/HBA
-            // could be assigned the same physical slot. Count any storage entry that
-            // carries a pcie_ slot_position (AIC SSDs), exactly like the other card types.
-            if (!empty($configData['storage_configuration'])) {
-                $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
-                if (is_array($storageConfigs)) {
-                    foreach ($storageConfigs as $storage) {
-                        if (!empty($storage['slot_position']) &&
-                            self::isPcieSlotPosition($storage['slot_position'])) {
-                            $occupants[$storage['slot_position']][] = $storage['uuid'] ?? 'storage-aic';
-                        }
-                    }
+                $occupants[$slot][] = $entry['component_uuid']
+                    ?? ($entryType === 'storage' ? 'storage-aic' : null);
+                if ($entryType === 'hbacard') {
+                    error_log("HBA-TRACK: HBA card occupies slot: " . $slot);
                 }
             }
 
@@ -1322,9 +1330,9 @@ class UnifiedSlotTracker {
             // as consuming a motherboard riser bay it does not occupy, inflating
             // riser usage while that same card stayed invisible to
             // getUsedPCIeSlots(). One card, miscounted in both directions.
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
+            {
+                $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                {
                     foreach ($pcieConfigs as $pcie) {
                         if (!empty($pcie['slot_position']) &&
                             self::isRiserBaySlot($pcie['slot_position'])) {
@@ -1547,9 +1555,9 @@ class UnifiedSlotTracker {
             $riserCards = [];
 
             // Get riser cards from PCIe cards configuration
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
+            {
+                $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                {
                     foreach ($pcieConfigs as $pcie) {
                         // Seated in a motherboard riser BAY. Audit D: the bare `riser_`
                         // prefix also admitted cards in riser-provided slots; the
@@ -1704,9 +1712,9 @@ class UnifiedSlotTracker {
             ];
 
             // Get storage components from configuration
-            if (!empty($configData['storage_configuration'])) {
-                $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
-                if (is_array($storageConfigs)) {
+            {
+                $storageConfigs = $this->routedTypes($configData, ['storage']);
+                {
                     foreach ($storageConfigs as $storage) {
                         $storageUuid = $storage['uuid'] ?? null;
                         $slotPosition = $storage['slot_position'] ?? '';
@@ -1770,9 +1778,9 @@ class UnifiedSlotTracker {
             $m2Cards = [];
 
             // Check PCIe cards for M.2 provision capability
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
+            {
+                $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                {
                     foreach ($pcieConfigs as $pcie) {
                         $pcieUuid = $pcie['uuid'] ?? null;
                         if ($pcieUuid) {
@@ -1812,9 +1820,9 @@ class UnifiedSlotTracker {
     private function countM2SlotsOnCard($cardUuid, $configData) {
         $count = 0;
 
-        if (!empty($configData['storage_configuration'])) {
-            $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
-            if (is_array($storageConfigs)) {
+        {
+            $storageConfigs = $this->routedTypes($configData, ['storage']);
+            {
                 foreach ($storageConfigs as $storage) {
                     $storageUuid = $storage['uuid'] ?? null;
                     $slotPosition = $storage['slot_position'] ?? '';
@@ -1893,9 +1901,9 @@ class UnifiedSlotTracker {
             $usedU2Slots = [];
             if ($config) {
                 $configData = $config->getData();
-                if (!empty($configData['storage_configuration'])) {
-                    $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], 'storage_configuration');
-                    if (is_array($storageConfigs)) {
+                {
+                    $storageConfigs = $this->routedTypes($configData, ['storage']);
+                    {
                         foreach ($storageConfigs as $storage) {
                             $storageSpecs = $this->componentDataService->getComponentSpecifications('storage', $storage['uuid'] ?? null);
                             if ($storageSpecs) {
@@ -1953,50 +1961,32 @@ class UnifiedSlotTracker {
             //   riser_{$riserUuid}_pcie_x16_slot_1
             $riserSlotPrefix = "riser_{$riserUuid}_pcie_";
 
-            // A riser's slots can hold any PCIe card type, and each type persists to its
-            // own column. Scanning only pciecard_configurations meant a NIC or HBA seated
-            // in a riser was not seen as a dependent, so validateRiserRemoval() would
-            // report the riser as safe to remove and strand that card in a slot that no
-            // longer exists.
-            $sources = [
-                ['column' => 'pciecard_configurations', 'type' => 'pciecard'],
-                ['column' => 'hbacard_config',          'type' => 'hbacard'],
-            ];
-
-            foreach ($sources as $source) {
-                if (empty($configData[$source['column']])) {
-                    continue;
-                }
-                $entries = $this->safeJsonDecode($configData[$source['column']], $source['column']);
-                if (!is_array($entries)) {
-                    continue;
-                }
-                // hbacard_config may be a single object rather than a list (migration shape).
-                if (isset($entries['uuid'])) {
-                    $entries = [$entries];
-                }
-                foreach ($entries as $entry) {
-                    if (!is_array($entry)) {
-                        continue;
-                    }
+            // Scanning only PCIe cards meant a NIC or HBA seated in a riser was not
+            // seen as a dependent, so validateRiserRemoval() would report the riser as
+            // safe to remove and strand that card in a slot that no longer exists.
+            // A riser's slots can hold any PCIe card type. The "single object rather
+            // than a list" hbacard_config migration shape the old body had to unwrap
+            // here cannot occur on the rows side.
+            foreach (['pciecard', 'hbacard'] as $sourceType) {
+                foreach ($this->routedTypes($configData, [$sourceType]) as $entry) {
                     $slotPosition = $entry['slot_position'] ?? '';
-                    if (strpos($slotPosition, $riserSlotPrefix) === 0) {
+                    if ($slotPosition !== null && $slotPosition !== ''
+                        && strpos($slotPosition, $riserSlotPrefix) === 0) {
                         $cardsOnRiser[] = [
                             'uuid' => $entry['uuid'] ?? null,
                             'slot_position' => $slotPosition,
-                            'component_type' => $source['type'],
+                            'component_type' => $sourceType,
                             'is_riser' => false
                         ];
                     }
                 }
             }
 
-            // NICs live under nic_config->nics. Onboard NICs never occupy a slot.
-            if (!empty($configData['nic_config'])) {
-                $nicConfig = $this->safeJsonDecode($configData['nic_config'], 'nic_config');
-                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                    foreach ($nicConfig['nics'] as $nic) {
-                        if (!is_array($nic) || ($nic['source_type'] ?? 'component') !== 'component') {
+            // A NIC row is a slot occupant too. Onboard NICs never occupy a slot.
+            {
+                {
+                    foreach ($this->routedTypes($configData, ['nic']) as $nic) {
+                        if (($nic['source_type'] ?? 'component') !== 'component') {
                             continue;
                         }
                         $slotPosition = $nic['slot_position'] ?? '';
@@ -2151,9 +2141,9 @@ class UnifiedSlotTracker {
             $riserUuids = array_column($riserCards, 'component_uuid');
 
             // Check all PCIe cards
-            if (!empty($configData['pciecard_configurations'])) {
-                $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], 'pciecard_configurations');
-                if (is_array($pcieConfigs)) {
+            {
+                $pcieConfigs = $this->routedTypes($configData, ['risercard', 'pciecard']);
+                {
                     foreach ($pcieConfigs as $pcie) {
                         $slotPosition = $pcie['slot_position'] ?? '';
 

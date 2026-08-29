@@ -156,20 +156,19 @@ class PcieLaneBudgetValidator
     public function computeLaneBudget(array $configData): int
     {
         $total = 0;
-        // P2 (M11): decode config columns through the single guarded read-model (TP-5B)
-        // instead of raw json_decode. Behaviour-preserving: empty/malformed → [].
-        $state = ServerState::fromConfigData($configData);
+        // U-D.3b: the CPU list comes from config_components rows via ServerState's typed
+        // accessor. Per-entry quantity is 1 on the rows side (one row per physical unit)
+        // where legacy could carry a single quantity=N entry, so the multiply below is
+        // now usually x1 -- the TOTAL is the same either way, which is all this sums.
+        $state = ServerState::fromConfigData($configData, $this->pdo);
 
         // CPUs
-        $cpus = $state->getDecodedColumn('cpu_configuration');
-        if (isset($cpus['cpus']) && is_array($cpus['cpus'])) {
-            foreach ($cpus['cpus'] as $cpu) {
-                if (empty($cpu['uuid'])) continue;
-                $specs = $this->dataUtils->getCPUByUUID($cpu['uuid']);
-                if ($specs && isset($specs['pcie_lanes'])) {
-                    $qty = max(1, (int)($cpu['quantity'] ?? 1));
-                    $total += (int)$specs['pcie_lanes'] * $qty;
-                }
+        foreach ($state->getCpus() as $cpu) {
+            if (empty($cpu['component_uuid'])) continue;
+            $specs = $this->dataUtils->getCPUByUUID($cpu['component_uuid']);
+            if ($specs && isset($specs['pcie_lanes'])) {
+                $qty = max(1, (int)($cpu['quantity'] ?? 1));
+                $total += (int)$specs['pcie_lanes'] * $qty;
             }
         }
 
@@ -195,58 +194,55 @@ class PcieLaneBudgetValidator
     public function computeLanesUsed(array $configData): int
     {
         $used = 0;
-        // P2 (M11): decode config columns through the single guarded read-model (TP-5B)
-        // instead of raw json_decode. Behaviour-preserving: empty/malformed → [].
-        $state = ServerState::fromConfigData($configData);
+        // U-D.3b: every list below comes from config_components rows via ServerState's
+        // typed accessors, replacing four per-column json_decodes.
+        $state = ServerState::fromConfigData($configData, $this->pdo);
 
-        $walkFlatJson = function ($column, $type) use (&$used, $state) {
-            foreach ($state->getDecodedColumn($column) as $entry) {
-                if (!is_array($entry) || empty($entry['uuid'])) continue;
-                $specs = $this->componentDataService->getComponentSpecifications($type, $entry['uuid']);
+        $walkType = function (array $entries, $type) use (&$used) {
+            foreach ($entries as $entry) {
+                if (empty($entry['component_uuid'])) continue;
+                $specs = $this->componentDataService->getComponentSpecifications($type, $entry['component_uuid']);
                 $qty = max(1, (int)($entry['quantity'] ?? 1));
                 $used += $this->extractLaneCount($specs ?? []) * $qty;
             }
         };
 
-        // NIC lives under nic_config.nics
-        $nicData = $state->getDecodedColumn('nic_config');
-        if (isset($nicData['nics']) && is_array($nicData['nics'])) {
-            foreach ($nicData['nics'] as $nic) {
-                if (empty($nic['uuid'])) continue;
-                // Onboard NICs share motherboard lanes; not counted against expansion budget.
-                if (($nic['source_type'] ?? '') === 'onboard') continue;
-                $specs = $nic['specifications'] ?? null;
-                if (!$specs) {
-                    $specs = $this->componentDataService->getComponentSpecifications('nic', $nic['uuid']);
-                }
-                $qty = max(1, (int)($nic['quantity'] ?? 1));
-                $used += $this->extractLaneCount($specs ?? []) * $qty;
-            }
+        foreach ($state->getNics() as $nic) {
+            if (empty($nic['component_uuid'])) continue;
+            // Onboard NICs share motherboard lanes; not counted against expansion budget.
+            // The rows side marks them via ConfigReadRouter's source_type; the belt-and-
+            // braces prefix test is the same one line 101 above already applies.
+            if (($nic['source_type'] ?? '') === 'onboard'
+                || strpos((string)$nic['component_uuid'], 'onboard-') === 0) continue;
+            // The inline 'specifications' blob the legacy nic_config carried is gone --
+            // rows store identity, not specs. ComponentDataService is the only spec
+            // authority anyway, and this was already the fallback for every entry that
+            // lacked the blob.
+            $specs = $this->componentDataService->getComponentSpecifications('nic', $nic['component_uuid']);
+            $qty = max(1, (int)($nic['quantity'] ?? 1));
+            $used += $this->extractLaneCount($specs ?? []) * $qty;
         }
 
-        $walkFlatJson('hbacard_config', 'hbacard');
-        $walkFlatJson('pciecard_configurations', 'pciecard');
+        $walkType($state->getHbas(), 'hbacard');
+        $walkType($state->getPcieCards(), 'pciecard');
 
         // Storage: only count NVMe (PCIe) storage. SAS/SATA don't consume PCIe lanes directly.
         {
-            $arr = $state->getDecodedColumn('storage_configuration');
-            if (is_array($arr)) {
-                foreach ($arr as $entry) {
-                    if (!is_array($entry) || empty($entry['uuid'])) continue;
-                    $specs = $this->componentDataService->getComponentSpecifications('storage', $entry['uuid']);
-                    if (!$specs) continue;
-                    $interface = (string)($specs['interface'] ?? '');
-                    if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) continue;
-                    // BUGFIX (TP-1C): M.2 NVMe drives use dedicated motherboard M.2 slots
-                    // (with their own chipset lanes), NOT the shared PCIe expansion-lane
-                    // budget. StorageConnectionValidator excludes them; this validator
-                    // must too, otherwise an M.2 add inflates the system budget here and
-                    // causes a false "lane budget exceeded".
-                    $formFactor = strtolower((string)($specs['form_factor'] ?? ''));
-                    if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) continue;
-                    $qty = max(1, (int)($entry['quantity'] ?? 1));
-                    $used += $this->extractLaneCount($specs) * $qty;
-                }
+            foreach ($state->getStorage() as $entry) {
+                if (empty($entry['component_uuid'])) continue;
+                $specs = $this->componentDataService->getComponentSpecifications('storage', $entry['component_uuid']);
+                if (!$specs) continue;
+                $interface = (string)($specs['interface'] ?? '');
+                if (stripos($interface, 'pcie') === false && stripos($interface, 'nvme') === false) continue;
+                // BUGFIX (TP-1C): M.2 NVMe drives use dedicated motherboard M.2 slots
+                // (with their own chipset lanes), NOT the shared PCIe expansion-lane
+                // budget. StorageConnectionValidator excludes them; this validator
+                // must too, otherwise an M.2 add inflates the system budget here and
+                // causes a false "lane budget exceeded".
+                $formFactor = strtolower((string)($specs['form_factor'] ?? ''));
+                if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) continue;
+                $qty = max(1, (int)($entry['quantity'] ?? 1));
+                $used += $this->extractLaneCount($specs) * $qty;
             }
         }
 

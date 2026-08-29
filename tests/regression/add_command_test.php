@@ -66,46 +66,62 @@ $addFnBody  = $addFnStart === false
     ? ''
     : ($addFnNext === false ? substr($apiSrc, $addFnStart) : substr($apiSrc, $addFnStart, $addFnNext - $addFnStart));
 
-$addShadowAt  = $addFnBody !== '' ? strpos($addFnBody, "\$commandLayerMode === 'shadow'") : false;
-$addEnforceAt = $addFnBody !== '' ? strpos($addFnBody, "\$commandLayerMode === 'enforce'") : false;
-// The dispatch chain ends where post-dispatch response building begins.
-$addChainEnd  = $addEnforceAt !== false ? strpos($addFnBody, "if (\$result['success']) {", $addEnforceAt) : false;
-$addShadowBranch = ($addShadowAt !== false && $addEnforceAt !== false && $addEnforceAt > $addShadowAt)
-    ? substr($addFnBody, $addShadowAt, $addEnforceAt - $addShadowAt)
-    : '';
-$addEnforceBranch = ($addEnforceAt !== false && $addChainEnd !== false && $addChainEnd > $addEnforceAt)
-    ? substr($addFnBody, $addEnforceAt, $addChainEnd - $addEnforceAt)
-    : '';
+// REWRITTEN 2026-08-30 (P9/U-D.4). These assertions used to pin the SHAPE of the
+// COMMAND_LAYER_ENABLED dispatch chain: the flag hoisted once, then a shadow
+// branch calling dryRun() alongside the real legacy add, then an enforce branch
+// calling execute(). The flag, both branches and the legacy add are all deleted,
+// so what replaces them is the stronger claim the deletion actually bought:
+// the command is not one of several possible paths, it is the ONLY path.
+check('handleAddComponent dispatches to AddComponentCommand',
+    $addFnBody !== '' && strpos($addFnBody, 'new AddComponentCommand(') !== false);
+check('handleAddComponent calls execute(), unconditionally -- no mode, no branch',
+    $addFnBody !== '' && strpos($addFnBody, '$addCommand->execute()') !== false);
+// The dispatch must not be reachable-only-sometimes. A reintroduced flag read of
+// ANY name inside this handler fails here, not just the deleted CommandLayer one.
+check('no rollout-flag read gates the dispatch (no getenv/mode() inside the handler)',
+    $addFnBody !== ''
+    && strpos($addFnBody, 'getenv(') === false
+    && preg_match('/\b(CommandLayer|StateGuard|ValidationEngine|ConfigReadRouter)::mode\(\)/', $addFnBody) !== 1);
+check('the deleted legacy add path is not called from this handler',
+    $addFnBody !== '' && strpos($addFnBody, '$serverBuilder->addComponent(') === false);
+check('dryRun() is not called on the add path (dryRun existed for the shadow comparison, which is gone)',
+    $addFnBody !== '' && strpos($addFnBody, '->dryRun()') === false);
 
-// Was a strpos over the WHOLE file, which any of the 38 handlers could satisfy.
-// Now: this handler reads the flag ONCE, into the hoist, ahead of both branches.
-$addHoistAt = $addFnBody !== '' ? strpos($addFnBody, '$commandLayerMode = CommandLayer::mode();') : false;
-check('handleAddComponent references CommandLayer::mode()',
-    $addHoistAt !== false && $addShadowAt !== false && $addEnforceAt !== false
-    && $addHoistAt < $addShadowAt && $addShadowAt < $addEnforceAt);
-// The "not execute()" half of this label was never actually asserted; it is now,
-// over the branch rather than over 200 bytes of it.
-check('shadow path calls dryRun(), not execute()',
-    $addShadowBranch !== ''
-    && strpos($addShadowBranch, '$addCommand->dryRun()') !== false
-    && strpos($addShadowBranch, '->execute(') === false);
-check('enforce path calls execute()',
-    $addEnforceBranch !== ''
-    && strpos($addEnforceBranch, '$addCommand->execute()') !== false);
-check('shadow path still calls the real legacy add ($serverBuilder->addComponent) and sets $result from it -- INV-8, mirrors handleRemoveComponent (U-C.3)',
-    $addShadowBranch !== ''
-    && strpos($addShadowBranch, '$result = $serverBuilder->addComponent(') !== false);
-check('shadow diff comparison uses the legacy call\'s REAL outcome (!$result[\'success\']), not a hardcoded false',
-    strpos($apiSrc, '$legacyBlocked = !$result[\'success\']') !== false
-    && preg_match('/\$legacyPrecheckBlocked\s*=\s*false;/', $apiSrc) !== 1);
-
-// =========================================================================
-echo "-- shadow-fidelity fix (P4 verify record) --\n";
+// Tree-wide, not just this handler: CommandLayer was deleted outright, so a
+// surviving CALL is a dangling reference that would fatal on the first request.
+// Comment lines are excluded deliberately -- server_api.php:3574 and
+// BaseCommand.php:10 both record what the flag used to do, and that history is
+// worth keeping. Anything OUTSIDE a comment is a live call and must be gone.
+$liveApiSrc = implode("\n", array_filter(
+    explode("\n", $apiSrc),
+    function ($l) {
+        $t = ltrim($l);
+        return $t !== '' && strpos($t, '//') !== 0 && strpos($t, '*') !== 0 && strpos($t, '/*') !== 0 && strpos($t, '#') !== 0;
+    }
+));
+check('no live CommandLayer reference survives in server_api.php (the class is deleted)',
+    strpos($liveApiSrc, 'CommandLayer') === false);
+check('the CommandLayer class file itself is gone',
+    !is_file("$ROOT/core/models/commands/CommandLayer.php"));
 $sbSrc = file_get_contents("$ROOT/core/models/server/ServerBuilder.php");
-check('validateComponentAddition\'s shadow hook resolves parent_id from parent_nic_uuid (no longer hardcoded null)',
-    strpos($sbSrc, 'resolvedParentId') !== false && strpos($sbSrc, "'parent_id' => \$resolvedParentId") !== false);
-check('validateComponentAddition\'s shadow hook resolves slot_ref from port_index for sfp',
-    strpos($sbSrc, 'resolvedSlotRef') !== false);
+check('ServerBuilder no longer defines addComponent() (U-D.2 deleted the legacy chain)',
+    preg_match('/function\s+addComponent\s*\(/', $sbSrc) !== 1);
+
+// The refusal envelope the command layer is responsible for. Previously only the
+// happy path was pinned structurally; these two are what callers actually see.
+check('a revision_mismatch is answered 409 with the current revision',
+    $addFnBody !== ''
+    && strpos($addFnBody, "\$commandFailure->errorType === 'revision_mismatch'") !== false
+    && strpos($addFnBody, 'current_revision') !== false);
+check('a blocking Verdict is translated through VerdictShim, not raw',
+    $addFnBody !== ''
+    && strpos($addFnBody, "\$commandFailure->errorType === 'validation_blocked'") !== false
+    && strpos($addFnBody, 'VerdictShim::fromVerdict(') !== false);
+check('quantity > 1 dispatches N commands inside ONE transaction (all-or-nothing)',
+    $addFnBody !== ''
+    && preg_match('/if\s*\(\$quantity\s*>\s*1\)/', $addFnBody) === 1
+    && strpos($addFnBody, 'beginTransaction()') !== false
+    && strpos($addFnBody, 'rollBack()') !== false);
 
 // =========================================================================
 echo "-- DB-backed scenario (real scratch DB when reachable; SKIPPED otherwise) --\n";

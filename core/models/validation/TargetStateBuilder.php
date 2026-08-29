@@ -6,49 +6,36 @@ require_once __DIR__ . '/../config/ResourceCatalog.php';
 
 /**
  * Builds TargetState snapshots. Pure array math — never writes to the DB.
- * fromCurrent() reads rows if config_components has any live rows for the
- * config (post-backfill / dual-write reality); otherwise it falls back to
- * mirroring server_configurations' legacy JSON columns via
- * ServerBuilder::extractComponentsFromJson() — flagged 'source'=>'json' on
- * every row it produces so parity_report.php (U-V.4) can segment rows-path
- * evaluations from json-fallback-path evaluations separately.
+ * fromCurrent() reads config_components rows, and nothing else: a config with
+ * no live rows has no components. U-D.3b removed the legacy-JSON fallback and
+ * its 'source' => 'json' tuples along with the columns that fed them, so every
+ * row this class emits is now 'rows' or 'pending'. The two KNOWN GAPs that
+ * fallback carried (no slot_ref for pciecard/hbacard, no parent linkage beyond
+ * sfp->nic, and status_v2 always null) are gone with it — those were properties
+ * of the JSON blob, not of the rows store.
  *
- * KNOWN GAP (documented, not a defect): the JSON fallback path cannot
- * recover slot_ref for pciecard/hbacard (legacy JSON never stored it) or
- * parent linkage for anything but sfp->nic (via parent_nic_uuid). Rules
- * that need slot_ref (U-R.3/U-R.6) degrade to "treat as unplaced" for
- * json-source rows, matching that no live slot bookkeeping exists pre-backfill
- * either. Once U-B.4 backfills, fromCurrent() takes the rows path for every
- * config and this gap disappears on its own.
- *
- * 'status_v2' field (added U-R.7, migration/04-validation-engine): rows-path
- * components carry their {inventory_table}.status_v2 (U-SM.1's per-inventory-table
+ * 'status_v2' field (added U-R.7, migration/04-validation-engine): components
+ * carry their {inventory_table}.status_v2 (U-SM.1's per-inventory-table
  * lifecycle enum), fetched in one batched SELECT per distinct inventory_table
  * (never per-row) so SystemInventoryStateRule can see live inventory state.
- * KNOWN GAP: json-fallback rows always get status_v2 = null — the legacy JSON
- * blob never stored a per-serial inventory status (only optionally a
- * serial_number, confirmed by reading ServerBuilder::extractComponentsFromJson()
- * in full), so there is nothing to recover pre-backfill. Same class of gap as
- * the slot_ref/parent-linkage one above; self-resolves once U-B.4 backfills.
  */
 final class TargetStateBuilder
 {
     public static function fromCurrent(PDO $pdo, string $configUuid): TargetState
     {
+        // U-D.3b: config_components is the only store. The json fallback that used to
+        // sit here (and the whole jsonFallbackRows() synthesiser behind it) is gone with
+        // the columns it read. It fired for exactly one config class — a build with no
+        // rows at all — and for that class the read path had ALREADY returned nothing
+        // since P9 made ConfigReadRouter unconditional, so the mutation path was the
+        // last place still seeing components the reader denied existed. Empty here is
+        // now the same answer both sides give.
         $repo = new ConfigComponentRepository($pdo);
         $rows = $repo->liveRows($configUuid);
-        if (!empty($rows)) {
-            return new TargetState(self::normalizeRows($rows, self::fetchStatusV2($pdo, $rows)));
-        }
-
-        $stmt = $pdo->prepare('SELECT * FROM server_configurations WHERE config_uuid = ?');
-        $stmt->execute([$configUuid]);
-        $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$configRow) {
+        if (empty($rows)) {
             return new TargetState([]);
         }
-
-        return new TargetState(self::jsonFallbackRows($pdo, $configRow));
+        return new TargetState(self::normalizeRows($rows, self::fetchStatusV2($pdo, $rows)));
     }
 
     /** @return TargetState a new state with $row appended (id assigned if absent) */
@@ -252,70 +239,4 @@ final class TargetStateBuilder
         return $statusById;
     }
 
-    /** @return array[] source='json' tuples mirrored from the legacy JSON columns */
-    private static function jsonFallbackRows(PDO $pdo, array $configRow): array
-    {
-        require_once __DIR__ . '/../server/ServerBuilder.php';
-        $sb = new ServerBuilder($pdo);
-        $extracted = $sb->extractComponentsFromJson($configRow);
-
-        $rows = [];
-        $syntheticId = -1;
-        $nicRowIdByUuid = [];
-
-        // nic rows first so sfp entries below can resolve parent_nic_uuid -> row id.
-        foreach ($extracted as $entry) {
-            if ($entry['component_type'] !== 'nic' || empty($entry['component_uuid'])) {
-                continue;
-            }
-            $id = $syntheticId--;
-            $rows[] = [
-                'id' => $id,
-                'component_type' => 'nic',
-                'spec_uuid' => $entry['component_uuid'],
-                'inventory_table' => null,
-                'inventory_id' => null,
-                'serial_number' => null,
-                'parent_id' => null,
-                'slot_ref' => null,
-                'source' => 'json',
-                'status_v2' => null,
-            ];
-            $nicRowIdByUuid[$entry['component_uuid']] = $id; // last-wins if duplicate specs (ambiguous by design, see class docblock)
-        }
-
-        foreach ($extracted as $entry) {
-            if ($entry['component_type'] === 'nic') {
-                continue; // already emitted above
-            }
-            if (empty($entry['component_uuid'])) {
-                continue;
-            }
-            $quantity = max(1, (int)($entry['quantity'] ?? 1));
-            for ($i = 0; $i < $quantity; $i++) {
-                $row = [
-                    'id' => $syntheticId--,
-                    'component_type' => $entry['component_type'],
-                    'spec_uuid' => $entry['component_uuid'],
-                    'inventory_table' => null,
-                    'inventory_id' => null,
-                    'serial_number' => $entry['serial_number'] ?? null,
-                    'parent_id' => null,
-                    'slot_ref' => null,
-                    'source' => 'json',
-                    'status_v2' => null,
-                ];
-                if ($entry['component_type'] === 'sfp') {
-                    $parentNicUuid = $entry['parent_nic_uuid'] ?? null;
-                    $row['parent_id'] = $parentNicUuid !== null ? ($nicRowIdByUuid[$parentNicUuid] ?? null) : null;
-                    $row['slot_ref'] = isset($entry['port_index']) && $entry['port_index'] !== null
-                        ? 'port_' . $entry['port_index']
-                        : null;
-                }
-                $rows[] = $row;
-            }
-        }
-
-        return $rows;
-    }
 }

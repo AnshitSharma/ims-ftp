@@ -59,6 +59,23 @@ try {
 }
 $pdo = scratch_db_or_skip($pdo, "backfill.php's ledger second pass against a live scratch schema");
 
+// U-D.3c END OF LIFE. backfill.php reads the nine legacy JSON columns and turns them
+// into config_components + config_resources rows. Once those columns are dropped there
+// is nothing for it to read and nothing for this suite to drive -- its subject is
+// retired, not broken. Skip with a reason rather than dying on "Unknown column", and
+// skip rather than deleting the file, because until the drop actually runs in
+// production this is still a working instrument over a script that still has an input.
+//
+// run_tests.php counts a suite that executes no checks as RAN NOTHING and warns that it
+// is NOT evidence, so this cannot quietly read as a pass.
+if (!$pdo->query("SHOW COLUMNS FROM server_configurations LIKE 'cpu_configuration'")->fetch()) {
+    fwrite(STDOUT, "SKIP: the legacy JSON columns are gone (U-D.3c). backfill.php has no input "
+        . "left to read, so its ledger pass cannot be driven. Retire scripts/backfill/backfill.php, "
+        . "scripts/backfill/Extractor.php and this suite together.
+");
+    exit(0);
+}
+
 function runBackfill(string $root, string $dbHost, string $dbName, string $dbUser, string $dbPass, array $args): array
 {
     $env = [

@@ -43,11 +43,34 @@ check("switch has 'server-transition-status' -> handleTransitionStatus", strpos(
 check('handleReplaceComponent function exists', strpos($src, 'function handleReplaceComponent(') !== false);
 check('handleTransitionStatus function exists', strpos($src, 'function handleTransitionStatus(') !== false);
 
-echo "-- flag-gated deviation (both new actions require COMMAND_LAYER_ENABLED != off) --\n";
-check("handleReplaceComponent rejects when CommandLayer::mode() === 'off'",
-    preg_match("/function handleReplaceComponent[\\s\\S]{0,400}CommandLayer::mode\\(\\) === 'off'/", $src) === 1);
-check("handleTransitionStatus rejects when CommandLayer::mode() === 'off'",
-    preg_match("/function handleTransitionStatus[\\s\\S]{0,400}CommandLayer::mode\\(\\) === 'off'/", $src) === 1);
+echo "-- the flag-gated deviation is closed: both actions are unconditionally live --\n";
+// REWRITTEN 2026-08-30 (P9/U-D.4). Both assertions pinned the U-A.2 rollout
+// deviation: server-replace-component and server-transition-status refused
+// outright while COMMAND_LAYER_ENABLED was off, so a rollback could not leave a
+// half-wired v2 action reachable. The flag is deleted and both actions are live,
+// so the deviation is closed, not violated -- and the DEPRECATION.md note that
+// recorded it should no longer describe them as gated.
+//
+// The replacement is the guarantee that has to hold now they are always
+// reachable: neither may be gated on anything, and both must still be
+// permission-mapped, because ACL is the only gate left. An unmapped operation is
+// rejected as "Unknown operation", so a missing map entry would make the action
+// dead rather than dangerous -- but a mapped action with no ACL row would be the
+// opposite, which is why the seeder check below still matters.
+foreach (['handleReplaceComponent', 'handleTransitionStatus'] as $fn) {
+    $fnStart = strpos($src, "function $fn(");
+    $fnNext  = $fnStart !== false ? strpos($src, "\nfunction ", $fnStart + 1) : false;
+    $fnBody  = $fnStart === false
+        ? ''
+        : ($fnNext === false ? substr($src, $fnStart) : substr($src, $fnStart, $fnNext - $fnStart));
+    check("$fn() reads no rollout flag -- it is unconditionally reachable",
+        $fnBody !== ''
+        && strpos($fnBody, 'getenv(') === false
+        && preg_match('/\b(CommandLayer|StateGuard|ValidationEngine|ConfigReadRouter)::mode\(\)/', $fnBody) !== 1);
+    check("$fn() still enforces permission before it mutates anything",
+        $fnBody !== ''
+        && (strpos($fnBody, 'userCanActOnConfig(') !== false || strpos($fnBody, 'hasPermission(') !== false));
+}
 
 echo "-- expected_revision -> 409 with current_revision (add/remove/replace/transition) --\n";
 check('handleAddComponent maps revision_mismatch to 409 with current_revision',

@@ -4,6 +4,7 @@ require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
 require_once __DIR__ . '/../../../core/models/components/ComponentSpecPaths.php';
 require_once __DIR__ . '/../../../core/models/server/ServerBuilder.php';
 require_once __DIR__ . '/../../../core/models/server/ServerConfiguration.php';
+require_once __DIR__ . '/../../../core/models/config/ConfigReadRouter.php';
 require_once __DIR__ . '/../../../core/models/compatibility/UnifiedSlotTracker.php';
 require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
@@ -897,44 +898,69 @@ function handleAddComponent($serverBuilder, $user) {
             // AUTO-ASSIGNMENT TRIGGER: If NIC was added, check for unassigned SFPs and auto-assign (Requirement #2)
             if ($componentType === 'nic') {
                 try {
-                    // Get server configuration to check for unassigned SFPs
-                    $stmt = $pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
+                    // U-D.3b: an unassigned SFP is a config_components row with no
+                    // parent_id -- the rows-store spelling of the old
+                    // sfp_configuration.unassigned_sfps bucket. Assigning one sets its
+                    // parent_id to the new NIC's row and its slot_ref to the port, which
+                    // is exactly what moving it between the two JSON buckets meant.
+                    $stmt = $pdo->prepare(
+                        "SELECT id, spec_uuid FROM config_components
+                          WHERE config_uuid = ? AND component_type = 'sfp'
+                            AND parent_id IS NULL AND removed_at IS NULL
+                          ORDER BY id"
+                    );
                     $stmt->execute([$configUuid]);
-                    $configData = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $unassignedSfps = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-                    if ($configData && !empty($configData['sfp_configuration'])) {
-                        $sfpConfig = json_decode($configData['sfp_configuration'], true);
-                        $unassignedSfps = $sfpConfig['unassigned_sfps'] ?? [];
+                    // The NIC's own row, which the assigned SFPs will point at. It was
+                    // written by AddComponentCommand moments ago, in this same request.
+                    $nicRowStmt = $pdo->prepare(
+                        "SELECT id FROM config_components
+                          WHERE config_uuid = ? AND component_type = 'nic' AND spec_uuid = ?
+                            AND removed_at IS NULL
+                          ORDER BY id DESC LIMIT 1"
+                    );
+                    $nicRowStmt->execute([$configUuid, $componentUuid]);
+                    $nicRowId = $nicRowStmt->fetchColumn();
 
-                        if (!empty($unassignedSfps)) {
+                    if (!empty($unassignedSfps) && $nicRowId) {
+                        {
                             require_once __DIR__ . '/../../../core/models/compatibility/SFPCompatibilityResolver.php';
                             $resolver = new SFPCompatibilityResolver($pdo);
 
-                            // Extract SFP UUIDs
-                            $sfpUuids = array_map(function($sfp) {
-                                return $sfp['uuid'];
-                            }, $unassignedSfps);
+                            $sfpRowIdByUuid = [];
+                            foreach ($unassignedSfps as $sfpRow) {
+                                // First row wins per spec uuid, matching the order the
+                                // resolver assigns ports in.
+                                if (!isset($sfpRowIdByUuid[$sfpRow['spec_uuid']])) {
+                                    $sfpRowIdByUuid[$sfpRow['spec_uuid']] = (int)$sfpRow['id'];
+                                }
+                            }
+                            $sfpUuids = array_keys($sfpRowIdByUuid);
 
                             // Try to auto-assign to the new NIC
                             $assignmentResult = $resolver->autoAssignSFPsToNIC($configUuid, $componentUuid, $sfpUuids);
 
                             if ($assignmentResult['success']) {
-                                // Update configuration
-                                $assignedSfps = $sfpConfig['sfps'] ?? [];
                                 foreach ($assignmentResult['assignments'] as $assignment) {
-                                    $assignedSfps[] = $assignment;
+                                    $sfpRowId = $sfpRowIdByUuid[$assignment['uuid']] ?? null;
+                                    if ($sfpRowId !== null) {
+                                        $stmt = $pdo->prepare(
+                                            "UPDATE config_components
+                                                SET parent_id = ?, slot_ref = ?
+                                              WHERE id = ? AND removed_at IS NULL"
+                                        );
+                                        $stmt->execute([
+                                            (int)$nicRowId,
+                                            'port_' . (int)$assignment['port_index'],
+                                            $sfpRowId,
+                                        ]);
+                                    }
 
                                     // Update SFP inventory
                                     $stmt = $pdo->prepare("UPDATE sfpinventory SET ParentNICUUID = ?, PortIndex = ?, UpdatedAt = NOW() WHERE UUID = ?");
                                     $stmt->execute([$assignment['parent_nic_uuid'], $assignment['port_index'], $assignment['uuid']]);
                                 }
-
-                                // Clear unassigned SFPs (they are now assigned)
-                                $sfpConfig['sfps'] = $assignedSfps;
-                                $sfpConfig['unassigned_sfps'] = [];
-
-                                $stmt = $pdo->prepare("UPDATE server_configurations SET sfp_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-                                $stmt->execute([json_encode($sfpConfig), $configUuid]);
 
                                 // Add auto-assignment info to response
                                 $responseData['sfp_auto_assignment'] = [
@@ -1725,7 +1751,11 @@ function handleListConfigurations($serverBuilder, $user) {
             $config['is_sandbox'] = (bool)($config['is_sandbox'] ?? 0);
 
             try {
-                $components = $serverBuilder->extractComponentsFromJson(is_array($config) ? $config : [], true);
+                // U-D.3b: the list view's per-card "N component types" now counts rows,
+                // the same store server-get-config reads. It used to count the JSON
+                // columns, which is why a build could advertise more types on the card
+                // than its own detail page listed.
+                $components = ConfigReadRouter::components($serverBuilder, $pdo, is_array($config) ? $config : [], true);
             } catch (Throwable $parseError) {
                 error_log("Error parsing configuration components for list view ({$config['config_uuid']}): " . $parseError->getMessage());
                 $components = [];

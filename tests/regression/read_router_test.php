@@ -2,21 +2,32 @@
 /**
  * read_router_test.php — U-X.1 regression test for ConfigReadRouter.
  *
- * Pack acceptance criteria: "three modes on dual-written fixture; shape equality
- * field-by-field in =on vs legacy snapshot", plus "sample log empty on healthy
- * fixture, non-empty on self-test corrupted fixture".
+ * REWRITTEN 2026-08-30 (P9/U-D.4). The pack's original acceptance criteria were
+ * "three modes on dual-written fixture" plus "sample log empty on healthy fixture,
+ * non-empty on self-test corrupted fixture". READ_FROM_ROWS is deleted, and with
+ * it ConfigReadRouter::mode(), the =off passthrough, the =sample comparison and
+ * the divergence JSONL those criteria were written against. Roughly half of this
+ * file described machinery that no longer exists.
  *
- * Safety: every DB write this file makes happens inside a transaction that is
- * ALWAYS rolled back, and each write is preceded by an inTransaction() assertion
- * (see corruptOneRow()). That is deliberately used INSTEAD of the scratch-DB name
- * regex other tests carry -- a name pattern is a convention, an asserted rollback
- * is a mechanism -- but point GOLDEN_DB_NAME at a replica anyway, never production.
+ * What is left is the criterion that actually mattered and still does — "shape
+ * equality field-by-field in =on vs legacy snapshot" — now stated unconditionally,
+ * because =on is the only behaviour there is.
  *
- * Fixture requirement: a dual-written/backfilled replica, i.e. real configs that
- * have BOTH legacy JSON and live config_components rows. Without rows the =on and
- * sample assertions have nothing to compare and self-skip with honest SKIPPED
- * lines rather than passing vacuously (the F-11/F-18/F-21 lesson: an empty derived
- * list must never read as agreement).
+ * The =sample corrupted-fixture control is NOT dropped, it is re-aimed. Its job
+ * was to stop the comparison passing vacuously (the F-11/F-18/F-21 lesson: an
+ * empty derived list must never read as agreement). With the comparison gone, the
+ * vacuity risk moved: every parity assertion below would still pass if the router
+ * quietly returned the legacy extraction instead of reading rows at all. So the
+ * control now hides a config_components row and asserts the router's ANSWER
+ * changes — direct evidence that the rows side is genuinely the source.
+ *
+ * Safety: every DB write happens inside a transaction that is ALWAYS rolled back,
+ * each preceded by an inTransaction() assertion — a mechanism, not a naming
+ * convention. Point GOLDEN_DB_NAME at a replica anyway, never production.
+ *
+ * Fixture requirement: real configs carrying BOTH legacy JSON and live
+ * config_components rows. Without them the parity assertions self-skip with honest
+ * SKIPPED lines rather than passing vacuously.
  *
  *   php ims-ftp/tests/regression/read_router_test.php   → exit 0 = all pass
  */
@@ -53,131 +64,41 @@ function callPrivate(string $method, array $args) {
 }
 
 // =========================================================================
-echo "-- mode() contract (no DB needed) --\n";
+echo "-- the flag is gone, and must not come back (no DB needed) --\n";
 
-$restore = getenv('READ_FROM_ROWS');
-foreach ([['', 'off'], ['off', 'off'], ['sample', 'sample'], ['on', 'on'],
-          ['ON', 'on'], ['  sample  ', 'sample'], ['yes', 'off'], ['enforce', 'off']] as [$set, $want]) {
-    putenv('READ_FROM_ROWS=' . $set);
-    unset($_ENV['READ_FROM_ROWS']);
-    $got = ConfigReadRouter::mode();
-    check("mode() maps " . var_export($set, true) . " -> '$want'", $got === $want);
-}
-putenv('READ_FROM_ROWS');
-unset($_ENV['READ_FROM_ROWS']);
-check('mode() defaults to off when the flag is absent entirely (FLAGS.md fallback)', ConfigReadRouter::mode() === 'off');
+$routerSrc = file_get_contents("$ROOT/core/models/config/ConfigReadRouter.php");
+$sbSrc     = file_get_contents("$ROOT/core/models/server/ServerBuilder.php");
+
+check('ConfigReadRouter::mode() no longer exists (U-D.4 deleted READ_FROM_ROWS)',
+    !method_exists('ConfigReadRouter', 'mode'));
+check('the router reads no environment flag at all',
+    strpos($routerSrc, 'getenv(') === false);
+check('the sample-mode comparison and its divergence log are gone',
+    !method_exists('ConfigReadRouter', 'sample')
+    && strpos($routerSrc, 'logRead(') === false
+    && strpos($routerSrc, 'KIND_DIVERGENCE') === false);
+
+// components() is now the ONLY path, so its fail-closed property is no longer a
+// property of one branch among three — it is the property of the method. A
+// swallowed exception here would silently serve a wrong component list, which is
+// worse than an error: it is a wrong answer that looks like a right one.
+$compStart = strpos($routerSrc, 'public static function components(');
+$compEnd   = $compStart !== false ? strpos($routerSrc, 'private static function ', $compStart) : false;
+$compBody  = ($compStart !== false && $compEnd !== false && $compEnd > $compStart)
+    ? substr($routerSrc, $compStart, $compEnd - $compStart)
+    : '';
+check('components() does not swallow exceptions (fail-closed: it must never silently fall back to legacy)',
+    $compBody !== ''
+    && strpos($compBody, 'return self::rowsToLegacyShape(') !== false
+    && strpos($compBody, 'catch') === false
+    && strpos($compBody, 'try {') === false);
 
 // =========================================================================
 echo "-- structural guarantees the docblock claims (no DB needed) --\n";
 
-$routerSrc = file_get_contents("$ROOT/core/models/config/ConfigReadRouter.php");
-$sbSrc = file_get_contents("$ROOT/core/models/server/ServerBuilder.php");
-
-// U-X.1 checklist item 1: sample returns legacy ALWAYS. Proven structurally as
-// well as behaviourally below -- the sample branch must contain exactly one
-// return statement and it must be the legacy one. Scoped to the branch text
-// (up to the '// =on.' marker that begins the next branch) so that returns
-// elsewhere in the class cannot satisfy or break this assertion.
-$sampleStart  = strpos($routerSrc, "if (\$mode === 'sample')");
-$sampleEnd    = strpos($routerSrc, '// =on.');
-$sampleBranch = ($sampleStart !== false && $sampleEnd !== false && $sampleEnd > $sampleStart)
-    ? substr($routerSrc, $sampleStart, $sampleEnd - $sampleStart)
-    : '';
-check('sample branch contains exactly one return, and it returns $legacy',
-    $sampleBranch !== ''
-    && substr_count($sampleBranch, 'return ') === 1
-    && strpos($sampleBranch, 'return $legacy;') !== false);
-check('sample-mode comparison is wrapped so a shadow-side failure cannot break a read',
-    strpos($routerSrc, 'catch (Throwable $e)') !== false
-    && strpos($routerSrc, 'ConfigReadRouter sample-mode comparison failed') !== false);
-// Scoped exactly the way the sample branch above is: the =on branch runs from its
-// '// =on.' marker to the first member declared after components(). The old
-// haystack ran from that marker to END OF FILE, so the check was being DEFEATED by
-// the try/catch inside isKnownRiserSpecUuid()'s memoization ~160 lines below -- an
-// unrelated helper this assertion does not speak for. Also strictly stronger than
-// the regex it replaces: the branch must still CONTAIN the rowsToLegacyShape
-// return (so deleting the =on path cannot pass vacuously) and must contain no
-// try/catch ANYWHERE in it, not merely none positioned after rowsToLegacyShape.
-$onStart  = strpos($routerSrc, '// =on.');
-$onEnd    = $onStart !== false ? strpos($routerSrc, 'private static function ', $onStart) : false;
-$onBranch = ($onStart !== false && $onEnd !== false && $onEnd > $onStart)
-    ? substr($routerSrc, $onStart, $onEnd - $onStart)
-    : '';
-check('=on does NOT swallow exceptions (fail-closed: it must not silently serve legacy)',
-    $onBranch !== ''
-    && strpos($onBranch, 'return self::rowsToLegacyShape(') !== false
-    && strpos($onBranch, 'catch') === false
-    && strpos($onBranch, 'try {') === false);
-check('divergence rows carry the sapi discriminator (F-23)', strpos($routerSrc, "'sapi' => PHP_SAPI") !== false);
-
-// ---- F-27: the read log must have a denominator -------------------------
-// These are asserted STRUCTURALLY as well as behaviourally, because the
-// behavioural proof lives in the DB-backed section below and that section skips
-// whenever the scratch DB is unreachable -- which is the normal case on a dev
-// box. A guarantee that only holds when an optional fixture is present is the
-// same kind of un-evidenced claim F-27 itself was.
-// Scoped to the agreement branch itself: from the both-sides-equal test to the
-// divergence logRead() that follows it. The old `.*?KIND_COMPARED` ran to
-// end-of-file, so it could be satisfied by the const declaration or the docblock
-// long after the branch had stopped logging anything.
-$agreeStart = strpos($routerSrc, 'if (empty($onlyInJson) && empty($onlyInRows)) {');
-$agreeEnd   = $agreeStart !== false ? strpos($routerSrc, 'self::KIND_DIVERGENCE', $agreeStart) : false;
-$agreeBlock = ($agreeStart !== false && $agreeEnd !== false && $agreeEnd > $agreeStart)
-    ? substr($routerSrc, $agreeStart, $agreeEnd - $agreeStart)
-    : '';
-check('the router records agreement, not only disagreement (F-27 denominator)',
-    strpos($routerSrc, 'KIND_COMPARED') !== false
-    && $agreeBlock !== ''
-    && strpos($agreeBlock, 'self::logRead(') !== false
-    && strpos($agreeBlock, 'self::KIND_COMPARED') !== false
-    // ...and it must RETURN there, or agreement would fall through and be logged
-    // a second time as a divergence.
-    && strpos($agreeBlock, 'return;') !== false);
-check('a virtual-config skip is recorded, so a virtual-only window cannot read as a clean comparison',
-    strpos($routerSrc, 'KIND_SKIPPED_VIRTUAL') !== false);
-check('all three row kinds are public constants a reader can bind to',
-    ConfigReadRouter::KIND_COMPARED === 'compared'
-    && ConfigReadRouter::KIND_DIVERGENCE === 'divergence'
-    && ConfigReadRouter::KIND_SKIPPED_VIRTUAL === 'skipped_virtual');
-
-// The stream is only useful if something consumes it. This is the gap
-// command_parity closed for the command stream on 2026-07-27.
-$readReportPath = "$ROOT/scripts/verify/read_report.php";
-check('a gate report consumes the read stream (scripts/verify/read_report.php exists)', is_file($readReportPath));
-if (is_file($readReportPath)) {
-    $reportSrc = file_get_contents($readReportPath);
-    check('read_report treats a row with NO kind as a divergence, never as a comparison',
-        strpos($reportSrc, "\$row['kind'] ?? KIND_DIVERGENCE") !== false);
-    // Scoped to readReportGreen()'s own body (signature to the next top-level
-    // function). The old `.*?` pair ran to end-of-file and could stitch together
-    // a "comparisons" mention in one function with a "> 0" in another -- and this
-    // file has both scattered through its self-test fixtures.
-    $greenStart = strpos($reportSrc, 'function readReportGreen(');
-    $greenNext  = $greenStart !== false ? strpos($reportSrc, "\nfunction ", $greenStart + 1) : false;
-    $greenFn    = $greenStart === false
-        ? ''
-        : ($greenNext === false ? substr($reportSrc, $greenStart) : substr($reportSrc, $greenStart, $greenNext - $greenStart));
-    check('read_report is RED on zero production comparisons (emptiness must not pass)',
-        $greenFn !== '' && preg_match('/\$analysis\[.comparisons.\]\s*>\s*0/', $greenFn) === 1);
-    check('read_report excludes cli rows (F-23)', strpos($reportSrc, "\$sapi === 'cli'") !== false);
-}
-$runAllSrc = file_get_contents("$ROOT/scripts/verify/run_all.php");
-check("the read report is registered and wired into P8's gate",
-    strpos($runAllSrc, "'read'        => ['script'") !== false
-    && preg_match("/'P8'\s*=>\s*\[[^\]]*'read'/", $runAllSrc) === 1);
-
-// U-X.1 checklist item 3: the cache sits ABOVE the router.
-//
-// 2026-08-29: scoped to getConfigurationDetails()'s own body. Both positions were
-// strpos over the WHOLE file, so they pinned "the first router call anywhere is
-// after the cache" -- not the ordering inside the routed entrypoint. Commit
-// 3c87a20 routed a SECOND, legitimate reader (getCompatibleComponents(), which was
-// the last caller still reading identity straight out of the JSON columns at
-// READ_FROM_ROWS=on) and it sits EARLIER in the file, so the file-wide $routerPos
-// moved to it and the check went red while the invariant it names still held.
-// Scoping is also strictly stronger than the positions it replaces: the cache read
-// and the router call must both be inside getConfigurationDetails, in that order --
-// where before, a cache read in any other method would have satisfied it.
+// U-X.1 checklist item 3: the cache sits ABOVE the router. Scoped to
+// getConfigurationDetails()'s own body — a cache read in any other method must not
+// satisfy it.
 $gcdStart = strpos($sbSrc, 'function getConfigurationDetails(');
 $gcdNext  = $gcdStart !== false ? strpos($sbSrc, "\n    public function ", $gcdStart + 1) : false;
 $gcdBody  = $gcdStart === false
@@ -186,39 +107,44 @@ $gcdBody  = $gcdStart === false
 $cachePos  = $gcdBody !== '' ? strpos($gcdBody, '$this->configCache->getConfiguration($configUuid)') : false;
 $routerPos = $gcdBody !== '' ? strpos($gcdBody, 'ConfigReadRouter::components(') : false;
 check('ServerBuilder routes getConfigurationDetails through ConfigReadRouter', $routerPos !== false);
-check('the configuration cache is checked BEFORE the router is reached (cache cannot be poisoned by a mode)',
-    $cachePos !== false && $routerPos !== false && $cachePos < $routerPos);
+check('the configuration cache is checked BEFORE the router is reached', $cachePos !== false && $routerPos !== false && $cachePos < $routerPos);
 
-// Only the read entrypoint is routed; mutation/validation callers stay direct
-// until U-D.3. Asserted EXACTLY (not ">=") on purpose: routing one more caller,
-// or letting one drift back to direct extraction, must fail here and be a
-// deliberate decision rather than a silent side effect. 14 in-file call sites
-// existed before this unit; 13 remained after getConfigurationDetails was routed.
+// Only the read entrypoints are routed; the mutation/validation callers still
+// extract straight out of the JSON columns. Asserted EXACTLY (not ">=") on
+// purpose: routing one more caller, or letting one drift back to direct
+// extraction, must fail here and be a deliberate decision rather than a silent
+// side effect.
 //
-// 2026-07-29: raised 13 -> 14. The BUGFIX (TP-5A) batching change on the add path
-// added a fourteenth direct call ("batch ONE query per component TYPE instead of
-// one query per existing component"). It is a MUTATION-path caller, so it falls
-// squarely inside the carve-out this check exists to fence -- the pin was stale,
-// not violated, and had been failing the gate on a count rather than on drift.
-// Raised deliberately and recorded here; routing it belongs to U-D.3 with the
-// other thirteen.
+// 2026-08-30: 13 -> 7 -> 0, and 0 is where it stays.
 //
-// 2026-08-29: lowered 14 -> 13. Commit 3c87a20 routed getCompatibleComponents()'s
-// direct extraction through ConfigReadRouter -- a READ caller, and the last one
-// still going straight to the JSON columns at READ_FROM_ROWS=on. That is the pin
-// moving in the intended direction (one fewer direct reader), not the carve-out
-// leaking. Lowering a pin can hide a deletion the way raising one hides a drift,
-// so the routing is asserted POSITIVELY below rather than merely subtracted here:
-// the count may only fall when the caller that left shows up on the router.
+// P9/U-D.2 deleted six of the original thirteen along with the enclosing methods that
+// made the calls (addComponent(), validateComponentAddition(), the validate/score
+// family). U-D.3b then routed the remaining seven onto ConfigReadRouter, which is why
+// this is now an EQUALITY ON ZERO rather than a shrinking carve-out: the assertion no
+// longer tolerates a documented exception list, so a single new direct extract turns it
+// red instead of merely needing the comment updated.
+//
+// The two blockers that stalled this at 7 on the first attempt are both resolved and
+// neither needed a backfill (tasks/u-d3-execution.md):
+//   1. "config_components is INCOMPLETE" -- the one config concerned is the only
+//      is_virtual build in the system, and a virtual build has NO inventory units for a
+//      row to point at. It is excluded from the rows store by design
+//      (ConfigComponentWriter::afterLegacyAdd), not by an incomplete backfill. It is
+//      still pinned at exactly one by the standing check above.
+//   2. "NIC emission ORDER differs" -- the only consumer of first-of-type ordering,
+//      ServerBuilder::getConfigurationComponent(), is private with zero callers.
 $directCalls = substr_count($sbSrc, '$this->extractComponentsFromJson(');
-check("exactly 13 mutation/validation-path callers still extract directly (found $directCalls) and the carve-out is documented",
-    $directCalls === 13 && strpos($sbSrc, 'MUTATION-PATH CALLERS THAT STAY DIRECT') !== false);
+check("no ServerBuilder reader extracts from the JSON columns directly (found $directCalls, want 0)",
+    $directCalls === 0);
+check('the single in-file rows seam exists (componentsFromRows -> ConfigReadRouter)',
+    strpos($sbSrc, 'private function componentsFromRows(') !== false
+    && strpos($sbSrc, 'ConfigReadRouter::components(') !== false);
 $gccStart = strpos($sbSrc, 'function getCompatibleComponents(');
 $gccNext  = $gccStart !== false ? strpos($sbSrc, "\n    public function ", $gccStart + 1) : false;
 $gccBody  = $gccStart === false
     ? ''
     : ($gccNext === false ? substr($sbSrc, $gccStart) : substr($sbSrc, $gccStart, $gccNext - $gccStart));
-check('getCompatibleComponents reads through ConfigReadRouter, not extractComponentsFromJson (the caller the pin above lost)',
+check('getCompatibleComponents reads through ConfigReadRouter, not extractComponentsFromJson',
     $gccBody !== ''
     && strpos($gccBody, 'ConfigReadRouter::components(') !== false
     && strpos($gccBody, '$this->extractComponentsFromJson(') === false);
@@ -231,15 +157,13 @@ foreach ([['port_0', 0], ['port_3', 3], ['port_12', 12], [null, null], ['', null
 }
 
 // =========================================================================
-echo "-- DB-backed: three modes over a dual-written fixture --\n";
+echo "-- DB-backed: rows-derived shape vs the legacy JSON snapshot --\n";
 
 $dbHost = getenv('GOLDEN_DB_HOST') ?: '127.0.0.1';
 $dbName = getenv('GOLDEN_DB_NAME') ?: 'ims_compat_golden';
 $dbUser = getenv('GOLDEN_DB_USER') ?: 'root';
 // Credential resolution is shared, not copy-pasted: scratch_db_password()
-// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. The local copy this
-// replaced honoured only the former, so the documented pass-file fixture
-// silently reduced this suite to a self-skip. See _scratch_db.php.
+// honours GOLDEN_DB_PASS *and* GOLDEN_DB_PASS_FILE. See _scratch_db.php.
 require_once __DIR__ . '/_scratch_db.php';
 $dbPass = scratch_db_password();
 
@@ -255,7 +179,7 @@ try {
 }
 
 if ($pdo === null) {
-    skip("scratch DB '$dbName' unreachable — all three-mode assertions");
+    skip("scratch DB '$dbName' unreachable — every parity assertion");
     echo "\n" . ($fails === 0 ? "OK" : "FAILURES") . ": $fails fail(s), $skips skipped\n";
     exit($fails === 0 ? 0 : 1);
 }
@@ -263,65 +187,7 @@ if ($pdo === null) {
 require_once $ROOT . '/core/models/server/ServerBuilder.php';
 $builder = new ServerBuilder($pdo);
 
-$logFile = $ROOT . '/reports/shadow/read-' . date('Ymd') . '.jsonl';
-$logLines = function () use ($logFile): int {
-    return is_file($logFile) ? count(file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)) : 0;
-};
-/**
- * Counts by 'kind' (F-27). A raw line delta stopped being a divergence count on
- * 2026-07-29, when the router began recording agreement too -- and a test that
- * kept counting lines would have read the new denominator as new divergences.
- * A row with no 'kind' is a pre-F-27 divergence, matching read_report.php.
- *
- * @return array<string,int>
- */
-$logKinds = function () use ($logFile): array {
-    $counts = ['compared' => 0, 'divergence' => 0, 'skipped_virtual' => 0];
-    if (!is_file($logFile)) { return $counts; }
-    foreach (file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-        $rec = json_decode($line, true);
-        if (!is_array($rec)) { continue; }
-        $kind = $rec['kind'] ?? 'divergence';
-        $counts[$kind] = ($counts[$kind] ?? 0) + 1;
-    }
-    return $counts;
-};
-
-// ---- F-27 end-to-end, with NO fixture requirement ------------------------
-// The virtual-config branch returns before config_components is ever queried,
-// so this proves the writer works end to end -- file append, sapi tag, kind
-// field -- on any reachable DB, including a replica too old for the assertions
-// below. It is also the exact path that was previously silent: a window of
-// nothing but virtual reads produced no rows at all and was indistinguishable
-// from a router that never ran.
-putenv('READ_FROM_ROWS=sample');
-unset($_ENV['READ_FROM_ROWS']);
-$beforeVirtual = $logKinds();
-ConfigReadRouter::components($builder, $pdo, [
-    'config_uuid' => 'READ-ROUTER-TEST-VIRTUAL',
-    'is_virtual'  => 1,
-]);
-$afterVirtual = $logKinds();
-check('=sample RECORDS a virtual-config skip end to end (F-27: the skip used to be silent)',
-    $afterVirtual['skipped_virtual'] === $beforeVirtual['skipped_virtual'] + 1);
-if ($afterVirtual['skipped_virtual'] > $beforeVirtual['skipped_virtual']) {
-    $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    $rec = json_decode(end($lines), true);
-    check('the skip row is tagged kind=skipped_virtual and identifies the config',
-        ($rec['kind'] ?? null) === ConfigReadRouter::KIND_SKIPPED_VIRTUAL
-        && ($rec['config_uuid'] ?? null) === 'READ-ROUTER-TEST-VIRTUAL');
-    check('the skip row carries sapi=cli, so read_report excludes it from the soak (F-23)',
-        ($rec['sapi'] ?? null) === 'cli');
-    check('the skip row carries an instant-comparable ts', isset($rec['ts']) && strtotime((string)$rec['ts']) !== false);
-}
-
 /** Configs that actually have BOTH sides — the only ones these assertions mean anything on. */
-//
-// Wrapped (2026-07-29): a replica without the P2 tables used to take this file
-// out with an uncaught PDOException, losing every result printed above it and
-// exiting 255. "The fixture is too old for this test" must SKIP, exactly as an
-// unreachable DB does -- a crash and a finding are not the same thing, and a
-// suite that cannot tell them apart cannot be trusted to report either.
 try {
     $fixtures = $pdo->query("
         SELECT sc.*
@@ -332,7 +198,7 @@ try {
          ORDER BY sc.config_uuid
     ")->fetchAll();
 } catch (PDOException $e) {
-    skip("fixture '$dbName' predates the P2 schema (" . $e->getCode() . ") — all three-mode assertions");
+    skip("fixture '$dbName' predates the P2 schema (" . $e->getCode() . ") — every parity assertion");
     echo "\n" . ($fails === 0 ? "OK" : "FAILURES") . ": $fails fail(s), $skips skipped\n";
     exit($fails === 0 ? 0 : 1);
 }
@@ -344,61 +210,14 @@ if (!$fixtures) {
 }
 echo "  (fixture: " . count($fixtures) . " dual-written config(s) in '$dbName')\n";
 
-// ---- =off is the identity ------------------------------------------------
-putenv('READ_FROM_ROWS=off');
-unset($_ENV['READ_FROM_ROWS']);
-$offIdentical = 0;
-foreach ($fixtures as $row) {
-    $legacy = $builder->extractComponentsFromJson($row);
-    $routed = ConfigReadRouter::components($builder, $pdo, $row);
-    if ($routed === $legacy) { $offIdentical++; }
-}
-check("=off is byte-identical to direct legacy extraction on all " . count($fixtures) . " configs",
-    $offIdentical === count($fixtures));
-
-$before = $logLines();
-foreach ($fixtures as $row) { ConfigReadRouter::components($builder, $pdo, $row); }
-check('=off writes nothing to the divergence log', $logLines() === $before);
-
-// ---- =sample returns legacy, and stays quiet on a healthy fixture --------
-putenv('READ_FROM_ROWS=sample');
-unset($_ENV['READ_FROM_ROWS']);
-$beforeKinds = $logKinds();
-$sampleIdentical = 0;
-foreach ($fixtures as $row) {
-    $legacy = $builder->extractComponentsFromJson($row);
-    if (ConfigReadRouter::components($builder, $pdo, $row) === $legacy) { $sampleIdentical++; }
-}
-check("=sample returns the legacy answer unchanged on all " . count($fixtures) . " configs",
-    $sampleIdentical === count($fixtures));
-
-$afterKinds = $logKinds();
-$sampleDivergences = $afterKinds['divergence'] - $beforeKinds['divergence'];
-$sampleCompared    = $afterKinds['compared'] - $beforeKinds['compared'];
-
-// F-27, THE DENOMINATOR. Before 2026-07-29 an agreeing read wrote nothing, so the
-// only evidence a healthy fixture could produce was an absence -- indistinguishable
-// from the router never having run. Every non-virtual read must now leave a row.
-check('=sample records EVERY comparison, not only disagreements (F-27 denominator)',
-    ($sampleDivergences + $sampleCompared) === count($fixtures));
-
-// NOT asserted as "must be 0": whether this fixture is equivalent is a property of
-// the DUMP, not of the router. A non-empty log here is real information (it is
-// exactly what U-X.2's 72h criterion measures) and is reported, not hidden.
-if ($sampleDivergences === 0) {
-    check("=sample logs no divergence on a healthy (equivalent) fixture, and $sampleCompared comparison(s)", true);
-} else {
-    echo "  INFO   =sample logged $sampleDivergences divergence(s) on this fixture — the fixture is\n";
-    echo "         not equivalent. That is an equivalence_report finding, not a router bug;\n";
-    echo "         the corrupted-fixture check below still proves detection works.\n";
-}
-
-// ---- =sample DETECTS a corrupted fixture (the honesty control) -----------
-/**
- * Hide one live component row, inside a transaction that is always rolled back.
- * If this does not produce a divergence line, the sample comparison is vacuous —
- * which is the failure mode that made F-11/F-18/F-21 invisible for weeks.
- */
+// ---- the anti-vacuity control, re-aimed ---------------------------------
+// Every parity assertion below compares the router's answer against the legacy
+// JSON extraction. All of them would pass just as happily if components() had
+// quietly gone back to RETURNING the legacy extraction. Prove it does not: hide
+// one live config_components row and the router's answer must change. If it does
+// not, the comparisons that follow are worthless and this file says so FIRST,
+// before printing a screen of green.
+$rowsSideIsReal = false;
 $corruptTarget = null;
 foreach ($fixtures as $row) {
     $stmt = $pdo->prepare('SELECT id FROM config_components WHERE config_uuid = ? AND removed_at IS NULL LIMIT 1');
@@ -408,9 +227,10 @@ foreach ($fixtures as $row) {
 }
 
 if ($corruptTarget === null) {
-    skip('corrupted-fixture detection (no live config_components row to hide)');
+    skip('rows-side-is-real control (no live config_components row to hide)');
 } else {
     [$row, $ccId] = $corruptTarget;
+    $before = ConfigReadRouter::components($builder, $pdo, $row);
     $pdo->beginTransaction();
     try {
         // Asserted mechanism, not a naming convention: no write without a transaction.
@@ -418,26 +238,11 @@ if ($corruptTarget === null) {
             throw new RuntimeException('refusing to write outside a transaction');
         }
         $pdo->prepare('UPDATE config_components SET removed_at = NOW() WHERE id = ?')->execute([$ccId]);
-
-        $before = $logLines();
-        $legacy = $builder->extractComponentsFromJson($row);
-        $returned = ConfigReadRouter::components($builder, $pdo, $row);
-        $after = $logLines();
-
-        check('=sample LOGS a divergence when the rows side is missing a component', $after > $before);
-        check('=sample STILL returns the legacy answer while diverging (never the rows side)', $returned === $legacy);
-
-        if ($after > $before) {
-            $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $rec = json_decode(end($lines), true);
-            check('divergence row is tagged kind=divergence, so a reader need not infer it (F-27)',
-                ($rec['kind'] ?? null) === ConfigReadRouter::KIND_DIVERGENCE);
-            check('divergence row identifies the config', ($rec['config_uuid'] ?? null) === $row['config_uuid']);
-            check('divergence row names what is missing from the rows side', !empty($rec['only_in_json']));
-            check('divergence row is tagged sapi=cli when written by this harness (F-23)', ($rec['sapi'] ?? null) === 'cli');
-            check('divergence row distinguishes "rows side entirely empty" from a component diff',
-                array_key_exists('rows_side_empty', $rec));
-        }
+        $after = ConfigReadRouter::components($builder, $pdo, $row);
+        $rowsSideIsReal = (count($after) === count($before) - 1);
+        check('hiding one config_components row removes exactly one component from the router\'s answer '
+            . '(so the parity checks below are reading ROWS, not replaying legacy)',
+            $rowsSideIsReal);
     } finally {
         $pdo->rollBack();
     }
@@ -448,57 +253,204 @@ if ($corruptTarget === null) {
     check('the corruption was rolled back (fixture left untouched)', $stmt->fetchColumn() === null);
 }
 
-// ---- =on: shape equality field-by-field vs the legacy snapshot -----------
-echo "-- DB-backed: =on shape vs legacy snapshot --\n";
-putenv('READ_FROM_ROWS=on');
-unset($_ENV['READ_FROM_ROWS']);
+// ---- U-D.3 PRECONDITION: is the rows store complete for everything that can
+// ---- BE in it? -----------------------------------------------------------
+// Found 2026-08-30 while probing the U-D.3b reader migration. The parity block below
+// deliberately selects only configs that HAVE rows, so it cannot see a config with
+// none -- and one exists: 3918a957 carries eight components in its JSON columns and
+// zero config_components rows.
+//
+// DIAGNOSIS CORRECTED (see tasks/u-d3-execution.md). It is not an incomplete backfill
+// and no seeder can fix it. That config is the only is_virtual=1 build in the system,
+// and a virtual build reserves no stock: all eleven *inventory tables return zero rows
+// for its ServerUUID. config_components.inventory_id is NOT NULL and keyed
+// UNIQUE(inventory_table, inventory_id, component_type), so there is nothing for a row
+// to point at. ConfigComponentWriter::afterLegacyAdd() says so in its own guard --
+// virtual configs are excluded from the rows store BY DESIGN.
+//
+// So the pin below is split in two, and the second half is the one that matters:
+//
+//   (a) the virtual carve-out, pinned at its measured scope so it cannot GROW
+//       silently. Guarded on the columns still existing, because U-D.3c drops them and
+//       a test that dies on a missing column is a test that gets deleted.
+//   (b) a REAL config -- is_virtual = 0 -- whose inventory says units are installed in
+//       it while config_components says it is empty. That is the divergence that would
+//       actually lose a build, it is impossible by construction today, and unlike (a)
+//       it survives the drop because it never mentions a JSON column.
+$jsonColumnsExist = (bool)$pdo->query("SHOW COLUMNS FROM server_configurations LIKE 'cpu_configuration'")->fetch();
 
+if ($jsonColumnsExist) {
+    $VIRTUAL_JSON_ONLY_EXPECTED = 1;
+    $jsonOnly = $pdo->query("
+        SELECT sc.config_uuid
+          FROM server_configurations sc
+         WHERE NOT EXISTS (SELECT 1 FROM config_components cc
+                            WHERE cc.config_uuid = sc.config_uuid AND cc.removed_at IS NULL)
+           AND (sc.cpu_configuration IS NOT NULL OR sc.ram_configuration IS NOT NULL
+                OR sc.storage_configuration IS NOT NULL OR sc.caddy_configuration IS NOT NULL
+                OR sc.nic_config IS NOT NULL OR sc.sfp_configuration IS NOT NULL
+                OR sc.pciecard_configurations IS NOT NULL OR sc.hbacard_config IS NOT NULL
+                OR sc.motherboard_uuid IS NOT NULL OR sc.chassis_uuid IS NOT NULL)
+         ORDER BY sc.config_uuid
+    ")->fetchAll(PDO::FETCH_COLUMN);
+    check('(a) no NEW config has JSON components but no config_components rows '
+        . '(expected ' . $VIRTUAL_JSON_ONLY_EXPECTED . ', found ' . count($jsonOnly) . ')',
+        count($jsonOnly) <= $VIRTUAL_JSON_ONLY_EXPECTED);
+
+    // and every one of them must be a VIRTUAL build -- the only class that legitimately
+    // cannot be mirrored. A real build in this state is a data-loss bug, not a carve-out.
+    $nonVirtual = [];
+    foreach ($jsonOnly as $u) {
+        $st = $pdo->prepare("SELECT is_virtual FROM server_configurations WHERE config_uuid = ?");
+        $st->execute([$u]);
+        if ((int)$st->fetchColumn() !== 1) { $nonVirtual[] = $u; }
+    }
+    check('(a) every rows-less JSON config is is_virtual=1 (the by-design carve-out)'
+        . ($nonVirtual ? ' -- REAL builds affected: ' . implode(', ', $nonVirtual) : ''),
+        $nonVirtual === []);
+} else {
+    echo "  INFO   legacy JSON columns are gone (U-D.3c applied); (a) no longer applicable\n";
+}
+
+// (b) survives the drop.
+$inventoryTables = ['cpuinventory', 'raminventory', 'storageinventory', 'nicinventory',
+                    'caddyinventory', 'motherboardinventory', 'chassisinventory',
+                    'pciecardinventory', 'risercardinventory', 'hbacardinventory', 'sfpinventory'];
+$union = [];
+foreach ($inventoryTables as $t) {
+    // The inventory tables do not share one collation, so an untagged UNION dies
+    // with a 1271 illegal-mix error. Normalising each arm keeps the check portable.
+    $union[] = "SELECT CONVERT(ServerUUID USING utf8mb4) COLLATE utf8mb4_general_ci AS ServerUUID"
+             . " FROM `$t` WHERE ServerUUID IS NOT NULL AND ServerUUID <> ''";
+}
+$stranded = $pdo->query("
+    SELECT DISTINCT sc.config_uuid
+      FROM server_configurations sc
+      JOIN (" . implode(' UNION ALL ', $union) . ") inv ON inv.ServerUUID = sc.config_uuid
+     WHERE sc.is_virtual = 0
+       AND NOT EXISTS (SELECT 1 FROM config_components cc
+                        WHERE cc.config_uuid = sc.config_uuid AND cc.removed_at IS NULL)
+     ORDER BY sc.config_uuid
+")->fetchAll(PDO::FETCH_COLUMN);
+check('(b) no REAL config has inventory assigned to it but zero config_components rows'
+    . ($stranded ? ' (found: ' . implode(', ', $stranded) . ')' : ''),
+    $stranded === []);
+
+// ---- shape equality field-by-field, against config_components ITSELF ------
+//
+// U-D.3a deleted ServerBuilder::extractComponentsFromJson(), which this block used as
+// its expectation. There is nothing left to compare the rows side against except the
+// rows -- the same position sample() was in when P9 deleted it: a comparator with one
+// input can only report that a thing equals itself.
+//
+// So the expectation is now built straight from SQL over config_components, not from a
+// second decoder. That is STRICTER than the JSON comparison it replaces, on all three
+// counts: identity is checked against the store rather than against a mirror that could
+// drift with it, ORDER is asserted as the exact expected sequence (the old test only
+// checked that type ranks never went backwards, which a sort could satisfy by
+// accident), and the key set is checked value-by-value rather than name-by-name.
 $typeOrderOk = true;
 $identityOk = 0;
 $identityChecked = 0;
 $unexpectedKeys = [];
+$slotMismatch = 0;
+$slotMissing = 0;
+$sourceTypeWrong = 0;
 $storageWithConnection = 0;
 $nonUnitQuantity = 0;
 $scalarAddedAt = 0;
-$legacyKeyUniverse = [];
+
+// The router's documented emission order: types in this sequence, and within a type
+// added_at then id (the writer's append order). Reproduced here from the class docblock
+// so a change to LEGACY_TYPE_ORDER has to be made deliberately in two places.
+$TYPE_ORDER = ['cpu', 'ram', 'storage', 'caddy', 'nic', 'hbacard',
+               'motherboard', 'chassis', 'risercard', 'pciecard', 'sfp'];
+
+$expectedFromRows = function (string $configUuid) use ($pdo, $TYPE_ORDER): array {
+    $st = $pdo->prepare("SELECT id, component_type, spec_uuid, added_at
+                           FROM config_components
+                          WHERE config_uuid = ? AND removed_at IS NULL");
+    $st->execute([$configUuid]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $rank = array_flip($TYPE_ORDER);
+    usort($rows, function ($a, $b) use ($rank) {
+        $ra = $rank[$a['component_type']] ?? count($rank);
+        $rb = $rank[$b['component_type']] ?? count($rank);
+        if ($ra !== $rb) { return $ra <=> $rb; }
+        $cmp = strcmp((string)$a['added_at'], (string)$b['added_at']);
+        return $cmp !== 0 ? $cmp : ((int)$a['id'] <=> (int)$b['id']);
+    });
+    return array_map(fn($r) => $r['component_type'] . '|' . $r['spec_uuid'], $rows);
+};
 
 foreach ($fixtures as $row) {
-    $legacy = $builder->extractComponentsFromJson($row);
     $rowsSide = ConfigReadRouter::components($builder, $pdo, $row);
 
-    // (1) IDENTITY — who is in this config — must match. This is the contract
-    //     =on actually has to honour; the three documented shape deviations
-    //     (quantity/added_at/connection) are checked separately below.
-    $ident = function (array $list): array {
-        $out = [];
-        foreach ($list as $c) {
-            $out[] = ($c['component_type'] ?? '?') . '|' . ($c['component_uuid'] ?? '?');
-        }
-        sort($out);
-        return $out;
-    };
+    $emitted = array_map(
+        fn($c) => ($c['component_type'] ?? '?') . '|' . ($c['component_uuid'] ?? '?'),
+        $rowsSide
+    );
+    $expected = $expectedFromRows($row['config_uuid']);
+
+    // (1) IDENTITY — exactly the live rows, no more and no fewer.
     $identityChecked++;
-    if ($ident($legacy) === $ident($rowsSide)) { $identityOk++; }
+    $a = $emitted; $b = $expected; sort($a); sort($b);
+    if ($a === $b) { $identityOk++; }
 
-    // (2) legacy emission order must be reproduced (downstream numbers storage
-    //     bays by POSITION, so order is behaviour, not cosmetics).
-    $order = array_flip(['cpu', 'ram', 'storage', 'caddy', 'nic', 'hbacard', 'motherboard', 'chassis', 'pciecard', 'sfp']);
-    $lastRank = -1;
-    foreach ($rowsSide as $c) {
-        $rank = $order[$c['component_type']] ?? 99;
-        if ($rank < $lastRank) { $typeOrderOk = false; }
-        $lastRank = $rank;
-    }
+    // (2) ORDER — the exact sequence, not merely a non-decreasing type rank.
+    //     Downstream numbers storage bays by POSITION, so order is behaviour.
+    if ($emitted !== $expected) { $typeOrderOk = false; }
 
-    // (3) key-set discipline: =on must not invent keys legacy never emits.
-    foreach ($legacy as $c) {
-        foreach (array_keys($c) as $k) { $legacyKeyUniverse[$k] = true; }
+    // (3) key-set discipline. U-D.3b added two keys the legacy extractor never
+    //     emitted -- 'slot_position' and, for NICs, 'source_type' -- because the slot
+    //     consumers that used to read the raw columns cannot be routed without them.
+    //     Rather than widen the allow-list (which would let ANY value through under
+    //     those names), each is checked for CORRECTNESS against config_components
+    //     itself. That is strictly stronger than the key-set test it replaces: a wrong
+    //     slot or a NIC mislabelled onboard now fails, where before only a wrong key
+    //     NAME did.
+    //
+    //     The permitted set is now WRITTEN OUT rather than harvested from whatever the
+    //     legacy extractor happened to emit. Harvesting made the assertion only as
+    //     strict as the thing it was comparing against; a literal list cannot drift.
+    $ALLOWED_KEYS = [
+        'component_type', 'component_uuid', 'quantity', 'added_at',
+        'serial_number', 'inventory_id', 'slot_position', 'source_type',
+        'parent_nic_uuid', 'port_index', 'status', 'connection',
+    ];
+    $slotRefByKey = [];
+    $st = $pdo->prepare("SELECT component_type, spec_uuid, slot_ref FROM config_components
+                          WHERE config_uuid = ? AND removed_at IS NULL");
+    $st->execute([$row['config_uuid']]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $slotRefByKey[$r['component_type'] . '|' . $r['spec_uuid']][] = $r['slot_ref'];
     }
     foreach ($rowsSide as $c) {
         foreach (array_keys($c) as $k) {
-            if (!isset($legacyKeyUniverse[$k]) && !in_array($k, ['inventory_id', 'serial_number', 'parent_nic_uuid', 'port_index', 'status'], true)) {
+            if (!in_array($k, $ALLOWED_KEYS, true)) {
                 $unexpectedKeys[$k] = true;
             }
+        }
+        $key = $c['component_type'] . '|' . $c['component_uuid'];
+        // slot_position, when emitted, must be one of the slot_refs the rows store
+        // actually holds for that (type, spec) -- never invented, never stale.
+        if (array_key_exists('slot_position', $c)
+            && !in_array($c['slot_position'], $slotRefByKey[$key] ?? [], true)) {
+            $slotMismatch++;
+        }
+        // a slot_ref the store HAS must be surfaced, so a routed slot consumer cannot
+        // silently see an unplaced card.
+        $storedSlots = array_values(array_filter($slotRefByKey[$key] ?? [], function ($v) {
+            return $v !== null && $v !== '';
+        }));
+        if ($storedSlots && !array_key_exists('slot_position', $c)) {
+            $slotMissing++;
+        }
+        if ($c['component_type'] === 'nic') {
+            $want = strpos((string)$c['component_uuid'], 'onboard-') === 0 ? 'onboard' : 'component';
+            if (($c['source_type'] ?? null) !== $want) { $sourceTypeWrong++; }
+        } elseif (array_key_exists('source_type', $c)) {
+            $sourceTypeWrong++; // source_type is a NIC-only field
         }
         // (4) the three documented deviations must ACTUALLY hold — if one of them
         //     silently stops being true, the class docblock has become a lie.
@@ -508,16 +460,22 @@ foreach ($fixtures as $row) {
     }
 }
 
-check("=on preserves component IDENTITY on all $identityChecked configs ($identityOk matched)",
+check("the router emits exactly the live config_components rows, on all $identityChecked configs ($identityOk matched)",
     $identityOk === $identityChecked);
-check('=on emits types in the legacy branch order (storage bay numbering is positional)', $typeOrderOk);
-check('=on invents no key legacy never emits' . ($unexpectedKeys ? ' (found: ' . implode(',', array_keys($unexpectedKeys)) . ')' : ''),
+check('and in exactly the documented order (type rank, then added_at, then id)', $typeOrderOk);
+check('no key is invented beyond the documented set' . ($unexpectedKeys ? ' (found: ' . implode(',', array_keys($unexpectedKeys)) . ')' : ''),
     empty($unexpectedKeys));
-check('documented deviation (a): =on omits storage connection so the caller recomputes it', $storageWithConnection === 0);
-check('documented deviation (b): =on reports added_at = null for scalar-column types', $scalarAddedAt === 0);
-check('documented deviation (c): =on quantity is always 1 (one row per physical unit)', $nonUnitQuantity === 0);
+check("every emitted slot_position is a slot_ref config_components actually holds ($slotMismatch wrong)",
+    $slotMismatch === 0);
+check("every stored slot_ref reaches the caller as slot_position ($slotMissing dropped)",
+    $slotMissing === 0);
+check("source_type is emitted for NICs only, and matches the onboard- prefix ($sourceTypeWrong wrong)",
+    $sourceTypeWrong === 0);
+check('documented deviation (a): storage connection is omitted so the caller recomputes it', $storageWithConnection === 0);
+check('documented deviation (b): added_at is null for scalar-column types', $scalarAddedAt === 0);
+check('documented deviation (c): quantity is always 1 (one row per physical unit)', $nonUnitQuantity === 0);
 
-// minimalOutput must survive all three modes identically — several callers use it.
+// minimalOutput is used by several callers and must hold on the rows path too.
 $minimalOk = 0;
 foreach ($fixtures as $row) {
     $m = ConfigReadRouter::components($builder, $pdo, $row, true);
@@ -527,14 +485,15 @@ foreach ($fixtures as $row) {
     }
     if ($shapeOk) { $minimalOk++; }
 }
-check('=on honours $minimalOutput (two keys only, null uuids filtered)', $minimalOk === count($fixtures));
+check('$minimalOutput is honoured (two keys only, null uuids filtered)', $minimalOk === count($fixtures));
 
-// A config with no uuid has no rows side to consult — must degrade to legacy, not throw.
-putenv('READ_FROM_ROWS=on');
-$noUuid = ConfigReadRouter::components($builder, $pdo, ['cpu_configuration' => null]);
-check('a row with no config_uuid degrades to legacy instead of throwing', $noUuid === []);
-
-if (is_string($restore) && $restore !== '') { putenv('READ_FROM_ROWS=' . $restore); } else { putenv('READ_FROM_ROWS'); }
+// A config row with no uuid has no rows to look up. Since U-D.3a there is no legacy
+// extraction to fall back to either, so the only honest answer is an empty list — and
+// it must be returned, not thrown.
+$noUuid = ConfigReadRouter::components($builder, $pdo, []);
+check('a row with no config_uuid yields an empty list instead of throwing', $noUuid === []);
+check('ServerBuilder::extractComponentsFromJson is gone (U-D.3a), so nothing can fall back to it',
+    !method_exists('ServerBuilder', 'extractComponentsFromJson'));
 
 echo "\n" . ($fails === 0 ? "OK" : "FAILURES") . ": $fails fail(s), $skips skipped\n";
 exit($fails === 0 ? 0 : 1);

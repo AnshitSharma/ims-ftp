@@ -58,23 +58,60 @@ function check($label, $cond) {
 $ramUuid = 'f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c';
 $builder = new ServerBuilder($pdo);
 
+/**
+ * U-D.3b: build one installed-RAM fixture.
+ *
+ * These fixtures used to persist the installed unit ONLY as a ram_configuration JSON
+ * blob. That column is being retired and every reader now answers from
+ * config_components, so a JSON-only fixture describes a configuration the code can no
+ * longer see -- removeComponent() found nothing to remove and reported failure, and
+ * deleteConfiguration()'s installed-components guard had nothing to refuse over.
+ *
+ * The fixture now writes what production writes: an inventory unit claimed by the
+ * config (Status=2 + ServerUUID) and its config_components row. That is a STRICTER
+ * setup than the blob it replaces -- it exercises the same store the live add path
+ * fills, so these transaction-ownership assertions now run against a configuration
+ * that is real to every reader rather than to one decoder.
+ *
+ * @return int the raminventory row id
+ */
+function nest_fixture(PDO $pdo, string $configUuid, string $ramUuid, string $serial, string $flag): int
+{
+    $pdo->exec("DELETE FROM raminventory WHERE Flag = " . $pdo->quote($flag));
+    $pdo->prepare("INSERT INTO raminventory (UUID, SerialNumber, Status, ServerUUID, Flag) VALUES (?, ?, 2, ?, ?)")
+        ->execute([$ramUuid, $serial, $configUuid, $flag]);
+    $inventoryId = (int)$pdo->lastInsertId();
+
+    $cols = [
+        'config_uuid' => $configUuid, 'server_name' => 'TEST NEST', 'is_virtual' => 0,
+        'configuration_status' => 1,
+    ];
+    $f = array_keys($cols);
+    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES ('
+        . implode(',', array_map(fn($x) => ":$x", $f)) . ')')->execute($cols);
+
+    $pdo->prepare("INSERT INTO config_components
+            (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, serial_number)
+            VALUES (?, 'ram', 'raminventory', ?, ?, ?)")
+        ->execute([$configUuid, $inventoryId, $ramUuid, $serial]);
+
+    return $inventoryId;
+}
+
+/** Live config_components rows for a config — the state the assertions care about. */
+function nest_live_rows(PDO $pdo, string $configUuid): int
+{
+    $st = $pdo->prepare("SELECT COUNT(*) FROM config_components WHERE config_uuid = ? AND removed_at IS NULL");
+    $st->execute([$configUuid]);
+    return (int)$st->fetchColumn();
+}
+
 // =============================================================================
 // 1. removeComponent() nested inside an already-open outer transaction
 // =============================================================================
 $configUuid1 = 'TEST-NEST-RM-' . substr(md5(uniqid()), 0, 8);
 try {
-    $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE'");
-    $pdo->prepare("INSERT INTO raminventory (UUID, SerialNumber, Status, Flag) VALUES (?, 'TEMP-NEST', 2, 'TEMP-NEST-PROBE')")
-        ->execute([$ramUuid]);
-
-    $ramConfigJson = json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => 'TEMP-NEST']]);
-    $cols = [
-        'config_uuid' => $configUuid1, 'server_name' => 'TEST NEST RM', 'is_virtual' => 0,
-        'configuration_status' => 1, 'ram_configuration' => $ramConfigJson,
-    ];
-    $f = array_keys($cols);
-    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')
-        ->execute($cols);
+    nest_fixture($pdo, $configUuid1, $ramUuid, 'TEMP-NEST', 'TEMP-NEST-PROBE');
 
     $pdo->beginTransaction(); // outer transaction, owned by the test
     $threw = false;
@@ -98,11 +135,15 @@ try {
         $pdo->rollback();
     }
 
-    $after = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid1))->fetch();
-    check('removeComponent nested: outer rollback restored config JSON', $after && json_decode($after['ram_configuration'], true) !== []);
+    // U-D.3b: assert against config_components, the store the removal actually
+    // tombstones. Reading back the JSON column proved the rollback undid a write to a
+    // column nothing reads; this proves it undid the one that decides what is installed.
+    check('removeComponent nested: outer rollback restored the component row',
+        nest_live_rows($pdo, $configUuid1) === 1);
 
 } finally {
     if ($pdo->inTransaction()) { $pdo->rollback(); }
+    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configUuid1));
     $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid1));
     $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE'");
 }
@@ -112,18 +153,7 @@ try {
 // =============================================================================
 $configUuid2 = 'TEST-NEST-DEL-' . substr(md5(uniqid()), 0, 8);
 try {
-    $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE2'");
-    $pdo->prepare("INSERT INTO raminventory (UUID, SerialNumber, Status, Flag) VALUES (?, 'TEMP-NEST-2', 2, 'TEMP-NEST-PROBE2')")
-        ->execute([$ramUuid]);
-
-    $ramConfigJson = json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => 'TEMP-NEST-2']]);
-    $cols = [
-        'config_uuid' => $configUuid2, 'server_name' => 'TEST NEST DEL', 'is_virtual' => 0,
-        'configuration_status' => 1, 'ram_configuration' => $ramConfigJson,
-    ];
-    $f = array_keys($cols);
-    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')
-        ->execute($cols);
+    nest_fixture($pdo, $configUuid2, $ramUuid, 'TEMP-NEST-2', 'TEMP-NEST-PROBE2');
 
     $pdo->beginTransaction(); // outer transaction, owned by the test
 
@@ -162,6 +192,7 @@ try {
 
 } finally {
     if ($pdo->inTransaction()) { $pdo->rollback(); }
+    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configUuid2));
     $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid2));
     $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE2'");
 }
@@ -172,18 +203,7 @@ try {
 // =============================================================================
 $configUuid3 = 'TEST-NEST-STANDALONE-' . substr(md5(uniqid()), 0, 8);
 try {
-    $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE3'");
-    $pdo->prepare("INSERT INTO raminventory (UUID, SerialNumber, Status, Flag) VALUES (?, 'TEMP-NEST-3', 2, 'TEMP-NEST-PROBE3')")
-        ->execute([$ramUuid]);
-
-    $ramConfigJson = json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => 'TEMP-NEST-3']]);
-    $cols = [
-        'config_uuid' => $configUuid3, 'server_name' => 'TEST NEST STANDALONE', 'is_virtual' => 0,
-        'configuration_status' => 1, 'ram_configuration' => $ramConfigJson,
-    ];
-    $f = array_keys($cols);
-    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')
-        ->execute($cols);
+    nest_fixture($pdo, $configUuid3, $ramUuid, 'TEMP-NEST-3', 'TEMP-NEST-PROBE3');
 
     check('standalone: no transaction open before call', !$pdo->inTransaction());
     $result = $builder->removeComponent($configUuid3, 'ram', $ramUuid, 'TEMP-NEST-3');
@@ -196,6 +216,7 @@ try {
 
 } finally {
     if ($pdo->inTransaction()) { $pdo->rollback(); }
+    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configUuid3));
     $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid3));
     $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-NEST-PROBE3'");
 }

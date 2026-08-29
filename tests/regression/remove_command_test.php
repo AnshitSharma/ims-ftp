@@ -63,12 +63,23 @@ $rmFnNext  = $rmFnStart !== false ? strpos($apiSrc, "\nfunction ", $rmFnStart + 
 $rmFnBody  = $rmFnStart === false
     ? ''
     : ($rmFnNext === false ? substr($apiSrc, $rmFnStart) : substr($apiSrc, $rmFnStart, $rmFnNext - $rmFnStart));
-$rmHoistAt   = $rmFnBody !== '' ? strpos($rmFnBody, '$commandLayerMode = CommandLayer::mode();') : false;
-$rmShadowAt  = $rmFnBody !== '' ? strpos($rmFnBody, "\$commandLayerMode === 'shadow'") : false;
-$rmEnforceAt = $rmFnBody !== '' ? strpos($rmFnBody, "\$commandLayerMode === 'enforce'") : false;
-check('handleRemoveComponent references CommandLayer::mode()',
-    $rmHoistAt !== false && $rmShadowAt !== false && $rmEnforceAt !== false
-    && $rmHoistAt < $rmShadowAt && $rmShadowAt < $rmEnforceAt);
+// REWRITTEN 2026-08-30 (P9/U-D.4). The three assertions above the fold used to
+// pin the ORDER of the COMMAND_LAYER_ENABLED dispatch chain (hoist, then shadow,
+// then enforce). The flag and both branches are deleted, so the replacement is
+// the stronger post-deletion claim: the command is the only path out of this
+// handler, gated by nothing.
+check('handleRemoveComponent dispatches to RemoveComponentCommand',
+    $rmFnBody !== '' && strpos($rmFnBody, 'new RemoveComponentCommand(') !== false);
+check('it calls execute() unconditionally -- no mode, no branch',
+    $rmFnBody !== '' && strpos($rmFnBody, '->execute()') !== false);
+check('no rollout-flag read gates the dispatch (no getenv/mode() inside the handler)',
+    $rmFnBody !== ''
+    && strpos($rmFnBody, 'getenv(') === false
+    && preg_match('/\b(CommandLayer|StateGuard|ValidationEngine|ConfigReadRouter)::mode\(\)/', $rmFnBody) !== 1);
+check('the deleted legacy remove path is not called from this handler',
+    $rmFnBody !== '' && strpos($rmFnBody, '$serverBuilder->removeComponent(') === false);
+check('dryRun() is not called on the remove path (it existed for the shadow comparison, now gone)',
+    $rmFnBody !== '' && strpos($rmFnBody, '->dryRun()') === false);
 check('cascade defaults to false (matches legacy single-component removal)', strpos($apiSrc, "\$_POST['cascade'] ?? false") !== false);
 
 // =========================================================================

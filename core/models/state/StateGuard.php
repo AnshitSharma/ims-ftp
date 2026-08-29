@@ -14,7 +14,6 @@
 class StateGuard
 {
     private const ALLOWED_STATUS_V2 = ['draft', 'building', 'maintenance'];
-    private const LOG_PATH = __DIR__ . '/../../../reports/shadow/state-guard.jsonl';
 
     /**
      * @param array $lockedRow the already row-locked server_configurations row

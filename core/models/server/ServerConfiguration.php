@@ -184,190 +184,23 @@ class ServerConfiguration {
     }
     
     /**
-     * Get configuration components from JSON columns
+     * Get configuration components.
+     *
+     * U-D.3b: reads config_components rows through ConfigReadRouter. This method used to
+     * be a THIRD independent decoder of the nine JSON columns, alongside
+     * ServerBuilder::extractComponentsFromJson() and ServerState::buildComponents(), and
+     * the three had already drifted -- this one silently dropped serial_number and
+     * inventory_id, so a caller could not tell two units of one model apart. Routing it
+     * collapses all three onto the one authority and fixes that drift as a side effect.
+     *
+     * Output shape is unchanged for every key it emitted before.
      */
     public function getComponents() {
         try {
-            $components = [];
-
-            // CPU configuration
-            if (!empty($this->data['cpu_configuration'])) {
-                $cpuConfig = json_decode($this->data['cpu_configuration'], true);
-                if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                    foreach ($cpuConfig['cpus'] as $cpu) {
-                        if (!empty($cpu['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'cpu',
-                                'component_uuid' => $cpu['uuid'],
-                                'quantity' => $cpu['quantity'] ?? 1,
-                                'added_at' => $cpu['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // RAM configuration
-            if (!empty($this->data['ram_configuration'])) {
-                $ramConfigs = json_decode($this->data['ram_configuration'], true);
-                if (is_array($ramConfigs)) {
-                    foreach ($ramConfigs as $ram) {
-                        if (!empty($ram['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'ram',
-                                'component_uuid' => $ram['uuid'],
-                                'quantity' => $ram['quantity'] ?? 1,
-                                'added_at' => $ram['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // Storage configuration
-            if (!empty($this->data['storage_configuration'])) {
-                $storageConfigs = json_decode($this->data['storage_configuration'], true);
-                if (is_array($storageConfigs)) {
-                    foreach ($storageConfigs as $storage) {
-                        if (!empty($storage['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'storage',
-                                'component_uuid' => $storage['uuid'],
-                                'quantity' => $storage['quantity'] ?? 1,
-                                'added_at' => $storage['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // Caddy configuration
-            if (!empty($this->data['caddy_configuration'])) {
-                $caddyConfigs = json_decode($this->data['caddy_configuration'], true);
-                if (is_array($caddyConfigs)) {
-                    foreach ($caddyConfigs as $caddy) {
-                        if (!empty($caddy['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'caddy',
-                                'component_uuid' => $caddy['uuid'],
-                                'quantity' => $caddy['quantity'] ?? 1,
-                                'added_at' => $caddy['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // NIC configuration
-            if (!empty($this->data['nic_config'])) {
-                $nicConfig = json_decode($this->data['nic_config'], true);
-                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                    foreach ($nicConfig['nics'] as $nic) {
-                        if (!empty($nic['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'nic',
-                                'component_uuid' => $nic['uuid'],
-                                'quantity' => 1,
-                                'added_at' => null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // HBA Card configuration (JSON array, with legacy scalar fallback).
-            // BUGFIX (TP-4B): previously this read only the legacy scalar hbacard_uuid,
-            // so it saw at most one HBA and missed everything stored in the
-            // hbacard_config array. Read the array first; fall back to the scalar.
-            if (!empty($this->data['hbacard_config'])) {
-                $hbaConfigs = json_decode($this->data['hbacard_config'], true);
-                if (is_array($hbaConfigs)) {
-                    // Migration: single object (top-level uuid) vs array of objects
-                    if (isset($hbaConfigs['uuid'])) {
-                        $hbaConfigs = [$hbaConfigs];
-                    }
-                    foreach ($hbaConfigs as $hba) {
-                        if (!empty($hba['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'hbacard',
-                                'component_uuid' => $hba['uuid'],
-                                'quantity' => 1,
-                                'added_at' => $hba['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            } elseif (!empty($this->data['hbacard_uuid'])) {
-                $components[] = [
-                    'component_type' => 'hbacard',
-                    'component_uuid' => $this->data['hbacard_uuid'],
-                    'quantity' => 1,
-                    'added_at' => null
-                ];
-            }
-
-            // Motherboard
-            if (!empty($this->data['motherboard_uuid'])) {
-                $components[] = [
-                    'component_type' => 'motherboard',
-                    'component_uuid' => $this->data['motherboard_uuid'],
-                    'quantity' => 1,
-                    'added_at' => null
-                ];
-            }
-
-            // Chassis
-            if (!empty($this->data['chassis_uuid'])) {
-                $components[] = [
-                    'component_type' => 'chassis',
-                    'component_uuid' => $this->data['chassis_uuid'],
-                    'quantity' => 1,
-                    'added_at' => null
-                ];
-            }
-
-            // PCIe Card configuration
-            if (!empty($this->data['pciecard_configurations'])) {
-                $pcieConfigs = json_decode($this->data['pciecard_configurations'], true);
-                if (is_array($pcieConfigs)) {
-                    foreach ($pcieConfigs as $pcie) {
-                        if (!empty($pcie['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'pciecard',
-                                'component_uuid' => $pcie['uuid'],
-                                'quantity' => $pcie['quantity'] ?? 1,
-                                'added_at' => $pcie['added_at'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            // SFP configuration (modules; may be assigned to a NIC port or staged).
-            // BUGFIX (TP-4B): getComponents() previously had no SFP branch, so any
-            // check built on it was blind to SFP modules entirely.
-            if (!empty($this->data['sfp_configuration'])) {
-                $sfpConfig = json_decode($this->data['sfp_configuration'], true);
-                $sfps = $sfpConfig['sfps'] ?? [];
-                if (is_array($sfps)) {
-                    foreach ($sfps as $sfp) {
-                        if (!empty($sfp['uuid'])) {
-                            $components[] = [
-                                'component_type' => 'sfp',
-                                'component_uuid' => $sfp['uuid'],
-                                'quantity' => 1,
-                                'added_at' => $sfp['added_at'] ?? null,
-                                'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
-                                'port_index' => $sfp['port_index'] ?? null
-                            ];
-                        }
-                    }
-                }
-            }
-
-            return $components;
-
-        } catch (Exception $e) {
+            require_once __DIR__ . '/../config/ConfigReadRouter.php';
+            require_once __DIR__ . '/ServerBuilder.php';
+            return ConfigReadRouter::components(new ServerBuilder($this->pdo), $this->pdo, $this->data);
+        } catch (Throwable $e) {
             error_log("Error getting configuration components: " . $e->getMessage());
             return [];
         }

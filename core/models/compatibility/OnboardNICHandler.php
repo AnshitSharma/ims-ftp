@@ -196,8 +196,10 @@ class OnboardNICHandler {
                 ]);
             }
 
-            // Update nic_config JSON (this is the source of truth for reads)
-            $this->updateNICConfigJSON($configUuid);
+            // U-D.3a: the nic_config rebuild that stood here is gone with the column.
+            // The onboard ports are recorded by the config_components rows the caller
+            // writes (AddComponentCommand's onboard loop / server_api's platform
+            // install), and ConfigReadRouter answers every read from those.
 
             if ($ownTransaction) {
                 $this->pdo->commit();
@@ -240,102 +242,43 @@ class OnboardNICHandler {
     }
 
     /**
-     * Update nic_config JSON column with all NICs in configuration
+     * Resolve one NIC's frontend-facing specification block by its spec uuid, onboard
+     * or not.
      *
-     * @param string $configUuid
-     * @return bool Success status
+     * U-D.3b: extracted from updateNICConfigJSON(), which did exactly this inline while
+     * rebuilding the nic_config blob. With that blob retired, the same resolution has to
+     * be available to whoever is rendering a NIC -- ServerBuilder::getNetworkConfiguration()
+     * -- because config_components stores identity, not specs.
+     *
+     * Not a new derivation: same source (nicinventory's ParentComponentUUID +
+     * OnboardNICIndex, then the board's networking.onboard_nics[]), same
+     * filterNICSpecs() key set, so the shape the builder UI reads is unchanged.
+     *
+     * @param string $nicUuid NIC spec uuid ("onboard-..." for an onboard port)
+     * @return array filtered specs; [] when they cannot be resolved
      */
-    public function updateNICConfigJSON($configUuid) {
+    public function resolveNICSpecs($nicUuid) {
         try {
-            // Get all NICs from nicinventory for this configuration
-            $stmt = $this->pdo->prepare("
-                SELECT
-                    UUID as component_uuid,
-                    SourceType,
-                    ParentComponentUUID,
-                    OnboardNICIndex,
-                    SerialNumber,
-                    Notes,
-                    Status
-                FROM nicinventory
-                WHERE ServerUUID = ?
-            ");
-            $stmt->execute([$configUuid]);
-            $nics = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $stmt = $this->pdo->prepare(
+                "SELECT SourceType, ParentComponentUUID, OnboardNICIndex
+                   FROM nicinventory WHERE UUID = ? LIMIT 1"
+            );
+            $stmt->execute([$nicUuid]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            $nicConfigData = [
-                'nics' => [],
-                'summary' => [
-                    'total_nics' => 0,
-                    'onboard_nics' => 0,
-                    'component_nics' => 0
-                ],
-                'last_updated' => date('Y-m-d H:i:s')
-            ];
+            $isOnboard = $row
+                ? ($row['SourceType'] ?? null) === 'onboard'
+                : strpos((string)$nicUuid, 'onboard-') === 0;
 
-            foreach ($nics as $nic) {
-                $isOnboard = $nic['SourceType'] === 'onboard';
+            $specs = $isOnboard && $row && !empty($row['ParentComponentUUID'])
+                ? $this->getOnboardNICSpecs($row['ParentComponentUUID'], (int)($row['OnboardNICIndex'] ?? 1))
+                : $this->getComponentNICSpecs($nicUuid);
 
-                // Determine source type - default to 'component' if NULL (happens when NIC isn't in nicinventory)
-                $sourceType = $nic['SourceType'] ?? 'component';
-
-                $nicData = [
-                    'uuid' => $nic['component_uuid'],
-                    'source_type' => $sourceType,
-                    'parent_motherboard_uuid' => $nic['ParentComponentUUID'],
-                    'onboard_index' => $nic['OnboardNICIndex'],
-                    'status' => $nic['Status'] == 2 ? 'in_use' : ($nic['Status'] == 1 ? 'available' : 'failed'),
-                    'replaceable' => true
-                ];
-
-                // Get specs based on type — only include fields needed by frontend
-                if ($isOnboard) {
-                    $nicData['specifications'] = $this->filterNICSpecs(
-                        $this->getOnboardNICSpecs($nic['ParentComponentUUID'], $nic['OnboardNICIndex'])
-                    );
-                    $nicConfigData['summary']['onboard_nics']++;
-                } else {
-                    // Component NIC - get specs from JSON
-                    $specs = $this->getComponentNICSpecs($nic['component_uuid']);
-                    $nicData['specifications'] = $this->filterNICSpecs($specs);
-                    $nicData['serial_number'] = $nic['SerialNumber'] ?? 'N/A';
-                    $nicConfigData['summary']['component_nics']++;
-                }
-
-                $nicConfigData['nics'][] = $nicData;
-                $nicConfigData['summary']['total_nics']++;
-            }
-
-            // First, verify the config exists
-            $checkStmt = $this->pdo->prepare("SELECT COUNT(*) FROM server_configurations WHERE config_uuid = ?");
-            $checkStmt->execute([$configUuid]);
-            $exists = $checkStmt->fetchColumn();
-
-            if (!$exists) {
-                error_log("ERROR: config_uuid '$configUuid' not found in server_configurations table");
-                return false;
-            }
-
-            // Update server_configurations.nic_config
-            $stmt = $this->pdo->prepare("
-                UPDATE server_configurations
-                SET nic_config = ?
-                WHERE config_uuid = ?
-            ");
-
-            $jsonString = json_encode($nicConfigData, JSON_PRETTY_PRINT);
-
-            try {
-                $result = $stmt->execute([$jsonString, $configUuid]);
-                return $result;
-            } catch (PDOException $pdoEx) {
-                error_log("PDOException during UPDATE: " . $pdoEx->getMessage());
-                return false;
-            }
-
+            $filtered = $this->filterNICSpecs($specs);
+            return (is_array($filtered) && !isset($filtered['error'])) ? $filtered : [];
         } catch (Exception $e) {
-            error_log("Error updating nic_config JSON: " . $e->getMessage());
-            return false;
+            error_log("OnboardNICHandler::resolveNICSpecs($nicUuid): " . $e->getMessage());
+            return [];
         }
     }
 
@@ -442,8 +385,8 @@ class OnboardNICHandler {
             $stmt->execute([$motherboardUuid, $configUuid]);
             $detachedCount = $stmt->rowCount();
 
-            // Update nic_config JSON to reflect removal
-            $this->updateNICConfigJSON($configUuid);
+            // U-D.3a: nothing to rebuild -- the detach is recorded by tombstoning the
+            // rows, which RemoveComponentCommand does around this call.
 
             return [
                 'success' => true,
@@ -563,8 +506,7 @@ class OnboardNICHandler {
             ");
             $stmt->execute([$configUuid, (int)$componentNIC['ID']]);
 
-            // Update nic_config JSON
-            $this->updateNICConfigJSON($configUuid);
+            // U-D.3a: nic_config is retired; the row store carries the replacement.
 
             if ($ownTransaction) {
                 $this->pdo->commit();

@@ -107,12 +107,11 @@ try {
         $insertedTempInventory = true;
     }
 
+    // U-D.3c: the nine legacy JSON columns are dropped; naming them here would make
+    // this fixture die with "Unknown column".
     $cols = [
         'config_uuid' => $configUuid, 'server_name' => 'TEST FAIL-CLOSED', 'is_virtual' => 0,
         'configuration_status' => 0, 'motherboard_uuid' => null, 'chassis_uuid' => null,
-        'cpu_configuration' => null, 'ram_configuration' => null, 'storage_configuration' => null,
-        'caddy_configuration' => null, 'nic_config' => null, 'sfp_configuration' => null,
-        'hbacard_config' => null, 'pciecard_configurations' => null,
     ];
     $f = array_keys($cols);
     $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')
@@ -123,17 +122,53 @@ try {
     //    hidden, so any code path that resolves it must throw — and
     //    addComponent() must abort cleanly instead of continuing.
     // ---------------------------------------------------------------
-    $beforeConfig = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid))->fetch();
+    // U-D.3c: "did the refused add mutate the configuration?" is now asked of
+    // config_components, the store an add actually writes. Watching ram_configuration
+    // was only ever a proxy for that, and since U-D.3a nothing writes it at all — so a
+    // check on it would pass no matter how badly the command behaved. Counting live
+    // rows cannot go vacuous that way.
+    $beforeRows = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = "
+        . $pdo->quote($configUuid) . " AND removed_at IS NULL")->fetchColumn();
     $beforeStatus = $pdo->query("SELECT Status FROM raminventory WHERE UUID = " . $pdo->quote($ramUuid) . " AND Flag = 'TEMP-PROBE'")->fetch();
 
+    // REPOINTED 2026-08-30 (P9/U-D.2): ServerBuilder::addComponent() is deleted.
+    // AddComponentCommand is the add path in production, so the fail-closed
+    // property is now asserted where it actually has to hold. The command signals
+    // refusal by throwing CommandFailed instead of returning success=false; the
+    // guarantee under test — an unresolvable spec must ABORT, never continue — is
+    // unchanged, and is now additionally pinned on the failure being attributed
+    // rather than generic, so "it threw for some other reason" cannot pass.
     $builder = new ServerBuilder($pdo);
-    $result = $builder->addComponent($configUuid, 'ram', $ramUuid, ['quantity' => 1]);
+    require_once $ROOT . '/core/models/commands/BaseCommand.php';
+    require_once $ROOT . '/core/models/commands/AddComponentCommand.php';
 
-    check('add returns success=false', ($result['success'] ?? true) === false);
+    $refused = false;
+    $refusalType = null;
+    $refusalMessage = '';
+    try {
+        (new AddComponentCommand($pdo, $configUuid, 'ram', $ramUuid, ['quantity' => 1]))->execute();
+    } catch (CommandFailed $e) {
+        $refused = true;
+        $refusalType = $e->errorType;
+        $refusalMessage = $e->getMessage();
+    } catch (Throwable $e) {
+        // Anything that is NOT a CommandFailed escaped the command's own
+        // fail-closed handling. That is still an abort (nothing was written), but
+        // it is an uncontrolled one, so record it distinctly rather than counting
+        // it as a pass.
+        $refused = true;
+        $refusalType = 'UNCAUGHT:' . get_class($e);
+        $refusalMessage = $e->getMessage();
+    }
+
+    check('add is REFUSED when the component spec cannot be resolved', $refused);
+    check('the refusal is a controlled CommandFailed, not an escaped exception (found: ' . var_export($refusalType, true) . ')',
+        $refused && strpos((string)$refusalType, 'UNCAUGHT:') !== 0);
     check('no PDO transaction left open', !$pdo->inTransaction());
 
-    $afterConfig = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configUuid))->fetch();
-    check('no config JSON mutation', $afterConfig['ram_configuration'] === $beforeConfig['ram_configuration']);
+    $afterRows = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = "
+        . $pdo->quote($configUuid) . " AND removed_at IS NULL")->fetchColumn();
+    check('no component row written by the refused add', $afterRows === $beforeRows);
 
     $afterStatus = $pdo->query("SELECT Status FROM raminventory WHERE UUID = " . $pdo->quote($ramUuid) . " AND Flag = 'TEMP-PROBE'")->fetch();
     if ($insertedTempInventory) {

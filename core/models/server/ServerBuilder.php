@@ -76,279 +76,21 @@ class ServerBuilder {
     }
 
     /**
-     * Extract components from JSON columns in server_configurations table
-     * Supports: cpu_configuration, ram_configuration, storage_configuration, caddy_configuration, nic_config, hbacard_uuid, pciecard_configurations
+     * U-D.3b: the rows-side read, replacing every in-file
+     * extractComponentsFromJson() call.
      *
-     * @param array $configData Configuration data from server_configurations table
-     * @param bool $minimalOutput If true, returns only component_type and component_uuid keys, filtering null UUIDs
-     * @return array Array of components with type, uuid, and optionally quantity, added_at, etc.
+     * Takes an already-fetched server_configurations row exactly as the extractor
+     * did, so each call site changes by one line and nothing above it moves. The
+     * row is still needed: ConfigReadRouter keys the rows lookup off its
+     * config_uuid, and the scalar motherboard_uuid / chassis_uuid columns (which
+     * U-D.3 does NOT drop) are read from it.
+     *
+     * @param array $configData server_configurations row
+     * @param bool  $minimalOutput component_type + component_uuid only
      */
-    public function extractComponentsFromJson($configData, $minimalOutput = false) {
-        $components = [];
-
-        // CPU configuration (JSON array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['cpu_configuration'])) {
-            $cpuConfig = $this->safeJsonDecode($configData['cpu_configuration'], true, 'cpu_configuration');
-            if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                foreach ($cpuConfig['cpus'] as $cpu) {
-                    $component = [
-                        'component_type' => 'cpu',
-                        'component_uuid' => $cpu['uuid'] ?? null,
-                        'quantity' => $cpu['quantity'] ?? 1,
-                        'added_at' => $cpu['added_at'] ?? null
-                    ];
-                    // CRITICAL: Include serial_number to identify specific physical component
-                    if (isset($cpu['serial_number'])) {
-                        $component['serial_number'] = $cpu['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($cpu['inventory_id'])) {
-                        $component['inventory_id'] = (int)$cpu['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // RAM configuration (JSON array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['ram_configuration'])) {
-            $ramConfigs = $this->safeJsonDecode($configData['ram_configuration'], true, 'ram_configuration');
-            if (is_array($ramConfigs)) {
-                foreach ($ramConfigs as $ram) {
-                    $component = [
-                        'component_type' => 'ram',
-                        'component_uuid' => $ram['uuid'] ?? null,
-                        'quantity' => $ram['quantity'] ?? 1,
-                        'added_at' => $ram['added_at'] ?? null
-                    ];
-                    // CRITICAL: Include serial_number to identify specific physical component
-                    // (mirrors the CPU branch above). removeComponent() recovers this serial
-                    // from the config JSON when the caller omits one; without it the fail-closed
-                    // ambiguity guard refuses to release any of several same-model DIMMs bound to
-                    // the config ("Could not identify which physical unit to release").
-                    if (isset($ram['serial_number'])) {
-                        $component['serial_number'] = $ram['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($ram['inventory_id'])) {
-                        $component['inventory_id'] = (int)$ram['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // Storage configuration (JSON array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['storage_configuration'])) {
-            $storageConfigs = $this->safeJsonDecode($configData['storage_configuration'], true, 'storage_configuration');
-            if (is_array($storageConfigs)) {
-                foreach ($storageConfigs as $storage) {
-                    $component = [
-                        'component_type' => 'storage',
-                        'component_uuid' => $storage['uuid'] ?? null,
-                        'quantity' => $storage['quantity'] ?? 1,
-                        'added_at' => $storage['added_at'] ?? null,
-                        'connection' => $storage['connection'] ?? null
-                    ];
-                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
-                    if (isset($storage['serial_number'])) {
-                        $component['serial_number'] = $storage['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($storage['inventory_id'])) {
-                        $component['inventory_id'] = (int)$storage['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // Caddy configuration (JSON array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['caddy_configuration'])) {
-            $caddyConfigs = $this->safeJsonDecode($configData['caddy_configuration'], true, 'caddy_configuration');
-            if (is_array($caddyConfigs)) {
-                foreach ($caddyConfigs as $caddy) {
-                    $component = [
-                        'component_type' => 'caddy',
-                        'component_uuid' => $caddy['uuid'] ?? null,
-                        'quantity' => $caddy['quantity'] ?? 1,
-                        'added_at' => $caddy['added_at'] ?? null
-                    ];
-                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
-                    if (isset($caddy['serial_number'])) {
-                        $component['serial_number'] = $caddy['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($caddy['inventory_id'])) {
-                        $component['inventory_id'] = (int)$caddy['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // NIC configuration (JSON object with nics array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['nic_config'])) {
-            $nicConfig = $this->safeJsonDecode($configData['nic_config'], true, 'nic_config');
-            if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                foreach ($nicConfig['nics'] as $nic) {
-                    $component = [
-                        'component_type' => 'nic',
-                        'component_uuid' => $nic['uuid'] ?? null,
-                        'quantity' => 1,
-                        'added_at' => $nic['added_at'] ?? null
-                    ];
-                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
-                    if (isset($nic['serial_number'])) {
-                        $component['serial_number'] = $nic['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($nic['inventory_id'])) {
-                        $component['inventory_id'] = (int)$nic['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // HBA Card configuration (JSON array, with legacy scalar fallback)
-        if (!empty($configData['hbacard_config'])) {
-            $hbaConfigs = $this->safeJsonDecode($configData['hbacard_config'], true, 'hbacard_config');
-            if (is_array($hbaConfigs)) {
-                // Handle migration: single object (has 'uuid' at top level) vs array of objects
-                if (isset($hbaConfigs['uuid'])) {
-                    $hbaConfigs = [$hbaConfigs];
-                }
-                foreach ($hbaConfigs as $hba) {
-                    $component = [
-                        'component_type' => 'hbacard',
-                        'component_uuid' => $hba['uuid'] ?? null,
-                        'quantity' => 1,
-                        'added_at' => $hba['added_at'] ?? null
-                    ];
-                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
-                    if (isset($hba['serial_number'])) {
-                        $component['serial_number'] = $hba['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($hba['inventory_id'])) {
-                        $component['inventory_id'] = (int)$hba['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        } elseif (!empty($configData['hbacard_uuid'])) {
-            // Backward compatibility: fall back to legacy scalar column
-            $components[] = [
-                'component_type' => 'hbacard',
-                'component_uuid' => $configData['hbacard_uuid'],
-                'quantity' => 1,
-                'added_at' => null
-            ];
-        }
-
-        // Motherboard (simple column)
-        if (!empty($configData['motherboard_uuid'])) {
-            $components[] = [
-                'component_type' => 'motherboard',
-                'component_uuid' => $configData['motherboard_uuid'],
-                'quantity' => 1,
-                'added_at' => null
-            ];
-        }
-
-        // Chassis (simple column)
-        if (!empty($configData['chassis_uuid'])) {
-            $components[] = [
-                'component_type' => 'chassis',
-                'component_uuid' => $configData['chassis_uuid'],
-                'quantity' => 1,
-                'added_at' => null
-            ];
-        }
-
-        // PCIe Card configuration (JSON array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['pciecard_configurations'])) {
-            $pcieConfigs = $this->safeJsonDecode($configData['pciecard_configurations'], true, 'pciecard_configurations');
-            if (is_array($pcieConfigs)) {
-                foreach ($pcieConfigs as $pcie) {
-                    $component = [
-                        'component_type' => 'pciecard',
-                        'component_uuid' => $pcie['uuid'] ?? null,
-                        'quantity' => $pcie['quantity'] ?? 1,
-                        'added_at' => $pcie['added_at'] ?? null
-                    ];
-                    // CRITICAL: carry the per-unit serial for removal (see RAM branch note).
-                    // Without it, four same-model adapters in one config are indistinguishable
-                    // and the ambiguity guard refuses to release any of them.
-                    if (isset($pcie['serial_number'])) {
-                        $component['serial_number'] = $pcie['serial_number'];
-                    }
-                    // A-L5: the physical unit's inventory row id -- the only identifier
-                    // that separates two units of one model when both serials are NULL.
-                    if (isset($pcie['inventory_id'])) {
-                        $component['inventory_id'] = (int)$pcie['inventory_id'];
-                    }
-                    $components[] = $component;
-                }
-            }
-        }
-
-        // SFP configuration (JSON object with sfps array) - P5.2: Use safe JSON decoder
-        if (!empty($configData['sfp_configuration'])) {
-            $sfpConfig = $this->safeJsonDecode($configData['sfp_configuration'], true, 'sfp_configuration');
-
-            // Extract assigned SFPs (with parent NIC and port assignments)
-            if (isset($sfpConfig['sfps']) && is_array($sfpConfig['sfps'])) {
-                foreach ($sfpConfig['sfps'] as $sfp) {
-                    $components[] = [
-                        'component_type' => 'sfp',
-                        'component_uuid' => $sfp['uuid'] ?? null,
-                        'parent_nic_uuid' => $sfp['parent_nic_uuid'] ?? null,
-                        'port_index' => $sfp['port_index'] ?? null,
-                        'quantity' => 1,
-                        'added_at' => $sfp['added_at'] ?? null
-                    ];
-                }
-            }
-
-            // Extract unassigned SFPs (added before NIC, awaiting assignment)
-            if (isset($sfpConfig['unassigned_sfps']) && is_array($sfpConfig['unassigned_sfps'])) {
-                foreach ($sfpConfig['unassigned_sfps'] as $sfp) {
-                    $components[] = [
-                        'component_type' => 'sfp',
-                        'component_uuid' => $sfp['uuid'] ?? null,
-                        'parent_nic_uuid' => null,
-                        'port_index' => null,
-                        'quantity' => 1,
-                        'added_at' => $sfp['added_at'] ?? null,
-                        'status' => 'unassigned'
-                    ];
-                }
-            }
-        }
-
-        // Apply minimal output filter if requested (for backward compatibility with extractComponentsFromConfigData)
-        if ($minimalOutput) {
-            $components = array_map(function($c) {
-                return [
-                    'component_type' => $c['component_type'],
-                    'component_uuid'  => $c['component_uuid']
-                ];
-            }, $components);
-            // Filter out entries with null/empty UUIDs to match standalone function behavior
-            $components = array_values(array_filter($components, function($c) {
-                return !empty($c['component_uuid']);
-            }));
-        }
-
-        return $components;
+    private function componentsFromRows($configData, $minimalOutput = false) {
+        require_once __DIR__ . '/../config/ConfigReadRouter.php';
+        return ConfigReadRouter::components($this, $this->pdo, is_array($configData) ? $configData : [], $minimalOutput);
     }
 
     /**
@@ -635,7 +377,7 @@ class ServerBuilder {
             }
 
             // Check if component exists in configuration by extracting from JSON
-            $components = $this->extractComponentsFromJson($config);
+            $components = $this->componentsFromRows($config);
             $componentFound = false;
             $componentSerialNumber = null;
             // Inventory row id recorded on the matched entry (A-L5). Authoritative when
@@ -760,20 +502,17 @@ class ServerBuilder {
 
             // Phase 3: NIC removal validation - Check if any SFPs are installed on ports
             if ($componentType === 'nic') {
-                $sfpConfigJson = $config['sfp_configuration'] ?? null;
-                if ($sfpConfigJson) {
-                    $sfpConfig = json_decode($sfpConfigJson, true);
+                {
+                    // U-D.3b: the SFPs seated on this NIC, from config_components rows
+                    // (parent_id -> this NIC's row, slot_ref -> the port).
                     $occupiedPorts = [];
-
-                    if (isset($sfpConfig['sfps']) && is_array($sfpConfig['sfps'])) {
-                        foreach ($sfpConfig['sfps'] as $sfp) {
-                            if (isset($sfp['parent_nic_uuid']) && $sfp['parent_nic_uuid'] === $componentUuid) {
-                                $occupiedPorts[] = [
-                                    'port_index' => $sfp['port_index'],
-                                    'sfp_uuid' => $sfp['uuid']
-                                ];
-                            }
-                        }
+                    foreach ($this->componentsFromRows($config) as $entry) {
+                        if (($entry['component_type'] ?? null) !== 'sfp') { continue; }
+                        if (($entry['parent_nic_uuid'] ?? null) !== $componentUuid) { continue; }
+                        $occupiedPorts[] = [
+                            'port_index' => $entry['port_index'] ?? null,
+                            'sfp_uuid'   => $entry['component_uuid'] ?? null,
+                        ];
                     }
 
                     if (!empty($occupiedPorts)) {
@@ -844,7 +583,7 @@ class ServerBuilder {
                 $dependentTypes = ['cpu', 'ram', 'pciecard', 'risercard', 'nic', 'hbacard', 'storage'];
                 // Full (non-minimal) form: minimalOutput drops 'quantity', which would
                 // report an 8-DIMM entry as "1 ram".
-                $remaining = $this->extractComponentsFromJson($config);
+                $remaining = $this->componentsFromRows($config);
 
                 $blockers = [];
                 foreach ($remaining as $entry) {
@@ -1007,18 +746,11 @@ class ServerBuilder {
                 RackPlacement::syncHeightFromChassis($this->pdo, $configUuid);
             }
 
-            // Post-removal side effect. BUGFIX (A-L6): this ran AFTER commit(), so its
-            // read-modify-write of nic_config was unlocked and raced concurrent flows, and
-            // the cache had already been invalidated from the pre-side-effect state.
-            // Skipped for virtual configs for the same reason as the add path: the
-            // rebuild reads reservations, a virtual config has none, so it would blank
-            // nic_config and take every REMAINING NIC with it -- turning "remove one" into
-            // "remove all". The JSON write above already removed exactly the one asked for.
-            if ($componentType === 'nic' && !(bool)($config['is_virtual'] ?? 0)) {
-                require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
-                $nicHandler = new OnboardNICHandler($this->pdo);
-                $nicHandler->updateNICConfigJSON($configUuid);
-            }
+            // U-D.3a: the post-removal nic_config rebuild that stood here is gone with
+            // the column. It carried its own hazard -- the rebuild read inventory
+            // reservations, so on a virtual config (which has none) it blanked the blob
+            // and took every REMAINING NIC with it, which is why it was flag-guarded.
+            // Removing a row cannot have that failure mode: it removes one row.
 
             // Update calculated fields (after the side effect, so NIC changes are counted)
             $this->updateConfigurationMetrics($configUuid);
@@ -1867,42 +1599,37 @@ class ServerBuilder {
      */
     public function migrateNICSlotPositions($configUuid) {
         try {
-            $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
+            // U-D.3b: the lazy migration now repairs config_components.slot_ref instead
+            // of nic_config's slot_position. Same intent -- a component NIC installed
+            // before slot auto-assignment existed has no recorded slot, and every slot
+            // consumer then treats it as unplaced -- against the store that survives.
+            //
+            // This is not a no-op rename: the two stores had DRIFTED. A NIC could carry
+            // a slot_position in the blob (written by an earlier run of this very
+            // method) while its row's slot_ref stayed NULL, so getUsedPCIeSlots() saw
+            // the card occupying a slot and the command layer's slot planner did not.
+            $stmt = $this->pdo->prepare(
+                "SELECT id, spec_uuid FROM config_components
+                  WHERE config_uuid = ? AND component_type = 'nic'
+                    AND removed_at IS NULL AND (slot_ref IS NULL OR slot_ref = '')"
+            );
             $stmt->execute([$configUuid]);
-            $nicConfigJson = $stmt->fetchColumn();
-
-            if (!$nicConfigJson) {
-                return;
-            }
-
-            $nicConfig = json_decode($nicConfigJson, true);
-            if (!isset($nicConfig['nics']) || !is_array($nicConfig['nics'])) {
-                return;
-            }
-
-            $needsMigration = false;
-            foreach ($nicConfig['nics'] as $nic) {
-                if (($nic['source_type'] ?? '') === 'component' && empty($nic['slot_position'])) {
-                    $needsMigration = true;
-                    break;
-                }
-            }
-
-            if (!$needsMigration) {
+            $unplaced = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (!$unplaced) {
                 return;
             }
 
             $slotTracker = new UnifiedSlotTracker($this->pdo);
             $dataService = ComponentDataService::getInstance();
 
-            foreach ($nicConfig['nics'] as &$nic) {
-                if (($nic['source_type'] ?? '') !== 'component' || !empty($nic['slot_position'])) {
+            foreach ($unplaced as $row) {
+                $nicUuid = (string)$row['spec_uuid'];
+                // An onboard port is not in a PCIe slot and must never be given one.
+                if (strpos($nicUuid, 'onboard-') === 0) {
                     continue;
                 }
 
-                $nicUuid = $nic['uuid'];
                 $nicSpecs = $dataService->getComponentSpecifications('nic', $nicUuid);
-
                 if ($nicSpecs && isset($nicSpecs['interface'])) {
                     preg_match('/x(\d+)/', $nicSpecs['interface'], $matches);
                     $slotSize = 'x' . ($matches[1] ?? '8');
@@ -1911,15 +1638,26 @@ class ServerBuilder {
                 }
 
                 $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
-                if ($slotPosition) {
-                    $nic['slot_position'] = $slotPosition;
+                if (!$slotPosition) {
+                    continue;
+                }
+
+                try {
+                    $upd = $this->pdo->prepare(
+                        "UPDATE config_components SET slot_ref = ? WHERE id = ? AND slot_ref IS NULL"
+                    );
+                    $upd->execute([$slotPosition, (int)$row['id']]);
                     error_log("NIC-MIGRATE: Assigned slot $slotPosition to NIC $nicUuid in config $configUuid");
+                } catch (\Throwable $slotClash) {
+                    // Left in place as a genuine fail-safe, not as the primary guard:
+                    // uq_slot_occupancy cannot refuse this (see autoAssignSFPPort's
+                    // note -- it is NULL-distinct on removed_at for every live row).
+                    // assignSlot() picking from the current occupancy map is what
+                    // actually prevents a collision.
+                    error_log("NIC-MIGRATE: slot $slotPosition already occupied in config $configUuid: "
+                        . $slotClash->getMessage());
                 }
             }
-            unset($nic);
-
-            $updateStmt = $this->pdo->prepare("UPDATE server_configurations SET nic_config = ? WHERE config_uuid = ?");
-            $updateStmt->execute([json_encode($nicConfig), $configUuid]);
 
         } catch (Exception $e) {
             error_log("NIC-MIGRATE: Error migrating NIC slots for config $configUuid: " . $e->getMessage());
@@ -2158,39 +1896,73 @@ class ServerBuilder {
                 'success' => true
             ];
 
-            // Get NIC configuration from database
-            $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
+            // U-D.3b: NICs and SFPs come from config_components rows, not from the
+            // nic_config / sfp_configuration blobs.
+            //
+            // nic_config was a DERIVED cache -- OnboardNICHandler::updateNICConfigJSON()
+            // rebuilt it wholesale from nicinventory on every change, specs and summary
+            // included. Rows carry identity; the specs half is re-resolved here through
+            // OnboardNICHandler::resolveNICSpecs(), which is that same rebuild's spec
+            // lookup extracted rather than reimplemented, so the block the builder UI
+            // reads keeps its shape and its key set.
+            //
+            // The summary is now COUNTED rather than trusted. It used to be whatever the
+            // blob's 'summary' said, which was only as fresh as the last rebuild.
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
-            $nicConfigJson = $stmt->fetchColumn();
-
-            if (!$nicConfigJson) {
-                // No NIC configuration exists - return empty but successful
+            $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$configRow) {
                 return $result;
             }
 
-            $nicConfiguration = json_decode($nicConfigJson, true);
-            if (!is_array($nicConfiguration)) {
-                return $result;
-            }
+            require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
+            $nicSpecResolver = new OnboardNICHandler($this->pdo);
 
-            // Extract summary if available
-            if (isset($nicConfiguration['summary'])) {
-                $result['summary'] = $nicConfiguration['summary'];
-            }
-
-            // Extract NICs if available
-            if (isset($nicConfiguration['nics']) && is_array($nicConfiguration['nics'])) {
-                $result['nics'] = $nicConfiguration['nics'];
-            }
-
-            // Add SFP port mapping to each NIC
-            $sfpStmt = $this->pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
-            $sfpStmt->execute([$configUuid]);
-            $sfpConfigJson = $sfpStmt->fetchColumn();
             $sfps = [];
-            if ($sfpConfigJson) {
-                $sfpDecoded = json_decode($sfpConfigJson, true);
-                $sfps = $sfpDecoded['sfps'] ?? [];
+            foreach ($this->componentsFromRows($configRow) as $entry) {
+                $type = $entry['component_type'] ?? null;
+                if ($type === 'sfp') {
+                    $sfps[] = [
+                        'uuid'            => $entry['component_uuid'] ?? null,
+                        'parent_nic_uuid' => $entry['parent_nic_uuid'] ?? null,
+                        'port_index'      => $entry['port_index'] ?? null,
+                        'serial_number'   => $entry['serial_number'] ?? null,
+                    ];
+                    continue;
+                }
+                if ($type !== 'nic' || empty($entry['component_uuid'])) {
+                    continue;
+                }
+
+                $nicUuid   = (string)$entry['component_uuid'];
+                $isOnboard = ($entry['source_type'] ?? 'component') === 'onboard';
+                $specs     = $nicSpecResolver->resolveNICSpecs($nicUuid);
+
+                $nicEntry = [
+                    'uuid'          => $nicUuid,
+                    'source_type'   => $isOnboard ? 'onboard' : 'component',
+                    'status'        => 'in_use',
+                    'replaceable'   => true,
+                    'specifications' => $specs,
+                ];
+                if (!$isOnboard) {
+                    $nicEntry['serial_number'] = $entry['serial_number'] ?? 'N/A';
+                }
+                if (($entry['slot_position'] ?? null) !== null) {
+                    $nicEntry['slot_position'] = $entry['slot_position'];
+                }
+                $result['nics'][] = $nicEntry;
+
+                $ports = (int)($specs['ports'] ?? 0);
+                $result['summary']['total_nics']++;
+                $result['summary']['total_ports'] += $ports;
+                if ($isOnboard) {
+                    $result['summary']['onboard_nics']++;
+                    $result['summary']['onboard_ports'] += $ports;
+                } else {
+                    $result['summary']['component_nics']++;
+                    $result['summary']['component_ports'] += $ports;
+                }
             }
 
             foreach ($result['nics'] as &$nic) {
@@ -2242,7 +2014,7 @@ class ServerBuilder {
      * Determines port count from NIC specs and returns first unoccupied port
      *
      * @param string $nicUuid       NIC UUID to assign port on
-     * @param string $configUuid    Server configuration UUID (used to read sfp_configuration)
+     * @param string $configUuid    Server configuration UUID (used to read installed SFPs)
      * @return int|null             First available port index (1-based), or null if all occupied
      */
     public function autoAssignSFPPort($nicUuid, $configUuid) {
@@ -2274,17 +2046,25 @@ class ServerBuilder {
                 return null;
             }
 
-            // Step 2: Find which ports are already occupied on this NIC
+            // Step 2: Find which ports are already occupied on this NIC.
+            // U-D.3b: from config_components rows. An SFP row's slot_ref IS its port
+            // ("port_3"), so occupancy is read from the same field the writer sets.
+            //
+            // NOT relying on uq_slot_occupancy to enforce this. That index is
+            // (config_uuid, slot_ref, removed_at) and every LIVE row has removed_at
+            // NULL, which MariaDB treats as distinct -- so it accepts two live rows in
+            // one slot and only ever constrains tombstones sharing a timestamp. Probed
+            // 2026-08-30; it does not do what its name says. This loop is the check.
             $occupiedPorts = [];
-            $stmt = $this->pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row && !empty($row['sfp_configuration'])) {
-                $sfpConfig = json_decode($row['sfp_configuration'], true) ?? [];
-                foreach ($sfpConfig['sfps'] ?? [] as $sfp) {
-                    if (($sfp['parent_nic_uuid'] ?? null) === $nicUuid) {
-                        $occupiedPorts[] = (int)$sfp['port_index'];
-                    }
+            if ($row) {
+                foreach ($this->componentsFromRows($row) as $entry) {
+                    if (($entry['component_type'] ?? null) !== 'sfp') { continue; }
+                    if (($entry['parent_nic_uuid'] ?? null) !== $nicUuid) { continue; }
+                    if (($entry['port_index'] ?? null) === null) { continue; }
+                    $occupiedPorts[] = (int)$entry['port_index'];
                 }
             }
 
@@ -2475,7 +2255,20 @@ class ServerBuilder {
     }
     
     /**
-     * Update server_configurations table with component information
+     * Persist the SCALAR component columns on server_configurations.
+     *
+     * U-D.3a: this used to fan out to eight JSON-column updaters as well
+     * (updateCpuConfiguration and its siblings). Those columns are retired and the
+     * updaters are deleted; config_components is the record, written by
+     * ConfigComponentRepository in the same transaction as this call.
+     *
+     * What survives is motherboard_uuid, chassis_uuid, and the platform fields that
+     * hang off the board -- plain scalars the pack rules OUT of the drop (see the scope
+     * decision in tasks/u-d3-json-column-retirement.md) because they are read far more
+     * widely than the JSON set and nothing in P9 moved them.
+     *
+     * Every other component type is now a no-op here. That is the point, not an
+     * omission: for those types the row IS the record.
      */
     /** U-C.2/U-C.3: exposed as a library call for the command layer (reuse legacy persistence, don't reimplement). */
     public function updateServerConfigurationTable($configUuid, $componentType, $componentUuid, $quantity, $action, $serialNumber = null, $options = []) {
@@ -2492,10 +2285,6 @@ class ServerBuilder {
                     } elseif ($action === 'remove') {
                         $updateFields[] = "chassis_uuid = NULL";
                     }
-                    break;
-
-                case 'cpu':
-                    $this->updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
                     break;
 
                 case 'motherboard':
@@ -2517,65 +2306,6 @@ class ServerBuilder {
                     }
                     break;
 
-                case 'ram':
-                    $this->updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
-                    break;
-
-                case 'storage':
-                    $this->updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options, $serialNumber);
-                    break;
-
-                case 'nic':
-                    // A-L10: slot assignment belongs to assignComponentSlot(), which runs
-                    // before this method and propagates its result via
-                    // $options['slot_position'] (C4). The local fallback that used to live
-                    // here re-derived the slot width with a DIFFERENT rule --
-                    // `interface` only, hard-defaulting to x8 -- so a card whose width is
-                    // declared in slot_type/pcie_interface got x8 here and its true width
-                    // there, and it threw on exhaustion where the pciecard path stored
-                    // null. One authority now, one failure mode.
-                    if ($action === 'add') {
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'add', $options['slot_position'] ?? null, $serialNumber, $options);
-                    } elseif ($action === 'remove') {
-                        $this->updateNicConfiguration($configUuid, $componentUuid, $quantity, 'remove', null, $serialNumber, $options);
-                    }
-                    break;
-
-                case 'caddy':
-                    $this->updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $options);
-                    break;
-
-                case 'sfp':
-                    // Extract SFP-specific parameters from options
-                    $parentNicUuid = $options['parent_nic_uuid'] ?? null;
-                    $portIndex = $options['port_index'] ?? null;
-                    $this->updateSfpConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber, $parentNicUuid, $portIndex);
-                    break;
-
-                case 'pciecard':
-                case 'risercard':
-                    // Risers became their own component type on 2026-08-14 but keep
-                    // sharing the LEGACY pciecard_configurations JSON column: that column
-                    // (and every other *_configuration column) is deleted at U-D.3, so
-                    // adding an 11th doomed column — plus a decoder branch in every legacy
-                    // reader — buys nothing. The row store (config_components) is where the
-                    // types are genuinely separate; ConfigReadRouter::isRiserPciecard()
-                    // bridges the legacy side back to 'risercard' for parity and dies with
-                    // the JSON columns.
-                    $slotPosition = $options['slot_position'] ?? null;
-                    $this->updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition, $serialNumber, $options);
-                    break;
-
-                case 'hbacard':
-                    // HBA-TRACK FIX: Store HBA with PCIe slot position in JSON format.
-                    // A-L10: slot assignment is assignComponentSlot()'s job (see the 'nic'
-                    // case above) -- the divergent inline fallback has been removed.
-                    if ($action === 'add') {
-                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'add', $options['slot_position'] ?? null, $serialNumber, $options);
-                    } elseif ($action === 'remove') {
-                        $this->updateHbaCardConfiguration($configUuid, $componentUuid, 'remove', null, $serialNumber, $options);
-                    }
-                    break; // Skip generic UPDATE below — method handles its own SQL
             }
 
             if (!empty($updateFields)) {
@@ -2588,275 +2318,6 @@ class ServerBuilder {
             
         } catch (\Throwable $e) {
             error_log("Error updating server configuration table: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    /**
-     * Build the identity fields common to every component JSON entry.
-     *
-     * `inventory_id` is the PHYSICAL unit's row id and is the only identifier that
-     * distinguishes two units of one model when both have SerialNumber NULL
-     * (serial-less stock, AssetTag-addressed). `reserved_units` records every unit an
-     * entry claims, so a quantity>1 entry can be released exactly (A-L3/A-L5).
-     *
-     * @return array identity fields to merge into the entry
-     */
-    private function componentEntryIdentity($serialNumber, array $options = []) {
-        $identity = [];
-
-        if ($serialNumber !== null) {
-            $identity['serial_number'] = $serialNumber;
-        }
-        if (!empty($options['inventory_id'])) {
-            $identity['inventory_id'] = (int)$options['inventory_id'];
-        }
-        if (!empty($options['reserved_units']) && is_array($options['reserved_units'])) {
-            $ids = [];
-            foreach ($options['reserved_units'] as $unit) {
-                if (!empty($unit['ID'])) {
-                    $ids[] = (int)$unit['ID'];
-                }
-            }
-            // Only worth storing when the entry claims more than the one unit that
-            // inventory_id already names.
-            if (count($ids) > 1) {
-                $identity['reserved_units'] = $ids;
-            }
-        }
-
-        return $identity;
-    }
-
-    /**
-     * Does a stored JSON entry denote the same PHYSICAL unit the caller is targeting?
-     *
-     * Precedence mirrors isDuplicateComponent(): inventory_id when both sides have it,
-     * serial when both sides have it, model UUID only as a last resort.
-     */
-    private function componentEntryMatches(array $entry, $componentUuid, $serialNumber = null, $inventoryId = null) {
-        if (($entry['uuid'] ?? null) !== $componentUuid) {
-            return false;
-        }
-
-        $entryInventoryId = isset($entry['inventory_id']) ? (int)$entry['inventory_id'] : null;
-        if ($inventoryId !== null && $entryInventoryId !== null) {
-            return $entryInventoryId === (int)$inventoryId;
-        }
-
-        $entrySerial = $entry['serial_number'] ?? null;
-        if ($serialNumber !== null && $entrySerial !== null) {
-            return $entrySerial === $serialNumber;
-        }
-
-        // Neither side can distinguish units of this model. Match on the model alone --
-        // the caller removes at most ONE entry, so this can no longer wipe the set.
-        return true;
-    }
-
-    /**
-     * Remove exactly ONE entry matching the target unit from a flat entry list.
-     *
-     * BUGFIX (A-L4): every removal path used
-     * `array_filter(... return $e['uuid'] !== $uuid)` as its fallback, which deleted
-     * EVERY entry of the model whenever the caller had no serial or the stored entry
-     * had none -- while removeComponent() released a single inventory row. The surplus
-     * units were left Status=2 with a stale ServerUUID and no longer referenced by the
-     * config, i.e. unreachable from the UI. A mixed set (one entry with a serial, one
-     * without) hit the same fallback and over-removed too.
-     *
-     * @return array the list with at most one entry removed, reindexed
-     */
-    private function removeOneComponentEntry(array $entries, $componentUuid, $serialNumber = null, $inventoryId = null) {
-        $removed = false;
-        $kept = [];
-
-        foreach ($entries as $entry) {
-            if (!$removed && is_array($entry)
-                && $this->componentEntryMatches($entry, $componentUuid, $serialNumber, $inventoryId)) {
-                $removed = true;
-                continue;
-            }
-            $kept[] = $entry;
-        }
-
-        return array_values($kept);
-    }
-
-    /**
-     * Update CPU configuration in JSON format
-     * New schema: cpu_configuration as JSON array supporting 1-2 CPUs
-     */
-    private function updateCpuConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
-        try {
-            if ($action === 'add') {
-                // Retrieve current CPU configuration
-                $stmt = $this->pdo->prepare("SELECT cpu_configuration FROM server_configurations WHERE config_uuid = ?");
-                $stmt->execute([$configUuid]);
-                $currentConfig = $stmt->fetchColumn();
-
-                // Decode existing config or create new structure
-                $cpuData = [];
-                if (!empty($currentConfig)) {
-                    $decoded = json_decode($currentConfig, true);
-                    $cpuData = $decoded['cpus'] ?? [];
-                }
-
-                // Check if this is a virtual configuration
-                $isVirtual = $this->isVirtualConfig($configUuid);
-
-                // Does this exact PHYSICAL unit already have an entry? Virtual configs
-                // intentionally allow repeats of the same model.
-                $inventoryId = $options['inventory_id'] ?? null;
-                $cpuExists = false;
-                if (!$isVirtual) {
-                    foreach ($cpuData as &$cpu) {
-                        if (is_array($cpu)
-                            && $this->componentEntryMatches($cpu, $componentUuid, $serialNumber, $inventoryId)) {
-                            $cpuExists = true;
-                            // BUGFIX (A-L11): accumulate. Assigning $quantity here dropped
-                            // whatever the entry already claimed, so add(qty 2) then
-                            // add(qty 1) for one unit left quantity = 1.
-                            $cpu['quantity'] = (int)($cpu['quantity'] ?? 0) + (int)$quantity;
-                            break;
-                        }
-                    }
-                    unset($cpu); // Break reference
-                }
-
-                // Add new CPU if it doesn't exist (or always add for virtual configs)
-                if (!$cpuExists) {
-                    $newCpu = array_merge([
-                        'uuid' => $componentUuid,
-                        'quantity' => $quantity,
-                        'socket' => 'LGA3647', // Default socket - will be overridden by actual specs
-                        'added_at' => date('Y-m-d H:i:s')
-                    ], $this->componentEntryIdentity($serialNumber, $options));
-
-                    // For virtual configs, generate a unique serial so repeated instances
-                    // of one model stay distinguishable.
-                    if ($isVirtual) {
-                        $virtualIndex = count($cpuData) + 1;
-                        $newCpu['serial_number'] = 'VIRTUAL-CPU-' . $virtualIndex . '-' . time();
-                    }
-                    $cpuData[] = $newCpu;
-                }
-
-                // Build new JSON structure
-                $newConfig = json_encode(['cpus' => $cpuData]);
-
-                // Update database
-                $stmt = $this->pdo->prepare("UPDATE server_configurations SET cpu_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-                $stmt->execute([$newConfig, $configUuid]);
-
-            } elseif ($action === 'remove') {
-                // Retrieve current CPU configuration
-                $stmt = $this->pdo->prepare("SELECT cpu_configuration FROM server_configurations WHERE config_uuid = ?");
-                $stmt->execute([$configUuid]);
-                $currentConfig = $stmt->fetchColumn();
-
-                if (!empty($currentConfig)) {
-                    $decoded = json_decode($currentConfig, true);
-                    $cpuData = $decoded['cpus'] ?? [];
-
-                    // Remove exactly ONE entry -- the targeted physical unit (A-L4).
-                    $cpuData = $this->removeOneComponentEntry(
-                        $cpuData, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
-                    );
-
-                    // Update database
-                    if (empty($cpuData)) {
-                        // If no CPUs left, set to NULL
-                        $stmt = $this->pdo->prepare("UPDATE server_configurations SET cpu_configuration = NULL, updated_at = NOW() WHERE config_uuid = ?");
-                        $stmt->execute([$configUuid]);
-                    } else {
-                        // Update with remaining CPUs
-                        $newConfig = json_encode(['cpus' => $cpuData]);
-                        $stmt = $this->pdo->prepare("UPDATE server_configurations SET cpu_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-                        $stmt->execute([$newConfig, $configUuid]);
-                    }
-                }
-            }
-
-        } catch (Exception $e) {
-            error_log("Error updating CPU configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-    
-    /**
-     * Update RAM configuration in JSON format
-     */
-    private function updateRamConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT ram_configuration FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            $ramConfig = $currentConfig ? json_decode($currentConfig, true) : [];
-            if (!is_array($ramConfig)) {
-                $ramConfig = [];
-            }
-
-            if ($action === 'add') {
-                $ramConfig[] = array_merge([
-                    'uuid' => $componentUuid,
-                    'quantity' => $quantity,
-                    'added_at' => date('Y-m-d H:i:s')
-                ], $this->componentEntryIdentity($serialNumber, $options));
-            } elseif ($action === 'remove') {
-                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
-                $ramConfig = $this->removeOneComponentEntry(
-                    $ramConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
-                );
-            }
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET ram_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($ramConfig), $configUuid]);
-            
-        } catch (Exception $e) {
-            error_log("Error updating RAM configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-    
-    /**
-     * Update storage configuration in JSON format
-     */
-    private function updateStorageConfiguration($configUuid, $componentUuid, $quantity, $action, $options = [], $serialNumber = null) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT storage_configuration FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            $storageConfig = $currentConfig ? json_decode($currentConfig, true) : [];
-            if (!is_array($storageConfig)) {
-                $storageConfig = [];
-            }
-
-            if ($action === 'add') {
-                $entry = array_merge([
-                    'uuid' => $componentUuid,
-                    'quantity' => $quantity,
-                    'added_at' => date('Y-m-d H:i:s')
-                ], $this->componentEntryIdentity($serialNumber, $options));
-
-                if (!empty($options['connection_data'])) {
-                    $entry['connection'] = $options['connection_data'];
-                }
-                $storageConfig[] = $entry;
-            } elseif ($action === 'remove') {
-                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
-                $storageConfig = $this->removeOneComponentEntry(
-                    $storageConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
-                );
-            }
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET storage_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($storageConfig), $configUuid]);
-            
-        } catch (Exception $e) {
-            error_log("Error updating storage configuration: " . $e->getMessage());
             throw $e;
         }
     }
@@ -2903,286 +2364,6 @@ class ServerBuilder {
         } catch (Exception $e) {
             error_log("Error computing storage connection path: " . $e->getMessage());
             return ['type' => 'not_connected'];
-        }
-    }
-
-    /**
-     * Update NIC configuration in JSON format
-     */
-    private function updateNicConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT nic_config FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            $nicConfig = $currentConfig ? json_decode($currentConfig, true) : [];
-            if (!is_array($nicConfig)) {
-                $nicConfig = [];
-            }
-
-            // Detect format: nested {"nics": [...], ...} (from OnboardNICHandler) vs flat array
-            $isNestedFormat = isset($nicConfig['nics']) && is_array($nicConfig['nics']);
-
-            if ($action === 'add') {
-                $newNic = [
-                    'uuid' => $componentUuid,
-                    'source_type' => 'component',
-                    'quantity' => $quantity,
-                    'added_at' => date('Y-m-d H:i:s')
-                ];
-                if ($slotPosition !== null) {
-                    $newNic['slot_position'] = $slotPosition;
-                }
-                if ($serialNumber !== null) {
-                    $newNic['serial_number'] = $serialNumber;
-                }
-                if ($isNestedFormat) {
-                    $nicConfig['nics'][] = $newNic;
-                } else {
-                    $nicConfig[] = $newNic;
-                }
-            } elseif ($action === 'remove') {
-                $predicate = function($nic) use ($componentUuid, $serialNumber) {
-                    if (!is_array($nic)) return true;
-                    if ($serialNumber !== null && isset($nic['serial_number'])) {
-                        return !(($nic['uuid'] ?? null) === $componentUuid &&
-                                 $nic['serial_number'] === $serialNumber);
-                    }
-                    return ($nic['uuid'] ?? null) !== $componentUuid;
-                };
-                if ($isNestedFormat) {
-                    $nicConfig['nics'] = array_values(array_filter($nicConfig['nics'], $predicate));
-                } else {
-                    $nicConfig = array_values(array_filter($nicConfig, $predicate));
-                }
-            }
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET nic_config = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($nicConfig), $configUuid]);
-
-        } catch (\Throwable $e) {
-            error_log("Error updating NIC configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-    
-    /**
-     * Update caddy configuration in JSON format
-     */
-    private function updateCaddyConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, array $options = []) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT caddy_configuration FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            $caddyConfig = $currentConfig ? json_decode($currentConfig, true) : [];
-            if (!is_array($caddyConfig)) {
-                $caddyConfig = [];
-            }
-
-            if ($action === 'add') {
-                $caddyConfig[] = array_merge([
-                    'uuid' => $componentUuid,
-                    'quantity' => $quantity,
-                    'added_at' => date('Y-m-d H:i:s')
-                ], $this->componentEntryIdentity($serialNumber, $options));
-            } elseif ($action === 'remove') {
-                // Remove exactly ONE entry -- the targeted physical unit (A-L4).
-                $caddyConfig = $this->removeOneComponentEntry(
-                    $caddyConfig, $componentUuid, $serialNumber, $options['inventory_id'] ?? null
-                );
-            }
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET caddy_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($caddyConfig), $configUuid]);
-
-        } catch (Exception $e) {
-            error_log("Error updating caddy configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    /**
-     * Update SFP configuration in JSON format
-     * Stores port assignments with parent NIC and port index
-     */
-    private function updateSfpConfiguration($configUuid, $componentUuid, $quantity, $action, $serialNumber = null, $parentNicUuid = null, $portIndex = null) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT sfp_configuration FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            // Decode existing config or create new structure
-            $sfpData = [];
-            if (!empty($currentConfig)) {
-                $decoded = json_decode($currentConfig, true);
-                $sfpData = $decoded['sfps'] ?? [];
-            }
-
-            if ($action === 'add') {
-                // Add new SFP with port assignment
-                $sfpEntry = [
-                    'uuid' => $componentUuid,
-                    'parent_nic_uuid' => $parentNicUuid,
-                    'port_index' => $portIndex,
-                    'added_at' => date('Y-m-d H:i:s')
-                ];
-
-                // Add serial number if provided
-                if ($serialNumber !== null) {
-                    $sfpEntry['serial_number'] = $serialNumber;
-                }
-
-                $sfpData[] = $sfpEntry;
-
-
-            } elseif ($action === 'remove') {
-                // Remove SFP by UUID and optionally serial number
-                $sfpData = array_filter($sfpData, function($sfp) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null) {
-                        // Match by both UUID and serial number
-                        return !($sfp['uuid'] === $componentUuid &&
-                                isset($sfp['serial_number']) &&
-                                $sfp['serial_number'] === $serialNumber);
-                    } else {
-                        // Match by UUID only
-                        return $sfp['uuid'] !== $componentUuid;
-                    }
-                });
-                $sfpData = array_values($sfpData); // Re-index array
-
-            }
-
-            // Wrap in structure
-            $sfpConfig = ['sfps' => $sfpData];
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET sfp_configuration = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($sfpConfig), $configUuid]);
-
-        } catch (Exception $e) {
-            error_log("Error updating SFP configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    /**
-     * Update PCIe card configuration in JSON format
-     * Stores PCIe cards (including riser cards, NVMe adapters, etc.) in pciecard_configurations column
-     */
-    private function updatePcieCardConfiguration($configUuid, $componentUuid, $quantity, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT pciecard_configurations FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $currentConfig = $stmt->fetchColumn();
-
-            $pcieConfig = $currentConfig ? json_decode($currentConfig, true) : [];
-            if (!is_array($pcieConfig)) {
-                $pcieConfig = [];
-            }
-
-            if ($action === 'add') {
-                $pcieEntry = [
-                    'uuid' => $componentUuid,
-                    'quantity' => $quantity,
-                    'added_at' => date('Y-m-d H:i:s')
-                ];
-
-                // Add slot position if provided
-                if ($slotPosition !== null) {
-                    $pcieEntry['slot_position'] = $slotPosition;
-                }
-                if ($serialNumber !== null) {
-                    $pcieEntry['serial_number'] = $serialNumber;
-                }
-
-                $pcieConfig[] = $pcieEntry;
-
-            } elseif ($action === 'remove') {
-                $pcieConfig = array_filter($pcieConfig, function($pcie) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null && isset($pcie['serial_number'])) {
-                        return !($pcie['uuid'] === $componentUuid && $pcie['serial_number'] === $serialNumber);
-                    }
-                    return $pcie['uuid'] !== $componentUuid;
-                });
-                $pcieConfig = array_values($pcieConfig); // Re-index array
-            }
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET pciecard_configurations = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([json_encode($pcieConfig), $configUuid]);
-
-        } catch (Exception $e) {
-            error_log("Error updating PCIe card configuration: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    /**
-     * Update HBA card configuration using JSON array (supports multiple HBA cards)
-     * Mirrors updatePcieCardConfiguration() pattern: read array → append/remove → write back
-     */
-    private function updateHbaCardConfiguration($configUuid, $componentUuid, $action, $slotPosition = null, $serialNumber = null, array $options = []) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT hbacard_config, hbacard_uuid FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            $hbaArray = [];
-
-            // Decode existing hbacard_config — handle 3 formats:
-            // 1. JSON array (new format) — use as-is
-            // 2. Single JSON object with 'uuid' key (migration format) — wrap in array
-            // 3. null/empty — seed from legacy hbacard_uuid if present
-            if (!empty($row['hbacard_config'])) {
-                $decoded = json_decode($row['hbacard_config'], true);
-                if (is_array($decoded)) {
-                    if (isset($decoded['uuid'])) {
-                        $hbaArray = [$decoded]; // Single object → array
-                    } else {
-                        $hbaArray = $decoded;
-                    }
-                }
-            } elseif (!empty($row['hbacard_uuid']) && $action === 'add') {
-                // Legacy fallback: seed array from scalar column
-                $hbaArray = [[
-                    'uuid' => $row['hbacard_uuid'],
-                    'slot_position' => null,
-                    'added_at' => date('Y-m-d H:i:s'),
-                    'serial_number' => null
-                ]];
-            }
-
-            if ($action === 'add') {
-                $hbaEntry = [
-                    'uuid' => $componentUuid,
-                    'slot_position' => $slotPosition,
-                    'added_at' => date('Y-m-d H:i:s'),
-                    'serial_number' => $serialNumber
-                ];
-                $hbaArray[] = $hbaEntry;
-
-            } elseif ($action === 'remove') {
-                $hbaArray = array_filter($hbaArray, function($hba) use ($componentUuid, $serialNumber) {
-                    if ($serialNumber !== null && isset($hba['serial_number']) && $hba['serial_number'] !== null) {
-                        return !(($hba['uuid'] ?? null) === $componentUuid && $hba['serial_number'] === $serialNumber);
-                    }
-                    return ($hba['uuid'] ?? null) !== $componentUuid;
-                });
-                $hbaArray = array_values($hbaArray); // Re-index
-            }
-
-            // Write back: JSON array + backward-compat scalar (first entry's UUID)
-            $firstUuid = !empty($hbaArray) ? ($hbaArray[0]['uuid'] ?? null) : null;
-
-            $stmt = $this->pdo->prepare("UPDATE server_configurations SET hbacard_config = ?, hbacard_uuid = ?, updated_at = NOW() WHERE config_uuid = ?");
-            $stmt->execute([
-                !empty($hbaArray) ? json_encode($hbaArray) : null,
-                $firstUuid,
-                $configUuid
-            ]);
-
-        } catch (Exception $e) {
-            error_log("Error updating HBA card configuration: " . $e->getMessage());
-            throw $e;
         }
     }
 
@@ -3422,18 +2603,12 @@ class ServerBuilder {
         $stmt->execute([$configUuid]);
         $this->purgeConfigComponentRows($configUuid);
 
+        // U-D.3a: the nine JSON columns are gone from this reset with the writers that
+        // filled them. purgeConfigComponentRows() above is what actually empties the
+        // build now. The scalars stay -- they are not part of the drop.
         $stmt = $this->pdo->prepare("
             UPDATE server_configurations
-               SET cpu_configuration = NULL,
-                   ram_configuration = NULL,
-                   storage_configuration = NULL,
-                   caddy_configuration = NULL,
-                   nic_config = NULL,
-                   pciecard_configurations = NULL,
-                   hbacard_config = NULL,
-                   hbacard_uuid = NULL,
-                   sfp_configuration = NULL,
-                   motherboard_uuid = NULL,
+               SET motherboard_uuid = NULL,
                    chassis_uuid = NULL,
                    power_consumption = NULL,
                    compatibility_score = NULL,
@@ -3590,7 +2765,7 @@ class ServerBuilder {
         }
 
         $fromJson = [];
-        foreach ($this->extractComponentsFromJson($configData) as $component) {
+        foreach ($this->componentsFromRows($configData) as $component) {
             $type = $component['component_type'] ?? null;
             if ($type === null || empty($component['component_uuid'])) {
                 continue;
@@ -3745,10 +2920,7 @@ class ServerBuilder {
             // This REQUIRES being in a transaction (should be started in addComponent)
             // Lock configuration row with FOR UPDATE
             $stmt = $this->pdo->prepare("
-                SELECT cpu_configuration, ram_configuration, storage_configuration,
-                       caddy_configuration, nic_config, hbacard_uuid, hbacard_config, motherboard_uuid,
-                       chassis_uuid, pciecard_configurations, sfp_configuration
-                FROM server_configurations
+                SELECT * FROM server_configurations
                 WHERE config_uuid = ?
                 FOR UPDATE
             ");
@@ -3760,7 +2932,7 @@ class ServerBuilder {
             }
 
             // Extract components and check for duplicate
-            $components = $this->extractComponentsFromJson($configData);
+            $components = $this->componentsFromRows($configData);
 
             foreach ($components as $comp) {
                 if (($comp['component_uuid'] ?? null) !== $componentUuid) {
@@ -3865,7 +3037,7 @@ class ServerBuilder {
             }
 
             // 2. Check if parent NIC exists in configuration
-            $existingComponents = $this->extractComponentsFromJson($configData, true);
+            $existingComponents = $this->componentsFromRows($configData, true);
             $nicExists = false;
             foreach ($existingComponents as $comp) {
                 if ($comp['component_type'] === 'nic' && $comp['component_uuid'] === $parentNicUuid) {
@@ -4187,14 +3359,7 @@ class ServerBuilder {
      */
     public function getConfigComponents($configUuid) {
         try {
-            $stmt = $this->pdo->prepare("
-                SELECT
-                    cpu_configuration, ram_configuration, storage_configuration,
-                    caddy_configuration, nic_config, pciecard_configurations,
-                    hbacard_uuid, hbacard_config, sfp_configuration, motherboard_uuid, chassis_uuid
-                FROM server_configurations
-                WHERE config_uuid = ?
-            ");
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -4202,143 +3367,46 @@ class ServerBuilder {
                 return null;
             }
 
+            // U-D.3b: from config_components rows. This was the LAST of the three
+            // independent JSON decoders (U-X.1-PLAN-20260712.md §2 catalogued it as a
+            // second decoder deliberately left unrouted); it is routed now because the
+            // columns it decoded are going away.
+            //
+            // Its two deliberate omissions are preserved, because this feeds the
+            // virtual-template import and both are things the import must NOT copy:
+            //   - onboard NICs, which OnboardNICHandler materialises from whatever board
+            //     the new build actually gets, and
+            //   - SFPs, which are seated into a NIC port that does not exist yet.
+            // Its output keys ('uuid', not 'component_uuid') are preserved too, so
+            // handleImportVirtual() is untouched.
             $components = [];
-
-            // Parse CPU configuration
-            if (!empty($config['cpu_configuration'])) {
-                $cpus = json_decode($config['cpu_configuration'], true);
-                if (isset($cpus['cpus']) && is_array($cpus['cpus'])) {
-                    foreach ($cpus['cpus'] as $cpu) {
-                        $components[] = [
-                            'component_type' => 'cpu',
-                            'uuid' => $cpu['uuid'],
-                            'quantity' => $cpu['quantity'] ?? 1,
-                            'serial_number' => $cpu['serial_number'] ?? null
-                        ];
-                    }
+            foreach ($this->componentsFromRows($config) as $entry) {
+                $type = $entry['component_type'] ?? null;
+                if ($type === null || empty($entry['component_uuid'])) {
+                    continue;
                 }
-            }
-
-            // Parse RAM configuration
-            if (!empty($config['ram_configuration'])) {
-                $rams = json_decode($config['ram_configuration'], true);
-                if (is_array($rams)) {
-                    foreach ($rams as $ram) {
-                        $components[] = [
-                            'component_type' => 'ram',
-                            'uuid' => $ram['uuid'],
-                            'quantity' => $ram['quantity'] ?? 1,
-                            'serial_number' => $ram['serial_number'] ?? null
-                        ];
-                    }
+                if ($type === 'sfp') {
+                    continue;
                 }
-            }
-
-            // Parse Storage configuration
-            if (!empty($config['storage_configuration'])) {
-                $storages = json_decode($config['storage_configuration'], true);
-                if (is_array($storages)) {
-                    foreach ($storages as $storage) {
-                        $components[] = [
-                            'component_type' => 'storage',
-                            'uuid' => $storage['uuid'],
-                            'quantity' => $storage['quantity'] ?? 1,
-                            'serial_number' => $storage['serial_number'] ?? null
-                        ];
-                    }
+                if ($type === 'nic' && ($entry['source_type'] ?? 'component') !== 'component') {
+                    continue;
                 }
-            }
 
-            // Parse Caddy configuration
-            if (!empty($config['caddy_configuration'])) {
-                $caddies = json_decode($config['caddy_configuration'], true);
-                if (is_array($caddies)) {
-                    foreach ($caddies as $caddy) {
-                        $components[] = [
-                            'component_type' => 'caddy',
-                            'uuid' => $caddy['uuid'],
-                            'quantity' => $caddy['quantity'] ?? 1,
-                            'serial_number' => $caddy['serial_number'] ?? null
-                        ];
-                    }
-                }
-            }
-
-            // Parse PCIe Card configuration
-            if (!empty($config['pciecard_configurations'])) {
-                $pciCards = json_decode($config['pciecard_configurations'], true);
-                if (is_array($pciCards)) {
-                    foreach ($pciCards as $card) {
-                        $components[] = [
-                            'component_type' => 'pciecard',
-                            'uuid' => $card['uuid'],
-                            'quantity' => $card['quantity'] ?? 1,
-                            'serial_number' => $card['serial_number'] ?? null,
-                            'slot_position' => $card['slot_position'] ?? null
-                        ];
-                    }
-                }
-            }
-
-            // Parse HBA Cards (JSON array, with legacy fallback)
-            if (!empty($config['hbacard_config'])) {
-                $hbaConfigs = json_decode($config['hbacard_config'], true);
-                if (is_array($hbaConfigs)) {
-                    if (isset($hbaConfigs['uuid'])) {
-                        $hbaConfigs = [$hbaConfigs]; // Single object → array
-                    }
-                    foreach ($hbaConfigs as $hba) {
-                        $components[] = [
-                            'component_type' => 'hbacard',
-                            'uuid' => $hba['uuid'] ?? null,
-                            'quantity' => 1,
-                            'serial_number' => $hba['serial_number'] ?? null,
-                            'slot_position' => $hba['slot_position'] ?? null
-                        ];
-                    }
-                }
-            } elseif (!empty($config['hbacard_uuid'])) {
-                $components[] = [
-                    'component_type' => 'hbacard',
-                    'uuid' => $config['hbacard_uuid'],
-                    'quantity' => 1
+                $component = [
+                    'component_type' => $type,
+                    'uuid'           => $entry['component_uuid'],
+                    'quantity'       => $entry['quantity'] ?? 1,
                 ];
-            }
-
-            // Parse Motherboard (single instance)
-            if (!empty($config['motherboard_uuid'])) {
-                $components[] = [
-                    'component_type' => 'motherboard',
-                    'uuid' => $config['motherboard_uuid'],
-                    'quantity' => 1
-                ];
-            }
-
-            // Parse Chassis (single instance)
-            if (!empty($config['chassis_uuid'])) {
-                $components[] = [
-                    'component_type' => 'chassis',
-                    'uuid' => $config['chassis_uuid'],
-                    'quantity' => 1
-                ];
-            }
-
-            // Parse NIC configuration (complex structure)
-            if (!empty($config['nic_config'])) {
-                $nicConfig = json_decode($config['nic_config'], true);
-                if (isset($nicConfig['nics']) && is_array($nicConfig['nics'])) {
-                    foreach ($nicConfig['nics'] as $nic) {
-                        // Only add component NICs, not onboard NICs
-                        if (isset($nic['source_type']) && $nic['source_type'] === 'component') {
-                            $components[] = [
-                                'component_type' => 'nic',
-                                'uuid' => $nic['uuid'],
-                                'quantity' => 1,
-                                'serial_number' => $nic['serial_number'] ?? null
-                            ];
-                        }
-                    }
+                // The old body emitted these two for some types and not others. Emitting
+                // them wherever the row HAS them is a superset, and the importer reads
+                // both with ?? null, so nothing downstream changes shape.
+                if (array_key_exists('serial_number', $entry)) {
+                    $component['serial_number'] = $entry['serial_number'];
                 }
+                if (array_key_exists('slot_position', $entry)) {
+                    $component['slot_position'] = $entry['slot_position'];
+                }
+                $components[] = $component;
             }
 
             return $components;
@@ -4447,7 +3515,7 @@ class ServerBuilder {
             }
 
             // Extract components and find the one matching the type
-            $components = $this->extractComponentsFromJson($configData);
+            $components = $this->componentsFromRows($configData);
             foreach ($components as $component) {
                 if ($component['component_type'] === $componentType) {
                     return $component;
@@ -5390,22 +4458,17 @@ class ServerBuilder {
      */
     public function getCPUSpecsFromConfig($configUuid) {
         try {
-            // Get all CPU UUIDs from configuration JSON
-            $stmt = $this->pdo->prepare("SELECT cpu_configuration FROM server_configurations WHERE config_uuid = ?");
+            // U-D.3b: CPU identities from config_components rows.
+            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
             $stmt->execute([$configUuid]);
             $configData = $stmt->fetch(PDO::FETCH_ASSOC);
 
             $cpuResults = [];
-            if ($configData && !empty($configData['cpu_configuration'])) {
-                try {
-                    $cpuConfig = json_decode($configData['cpu_configuration'], true);
-                    if (isset($cpuConfig['cpus']) && is_array($cpuConfig['cpus'])) {
-                        $cpuResults = array_map(function($cpu) {
-                            return ['component_uuid' => $cpu['uuid']];
-                        }, $cpuConfig['cpus']);
+            if ($configData) {
+                foreach ($this->componentsFromRows($configData) as $entry) {
+                    if (($entry['component_type'] ?? null) === 'cpu' && !empty($entry['component_uuid'])) {
+                        $cpuResults[] = ['component_uuid' => $entry['component_uuid']];
                     }
-                } catch (Exception $e) {
-                    error_log("Error parsing cpu_configuration: " . $e->getMessage());
                 }
             }
 
@@ -6773,7 +5836,7 @@ class ServerBuilder {
 
         $components = [];
         if ($configData) {
-            $components = $this->extractComponentsFromJson($configData);
+            $components = $this->componentsFromRows($configData);
         }
 
         $formatted = [
@@ -7015,8 +6078,18 @@ class ServerBuilder {
 
             // Extract storage components from JSON
             $storageComponents = [];
-            if (!empty($config['storage_configuration'])) {
-                $storageConfigs = json_decode($config['storage_configuration'], true);
+            {
+                // U-D.3b: storage from config_components rows, re-shaped to the legacy
+                // entry keys the loop below indexes by.
+                $storageConfigs = [];
+                foreach ($this->componentsFromRows($config) as $entry) {
+                    if (($entry['component_type'] ?? null) !== 'storage') { continue; }
+                    $storageConfigs[] = [
+                        'uuid'          => $entry['component_uuid'] ?? null,
+                        'quantity'      => $entry['quantity'] ?? 1,
+                        'slot_position' => $entry['slot_position'] ?? null,
+                    ];
+                }
                 if (is_array($storageConfigs)) {
                     $storageComponents = $storageConfigs;
                 }

@@ -1,30 +1,43 @@
 <?php
 /**
- * dual_write_test.php — U-1.5 regression test (DUAL_WRITE_ENABLED hook).
+ * dual_write_test.php — U-1.5 regression test for the ConfigComponentWriter hook.
  *
- * Proves the ConfigComponentWriter hook wired into ServerBuilder::addComponent()/
- * removeComponent():
- *   - flag off (default): completely inert, zero config_components/config_events/
- *     revision writes, even when the legacy call site executes normally.
- *   - flag on, remove: a live config_components row (pre-seeded to simulate a prior
- *     dual-written add) is tombstoned in the SAME transaction as the real
- *     ServerBuilder::removeComponent() legacy JSON write.
- *   - flag on, add: same-transaction proof done directly against
- *     ConfigComponentWriter::afterLegacyAdd() (see NOTE below for why).
- *   - a repository failure during the writer call rolls back BOTH the legacy write
- *     and the new-schema write together (fail-closed, INV-5).
+ * REPOINTED 2026-08-30 (P9/U-D.4): DUAL_WRITE_ENABLED is deleted and the writer is
+ * unconditional, so the flag-off section is gone (see the note at Section A's old
+ * position).
  *
- * NOTE on coverage: ServerBuilder::addComponent() gates every real (non-virtual)
- * component on ComponentCompatibility::validateComponentExistsInJSON(), which reads
- * ims-data/{type}/*.json (CLAUDE.md: canonical specs live outside the DB). This
- * sandbox has no ims-data/ (same gap documented in every prior migration unit's
- * handoff), so addComponent() cannot be driven end-to-end here. removeComponent()
- * has no such gate, so its test below runs through the real method. The add-path
- * same-transaction/rollback proofs instead call the writer directly, wrapped in a
- * transaction that also performs the identical legacy-column write
- * ServerBuilder::addComponent() would have made immediately before it — this
- * exercises the exact hook code and calling contract that is actually wired into
- * ServerBuilder.php, just without routing through the (unrelated) ims-data gate.
+ * REPOINTED AGAIN 2026-08-30 (U-D.3a): there is no longer a second store to be dual
+ * with. The eight JSON-column updaters are deleted, so every assertion of the form
+ * "the legacy JSON write landed in the same commit" was asserting that deleted code
+ * still ran, and each one has been REPLACED, not dropped:
+ *
+ *   was                                          now
+ *   ---                                          ---
+ *   legacy JSON write still happened             NOTHING wrote a legacy column, and
+ *                                                the rows side is the whole record
+ *   legacy JSON landed in the same commit        a same-transaction companion write
+ *                                                landed with it (atomicity, proven
+ *                                                against a column that survives)
+ *   legacy JSON write rolled back too            that companion write rolled back too
+ *
+ * The companion write is server_configurations.notes — chosen because it is an
+ * ordinary column U-D.3c does not touch, so this suite keeps proving transactional
+ * atomicity after the drop instead of dying with the columns it used to name.
+ *
+ * What it proves, all unconditional:
+ *   - remove: a live config_components row is tombstoned in the SAME transaction as
+ *     ServerBuilder::removeComponent()'s other work.
+ *   - add: ConfigComponentWriter::afterLegacyAdd() commits atomically with the
+ *     caller's own writes (see NOTE below for why the writer is called directly).
+ *   - a repository failure during the writer call rolls back the whole transaction,
+ *     the caller's writes included (fail-closed, INV-5).
+ *
+ * NOTE on coverage: the add path is driven through the writer directly rather than
+ * through a full add, because a real add gates on
+ * ComponentCompatibility::validateComponentExistsInJSON(), which reads
+ * ims-data/{type}/*.json, and this sandbox has no ims-data/ (the same gap documented
+ * in every prior migration unit's handoff). removeComponent() has no such gate, so
+ * its test below runs through the real method.
  *
  * Exit 0 = all pass; exit 1 = a failure.
  */
@@ -80,10 +93,14 @@ function makeRamRow(PDO $pdo, $uuid, $serial, $flag) {
     return (int)$pdo->lastInsertId();
 }
 
-function makeConfig(PDO $pdo, $configUuid, $ramConfigJson) {
+/**
+ * U-D.3a: the fixture no longer seeds ram_configuration. The store under test is
+ * config_components, and each section inserts its own rows.
+ */
+function makeConfig(PDO $pdo, $configUuid, $unusedLegacyJson = null) {
     $cols = [
         'config_uuid' => $configUuid, 'server_name' => 'DUAL WRITE TEST', 'is_virtual' => 0,
-        'configuration_status' => 1, 'ram_configuration' => $ramConfigJson,
+        'configuration_status' => 1,
     ];
     $f = array_keys($cols);
     $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')
@@ -93,44 +110,22 @@ function makeConfig(PDO $pdo, $configUuid, $ramConfigJson) {
 $ramUuid = 'f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c';
 $builder = new ServerBuilder($pdo);
 
-// =============================================================================
-// A. Flag OFF (default): removeComponent() through the real hook site is inert
-// =============================================================================
-$configA = 'TEST-DW-OFF-' . substr(md5(uniqid()), 0, 8);
-try {
-    putenv('DUAL_WRITE_ENABLED'); // unset -> mode() falls back to 'off'
-    $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-DW-OFF'");
-    $serial = 'TEMP-DW-OFF';
-    makeRamRow($pdo, $ramUuid, $serial, 'TEMP-DW-OFF');
-    makeConfig($pdo, $configA, json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => $serial]]));
-
-    check("mode() defaults to 'off' with no env set", ConfigComponentWriter::mode() === 'off');
-
-    $result = $builder->removeComponent($configA, 'ram', $ramUuid, $serial);
-    check('flag off: removeComponent() still succeeds', ($result['success'] ?? false) === true);
-
-    $rows = $pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configA))->fetchColumn();
-    check('flag off: no config_components row written', (int)$rows === 0);
-
-    $rev = $pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($configA))->fetchColumn();
-    check('flag off: revision untouched (still 0)', (int)$rev === 0);
-} finally {
-    $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configA));
-    $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configA));
-    $pdo->exec("DELETE FROM server_configurations WHERE config_uuid = " . $pdo->quote($configA));
-    $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-DW-OFF'");
-}
+// SECTION A REMOVED 2026-08-30 (P9/U-D.4). It asserted that with DUAL_WRITE_ENABLED
+// unset the hook was inert: no config_components row written, revision untouched.
+// The flag is deleted and ConfigComponentWriter now writes unconditionally, so there
+// is no "off" state left to assert. Every section below likewise drops its putenv
+// and its "flag on:" label prefix: what were guarantees conditional on a flag are
+// now unconditional ones, which is strictly stronger than the pair they replace.
 
 // =============================================================================
-// B. Flag ON: removeComponent() tombstones a pre-seeded row, same transaction
+// B. removeComponent() tombstones a pre-seeded row, same transaction
 // =============================================================================
 $configB = 'TEST-DW-RM-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-DW-RM'");
     $serial = 'TEMP-DW-RM';
     $ramId = makeRamRow($pdo, $ramUuid, $serial, 'TEMP-DW-RM');
-    makeConfig($pdo, $configB, json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => $serial]]));
+    makeConfig($pdo, $configB);
 
     // Simulate this unit having been dual-written on a prior add.
     $pdo->beginTransaction();
@@ -142,19 +137,23 @@ try {
     $pdo->commit();
 
     $result = $builder->removeComponent($configB, 'ram', $ramUuid, $serial);
-    check('flag on: removeComponent() succeeds', ($result['success'] ?? false) === true);
+    check('removeComponent() succeeds', ($result['success'] ?? false) === true);
 
     $row = $pdo->query("SELECT removed_at FROM config_components WHERE id = $ccId")->fetch();
-    check('flag on: config_components row tombstoned (removed_at set)', $row && $row['removed_at'] !== null);
+    check('config_components row tombstoned (removed_at set)', $row && $row['removed_at'] !== null);
 
     $rev = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($configB))->fetchColumn();
-    check('flag on: revision is 2 (1 from seeded add, 1 from this remove)', $rev === 2);
+    check('revision is 2 (1 from seeded add, 1 from this remove)', $rev === 2);
 
     $events = $pdo->query("SELECT event FROM config_events WHERE config_uuid = " . $pdo->quote($configB) . " ORDER BY revision")->fetchAll(PDO::FETCH_COLUMN);
-    check('flag on: config_events shows add then remove', $events === ['add', 'remove']);
+    check('config_events shows add then remove', $events === ['add', 'remove']);
 
-    $legacy = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configB))->fetchColumn();
-    check('flag on: legacy JSON write still happened (component removed from JSON)', json_decode($legacy, true) === []);
+    // U-D.3a: was "legacy JSON write still happened". There is no legacy write left,
+    // so the stronger statement is that the tombstone is the ENTIRE record of the
+    // removal -- no live row survives, by any route.
+    $liveAfter = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = "
+        . $pdo->quote($configB) . " AND removed_at IS NULL")->fetchColumn();
+    check('the tombstone is the whole record: no live row survives the removal', $liveAfter === 0);
 } finally {
     $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configB));
     $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configB));
@@ -163,22 +162,23 @@ try {
 }
 
 // =============================================================================
-// C. Flag ON, add path: writer call + legacy-column write commit atomically
+// C. add path: writer call + legacy-column write commit atomically
 // (direct writer call — see file header NOTE on why addComponent() itself isn't
 // driven here)
 // =============================================================================
 $configC = 'TEST-DW-ADD-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
     $pdo->exec("DELETE FROM raminventory WHERE Flag = 'TEMP-DW-ADD'");
     $serial = 'TEMP-DW-ADD';
     $ramId = makeRamRow($pdo, $ramUuid, $serial, 'TEMP-DW-ADD');
-    makeConfig($pdo, $configC, json_encode([]));
+    makeConfig($pdo, $configC);
 
     $pdo->beginTransaction();
-    // Legacy write analog: what updateServerConfigurationTable(...,'add',...) does.
-    $pdo->prepare("UPDATE server_configurations SET ram_configuration = ? WHERE config_uuid = ?")
-        ->execute([json_encode([['uuid' => $ramUuid, 'quantity' => 1, 'serial_number' => $serial]]), $configC]);
+    // A companion write by the caller, in the same transaction, standing in for
+    // whatever else an add does around the writer call. On a column that survives
+    // U-D.3c, so this atomicity proof outlives the drop.
+    $pdo->prepare("UPDATE server_configurations SET notes = ? WHERE config_uuid = ?")
+        ->execute(['DW-ADD-COMPANION', $configC]);
     ConfigComponentWriter::afterLegacyAdd(
         $pdo, $configC, 'ram', $ramUuid, $serial, null, 'raminventory', $ramId, 1, null
     );
@@ -191,9 +191,8 @@ try {
     $rev = (int)$pdo->query("SELECT revision FROM server_configurations WHERE config_uuid = " . $pdo->quote($configC))->fetchColumn();
     check('add path: revision is 1', $rev === 1);
 
-    $legacy = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configC))->fetchColumn();
-    $legacyDecoded = json_decode($legacy, true);
-    check('add path: legacy JSON write landed in the same commit', count($legacyDecoded) === 1 && $legacyDecoded[0]['uuid'] === $ramUuid);
+    $companion = $pdo->query("SELECT notes FROM server_configurations WHERE config_uuid = " . $pdo->quote($configC))->fetchColumn();
+    check("add path: the caller's companion write landed in the same commit", $companion === 'DW-ADD-COMPANION');
 } finally {
     $pdo->exec("DELETE FROM config_events WHERE config_uuid = " . $pdo->quote($configC));
     $pdo->exec("DELETE FROM config_components WHERE config_uuid = " . $pdo->quote($configC));
@@ -206,12 +205,11 @@ try {
 // =============================================================================
 $configD = 'TEST-DW-FAIL-' . substr(md5(uniqid()), 0, 8);
 try {
-    putenv('DUAL_WRITE_ENABLED=on');
-    makeConfig($pdo, $configD, json_encode([]));
+    makeConfig($pdo, $configD);
 
     $pdo->beginTransaction();
-    $pdo->prepare("UPDATE server_configurations SET ram_configuration = ? WHERE config_uuid = ?")
-        ->execute([json_encode([['uuid' => 'should-not-persist']]), $configD]);
+    $pdo->prepare("UPDATE server_configurations SET notes = ? WHERE config_uuid = ?")
+        ->execute(['SHOULD-NOT-PERSIST', $configD]);
 
     $threw = false;
     try {
@@ -228,8 +226,8 @@ try {
         $pdo->rollback();
     }
 
-    $legacyAfterRollback = $pdo->query("SELECT ram_configuration FROM server_configurations WHERE config_uuid = " . $pdo->quote($configD))->fetchColumn();
-    check('induced failure: legacy JSON write rolled back too', json_decode($legacyAfterRollback, true) === []);
+    $companionAfterRollback = $pdo->query("SELECT notes FROM server_configurations WHERE config_uuid = " . $pdo->quote($configD))->fetchColumn();
+    check("induced failure: the caller's own write rolled back too", $companionAfterRollback === null);
 
     $rows = (int)$pdo->query("SELECT COUNT(*) FROM config_components WHERE config_uuid = " . $pdo->quote($configD))->fetchColumn();
     check('induced failure: no config_components row leaked', $rows === 0);

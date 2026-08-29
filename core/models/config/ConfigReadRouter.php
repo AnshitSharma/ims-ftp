@@ -113,9 +113,12 @@ final class ConfigReadRouter
     {
         $configUuid = (string)($configRow['config_uuid'] ?? '');
         if ($configUuid === '') {
-            // No uuid means no rows side to consult, so legacy extraction is the
-            // only answer available. The one surviving use of it.
-            return $builder->extractComponentsFromJson($configRow, $minimalOutput);
+            // No uuid means no rows to look up. U-D.3a deleted the legacy extraction
+            // that used to answer here, along with the columns it read, so an empty
+            // list is now the only honest answer -- and it is RETURNED rather than
+            // thrown, because a caller handing over a row with no uuid is asking about
+            // a configuration that does not exist yet, not reporting a fault.
+            return [];
         }
 
         // A throw here is NOT swallowed: the rows side IS the answer, and silently
@@ -179,6 +182,25 @@ final class ConfigReadRouter
 
             if ($row['serial_number'] !== null) {
                 $component['serial_number'] = $row['serial_number'];
+            }
+            // U-D.3b: the slot this unit occupies. extractComponentsFromJson() never
+            // carried it, so every slot-aware consumer (the UnifiedSlotTracker family,
+            // getNetworkConfiguration, migrateNICSlotPositions) read the raw JSON column
+            // instead and could not be routed. Emitted under the LEGACY key name
+            // 'slot_position' -- that is what those consumers already index by, so they
+            // move onto rows without changing shape. SFP keeps 'port_index' below as
+            // well; its slot_ref is its NIC port, and both spellings have live readers.
+            if (($row['slot_ref'] ?? null) !== null && $row['slot_ref'] !== '') {
+                $component['slot_position'] = $row['slot_ref'];
+            }
+            if ($type === 'nic') {
+                // Legacy nic_config entries carry source_type; rows do not, but the
+                // synthetic "onboard-" spec_uuid IS the marker -- the same test
+                // RemoveComponentCommand:138, PcieLaneBudgetValidator:101,
+                // UnifiedSlotTracker:463 and ResourceCatalog::isOnboard() all already use.
+                $component['source_type'] = strpos((string)$row['spec_uuid'], 'onboard-') === 0
+                    ? 'onboard'
+                    : 'component';
             }
             // A-L5: the physical unit's inventory row id. Rows always have it, which
             // is the one place =on carries STRICTLY MORE identity than legacy JSON

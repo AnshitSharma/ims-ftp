@@ -44,10 +44,51 @@ check('handleAddComponent sends the X-IMS-Deprecation header',
 check('handleRemoveComponent sends the X-IMS-Deprecation header',
     preg_match('/function handleRemoveComponent[\s\S]{0,300}X-IMS-Deprecation/', $src) === 1);
 
-check('the advisory pre-check block is skipped ONLY at CommandLayer::mode() === enforce (not deleted unconditionally, per the U-A.1 deviation)',
-    strpos($src, "if (CommandLayer::mode() !== 'enforce') {") !== false);
-check('validateComponentAddition (the advisory pre-check) is still reachable at off/shadow',
-    preg_match("/CommandLayer::mode\\(\\) !== 'enforce'\\) \\{[\\s\\S]{0,1500}validateComponentAddition/", $src) === 1);
+// REWRITTEN 2026-08-30 (P9/U-A.1, U-D.2). These two asserted the U-A.1 deviation:
+// the unlocked advisory pre-check was skipped at CommandLayer=enforce but had to
+// stay REACHABLE at off/shadow, so a rollback would not lose it. There is no
+// off/shadow to roll back to and validateComponentAddition() is deleted, so the
+// deviation is closed rather than violated. What replaces it is the reason the
+// pre-check was safe to drop in the first place, asserted rather than assumed:
+// the command evaluates the same registry, and it does so UNDER THE LOCK, which
+// is what made the unlocked second opinion a TOCTOU window rather than a safety net.
+// Comment lines excluded: server_api.php:871 explains that VerdictShim reproduces
+// the envelope callers of the OLD validateComponentAddition() expect, and that
+// history is worth keeping. A call outside a comment would be a dangling one.
+$liveSrc = implode("\n", array_filter(
+    explode("\n", $src),
+    function ($l) {
+        $t = ltrim($l);
+        return $t !== '' && strpos($t, '//') !== 0 && strpos($t, '*') !== 0 && strpos($t, '/*') !== 0 && strpos($t, '#') !== 0;
+    }
+));
+check('no live call to the unlocked advisory pre-check survives in server_api.php',
+    strpos($liveSrc, 'validateComponentAddition') === false);
+check('ServerBuilder no longer defines validateComponentAddition() either (U-D.2)',
+    preg_match('/function\s+validateComponentAddition\s*\(/', file_get_contents("$ROOT/core/models/server/ServerBuilder.php")) !== 1);
+check('validation now happens inside the command, under the row lock BaseCommand holds',
+    (function () use ($ROOT) {
+        $bc = file_get_contents("$ROOT/core/models/commands/BaseCommand.php");
+        // The lock is taken, then the verdict is evaluated, then apply() runs --
+        // in that order, in execute(). Positions, not proximity.
+        $exStart = strpos($bc, 'final public function execute()');
+        $exEnd   = $exStart !== false ? strpos($bc, 'final public function dryRun()', $exStart) : false;
+        $ex      = ($exStart !== false && $exEnd !== false && $exEnd > $exStart)
+            ? substr($bc, $exStart, $exEnd - $exStart)
+            : '';
+        if ($ex === '') { return false; }
+        // The lock itself is taken by lockAndLoadConfigRow(), which issues the
+        // SELECT ... FOR UPDATE and refuses to run outside a transaction. What
+        // execute() has to get right is the ORDER: lock, then evaluate, then apply.
+        $lockAt  = strpos($ex, '$this->lockAndLoadConfigRow()');
+        $evalAt  = strpos($ex, 'evaluate($target, $this->trigger())');
+        $applyAt = strpos($ex, '$this->apply(');
+        $lockFn  = strpos($bc, 'SELECT * FROM server_configurations WHERE config_uuid = ? FOR UPDATE');
+        $lockGuard = strpos($bc, 'must be called inside an active transaction');
+        return $lockAt !== false && $evalAt !== false && $applyAt !== false
+            && $lockFn !== false && $lockGuard !== false
+            && $lockAt < $evalAt && $evalAt < $applyAt;
+    })());
 
 check('the handler-level SFP auto-assignment block is still present (NOT deleted -- documented gap, see DEPRECATION.md: AddComponentCommand has no equivalent yet)',
     strpos($src, 'AUTO-ASSIGNMENT TRIGGER') !== false && strpos($src, 'autoAssignSFPsToNIC') !== false);
