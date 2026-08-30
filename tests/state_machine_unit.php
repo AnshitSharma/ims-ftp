@@ -28,6 +28,24 @@ $dbUser = getenv('SM_TEST_DB_USER') ?: 'root';
 require_once __DIR__ . '/regression/_scratch_db.php';
 $dbPass = test_db_password('SM_TEST_DB');
 
+// Enforced, not just documented: this suite unconditionally DROPs $dbName
+// below. A single misrouted env var (SM_TEST_DB_NAME set to GOLDEN_DB_NAME)
+// already destroyed the shared parity fixture this way (2026-08-30) -- the
+// comment above warned about it and nothing stopped it. Refuse to run rather
+// than trust the caller: the name must look like a disposable scratch
+// database, and must not look like any shared-fixture name used in this tree
+// (ims_compat_golden, ims_golden_ud3c_test, GOLDEN_DB_NAME's own default).
+if (stripos($dbName, 'golden') !== false
+    || stripos($dbName, 'compat') !== false
+    || stripos($dbName, 'prod') !== false
+    || !preg_match('/scratch/i', $dbName)) {
+    fwrite(STDERR, "state_machine_unit.php: REFUSING to run -- SM_TEST_DB_NAME='$dbName' "
+        . "does not look like a disposable scratch database (must contain 'scratch'; must "
+        . "not contain 'golden'/'compat'/'prod'). This suite DROPs whatever database it is "
+        . "given. Fix SM_TEST_DB_NAME -- do not widen this check to get past it.\n");
+    exit(1);
+}
+
 // Guarded: an unreachable/unauthorised server is an environment fact, not a
 // StateMachine defect. Say it once, in the marker line run_tests.php
 // understands, and exit 0 having claimed nothing.
