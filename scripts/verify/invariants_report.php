@@ -95,14 +95,16 @@ $ROOT = dirname(__DIR__, 2);
 $EXTRACTOR = $ROOT . '/scripts/ci/inv_extract.php';
 $REPORT_DIR = $ROOT . '/reports';
 
-// INV-8's CHECK is the literal string `php scripts/verify/equivalence_report.php
-// --all`, so a bare `php` has to resolve inside the shell. When this script was
-// launched by an absolute interpreter path that is not on PATH — XAMPP's
-// php.exe, or run_all.php's own child launch — it does not, and INV-8 fails with
+// Several invariant CHECKs are literal shell one-liners that start with a bare
+// `php`, so `php` has to resolve inside the shell. When this script was launched
+// by an absolute interpreter path that is not on PATH — XAMPP's php.exe, or
+// run_all.php's own child launch — it does not, and the check fails with
 // "php: command not found": a RED produced by the environment rather than by the
 // code, which is exactly as corrosive as a false green. Put the interpreter's
 // directory ON the PATH; never rewrite the document's command to suit the host.
-// Same reasoning, same fix, as scripts/ci/invariants.sh.
+// Same reasoning, same fix, as scripts/ci/invariants.sh. (INV-8 was the original
+// reason for this; it closed on 2026-08-30 with U-D.3c, but the hazard is generic
+// and outlives it.)
 $phpDir = dirname(PHP_BINARY);
 if ($phpDir !== '' && strpos((string)getenv('PATH'), $phpDir) === false) {
     putenv('PATH=' . $phpDir . PATH_SEPARATOR . (string)getenv('PATH'));
@@ -123,13 +125,12 @@ $probeDb = in_array('--probe-db', $argv, true);
 //              is run against it verbatim, from that tree. This proves the
 //              CHECK detects the thing the invariant forbids.
 //   'runner' — a RUNNER mutant. The check delegates to another script
-//              (INV-4, INV-5/1, INV-8), so what is proven here is that a
-//              non-zero exit from that script is classified FAIL — not that the
-//              delegate itself detects anything. The delegates carry their own
-//              mutation evidence: the regression suites were mutation-probed on
-//              2026-08-24 (25 of 25 matchers rejected their mutant), and
-//              equivalence_report.php has --self-test. Stated plainly so nobody
-//              reads a green line here as coverage of those.
+//              (INV-4, INV-5/1), so what is proven here is that a non-zero exit
+//              from that script is classified FAIL — not that the delegate
+//              itself detects anything. The delegates carry their own mutation
+//              evidence: the regression suites were mutation-probed on
+//              2026-08-24 (25 of 25 matchers rejected their mutant). Stated
+//              plainly so nobody reads a green line here as coverage of those.
 //   'sql'    — a TARGET mutant needing a database: the document's statement is
 //              run against a throwaway table holding a violating row.
 //
@@ -195,7 +196,10 @@ const MUTANTS = [
     ],
     'INV-4/1' => ['kind' => 'runner', 'why' => "finalized_immutability_test.php exiting non-zero"],
     'INV-5/1' => ['kind' => 'runner', 'why' => "fail_closed_test.php exiting non-zero"],
-    'INV-8/1' => ['kind' => 'runner', 'why' => "equivalence_report.php exiting non-zero"],
+    // INV-8/1 removed 2026-08-30 (U-D.3c). Its delegate, equivalence_report.php,
+    // is deleted along with the invariant: with the legacy JSON columns dropped
+    // there is no second store for a dual-write window to fork from. A recipe kept
+    // here would run a script that no longer exists and report FAIL forever.
 ];
 
 // ---------------------------------------------------------------------------

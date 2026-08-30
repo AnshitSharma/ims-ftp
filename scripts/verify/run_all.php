@@ -17,7 +17,7 @@
  * runner is assumed to fail closed. It does not.
  *
  * Usage:
- *   php scripts/verify/run_all.php --quick        # schema + inventory + orphan + equivalence
+ *   php scripts/verify/run_all.php --quick        # schema + inventory + orphan
  *   php scripts/verify/run_all.php --gate P0      # exactly the reports listed for that phase
  *                                                  # in migration/phase-status.json
  *
@@ -45,7 +45,14 @@ const REGISTRY = [
     'schema'      => ['script' => __DIR__ . '/schema_report.php',      'available' => true,  'lands_in' => null],
     'ledger'      => ['script' => __DIR__ . '/ledger_report.php',      'available' => true,  'lands_in' => null],
     'slot'        => ['script' => __DIR__ . '/slot_report.php',        'available' => true,  'lands_in' => null],
-    'equivalence' => ['script' => __DIR__ . '/equivalence_report.php', 'available' => true,  'lands_in' => null],
+    // equivalence: RETIRED 2026-08-30 by U-D.3c, along with INV-8, which it was the
+    // check for. It compared the legacy JSON columns against config_components; the
+    // columns are dropped, so there is no second store left to fork from and the
+    // invariant is now structural rather than something a nightly run can restate.
+    // Deliberately absent rather than 'available' => false: an entry here would
+    // report SKIPPED forever and read as a gate someone still has to satisfy.
+    // The rows-vs-inventory half of its job lives on in inventory_report.php's
+    // Check 2, which U-D.3c repointed at config_components and made exact.
     'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => true,  'lands_in' => null],
     // command_parity (2026-07-27): gates the COMMAND_LAYER shadow stream
     // (reports/shadow/command-*.jsonl). Until it existed nothing consumed that
@@ -76,19 +83,15 @@ const REGISTRY = [
     // against and then always report GREEN. It needs a --diff/--check mode that
     // compares against a pinned baseline and exits non-zero on drift before it
     // can gate anything. Until then the honest reading is SKIPPED.
-    // partial_rows (2026-08-24): gates the fallback gap in
-    // TargetStateBuilder::fromCurrent(). Its source selection is `!empty($rows)` --
-    // a NON-EMPTY test, not a COMPLETE one -- so a config whose config_components
-    // rows cover only PART of its legacy JSON takes the rows path anyway, and the
-    // unmirrored components are silently absent from every TargetState the rules
-    // evaluate. Nothing else catches this: equivalence_report treats an empty rows
-    // store as a diff, so it cannot tell 'not yet backfilled' from 'half
-    // backfilled', and the shadow streams only see configs live traffic touches.
-    // At COMMAND_LAYER=enforce -- production today -- an under-reported TargetState
-    // is a user-visible 404 on remove, not a logged shadow diff. Detection first;
-    // the control-flow fix comes later, with evidence behind it.
-    // NOT in QUICK_SET (full-table scan, P9-scoped), so nightly.sh is unaffected.
-    'partial_rows' => ['script' => __DIR__ . '/partial_rows_report.php', 'available' => true, 'lands_in' => null],
+    // partial_rows: RETIRED 2026-08-30 by U-D.3c. It gated the fallback gap in
+    // TargetStateBuilder::fromCurrent(), whose source selection was `!empty($rows)`
+    // -- a NON-EMPTY test, not a COMPLETE one -- so a config whose config_components
+    // rows covered only PART of its legacy JSON took the rows path anyway and the
+    // unmirrored components were silently absent from every TargetState the rules
+    // evaluated. "Partly mirrored" is not a state that can exist any more: there is
+    // no JSON side to be half of, fromCurrent() returns an empty TargetState rather
+    // than falling back to a decoder that no longer exists, and a component absent
+    // from config_components is absent from the configuration, full stop.
     // deploy_skew (2026-08-24): gates the dead-code gate's own CORPUS. The
     // authoritative run of the deletion authority is the DEPLOYED one (no shell
     // on that host, so server-debug-deadcode is the only way it runs against
@@ -165,26 +168,32 @@ const GATE_REPORTS = [
     'P0'  => ['baseline', 'orphan', 'regression'],
     'P1'  => ['schema', 'regression'],
     'PL'  => ['schema', 'ledger', 'regression'],
-    'P2'  => ['equivalence', 'orphan', 'ledger', 'inventory'],
+    // 'equivalence' left P2, P6, P8 and P9 on 2026-08-30 with U-D.3c, and 'partial_rows'
+    // left P9 with it. Both reports are deleted; an unknown name here does not fail, it
+    // prints SKIPPED, which is the shape of a gate nobody notices went missing. These are
+    // the lists that RUN a gate today -- what P2, P6 and P8 were actually shown at the time
+    // is in their signoff files, and is not edited by this. Mirrored into
+    // migration/phase-status.json.
+    'P2'  => ['orphan', 'ledger', 'inventory'],
     'P3'  => ['schema', 'inventory', 'regression'],
     'P4'  => ['parity', 'regression'],
     'P5'  => ['parity', 'regression'],
     // P6 gains 'command_parity' (2026-07-27): U-C.6 is P6's enforce-soak unit and
     // its evidence lives in the command stream, which no gate report read before.
     // Mirrored into migration/phase-status.json's P6 gate_reports.
-    'P6'  => ['parity', 'command_parity', 'equivalence', 'regression', 'performance'],
+    'P6'  => ['parity', 'command_parity', 'regression', 'performance'],
     'P7'  => ['regression', 'parity'],
     // P8 gains 'read' (2026-07-29): U-X.2 is P8's read-cutover unit and its
     // checklist item 1 is a >=72h zero-divergence sample soak. That evidence lives
     // in the read stream, which no gate report read before -- so the criterion was
     // being checked by eye against a log whose emptiness meant nothing.
     // Mirrored into migration/phase-status.json's P8 gate_reports.
-    'P8'  => ['equivalence', 'orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
+    'P8'  => ['orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
     // P9 gains 'deploy_skew' (2026-08-24): P9 is the phase that DELETES, and
     // 'deadcode' is trusted to authorise those deletions. deploy_skew is the check
     // that the corpus deadcode scanned is the source of truth. Mirrored into
     // migration/phase-status.json's P9 gate_reports.
-    'P9'  => ['deadcode', 'partial_rows', 'deploy_skew', 'equivalence', 'regression'],
+    'P9'  => ['deadcode', 'deploy_skew', 'regression'],
     // P10 reads ['all'], which expands to array_keys(REGISTRY) -- so the
     // 'invariants' entry added 2026-08-26 reaches P10's gate automatically, with
     // no edit here and no mirroring needed in phase-status.json's gate_reports.
@@ -194,7 +203,7 @@ const GATE_REPORTS = [
     'P10' => ['all'],
 ];
 
-const QUICK_SET = ['schema', 'inventory', 'orphan', 'equivalence'];
+const QUICK_SET = ['schema', 'inventory', 'orphan'];
 
 /**
  * Owner-adopted (tenth session, 2026-07-13) standing invocation for the

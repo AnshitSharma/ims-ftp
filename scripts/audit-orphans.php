@@ -1,15 +1,18 @@
 <?php
 /**
- * audit-orphans.php — scan every server_configurations row, extract every
- * component UUID / serial_number from its JSON columns, and verify each one
- * still exists in the matching {type}inventory table with a non-zero Status.
+ * audit-orphans.php — scan every server_configurations row, take every component
+ * it claims from `config_components`, and verify each one still exists in the
+ * matching {type}inventory table with a non-zero Status.
  *
  * Orphaned references (inventory row missing or Status=0) are reported.
+ *
+ * Reads rows since U-D.3c dropped the legacy JSON columns (2026-08-30); see
+ * extractRefs() for why that makes this audit stricter rather than weaker.
  *
  * Usage:
  *   php scripts/audit-orphans.php           # dry run, prints report only
  *   php scripts/audit-orphans.php --fix     # also removes orphaned entries
- *                                           # from config JSON via ServerBuilder
+ *                                           # from the configuration via ServerBuilder
  *                                           # (inventory rows are never touched)
  *
  * Exit code: 0 if no orphans (or all fixed), 1 if orphans found in dry-run.
@@ -49,48 +52,59 @@ $componentTables = [
     'sfp'         => 'sfpinventory',
 ];
 
+// Every table a config_components row is allowed to point at. `serverplatforminventory`
+// is not in the type map above — no component type is called "serverplatform" inside a
+// build — but a platform-provisioned server records its motherboard and chassis there,
+// because one platform unit supplies both.
+$auditableTables = array_merge(array_values($componentTables), ['serverplatforminventory']);
+
 /**
- * Extract [type, uuid, serial_number|null] tuples from a config row.
- * Mirrors the shape produced by ServerBuilder::extractComponentsFromJson()
- * but is standalone so this script can be run without pulling the full
- * compatibility stack.
+ * Extract [type, uuid, serial_number|null, inventory_id|null] tuples for a config.
+ *
+ * U-D.3c (2026-08-30): this used to decode the nine legacy JSON columns. They are
+ * dropped. The source is now `config_components`, one live row per physical unit —
+ * which is a STRICTER audit, not a weaker one: each row carries the `inventory_id`
+ * of the exact unit it claims, so a reference resolves to ONE inventory row instead
+ * of "some row of this model". Under the old shape a serial-less entry matched
+ * `UUID = ? LIMIT 1`, which reported green whenever any other unit of that model
+ * happened to be healthy.
+ *
+ * Note the failure mode this replaced: `SELECT *` plus `?? null` meant the dropped
+ * columns produced an EMPTY ref list rather than an error, so this audit would have
+ * reported "0 orphans" forever without ever looking at anything.
+ *
+ * `motherboard_uuid` / `chassis_uuid` survive as scalars on server_configurations
+ * and are still checked, by UUID only — they name a model, never a unit. They are
+ * normally also present as config_components rows; the dedupe below keeps the
+ * unit-level row, which is the more precise of the two.
  */
-function extractRefs(array $row): array {
+function extractRefs(PDO $pdo, array $row): array {
     $refs = [];
 
-    $pushJson = function ($type, $json, $key = null) use (&$refs) {
-        if (empty($json)) return;
-        $decoded = json_decode($json, true);
-        if (!is_array($decoded)) return;
-        $list = $key ? ($decoded[$key] ?? []) : $decoded;
-        if (!is_array($list)) return;
-        foreach ($list as $entry) {
-            if (!is_array($entry) || empty($entry['uuid'])) continue;
-            $refs[] = [
-                'type'   => $type,
-                'uuid'   => $entry['uuid'],
-                'serial' => $entry['serial_number'] ?? null,
-            ];
-        }
-    };
-
-    $pushJson('cpu',      $row['cpu_configuration']       ?? null, 'cpus');
-    $pushJson('ram',      $row['ram_configuration']       ?? null);
-    $pushJson('storage',  $row['storage_configuration']   ?? null);
-    $pushJson('caddy',    $row['caddy_configuration']     ?? null);
-    $pushJson('pciecard', $row['pciecard_configurations'] ?? null);
-    $pushJson('hbacard',  $row['hbacard_config']          ?? null);
-    $pushJson('sfp',      $row['sfp_configuration']       ?? null);
-    $pushJson('nic',      $row['nic_config']              ?? null, 'nics');
-
-    if (!empty($row['motherboard_uuid'])) {
-        $refs[] = ['type' => 'motherboard', 'uuid' => $row['motherboard_uuid'], 'serial' => null];
+    $stmt = $pdo->prepare(
+        "SELECT component_type, spec_uuid, serial_number, inventory_id, inventory_table
+           FROM config_components
+          WHERE config_uuid = ? AND removed_at IS NULL
+          ORDER BY id"
+    );
+    $stmt->execute([$row['config_uuid']]);
+    $seen = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $refs[] = [
+            'type'         => $r['component_type'],
+            'uuid'         => $r['spec_uuid'],
+            'serial'       => $r['serial_number'],
+            'inventory_id' => (int)$r['inventory_id'],
+            'table'        => $r['inventory_table'],
+        ];
+        $seen[$r['component_type'] . '|' . $r['spec_uuid']] = true;
     }
-    if (!empty($row['chassis_uuid'])) {
-        $refs[] = ['type' => 'chassis', 'uuid' => $row['chassis_uuid'], 'serial' => null];
-    }
-    if (!empty($row['hbacard_uuid'])) {
-        $refs[] = ['type' => 'hbacard', 'uuid' => $row['hbacard_uuid'], 'serial' => null];
+
+    foreach (['motherboard' => 'motherboard_uuid', 'chassis' => 'chassis_uuid'] as $type => $col) {
+        if (empty($row[$col])) continue;
+        if (isset($seen[$type . '|' . $row[$col]])) continue;
+        $refs[] = ['type' => $type, 'uuid' => $row[$col], 'serial' => null,
+                   'inventory_id' => null, 'table' => null];
     }
 
     return $refs;
@@ -108,7 +122,7 @@ $orphans = [];
 
 foreach ($configs as $config) {
     // Skip synthetic/onboard NIC UUIDs — they don't exist in inventory by design.
-    $refs = extractRefs($config);
+    $refs = extractRefs($pdo, $config);
     foreach ($refs as $ref) {
         $totalRefs++;
 
@@ -116,14 +130,29 @@ foreach ($configs as $config) {
             continue;
         }
 
-        $table = $componentTables[$ref['type']] ?? null;
-        if ($table === null) continue;
+        // A config_components row names BOTH its table and its row id, so audit
+        // exactly that row. Taking the table from the row rather than from the
+        // type map matters: a serverplatform-provisioned build records its
+        // motherboard and chassis against `serverplatforminventory` (the platform
+        // unit IS both), which the type map has no entry for and the old
+        // JSON-based walk could not see at all.
+        //
+        // The name is interpolated into SQL, so it is whitelisted rather than
+        // trusted: it comes from a database column, and "our own code wrote it"
+        // is not a property this script can verify.
+        $table = $ref['table'] ?? ($componentTables[$ref['type']] ?? null);
+        if ($table === null || !in_array($table, $auditableTables, true)) continue;
 
-        $where = "UUID = ?";
-        $params = [$ref['uuid']];
-        if ($ref['serial'] !== null) {
-            $where .= " AND SerialNumber = ?";
-            $params[] = $ref['serial'];
+        if ($ref['inventory_id'] !== null) {
+            $where  = "ID = ?";
+            $params = [$ref['inventory_id']];
+        } else {
+            $where  = "UUID = ?";
+            $params = [$ref['uuid']];
+            if ($ref['serial'] !== null) {
+                $where .= " AND SerialNumber = ?";
+                $params[] = $ref['serial'];
+            }
         }
 
         $check = $pdo->prepare("SELECT Status FROM `$table` WHERE $where LIMIT 1");
@@ -174,14 +203,15 @@ if (!empty($orphans)) {
 
 if (!$fix) {
     if (!empty($orphans)) {
-        echo "Dry-run. Re-run with --fix to remove orphaned entries from config JSON.\n";
+        echo "Dry-run. Re-run with --fix to remove orphaned entries from the configuration.\n";
         exit(1);
     }
     exit(0);
 }
 
 // --fix mode: cascade-remove each orphan via ServerBuilder::removeComponent(),
-// which holds the Phase 1 FOR UPDATE lock while mutating the JSON.
+// which holds the Phase 1 FOR UPDATE lock on server_configurations while it
+// tombstones the config_components row and releases the inventory unit.
 $sb = new ServerBuilder($pdo);
 $removed = 0;
 $failed = 0;

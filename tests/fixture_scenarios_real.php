@@ -4,6 +4,31 @@
  * Verifies the verdicts the LIVE server (default/production flags) produces, so the
  * browser playbook's "Expected" column is ground-truth.
  *
+ * ============================================================================
+ * NON-FUNCTIONAL as of 2026-08-30. It stops immediately; see the guard below.
+ *
+ * TWO independent reasons, either of which is fatal on its own:
+ *
+ *   1. P9 deleted all three methods it drives — ServerBuilder::validateConfiguration(),
+ *      ::validateConfigurationEnhanced() and ::validateComponentAddition(). Every
+ *      scenario would record "Call to undefined method". This is the same breakage
+ *      tests/characterize_compatibility.php has, and it is P9's to answer, not U-D.3's.
+ *   2. U-D.3c dropped the nine legacy JSON columns, so insertRow()'s column list no
+ *      longer exists and a scenario can no longer be expressed as one INSERT. A
+ *      configuration's contents live in config_components now: an inventory unit per
+ *      component plus a row claiming it (see tests/regression/nested_transaction_test.php
+ *      for the shape production actually writes).
+ *
+ * The scenario table below (R1–R10, with its two recorded FINDINGs) is kept verbatim
+ * because it is the only written record of these expected verdicts, and the rule unit
+ * tests in tests/unit/rules/ cite its UUIDs by name. Rewriting the probe means driving
+ * ValidateConfigService / AddComponentCommand instead — a different tool, not a repair,
+ * and out of this unit's box.
+ *
+ * Deliberately a hard stop rather than a self-skip: a skip would let this sit in a
+ * report as "environment not available" when the truth is that its subject is gone.
+ * ============================================================================
+ *
  * It self-manages temporary inventory rows (Flag='TEMP-PROBE') for the real UUIDs it
  * references, inserts each scenario as a server_configurations row, runs the real
  * validators, then cleans everything up. Local mirror only.
@@ -16,6 +41,16 @@
  *   php ims-ftp/tests/fixture_scenarios_real.php
  */
 error_reporting(E_ALL); ini_set('display_errors','1');
+
+fwrite(STDERR,
+    "fixture_scenarios_real.php: DISABLED — its subject no longer exists.\n" .
+    "  * ServerBuilder::validateConfiguration/validateConfigurationEnhanced/\n" .
+    "    validateComponentAddition were deleted by P9.\n" .
+    "  * The nine legacy JSON columns its fixtures insert were dropped by U-D.3c.\n" .
+    "  Rewrite it against ValidateConfigService / AddComponentCommand and\n" .
+    "  config_components rows, or delete it. See the file header.\n");
+exit(2);
+
 $ROOT=dirname(__DIR__);
 foreach (file("$ROOT/.env", FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES) as $l){ if($l===''||$l[0]==='#'||strpos($l,'=')===false)continue; list($k,$v)=explode('=',$l,2); putenv(trim($k).'='.trim(trim($v),"\"'")); }
 if(!getenv('JWT_SECRET')) putenv('JWT_SECRET=probe');

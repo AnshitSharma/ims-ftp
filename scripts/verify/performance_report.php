@@ -13,6 +13,14 @@
  * no longer exist. **Any perf-baseline.json captured before that date is measuring
  * different code and is not comparable -- re-capture before trusting a verdict.**
  *
+ * Measured 2026-08-30 against the dropped-column fixture: all 10 scenarios replay with
+ * ZERO errors, and the verdict is RED purely against the stale 2026-07-06 baseline
+ * (add p95 0.52ms then, 22.5ms now with p50 at 0.89ms -- one cold first sample in a
+ * 8-sample series, timing a different engine). That RED is a baseline-provenance
+ * artifact, not a regression. It clears when the owner re-blesses on a quiet machine
+ * per migration/05-command-layer/PERF-BASELINE-REBLESS.md; that is deliberately not
+ * something an implementing session does to itself.
+ *
  * Unlike tests/fixture_scenarios_real.php (which hardcodes the production DB name), this
  * script honors GOLDEN_DB_HOST / GOLDEN_DB_NAME / GOLDEN_DB_USER / GOLDEN_DB_PASS so it can
  * run against any scratch DB seeded with the real component catalog.
@@ -105,18 +113,54 @@ function tableExists(PDO $pdo, string $table): bool {
     return (bool)$stmt->fetch();
 }
 
-function jcpus($u) { return json_encode(['cpus' => [['uuid' => $u, 'quantity' => 1, 'serial_number' => 'TMP']]]); }
-function jarr($us) { $a = []; foreach ($us as $u) { $a[] = ['uuid' => $u, 'quantity' => 1]; } return json_encode($a); }
-function jnics($u) { return json_encode(['nics' => [['uuid' => $u, 'source_type' => 'component', 'status' => 'in_use', 'specifications' => ['ports' => 2, 'port_type' => 'SFP+']]]]); }
+/**
+ * One already-installed component in a scenario's starting state.
+ * `$qty` > 1 means that many distinct physical units of the same model.
+ */
+function inst(string $type, string $uuid, int $qty = 1): array {
+    return ['type' => $type, 'uuid' => $uuid, 'qty' => $qty];
+}
 
-function insertRow(PDO $pdo, string $cfg, array $cols): array {
-    $base = ['config_uuid' => $cfg, 'server_name' => 'PERF ' . $cfg, 'is_virtual' => 0, 'configuration_status' => 0,
-        'motherboard_uuid' => null, 'chassis_uuid' => null, 'cpu_configuration' => null, 'ram_configuration' => null,
-        'storage_configuration' => null, 'caddy_configuration' => null, 'nic_config' => null, 'sfp_configuration' => null,
-        'hbacard_config' => null, 'pciecard_configurations' => null];
-    $row = array_merge($base, $cols);
+/**
+ * Build a scenario's starting configuration.
+ *
+ * U-D.3c (2026-08-30): the starting state used to be nine JSON columns on this one
+ * INSERT. Those columns are dropped, and a configuration's contents are
+ * config_components rows — so each pre-installed component now gets what production
+ * gives it: its own inventory unit, claimed (Status=2 + ServerUUID) and recorded by a
+ * row. That is also what makes `qty` honest; the blob could say quantity=3 with one
+ * unit behind it, three rows cannot.
+ *
+ * `motherboard_uuid` / `chassis_uuid` survive as scalars and are still set directly:
+ * several rules read them straight off the configuration row.
+ */
+function insertRow(PDO $pdo, string $cfg, array $spec, array $tables): array {
+    $row = ['config_uuid' => $cfg, 'server_name' => 'PERF ' . $cfg, 'is_virtual' => 0,
+            'configuration_status' => 0,
+            'motherboard_uuid' => $spec['motherboard_uuid'] ?? null,
+            'chassis_uuid' => $spec['chassis_uuid'] ?? null];
     $f = array_keys($row);
-    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES (' . implode(',', array_map(fn($x) => ":$x", $f)) . ')')->execute($row);
+    $pdo->prepare('INSERT INTO server_configurations (' . implode(',', $f) . ') VALUES ('
+        . implode(',', array_map(fn($x) => ":$x", $f)) . ')')->execute($row);
+
+    foreach ($spec['installed'] ?? [] as $component) {
+        $tbl = $tables[$component['type']] ?? null;
+        if ($tbl === null || !tableExists($pdo, $tbl)) { continue; }
+        for ($n = 0; $n < $component['qty']; $n++) {
+            $extra  = $component['type'] === 'nic' ? ', `SourceType`' : '';
+            $extraV = $component['type'] === 'nic' ? ", 'component'" : '';
+            $serial = 'PERF-' . strtoupper($component['type']) . '-' . $n . '-' . $cfg;
+            $pdo->prepare("INSERT INTO `$tbl` (`UUID`, `SerialNumber`, `Status`, `ServerUUID`, `Flag`$extra)
+                           VALUES (?, ?, 2, ?, 'TEMP-PERF-PROBE'$extraV)")
+                ->execute([$component['uuid'], $serial, $cfg]);
+            $pdo->prepare('INSERT INTO config_components
+                    (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, serial_number)
+                    VALUES (?, ?, ?, ?, ?, ?)')
+                ->execute([$cfg, $component['type'], $tbl, (int)$pdo->lastInsertId(),
+                           $component['uuid'], $serial]);
+        }
+    }
+
     $s = $pdo->prepare('SELECT * FROM server_configurations WHERE config_uuid = ?');
     $s->execute([$cfg]);
     return $s->fetch();
@@ -126,14 +170,14 @@ function insertRow(PDO $pdo, string $cfg, array $cols): array {
 $SCENARIOS = [
     ['R1 cpu-socket-match', fn($U) => ['motherboard_uuid' => $U['MB_3647']], ['cpu', fn($U) => $U['CPU_3647']]],
     ['R2 cpu-socket-mismatch', fn($U) => ['motherboard_uuid' => $U['MB_3647']], ['cpu', fn($U) => $U['CPU_4189']]],
-    ['R3 ram-type-match', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'cpu_configuration' => jcpus($U['CPU_3647'])], ['ram', fn($U) => $U['RAM_D4_RD']]],
+    ['R3 ram-type-match', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'installed' => [inst('cpu', $U['CPU_3647'])]], ['ram', fn($U) => $U['RAM_D4_RD']]],
     ['R4 ram-ddr-mismatch', fn($U) => ['motherboard_uuid' => $U['MB_3647']], ['ram', fn($U) => $U['RAM_D5_RD']]],
-    ['R5 ram-module-mix', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'ram_configuration' => jarr([$U['RAM_D4_RD']])], ['ram', fn($U) => $U['RAM_D4_UD']]],
-    ['R6 sfp-cage-match', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'nic_config' => jnics($U['NIC_SFPP'])], ['sfp', fn($U) => $U['SFP_10G'], fn($U) => $U['NIC_SFPP'], 1]],
-    ['R7 sfp-cage-mismatch', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'nic_config' => jnics($U['NIC_SFPP'])], ['sfp', fn($U) => $U['SFP_25G'], fn($U) => $U['NIC_SFPP'], 1]],
-    ['R8 sfp-1g-into-sfpplus', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'nic_config' => jnics($U['NIC_SFPP'])], ['sfp', fn($U) => $U['SFP_1G'], fn($U) => $U['NIC_SFPP'], 1]],
-    ['R9 bay-overflow(final)', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'chassis_uuid' => $U['CHS_2BAY'], 'cpu_configuration' => jcpus($U['CPU_3647']), 'storage_configuration' => jarr([$U['ST_SSD25'], $U['ST_SSD25'], $U['ST_SSD25']])], 'finalize'],
-    ['R10 full-build(final)', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'chassis_uuid' => $U['CHS_BIG'], 'cpu_configuration' => jcpus($U['CPU_3647']), 'ram_configuration' => jarr([$U['RAM_D4_RD'], $U['RAM_D4_RD']]), 'storage_configuration' => jarr([$U['ST_SSD25']]), 'nic_config' => jnics($U['NIC_SFPP'])], 'finalize'],
+    ['R5 ram-module-mix', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'installed' => [inst('ram', $U['RAM_D4_RD'])]], ['ram', fn($U) => $U['RAM_D4_UD']]],
+    ['R6 sfp-cage-match', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'installed' => [inst('nic', $U['NIC_SFPP'])]], ['sfp', fn($U) => $U['SFP_10G'], fn($U) => $U['NIC_SFPP'], 1]],
+    ['R7 sfp-cage-mismatch', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'installed' => [inst('nic', $U['NIC_SFPP'])]], ['sfp', fn($U) => $U['SFP_25G'], fn($U) => $U['NIC_SFPP'], 1]],
+    ['R8 sfp-1g-into-sfpplus', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'installed' => [inst('nic', $U['NIC_SFPP'])]], ['sfp', fn($U) => $U['SFP_1G'], fn($U) => $U['NIC_SFPP'], 1]],
+    ['R9 bay-overflow(final)', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'chassis_uuid' => $U['CHS_2BAY'], 'installed' => [inst('cpu', $U['CPU_3647']), inst('storage', $U['ST_SSD25'], 3)]], 'finalize'],
+    ['R10 full-build(final)', fn($U) => ['motherboard_uuid' => $U['MB_3647'], 'chassis_uuid' => $U['CHS_BIG'], 'installed' => [inst('cpu', $U['CPU_3647']), inst('ram', $U['RAM_D4_RD'], 2), inst('storage', $U['ST_SSD25']), inst('nic', $U['NIC_SFPP'])]], 'finalize'],
 ];
 
 function percentile(array $sorted, float $p): float {
@@ -172,25 +216,47 @@ function replayScenarios(PDO $pdo, ServerBuilder $builder, ComponentCompatibilit
     if (tableExists($pdo, 'server_configurations')) {
         $pdo->exec("DELETE FROM server_configurations WHERE config_uuid LIKE 'TESTPERF-%'");
     }
+    // The starting state is rows now, so it needs clearing too — a leftover row from an
+    // aborted run would silently join the next scenario's configuration and change the
+    // very thing being timed.
+    if (tableExists($pdo, 'config_components')) {
+        $pdo->exec("DELETE FROM config_components WHERE config_uuid LIKE 'TESTPERF-%'");
+    }
 
     foreach ($scenarios as $i => $sc) {
         [$id, $colsFn, $action] = $sc;
         $cfg = 'TESTPERF-R' . str_pad((string)($i + 1), 2, '0', STR_PAD_LEFT);
 
         try {
-            $row = insertRow($pdo, $cfg, $colsFn($U));
+            $row = insertRow($pdo, $cfg, $colsFn($U), $tables);
             $start = hrtime(true);
             if ($action === 'finalize') {
                 $r1 = ValidateConfigService::evaluate($pdo, $cfg);
                 $op = 'finalize';
             } else {
                 [$t, $uF, $pF, $pi] = array_pad($action, 4, null);
-                $parent = $pF ? $pF($U) : null;
-                $state = TargetStateBuilder::withAdd(
-                    TargetStateBuilder::fromCurrent($pdo, $cfg),
-                    ['component_type' => $t, 'component_uuid' => $uF($U),
-                     'parent_uuid' => $parent, 'port_index' => $pi]
-                );
+                $parentUuid = $pF ? $pF($U) : null;
+                $current = TargetStateBuilder::fromCurrent($pdo, $cfg);
+
+                // withAdd() takes a config_components-shaped ROW, and merges over a
+                // template whose every key defaults to null. Passing the add-component
+                // API's own key names instead (component_uuid / parent_uuid /
+                // port_index) is therefore silent: they land as extra keys, spec_uuid
+                // stays null, and the candidate reaches the rules as a component with
+                // no model — which is how pcie.lane_budget came to throw here on every
+                // add rather than time one. Corrected 2026-08-30 with U-D.3c.
+                $parentId = null;
+                if ($parentUuid !== null) {
+                    foreach ($current->components() as $c) {
+                        if ((string)$c['spec_uuid'] === (string)$parentUuid) { $parentId = $c['id']; break; }
+                    }
+                }
+                $state = TargetStateBuilder::withAdd($current, [
+                    'component_type' => $t,
+                    'spec_uuid'      => $uF($U),
+                    'parent_id'      => $parentId,
+                    'slot_ref'       => $pi === null ? null : 'port_' . $pi,
+                ]);
                 $r = (new ValidationEngine())->evaluate($state, Trigger::ADD);
                 $op = 'add';
             }
@@ -199,6 +265,9 @@ function replayScenarios(PDO $pdo, ServerBuilder $builder, ComponentCompatibilit
         } catch (\Throwable $e) {
             $errors++;
         } finally {
+            if (tableExists($pdo, 'config_components')) {
+                $pdo->exec('DELETE FROM config_components WHERE config_uuid = ' . $pdo->quote($cfg));
+            }
             if (tableExists($pdo, 'server_configurations')) {
                 $pdo->exec('DELETE FROM server_configurations WHERE config_uuid = ' . $pdo->quote($cfg));
             }

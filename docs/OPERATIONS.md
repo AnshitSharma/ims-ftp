@@ -105,10 +105,15 @@ usage/setup error (`run_all.php:24`).
 
 ### 3.1 REGISTRY
 
-`const REGISTRY` (`run_all.php:41-111`) maps a short gate name to a report script plus an
-`available` flag. Currently available: `inventory`, `orphan`, `performance`, `schema`,
-`ledger`, `slot`, `equivalence`, `parity`, `command_parity`, `read`, `deadcode`,
-`partial_rows`, `regression`.
+`const REGISTRY` maps a short gate name to a report script plus an `available` flag.
+Currently available: `inventory`, `orphan`, `performance`, `schema`, `ledger`, `slot`,
+`parity`, `command_parity`, `read`, `deadcode`, `deploy_skew`, `invariants`, `regression`.
+
+`equivalence` and `partial_rows` were **removed** on 2026-08-30 by U-D.3c — both compared the
+legacy JSON columns against `config_components`, and the columns are dropped. They are absent
+from the registry rather than marked `'available' => false`, deliberately: an unavailable entry
+prints SKIPPED forever and reads as a gate somebody still owes. Their rows-vs-inventory half
+lives on in `inventory_report.php`'s Check 2.
 
 Two entries carry load-bearing history:
 
@@ -146,8 +151,9 @@ a space ("Github IMS").
 
 `const GATE_REPORTS` (`run_all.php:114-135`) is copied verbatim from each phase's
 `gate_reports` array in `migration/phase-status.json`. **If you change one, change both.**
-Current P9 gate: `[deadcode, partial_rows, equivalence, regression]`. `--gate P10` is
-`['all']`, which expands to every registry key (`:188-190`).
+Current P9 gate: `[deadcode, deploy_skew, regression]` — `partial_rows` and `equivalence`
+left it on 2026-08-30 with U-D.3c, mirrored into `phase-status.json` in the same change.
+`--gate P10` is `['all']`, which expands to every registry key.
 
 `migration/phase-status.json` is the migration's state file. Its own schema line says every
 session must update it as its **last** action and never edit fields of units it did not work
@@ -205,7 +211,7 @@ Three sections:
    - Exactly **one** interpolation is performed and it is stated in the header: a bare `*.php`
      path is prefixed with the PHP binary, because the document names the test, not how to
      launch it (`inv_extract.php:70-77`). Related: when `PHP_BIN` points off `PATH`, the script
-     puts its directory *on* `PATH` rather than rewriting INV-8's literal `php …` command
+     puts its directory *on* `PATH` rather than rewriting an invariant's literal `php …` command
      (`invariants.sh:82-92`) — changing the environment to suit the check is legitimate,
      changing the check to suit the environment is the drift this unit exists to prevent.
    - Manifest is `0x1F`-separated, not tab-separated, because tab is IFS whitespace and `read`
@@ -466,6 +472,12 @@ Evidence: `reports/archive/battery-20260824.json` and
 | INV-8/1 | **FAIL (gating)** | `equivalence_report --all` RED |
 | INV-9/1 | **FAIL (gating)** | 35 seeders with no paired rollback |
 | INV-10, INV-11, INV-12 | MANUAL | no CHECK block — human rules |
+
+> **Superseded 2026-08-30.** Everything from here to the end of this section is the
+> 2026-08-24 verify run, kept as the record of that day. Two of its lines no longer describe
+> anything that exists: `equivalence` and `partial_rows` were retired with U-D.3c, and INV-8
+> closed with them. `inventory` is still RED for the same reason (seeder `2026_07_28_001`
+> unrun) — re-measured that day as 35 violations, none of them `referenced_while_available`.
 
 **`run_all.php --quick`: RED.** `schema` GREEN, `orphan` GREEN, `inventory` **RED**,
 `equivalence` **RED**.

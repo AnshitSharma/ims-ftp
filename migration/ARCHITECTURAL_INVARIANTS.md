@@ -77,11 +77,22 @@ CHECK:
 grep -rn "getenv\|_ENV" core/models/validation/rules/   # must return nothing
 ```
 
-## INV-8 — Dual-write windows never fork silently
-While legacy JSON and new rows coexist, the equivalence checker must report zero diffs before any
-phase gate. A diff is a blocking defect, never a "known issue".
+## INV-8 — Dual-write windows never fork silently — CLOSED 2026-08-30 (U-D.3c)
+While legacy JSON and new rows coexisted, the equivalence checker had to report zero diffs before
+any phase gate. A diff was a blocking defect, never a "known issue".
 
-CHECK: `php scripts/verify/equivalence_report.php --all` exits 0.
+**There is no longer a second store to fork from.** U-D.3c dropped the nine legacy JSON columns
+from `server_configurations`; `config_components` is the only record of what a configuration
+contains. The invariant is satisfied structurally rather than by a nightly run, which is stronger
+than the check ever was — a check can be skipped, a column that does not exist cannot diverge.
+
+`equivalence_report.php` is deleted with it. Its rows-vs-inventory half lives on as
+`inventory_report.php`'s Check 2, which now resolves each reference through
+`config_components.inventory_id` to one exact unit instead of sampling any unit of the model.
+
+CHECK (was): `php scripts/verify/equivalence_report.php --all` exits 0.
+CHECK (now): none needed. Reopening this invariant means reintroducing a second store, which
+is what the whole migration existed to remove.
 
 ## INV-9 — Migrations are paired
 Every seeder `database/seeders/<name>.sql` created by this migration ships a working

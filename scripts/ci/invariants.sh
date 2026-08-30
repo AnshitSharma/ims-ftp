@@ -93,12 +93,13 @@ if ! command -v "$PHP" >/dev/null 2>&1; then
     exit 2
 fi
 
-# INV-8's CHECK is the literal string `php scripts/verify/equivalence_report.php
-# --all`. It is run verbatim, which means a bare `php` has to resolve — so when
+# Several invariant CHECKs are literal shell one-liners beginning with a bare
+# `php`. They are run verbatim, which means `php` has to resolve — so when
 # PHP_BIN points somewhere off PATH, put its directory ON the PATH rather than
 # rewriting the document's command. Changing the environment to suit the check
 # is legitimate; changing the check to suit the environment is the drift this
-# unit exists to prevent.
+# unit exists to prevent. (INV-8 was the original case; it closed 2026-08-30
+# with U-D.3c, but the hazard is generic and outlives it.)
 case "$PHP" in
     */*) PHP_DIR=$(CDPATH= cd -- "$(dirname -- "$PHP")" && pwd)
          PATH="$PHP_DIR:$PATH"; export PATH ;;

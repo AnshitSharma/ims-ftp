@@ -58,6 +58,15 @@ const COMPONENT_TABLES = [
     'sfp' => 'sfpinventory',
 ];
 
+// Every table a config_components row may point at. `serverplatforminventory` is not
+// in the map above — no component type inside a build is called "serverplatform" —
+// but a platform-provisioned server claims its motherboard and chassis there.
+const AUDITABLE_TABLES = [
+    'cpuinventory', 'raminventory', 'storageinventory', 'motherboardinventory',
+    'chassisinventory', 'nicinventory', 'caddyinventory', 'pciecardinventory',
+    'risercardinventory', 'hbacardinventory', 'sfpinventory', 'serverplatforminventory',
+];
+
 function tableExists(PDO $pdo, string $table): bool {
     // SHOW TABLES isn't preparable under real (non-emulated) prepares — inline the quoted literal.
     $stmt = $pdo->query('SHOW TABLES LIKE ' . $pdo->quote($table));
@@ -65,35 +74,43 @@ function tableExists(PDO $pdo, string $table): bool {
 }
 
 /**
- * Extract [type, uuid, serial] tuples referenced by a server_configurations row's JSON columns.
+ * Extract [type, uuid, serial, inventory_id] tuples referenced by a configuration.
  * Mirrors scripts/audit-orphans.php's extractRefs() so both reports agree on "referenced".
+ *
+ * U-D.3c (2026-08-30): the nine legacy JSON columns are dropped and `config_components`
+ * is the only store. That upgrades Check 2 from a sampling heuristic to an exact one —
+ * every row names its unit by `inventory_id`, so the model-vs-unit ambiguity documented
+ * at the call site (finding F-2, model 4c8f5e1b) no longer has anywhere to occur.
+ *
+ * This function did NOT start erroring when the columns went: it read them through
+ * `?? null`, so it would have returned an empty ref list and kept Check 2 green forever
+ * while checking nothing. That is why it had to be repointed rather than left alone.
  */
-function extractRefs(array $row): array {
+function extractRefs(PDO $pdo, array $row): array {
     $refs = [];
-    $pushJson = function ($type, $json, $key = null) use (&$refs) {
-        if (empty($json)) return;
-        $decoded = json_decode($json, true);
-        if (!is_array($decoded)) return;
-        $list = $key ? ($decoded[$key] ?? []) : $decoded;
-        if (!is_array($list)) return;
-        foreach ($list as $entry) {
-            if (!is_array($entry) || empty($entry['uuid'])) continue;
-            $refs[] = ['type' => $type, 'uuid' => $entry['uuid'], 'serial' => $entry['serial_number'] ?? null];
-        }
-    };
 
-    $pushJson('cpu',      $row['cpu_configuration']       ?? null, 'cpus');
-    $pushJson('ram',      $row['ram_configuration']       ?? null);
-    $pushJson('storage',  $row['storage_configuration']   ?? null);
-    $pushJson('caddy',    $row['caddy_configuration']     ?? null);
-    $pushJson('pciecard', $row['pciecard_configurations'] ?? null);
-    $pushJson('hbacard',  $row['hbacard_config']          ?? null);
-    $pushJson('sfp',      $row['sfp_configuration']       ?? null);
-    $pushJson('nic',      $row['nic_config']              ?? null, 'nics');
+    $stmt = $pdo->prepare(
+        'SELECT component_type, spec_uuid, serial_number, inventory_id, inventory_table
+           FROM config_components
+          WHERE config_uuid = ? AND removed_at IS NULL
+          ORDER BY id'
+    );
+    $stmt->execute([$row['config_uuid']]);
+    $seen = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $refs[] = ['type' => $r['component_type'], 'uuid' => $r['spec_uuid'],
+                   'serial' => $r['serial_number'], 'inventory_id' => (int)$r['inventory_id'],
+                   'table' => $r['inventory_table']];
+        $seen[$r['component_type'] . '|' . $r['spec_uuid']] = true;
+    }
 
-    if (!empty($row['motherboard_uuid'])) $refs[] = ['type' => 'motherboard', 'uuid' => $row['motherboard_uuid'], 'serial' => null];
-    if (!empty($row['chassis_uuid']))     $refs[] = ['type' => 'chassis',     'uuid' => $row['chassis_uuid'],     'serial' => null];
-    if (!empty($row['hbacard_uuid']))     $refs[] = ['type' => 'hbacard',     'uuid' => $row['hbacard_uuid'],     'serial' => null];
+    // The two surviving scalars. They name a MODEL, never a unit, so they keep the
+    // old ServerUUID-scoped treatment below; skipped when a row already covers them.
+    foreach (['motherboard' => 'motherboard_uuid', 'chassis' => 'chassis_uuid'] as $type => $col) {
+        if (empty($row[$col]) || isset($seen[$type . '|' . $row[$col]])) continue;
+        $refs[] = ['type' => $type, 'uuid' => $row[$col], 'serial' => null,
+                   'inventory_id' => null, 'table' => null];
+    }
 
     return $refs;
 }
@@ -128,10 +145,16 @@ function runChecks(PDO $pdo): array {
     if (tableExists($pdo, 'server_configurations')) {
         $stmt = $pdo->query('SELECT * FROM server_configurations WHERE is_virtual = 0');
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $config) {
-            foreach (extractRefs($config) as $ref) {
+            foreach (extractRefs($pdo, $config) as $ref) {
                 if ($ref['type'] === 'nic' && strpos((string)$ref['uuid'], 'onboard-') === 0) continue;
-                $table = COMPONENT_TABLES[$ref['type']] ?? null;
-                if ($table === null || !tableExists($pdo, $table)) continue;
+                // The row names its own table, and it is not always the one the type
+                // map predicts: a serverplatform-provisioned build records both its
+                // motherboard and its chassis against `serverplatforminventory`, one
+                // platform unit supplying both. Whitelisted, not trusted — the value
+                // is interpolated into SQL and it comes out of a database column.
+                $table = $ref['table'] ?? (COMPONENT_TABLES[$ref['type']] ?? null);
+                if ($table === null || !in_array($table, AUDITABLE_TABLES, true)) continue;
+                if (!tableExists($pdo, $table)) continue;
 
                 // UUID is the MODEL/spec id — many physical units share it; SerialNumber
                 // is the unit. When the config ref carries a serial we can match the unit
@@ -145,7 +168,24 @@ function runChecks(PDO $pdo): array {
                 // The question this check actually asks is "does a physical unit of this
                 // model belong to THIS config, and is it marked in-use?" — so scope by
                 // ServerUUID rather than sampling.
-                if ($ref['serial'] !== null) {
+                //
+                // U-D.3c: a config_components ref answers that question outright. It
+                // carries the unit's row id, so ask about THAT row and nothing else —
+                // no sampling, no ServerUUID proxy, and a mis-set ServerUUID can no
+                // longer hide the violation by making the unit look unallocated.
+                if ($ref['inventory_id'] !== null) {
+                    $check = $pdo->prepare("SELECT Status FROM `$table` WHERE ID = ?");
+                    $check->execute([$ref['inventory_id']]);
+                    $status = $check->fetchColumn();
+                    if ($status === false) {
+                        // The row this configuration claims does not exist. That is an
+                        // orphan, which audit-orphans.php owns; not this report's check.
+                        continue;
+                    }
+                    $available = ((int)$status === 1);
+                    $detail = 'unit #' . $ref['inventory_id'] . ' claimed by config '
+                            . $config['config_uuid'] . ' is marked Status=1 (available)';
+                } elseif ($ref['serial'] !== null) {
                     $check = $pdo->prepare("SELECT Status FROM `$table` WHERE UUID = ? AND SerialNumber = ? LIMIT 1");
                     $check->execute([$ref['uuid'], $ref['serial']]);
                     $status = $check->fetchColumn();
@@ -293,20 +333,48 @@ if (in_array('--self-test', $argv, true)) {
         $pdo->prepare("INSERT INTO `$table` (UUID, SerialNumber, Status, ServerUUID, Flag) VALUES (?, 'SELFTEST', 2, NULL, 'TEMP-SELFTEST-INV')")
             ->execute([$fixtureUuid]);
 
+        // Check 2 fixture (added U-D.3c). The old self-test exercised Check 1 only,
+        // which is exactly how Check 2 could have been repointed at a store it never
+        // read and still reported PASS. This one seeds an available unit CLAIMED by a
+        // live config_components row — the shape Check 2 exists to refuse — so the
+        // self-test now fails if the reference walk goes blind again.
+        $ref2Caught = null;
+        if (tableExists($pdo, 'server_configurations') && tableExists($pdo, 'config_components')) {
+            $ref2Uuid   = 'SELFTEST-REF-' . substr(md5(uniqid()), 0, 10);
+            $ref2Config = 'selftest-' . substr(md5(uniqid()), 0, 24);
+            $pdo->prepare("INSERT INTO `$table` (UUID, SerialNumber, Status, ServerUUID, Flag) VALUES (?, 'SELFTEST-REF', 1, NULL, 'TEMP-SELFTEST-INV')")
+                ->execute([$ref2Uuid]);
+            $ref2InvId = (int)$pdo->lastInsertId();
+            $pdo->prepare('INSERT INTO server_configurations (config_uuid, server_name, is_virtual, configuration_status) VALUES (?, ?, 0, 0)')
+                ->execute([$ref2Config, 'SELFTEST inventory_report']);
+            $pdo->prepare("INSERT INTO config_components (config_uuid, component_type, inventory_table, inventory_id, spec_uuid, serial_number)
+                           VALUES (?, 'ram', ?, ?, ?, 'SELFTEST-REF')")
+                ->execute([$ref2Config, $table, $ref2InvId, $ref2Uuid]);
+            $ref2Caught = false;
+        }
+
         $result = runChecks($pdo);
         $caught = false;
         foreach ($result['violations'] as $v) {
             if (($v['check'] ?? null) === 'installed_without_server' && $v['uuid'] === $fixtureUuid) {
                 $caught = true;
-                break;
+            }
+            if ($ref2Caught !== null && ($v['check'] ?? null) === 'referenced_while_available'
+                && ($v['config_uuid'] ?? null) === $ref2Config) {
+                $ref2Caught = true;
             }
         }
         writeReport($result, true);
 
         $pdo->rollback();
 
+        if ($ref2Caught === false) {
+            echo "inventory_report --self-test: FAIL (Check 2 did not flag an available unit claimed by a live config_components row)\n";
+            exit(0);
+        }
         if ($caught) {
-            echo "inventory_report --self-test: PASS (defect fixture correctly flagged)\n";
+            echo "inventory_report --self-test: PASS (defect fixture correctly flagged"
+               . ($ref2Caught === null ? '' : '; Check 2 fixture flagged too') . ")\n";
             exit(1); // intentional: proves detection, matches pack's acceptance test
         }
         echo "inventory_report --self-test: FAIL (defect fixture NOT flagged — checker is broken)\n";

@@ -53,15 +53,37 @@ removes the need for `--since` going forward but is a one-way file rewrite, so i
 only.
 
 ### 7. performance_report.php (created U-0.4)
-Replays `tests/fixture_scenarios_real.php` scenarios against scratch DB, records wall-time p50/p95
-per operation, compares to `reports/perf-baseline.json` (captured at U-0.4). Green iff p95 delta
-≤ +20% (threshold overridable only in the pack that changes it).
+Replays the R1-R10 real-component scenarios against a scratch DB, records wall-time p50/p95 per
+operation, compares to `reports/perf-baseline.json`. Green iff p95 delta ≤ +20% (threshold
+overridable only in the pack that changes it).
 
-### equivalence_report.php (created U-1.6) — INV-8 owner
-For each config (or --config <uuid>): extract components via legacy
-`ServerBuilder::extractComponentsFromJson()` AND via row reads; canonicalize both to
-`[type, spec_uuid, serial, slot_ref]` sorted tuples; diff. Green iff zero diffs fleet-wide.
---all iterates with keyset pagination (1000/batch) so it runs on large fleets.
+It no longer replays `tests/fixture_scenarios_real.php`, which is disabled — it carries its own
+copy of the scenarios. Two corrections landed 2026-08-30 with U-D.3c: the starting state is
+built as inventory units plus `config_components` rows rather than JSON columns, and the ADD
+path now hands `TargetStateBuilder::withAdd()` a row-shaped candidate. It had been passing the
+API's key names (`component_uuid` / `parent_uuid` / `port_index`), which `withAdd()` merges over
+a null template — so `spec_uuid` stayed null and every add threw inside `pcie.lane_budget`
+instead of being timed.
+
+**`reports/perf-baseline.json` is from 2026-07-06 and is not comparable**: it timed the three
+legacy validate* methods P9 has since deleted. The report runs clean (0 errors, 10/10 scenarios)
+and reads RED purely against that stale baseline. Re-bless before trusting a verdict.
+
+### equivalence_report.php (created U-1.6) — INV-8 owner — **DELETED 2026-08-30 (U-D.3c)**
+It compared each config's components as extracted from the legacy JSON columns against the same
+config's `config_components` rows, canonicalized to `[type, spec_uuid, serial, slot_ref]` sorted
+tuples, and was green iff there were zero diffs fleet-wide.
+
+Both the report and INV-8 are closed: U-D.3c dropped the nine JSON columns, so there is no
+second store for a dual-write window to fork from. The invariant now holds structurally, which
+is stronger than a nightly run — a run can be skipped, a column that does not exist cannot
+diverge.
+
+The rows-vs-inventory half of its job (the pack's "retire JSON side → becomes rows-vs-inventory
+consistency check") lives on in `inventory_report.php`'s Check 2, in the file that already owned
+that question. It was repointed at `config_components` and mutation-probed BEFORE this file was
+deleted, and it is now exact rather than a sampling heuristic: every reference resolves through
+`config_components.inventory_id` to one physical unit.
 
 ### deadcode_report.php (created U-D.1)
 For each symbol scheduled for deletion: `grep -rn` zero call sites outside tests + the symbol's
@@ -69,6 +91,6 @@ own file; PHP lint of full tree after deletion; characterization suite green.
 
 ## run_all.php contract
 `php scripts/verify/run_all.php [--quick] [--gate P<N>]`
---quick: schema+inventory+orphan+equivalence only. --gate: exactly the reports listed for that
+--quick: schema+inventory+orphan only (`equivalence` left the set 2026-08-30 with U-D.3c). --gate: exactly the reports listed for that
 gate in phase-status.json. Exit 0 iff all selected reports green. Prints one line per report:
 `<name>: GREEN|RED reports/<file>.json`.
