@@ -1,5 +1,32 @@
 <?php
 /**
+ * ============================================================================
+ * DO NOT RUN THIS TO REGENERATE THE BASELINE. B-4, closed SUPERSEDED 2026-08-30.
+ * ============================================================================
+ * All four methods this harness characterises —
+ * ServerBuilder::validateConfiguration(), validateConfigurationEnhanced(),
+ * extractComponentsFromJson() (builds the add-time replay's candidate list),
+ * and validateComponentAddition() (the add-time replay call itself) — were
+ * permanently deleted by P9/U-D.3a. A fresh run against ANY database,
+ * including a from-scratch local clone with every seeder replayed, produces
+ * "Call to undefined method" for 100% of finalize-time checks and an empty
+ * add-time replay for every configuration. Verified 2026-08-30 against the
+ * rebuilt local-clone fixture: 18/18 configurations, uniformly useless. This
+ * is not a data problem — no seed source can fix it — so it is not an
+ * argument for restoring the forbidden
+ * production dump either (root CLAUDE.md: never restore
+ * imsbdcmsbharatda_Ims_Production.sql anywhere; that rule stands regardless).
+ *
+ * The checked-in tests/golden/compatibility_baseline.json is STALE BUT REAL —
+ * a pre-P9 artefact — and must stay exactly as it is until this harness is
+ * rewritten against whatever replaced those methods (the
+ * ValidationEngine/ValidationPipeline path in core/models/validation/, per
+ * ims-ftp/CLAUDE.md). Regenerating now would silently overwrite a stale-but-
+ * real baseline with 18 identical error strings that would trivially "match"
+ * on every future comparison — worse than doing nothing. That rewrite is
+ * logged as new work, out of migration scope (BACKLOG, new entry).
+ * ============================================================================
+ *
  * characterize_compatibility.php — Phase 0 golden-master harness.
  *
  * PURPOSE

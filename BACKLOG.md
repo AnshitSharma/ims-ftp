@@ -203,7 +203,29 @@ mattering**. Checked 2026-08-24: currently benign (0 production-only files cited
 **Unblocks.** Nothing. It needs the check written plus a production listing of `api/`, `core/`,
 `scripts/` to diff against — the listing is OWNER (FTP client or shell).
 
-### B-4 · The characterization baseline cannot gate — OPEN
+### B-4 · The characterization baseline cannot gate — CLOSED SUPERSEDED 2026-08-30
+
+**Original problem** (below) is moot: a `--diff` mode would compare against a baseline that no
+longer means anything, because its two subject methods are gone.
+
+**What actually happened, 2026-08-30.** Regeneration was attempted from a permitted new source —
+the untouched local clone plus every seeder replayed, never the forbidden production dump — to
+see whether that alone could unblock this item. It cannot. `characterize_compatibility.php`
+characterises `ServerBuilder::validateConfiguration()`, `validateConfigurationEnhanced()`, and
+(via the add-time replay) `extractComponentsFromJson()` — all three permanently deleted by
+P9/U-D.3a. Confirmed live against the rebuilt fixture: 18/18 configurations produce
+"Call to undefined method" for both finalize-time checks, 0/18 add-time replays (the extraction
+method they depend on is also gone). This is independent of data source — no clone, dump, or
+fixture can produce a representative baseline for methods that no longer exist. **Stop condition
+met, not worked around**: regenerating today would silently replace the stale-but-real
+`tests/golden/compatibility_baseline.json` with 18 identical error strings, which would
+trivially "match" on every future comparison — strictly worse than the current stale baseline.
+Nothing was regenerated or committed; the baseline file and the dump-restore recipe inside
+`characterize_compatibility.php` are both untouched. A `DO NOT RUN` banner was added to the top
+of the file so the recipe can't be followed by accident, and B-18 (below) logs the actual
+unblock as new work.
+
+**Original entry, for context:**
 
 **What.** `tests/characterize_compatibility.php` is a **capture** tool: it overwrites
 `tests/golden/compatibility_baseline.json` and exits 0 unconditionally (non-zero only for
@@ -216,10 +238,26 @@ to check against and then always report GREEN.
 unless the characterization suite passed on the preceding commit. With no compare mode, **INV-10
 is unsatisfiable**, which is why every §A defect is "logged, not fixed".
 
-**Unblocks.** Add a `--diff` / `--check` mode that compares against the pinned baseline and
-exits non-zero on drift, keeping `--capture` as an explicit opt-in. Then flip
-`baseline` to `available => true`. This is the single highest-leverage item in this file: it
-unblocks §A wholesale.
+**Unblocks (superseded — see above).** Add a `--diff` / `--check` mode that compares against the
+pinned baseline and exits non-zero on drift, keeping `--capture` as an explicit opt-in. Then flip
+`baseline` to `available => true`.
+
+### B-18 · `characterize_compatibility.php` needs rewriting against `ValidationEngine` — OPEN
+
+**What.** B-4's harness is permanently dead: it drives three `ServerBuilder` methods
+(`validateConfiguration`, `validateConfigurationEnhanced`, `extractComponentsFromJson`) that
+P9/U-D.3a deleted. The live compatibility path is now `core/models/validation/`'s
+`ValidationEngine` / `TargetStateBuilder` / `ValidateConfigService` / `SlotPlanner` (see
+`ims-ftp/CLAUDE.md`'s "Compatibility validation" section).
+
+**Why open.** This is a design decision — what does "characterize the engine's current
+behaviour" even mean against a rule-dispatch engine instead of two monolithic validate methods —
+not a mechanical unblock. Out of migration scope; logged here rather than attempted inline.
+
+**Unblocks.** Someone decides what a golden-master capture over `ValidationEngine` should record
+per configuration (per-rule verdicts? aggregate pass/fail? both?), then the harness is rewritten
+against that, a fresh baseline is captured deliberately (not accidentally, by running the old
+file), and B-4's `--diff`/`--check` mode is built on top of the new harness.
 
 ### B-5 · `tests/api/*` can pass without running their criteria — OPEN
 

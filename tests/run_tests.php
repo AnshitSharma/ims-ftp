@@ -63,8 +63,9 @@ const NOT_A_SUITE = [
     'run_tests.php',
     // A golden-master CAPTURE tool, not a suite: running it would overwrite
     // tests/golden/compatibility_baseline.json on every suite run. See BACKLOG
-    // B-4 -- it is also currently unusable as a parity gate (P9 deleted the
-    // methods it characterises), which is a separate, still-open problem.
+    // B-4 (closed SUPERSEDED) -- permanently unusable as a parity gate, not just
+    // currently: P9/U-D.3a deleted the methods it characterises. B-18 logs the
+    // rewrite against ValidationEngine as separate, still-open work.
     'characterize_compatibility.php',
     // Deliberately exits 2 (not a pass/fail suite) -- both its subjects are
     // gone: P9 deleted the validate* methods it drives, and U-D.3c dropped

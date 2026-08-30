@@ -141,11 +141,15 @@ before they auto-upload — a syntax error here is a live 500.
   (label `root`). `state_machine_unit.php` refuses to run unless its DB name contains `scratch`
   and none of `golden`/`compat`/`prod` — it unconditionally DROPs whatever database it is given.
 - `tests/characterize_compatibility.php` — golden master over real `server_configurations` rows
-  into `tests/golden/`. **Currently unusable as a parity gate**: P9 deleted the three methods it
-  characterises (`validateConfiguration`, `validateConfigurationEnhanced`,
-  `validateComponentAddition`), so a fresh run records "Call to undefined method" for every
-  configuration and the checked-in `compatibility_baseline.json` is a pre-P9 artefact from a
-  different scratch DB (12 configs, not 18). Repair or retire it before relying on it.
+  into `tests/golden/`. **Permanently unusable as a parity gate, not just currently**: P9/U-D.3a
+  deleted all four methods it characterises (`validateConfiguration`,
+  `validateConfigurationEnhanced`, `extractComponentsFromJson`, `validateComponentAddition`), and
+  this is independent of data source — confirmed 2026-08-30 that even a from-scratch local clone
+  with every seeder replayed still records "Call to undefined method" for every configuration
+  (BACKLOG B-4, closed SUPERSEDED). The checked-in `compatibility_baseline.json` is a pre-P9
+  artefact (12 configs, not 18) and **must not be regenerated** — a `DO NOT RUN` banner sits at
+  the top of the file. Rewriting it against `ValidationEngine` is logged as new work (BACKLOG
+  B-18), out of migration scope.
 - `scripts/audit-orphans.php` — orphaned-record audit, and the only thing that checks a
   configuration's claims against real inventory rows. Reads `config_components` since
   U-D.3c, so it resolves each claim to ONE unit by `inventory_id` instead of sampling any

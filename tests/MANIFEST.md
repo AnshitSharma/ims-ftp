@@ -145,8 +145,11 @@ see §3.
   golden-master capture/diff tool the sweep's "characterization" step invokes
   directly (see phase-status.json's `baseline` gate report, `lands_in` =
   this file). Reported as "byte-identical to baseline" / "N drift", never as
-  exit-code pass/fail alongside the 55. Also currently unusable as a parity
-  gate — see BACKLOG B-4.
+  exit-code pass/fail alongside the 55. Permanently unusable as a parity gate,
+  not just currently — see BACKLOG B-4 (closed SUPERSEDED) and B-18 (the
+  rewrite against ValidationEngine, logged as separate open work). A
+  `DO NOT RUN` banner sits at the top of the file; do not regenerate the
+  checked-in baseline.
 - **`tests/fixture_scenarios_real.php`** — deliberately exits 2, not 0/1;
   DISABLED since both its subjects are gone (P9 deleted the `validate*`
   methods it drives, U-D.3c dropped the columns its fixtures insert). Named in
