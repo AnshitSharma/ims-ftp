@@ -159,7 +159,7 @@ RESULT **RED**.
 | Invariant | Failure | Disposition |
 |---|---|---|
 | INV-1/1 | `grep "'quantity'"` returns 3 hits: `core/models/config/ConfigReadRouter.php:68` (a comment), `:454` (`'quantity' => 1` in the legacy output shape), `core/models/validation/TargetStateBuilder.php:295` (reads legacy JSON quantity in the fallback path) | All three are **legacy-compatibility surfaces**, not new quantity semantics. Either amend INV-1's CHECK to exclude the legacy-shape/fallback paths, or wait for U-D.3 to delete them. Do **not** silence it by renaming a variable. |
-| INV-8/1 | `equivalence_report --all` RED — 1 diff (§B-7) | Real data defect. |
+| INV-8/1 | RETIRED 2026-08-30 — invariant CLOSED with U-D.3c; `equivalence_report.php` deleted | No second store left to fork from. |
 | INV-9/1 | 35 seeders under `2026_0[7-9]*` have no paired rollback file, including both 2026-08-24 seeders | Real policy debt (§B-2). |
 
 INV-3 is `info-RED`, correctly: `inv_extract.php` resolves its "After U-C.6" condition against
@@ -273,7 +273,20 @@ contributed 0 lanes").
 `slot_ref` (writes `pcie_3_x8`, the value `SlotPlanner::plan()` produces for that card today).
 **Not run against production.** The lane half needs §A-7 fixed, not a data repair.
 
-### B-8 · `equivalence_report` RED — one chassis row present only in JSON — OPEN / OWNER
+### B-8 · `equivalence_report` RED — one chassis row present only in JSON — CLOSED 2026-08-30
+
+> **Closed by U-D.3c, and it is worth being precise about how.** The config it names,
+> `2c7f2dfb`, is not in production any more, so the specific diff is unreproducible. The class
+> of defect was closed structurally rather than repaired: the JSON side no longer exists, so a
+> component cannot be "in JSON and not in rows". Every configuration's nine columns were copied
+> into `server_configurations_json_archive` first, and `2026_08_30_003` refused to drop until
+> that archive was complete — so if such a row still existed at drop time, its JSON is preserved
+> there rather than lost. `equivalence_report.php` itself is deleted, and INV-8 is closed.
+>
+> The `referenced_while_available` half of this defect is still checked, by
+> `inventory_report.php` Check 2, now resolving through `config_components.inventory_id`.
+
+**Original entry:**
 
 **What.** `reports/equivalence-20260824-081420.json`: 3 configs scanned, 1 diff — chassis
 `4981e5a2-74b5-46ed-ac9d-7f9bbfdbc6d5` appears in the legacy JSON of config
@@ -292,6 +305,103 @@ fallback and reported all three measured configs COMPLETE — worth re-checking 
 add it to `expected_diffs.json` — that file is for *engine verdict* divergences, not for missing
 rows.
 
+### B-16 · Config `1f61541b` claims an SFP unit that no longer exists — CAUSE FIXED 2026-08-30 · one data repair OPEN / OWNER
+
+**What.** `config_components` row 10388 (config `1f61541b-db3e-4541-83eb-da0c78ffa1d8`, type
+`sfp`, spec `9a412f95-fe0f-487b-a9a1-443fb0b05172`) points at `sfpinventory` ID 99. That row is
+gone: production holds 74 SFP units, IDs 22-100, with 99 absent. The configuration still
+displays the SFP in `server-get-config`, sourced from the row rather than from stock.
+
+**How it was found.** By the repaired `scripts/audit-orphans.php`, on its first run after U-D.3c
+repointed it at `config_components`. The old JSON-based walk could not have found it: it matched
+`UUID = ? LIMIT 1`, and other healthy units of that model exist, so it would have reported green.
+Confirmed on live production, not only on the dump.
+
+**The cause, found and closed 2026-08-30.** `BaseFunctions::deleteComponent()` was a bare
+`DELETE FROM {type}inventory WHERE id = ?` with no in-use or configuration-reference check, and
+both `{type}-delete` and `{type}-bulk-delete` route through it. Deleting a unit a live server
+used therefore destroyed the inventory row and left the `config_components` row claiming it
+behind — exactly this defect. It was a *known* hazard, written down at
+`RequestActionExecutor.php:31` ("still a bare DELETE … it can destroy an inventory row a live
+server depends on") as the reason request automation was never given delete rights, and left
+standing.
+
+It now refuses with a 409 naming the configuration, and fail-closed if the claim query cannot be
+answered. Matched on `(inventory_table, inventory_id)`, never `component_type` — one
+serverplatform unit is claimed by both a motherboard row and a chassis row. Deliberately NOT
+keyed on `Status`/`ServerUUID`: those drift (§B-9 has 28 mismatches and 4 units at `Status=2`
+with no server), so keying on them would refuse deletes whose real problem is a stale column.
+
+Verified on live production, both branches, using only rows the probe created: a claimed unit
+returned `409 "This ram is installed in server configuration 33ff4c41-…"` and survived; the same
+unit deleted cleanly once released. Pinned by `tests/regression/component_delete_guard_test.php`
+(18 checks, no DB required), which was mutation-checked — all four load-bearing assertions
+detect the pre-fix implementation.
+
+`ServerBuilder::deleteConfiguration()`, the sibling path, was checked and is NOT affected: it
+refuses while components are installed, releases bound units, then purges the rows.
+
+**What is still open (OWNER).** The data repair itself — one row, and it needs a physical fact
+this session cannot supply: whether SFP `9a412f95-…` was actually pulled from the machine
+(tombstone the row — `php scripts/audit-orphans.php --fix` does exactly that via
+`ServerBuilder::removeComponent()`) or the inventory row was deleted in error (restore it from
+the dump). No new ones can appear through the API now.
+
+### B-17 · Eight test files live where the runner never looks, and five of them are broken — OPEN
+
+**What.** `run_tests.php` discovers by globbing `SUITE_DIRS`, which lists `api/`, `backfill/`,
+`regression/` and `unit/`. It does **not** list `tests/` itself. Eight real test files sit
+there and have never been run by the suite:
+
+| File | State (probed 2026-08-30 against the scratch fixture) |
+|---|---|
+| `lane_authority_unit.php` | passes, 15 checks |
+| `nic_sfp_authority_unit.php` | passes, 11 checks |
+| `storage_bay_authority_unit.php` | passes, 13 checks |
+| `state_machine_unit.php` | **1 FAIL** — needs a `user_permissions` table the fixture lacks; the schema probe fails and check 1 (`building->validating` with `server.edit`) then denies what it should allow |
+| `getDashboardDataShapeTest.php` | **fatal, exit 255** — `PDO object is not initialized` at `BaseFunctions.php:948`. Its `FakePDO extends PDO` overrides only `prepare()`, and `getDashboardData()` now reaches a PDO method it does not stub |
+| `memory_authority_unit.php` | **fatal, exit 255** — requires `core/models/compatibility/MemoryAuthority.php`, which does not exist |
+| `slot_storage_authority_unit.php` | **fatal, exit 255** — requires `core/models/compatibility/SlotAuthority.php`, which does not exist |
+| `serverstate_equivalence.php` | **fatal, exit 255** — `Unknown column 'id' in 'order clause'` at line 70; schema drift |
+
+`SlotAuthority`, `StorageConnectionAuthority` and `MemoryAuthority` exist nowhere under `core/`.
+CLAUDE.md named all three until 2026-08-30 and has been corrected; `core/models/compatibility/`
+holds `StorageConnectionValidator` instead.
+
+**Why it matters.** This is the *exact* defect `run_tests.php`'s own header was written about,
+one level up. That header describes a hand-typed list that "omitted six that do [exist] — and
+all six of the omitted ones were exiting 255 with an uncaught PDOException in every
+environment. The suite had been red for an unknown length of time while the sweep reported
+green." The fix was to glob instead of type. But **a glob cannot drift from the directory it
+globs, and it also cannot see a directory it was never pointed at** — which is what the
+2026-08-24 note about adding `api/` and `backfill/` already said, and the lesson stopped one
+directory short. Meanwhile `ims-ftp/CLAUDE.md` advertises `tests/*_authority_unit.php` and
+`tests/serverstate_equivalence.php` as if they were part of the suite.
+
+**Why it was not fixed here.** Adding `tests/` to `SUITE_DIRS` is one line, but on its own it
+turns the suite RED — correctly, which is the point, but it also needs `NOT_A_SUITE` extended
+with `run_tests.php` (self-recursion), `characterize_compatibility.php` (a CAPTURE tool: it
+would overwrite `tests/golden/compatibility_baseline.json` on every suite run) and
+`fixture_scenarios_real.php` (deliberately exits 2). Wiring in five broken suites without
+repairing them trades a false green for a permanent red, which is not obviously better. The
+two `*Authority` ones look retirable on the same grounds as `fixture_scenarios_real.php` —
+their subject is gone — but that is a judgement about what they were for, not a mechanical fix.
+
+**A landmine for whoever does wire it in.** `state_machine_unit.php:36` runs
+`DROP DATABASE IF EXISTS` on whatever `SM_TEST_DB_NAME` names, then rebuilds a minimal schema.
+The suite is right to do that and says so — "this suite must never point at `ims_compat_golden`"
+— but nothing enforces it, and the fixture-runner convention in this project sets the whole
+`GOLDEN_DB_*` / `SM_TEST_DB_*` / `PROBE_DB_*` family from one password file and one host. A
+runner that points `SM_TEST_DB_NAME` at the shared scratch database destroys it on the first
+run. That happened here on 2026-08-30 while probing these eight files, and cost a fixture
+rebuild; it stayed harmless for months only because the suite never discovered this file.
+`SM_TEST_DB_NAME` needs its own throwaway database, and ideally the suite should refuse to run
+when it equals `GOLDEN_DB_NAME` rather than trusting the operator.
+
+**Unblocks.** Nothing. Decide per file: repair, or retire with the reason stated in the file
+(the pattern `fixture_scenarios_real.php` now uses). Then point `SUITE_DIRS` at `tests/`,
+extend `NOT_A_SUITE` as above, and separate `SM_TEST_DB_NAME`.
+
 ### B-9 · `inventory_report` RED — 33 violations — OPEN / OWNER
 
 **What.** 28 × `status_v2_legacy_mismatch`, 4 × `installed_without_server` (sfp
@@ -305,20 +415,35 @@ gap, not a code defect. The 4 orphaned SFP rows are a separate leak.
 **Unblocks.** Run `2026_07_28_001`. The SFP rows need their own diagnosis (which config claimed
 them, and why the release did not clear `Status`).
 
-### B-10 · `expected_schema.json` omits `risercardinventory` — OPEN
+### B-10 · CLOSED 2026-08-30 · `expected_schema.json` omitted two tables, and pinned a third key wrongly
 
-**What.** `scripts/verify/expected_schema.json` pins `status_v2` on ten inventory tables — cpu,
+**What (as found).** `scripts/verify/expected_schema.json` pinned `status_v2` on ten inventory tables — cpu,
 ram, storage, motherboard, chassis, nic, caddy, pciecard, hbacard, sfp — and **not**
 `risercardinventory`, even though production's `risercardinventory` does carry
 `status_v2 enum(…) DEFAULT NULL` (verified in the repo-root dump). `inventory_report.php:56`
 *does* include `'risercard' => 'risercardinventory'`, which is why it reports
 `tables_checked: 11`.
 
-**Why open.** `schema_report` reads GREEN while silently not asserting one of the eleven tables.
-A future schema change that drops or alters `risercardinventory.status_v2` would not be caught.
-This is a residue of the 2026-08-14 riser/pciecard split.
+**Why it mattered.** `schema_report` read GREEN while silently not asserting those tables. A
+schema change dropping or altering their `status_v2` would not have been caught.
 
-**Unblocks.** Nothing. Add the table to `expected_schema.json` and re-run `--gate P1`.
+**Fixed, and it was worse than logged — two omissions, not one.**
+`serverplatforminventory` was missing as well; this entry counted only the 2026-08-14
+riser/pciecard split and not the 2026-08-25 platform type. Both carry
+`status_v2 enum(…) DEFAULT NULL`, confirmed in the repo-root dump before adding. The file now
+pins **12** inventory tables, matching `VALID_COMPONENT_TYPES` exactly.
+
+**And running the gate then found a third, larger problem.** With the tables added,
+`schema_report` came back **RED** — on `uq_inventory_once`, expected
+`(inventory_table, inventory_id)` but actually `(inventory_table, inventory_id, component_type)`.
+That widening is *correct and deliberate*: seeder `2026_08_25_005_widen-inventory-once-key.sql`
+made it so one compute-platform unit could back both the motherboard row and the chassis row it
+legitimately fills. `expected_schema.json` was never updated to match, so the P1 schema gate had
+been RED on a false alarm since 2026-08-25 — the failure mode where a gate cries wolf until
+people stop reading it. Expectation corrected to the shipped three-column key.
+
+`schema_report` is now **GREEN** against a production-shaped database, and its `--self-test`
+still flags an induced defect, so the GREEN is not vacuous.
 
 ### B-11 · Three flag-promotion dates are unrecoverable — OWNER
 
@@ -378,7 +503,9 @@ done here"). Repoint or delete those notes when next touching those files.
 
 **Recorded because `phase-status.json` says it is pending.** `partial_rows` is registered at
 `scripts/verify/run_all.php:91` (`available => true`) and P9's gate list at `:133` reads
-`['deadcode', 'partial_rows', 'equivalence', 'regression']`. The `registration_PENDING` note in
+`['deadcode', 'partial_rows', 'equivalence', 'regression']` (both `partial_rows` and
+`equivalence` left that list on 2026-08-30 when U-D.3c retired both reports; P9 is now
+`['deadcode', 'deploy_skew', 'regression']`). The `registration_PENDING` note in
 `phase-status.json` ("drafted but NOT applied — another agent held run_all.php") is stale.
 
 ---
@@ -465,7 +592,41 @@ GREEN only because `assignComponentSlot` is a target — and `assignComponentSlo
 live `addComponent()` calls it); and re-run `server-debug-deadcode` against the deployed tree
 immediately before any deletion (§B-3).
 
-### C-3 · U-D.3 — drop the legacy JSON columns — **RECOMMENDED: DO NOT RUN**
+### C-3 · U-D.3 — drop the legacy JSON columns — **DONE 2026-08-30**
+
+> **This entry's recommendation was overtaken by events and is kept only as the record of what
+> had to be true first.** The owner ran all three seeders against production on 2026-08-30;
+> `server-list-configs` no longer carries any of the nine columns, every configuration reads
+> 200, and a live create -> add -> read -> remove -> delete cycle succeeds end to end. What
+> actually happened to each objection below:
+>
+> 1. **Sign-off** — the owner's decision, taken and executed.
+> 2. **30-day GREEN streak** — never accumulated. Replaced by direct evidence rather than
+>    waived: the drop was rehearsed on a clone of the production dump, and the full suite ran
+>    GREEN against a database with the columns already gone before anything touched production.
+> 3. **§B-8's diff** — it named config `2c7f2dfb`, which no longer exists. The general case was
+>    resolved by ARCHIVING instead of repairing: `2026_08_30_002` copies all nine columns for
+>    every configuration into `server_configurations_json_archive`, and `2026_08_30_003`
+>    refuses to drop unless that archive is complete. Nothing was deleted without a copy.
+> 4. **Ordering** — U-D.1 and U-D.2 were completed by P9 before this ran.
+> 5. **The `!empty($rows)` selection** — fixed, not merely detected. `fromCurrent()` has no JSON
+>    branch left to fall back to; it returns an empty TargetState. "Partly mirrored" is not a
+>    state that can exist once there is no second store to be half of.
+> 6. **Live data defects** — the row side now carries its own cross-check. `audit-orphans.php`
+>    and `inventory_report.php` Check 2 resolve each claim to one exact unit through
+>    `config_components.inventory_id`, which is stricter than the JSON cross-check ever was: it
+>    immediately found one the old instrument could not (§B-16).
+> 7. **The equivalence checker** — retired rather than converted, with INV-8 closed alongside
+>    it. Its rows-vs-inventory half lives on in `inventory_report.php` Check 2, which was
+>    written, mutation-probed and proven BEFORE `equivalence_report.php` was deleted.
+> 8. **Deploy skew** — unchanged and still open (§B-3). The 16 production-only files remain a
+>    real residual risk against a dropped column; none was hit by any live probe.
+>
+> One deviation from the pack: `motherboard_uuid` and `chassis_uuid` were NOT dropped. The pack
+> says to drop them, but they are still written and read as scalars, so removing them was out of
+> this unit's scope.
+
+**Original entry, unedited:**
 
 This is the point of no return: `ALTER server_configurations DROP COLUMN` across nine JSON
 columns plus `hbacard_uuid`, `motherboard_uuid` and `chassis_uuid`, with a restore *procedure*
