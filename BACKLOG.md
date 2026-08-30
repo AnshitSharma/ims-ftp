@@ -617,7 +617,7 @@ invariant checks against it), so an internally inconsistent state file is not co
 `BaseCommand::afterCommit()` (`core/models/commands/BaseCommand.php:155-157`) is the single
 invalidation site and fixes same-node staleness; cross-node staleness is unaddressed.
 
-**Why open.** Recorded as assumption A-4 in `migration/PLAN_VERIFICATION_REVIEW.md` (F-10's
+**Why open.** Recorded as assumption A-4 in `docs/PLAN_VERIFICATION_REVIEW.md` (F-10's
 list): "multiple PHP-FPM nodes share one MySQL; row locks are the concurrency truth… cross-node
 staleness is a pre-existing condition, unchanged by this migration, backlog candidate."
 
@@ -826,7 +826,7 @@ pack's target list, already recorded in its own 2026-08-24 appendix:
 
 ### C-5 · `replaceOnboardNIC` — a shipped regression, not dead code — OPEN / OWNER
 
-**What.** `migration/10-cleanup/FINDING-20260824-replaceOnboardNIC-not-superseded.md`. The
+**What.** `docs/FINDING-20260824-replaceOnboardNIC-not-superseded.md`. The
 dead-code gate rates `OnboardNICHandler::replaceOnboardNIC()` (`:449-575`) GREEN — 0 blocking, 0
 internal callers, confirmed by tree-wide grep. **Do not delete it.**
 
@@ -1042,7 +1042,7 @@ exclusion stays a decision rather than becoming an assumption.
 `uq_inventory_once` over the pair, and no foreign key — because a hard FK needs one inventory
 table and there are eleven. `scripts/verify/orphan_report.php` is the soft guard.
 
-**Why deferred.** `migration/PLAN_VERIFICATION_REVIEW.md:32` (F-6, ACCEPTED): unification "would
+**Why deferred.** `docs/PLAN_VERIFICATION_REVIEW.md:32` (F-6, ACCEPTED): unification "would
 double the plan". The explicit risk note is the important half: **`orphan_report` is a detection
 control, not a prevention control, for this one edge.** The target design's claim that "orphans
 are structurally impossible" (§2.2) is therefore not true of the as-built schema.
@@ -1153,7 +1153,7 @@ the `isSandboxConfig()` guard in `finalizeConfiguration()`, which blocks *finali
 build. Sandbox implies virtual, so both are covered, but they are different guards doing
 different jobs.
 
-**Why deferred.** `migration/PLAN_VERIFICATION_REVIEW.md` F-5 (FIXED-with-residual): backfilling
+**Why deferred.** `docs/PLAN_VERIFICATION_REVIEW.md` F-5 (FIXED-with-residual): backfilling
 virtual configs would violate INV-1 (fake inventory ids) and poison equivalence. "Virtual flows
 stay legacy-only until a sandbox design lands (BACKLOG via U-P.2). ACCEPTED, owner: backlog."
 

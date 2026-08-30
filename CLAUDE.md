@@ -159,16 +159,28 @@ before they auto-upload — a syntax error here is a live 500.
 
 ## Deeper reference (local-only, never deployed)
 
-`docs/ARCHITECTURE.md` and `docs/OPERATIONS.md` (written 2026-08-24, every claim `file:line`
-cited), `BACKLOG.md`, `migration/` (the target design — several packs describe intent that was
-never built), and `database/seeders/*.sql` as schema history. Where a doc contradicts the code,
-the code wins; flag the stale doc.
+`BACKLOG.md`, `database/seeders/*.sql` as schema history, and `docs/`:
 
-`migration/` is kept, and two of its files are **load-bearing at run time**, not just reference:
-`scripts/ci/inv_extract.php` reads `migration/ARCHITECTURAL_INVARIANTS.md` and
-`migration/phase-status.json` to build the invariants gate, and
-`tests/api/add_remove_response_shape_test.php` reads
-`migration/08-api-adapters/DEPRECATION.md`. Do not tidy those three away.
+| File | What it is |
+|---|---|
+| `ARCHITECTURE.md`, `OPERATIONS.md` | written 2026-08-24, every claim `file:line` cited |
+| `ARCHITECTURAL_INVARIANTS.md` | INV-1..INV-12. **Executable** — `scripts/ci/inv_extract.php` parses its CHECK blocks verbatim, so editing it changes what the gate enforces with no code change |
+| `RULE_MAP.md` | which validation rule implements which unit; cited by ~30 files, including every rule class |
+| `API-DEPRECATION.md` | the documented add/remove deviation; read at run time by `tests/api/add_remove_response_shape_test.php` |
+| `PERF-BASELINE-REBLESS.md` | the quiet-machine capture procedure `performance_report.php --rebless` points the operator at |
+| `PLAN_VERIFICATION_REVIEW.md` | F-5 (virtual configs excluded) and friends, cited by `audit-orphans.php` and `inventory_report.php` |
+| `FINDING-20260824-replaceOnboardNIC-not-superseded.md` | the whole content of BACKLOG C-5, which is still OPEN |
+
+Where a doc contradicts the code, the code wins; flag the stale doc.
+
+**`migration/` is gone** — 140 execution packs, handoffs, phase plans and `phase-status.json`,
+deleted 2026-08-31 once the migration completed. The six files above were pulled out of it
+first, because live code reads or cites them. Comments elsewhere in the tree still say things
+like "see `migration/handoffs/U-1.1-20260706.md` for the full reasoning": those pointers are
+dead paths, not missing files — the content is in git (`git show HEAD:<path>` while the
+deletion is still uncommitted; afterwards `git log --diff-filter=D --name-only -- migration/`
+finds the deleting commit and `git show <sha>^:<path>` prints the file). Do not go hunting the
+filesystem for them, and do not treat a dead pointer as evidence the code is wrong.
 
 ## The verification gates, after the 2026-08-31 cleanup
 

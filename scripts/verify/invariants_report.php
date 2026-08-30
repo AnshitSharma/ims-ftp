@@ -28,7 +28,7 @@
  *
  * NO CHECK TEXT IS STORED HERE. Exactly as invariants.sh does it, the command
  * text is produced at run time by `scripts/ci/inv_extract.php`, which parses
- * migration/ARCHITECTURAL_INVARIANTS.md. Editing the document changes what this
+ * docs/ARCHITECTURAL_INVARIANTS.md. Editing the document changes what this
  * gate enforces with no code change here; an edit into a shape the parser cannot
  * execute exits 2 rather than silently dropping a check. U-P.1's only checklist
  * item — "every INV check runs verbatim from the invariants file (no paraphrase
@@ -542,7 +542,7 @@ $pdo = $needsDb ? pdoOrNull($ROOT) : null;
 $results = [];
 $red = 0; $infoRed = 0; $manual = []; $gatingRan = 0; $couldNotRun = 0;
 
-echo "invariants_report: migration/ARCHITECTURAL_INVARIANTS.md, extracted verbatim\n";
+echo "invariants_report: docs/ARCHITECTURAL_INVARIANTS.md, extracted verbatim\n";
 foreach ($records as $rec) {
     $key = $rec['inv'] . '/' . $rec['seq'];
 
@@ -619,7 +619,7 @@ $file = $REPORT_DIR . '/invariants-' . date('Ymd-His') . '.json';
 @file_put_contents($file, json_encode([
     'report'            => 'invariants',
     'generated_at'      => gmdate('c'),
-    'source_document'   => 'migration/ARCHITECTURAL_INVARIANTS.md',
+    'source_document'   => 'docs/ARCHITECTURAL_INVARIANTS.md',
     'extracted_by'      => 'scripts/ci/inv_extract.php (verbatim; no check text is stored in the report script)',
     'gating_executed'   => $gatingRan,
     'could_not_run'     => $couldNotRun,

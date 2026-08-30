@@ -87,7 +87,7 @@ foreach (['CpuSocketMatchRule', 'CpuSocketCountRule', 'CpuMixedModelsRule', 'Cpu
 // -----------------------------------------------------------------------
 // 2026-08-14: this rule no longer compares sockets (that duplicated
 // cpu.socket_match). It owns CPU-to-CPU SKU pairing and delegates to
-// CpuIdentityMatcher. See migration/04-validation-engine/RULE_MAP.md.
+// CpuIdentityMatcher. See docs/RULE_MAP.md.
 echo "-- cpu.mixed_models (E/W, ADD+VALIDATE, previously orphaned) --\n";
 $sameModel = new TargetState([cpuRow(1, CPU_3647), cpuRow(2, CPU_3647)]);
 check('same model twice: passes (the normal matched-pair 2S build)',

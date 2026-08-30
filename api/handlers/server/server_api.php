@@ -720,8 +720,8 @@ function handleCreateStart($serverBuilder, $user) {
 function handleAddComponent($serverBuilder, $user) {
     global $pdo;
 
-    // U-A.1: informational only, safe unconditionally -- see migration/08-api-adapters/DEPRECATION.md.
-    header('X-IMS-Deprecation: action superseded by v2 commands, see migration/08-api-adapters/DEPRECATION.md');
+    // U-A.1: informational only, safe unconditionally -- see docs/API-DEPRECATION.md.
+    header('X-IMS-Deprecation: action superseded by v2 commands, see docs/API-DEPRECATION.md');
 
     try {
         $configUuid = $_POST['config_uuid'] ?? '';
@@ -1134,8 +1134,8 @@ function handleAddComponent($serverBuilder, $user) {
 function handleRemoveComponent($serverBuilder, $user) {
     global $pdo;
 
-    // U-A.1: informational only, safe unconditionally -- see migration/08-api-adapters/DEPRECATION.md.
-    header('X-IMS-Deprecation: action superseded by v2 commands, see migration/08-api-adapters/DEPRECATION.md');
+    // U-A.1: informational only, safe unconditionally -- see docs/API-DEPRECATION.md.
+    header('X-IMS-Deprecation: action superseded by v2 commands, see docs/API-DEPRECATION.md');
 
     $configUuid = $_POST['config_uuid'] ?? '';
     $componentType = $_POST['component_type'] ?? '';
@@ -1266,7 +1266,7 @@ function handleRemoveComponent($serverBuilder, $user) {
 function handleReplaceComponent($serverBuilder, $user) {
     global $pdo;
 
-    header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
+    header('X-IMS-Deprecation: new v2-only action, see docs/API-DEPRECATION.md');
 
     require_once __DIR__ . '/../../../core/models/commands/ReplaceComponentCommand.php';
 
@@ -1349,7 +1349,7 @@ function handleReplaceComponent($serverBuilder, $user) {
 function handleTransitionStatus($serverBuilder, $user) {
     global $pdo;
 
-    header('X-IMS-Deprecation: new v2-only action, see migration/08-api-adapters/DEPRECATION.md');
+    header('X-IMS-Deprecation: new v2-only action, see docs/API-DEPRECATION.md');
 
     require_once __DIR__ . '/../../../core/models/commands/TransitionStatusCommand.php';
 

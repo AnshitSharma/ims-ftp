@@ -194,7 +194,7 @@ document) — never confused with 0 (`invariants.sh:20-26`).
 
 Three sections:
 
-1. **Every INV CHECK, extracted verbatim** from `migration/ARCHITECTURAL_INVARIANTS.md` at run
+1. **Every INV CHECK, extracted verbatim** from `docs/ARCHITECTURAL_INVARIANTS.md` at run
    time by `scripts/ci/inv_extract.php`. The command text is **never stored** in the CI script.
    Editing the invariants document changes what CI enforces immediately, with no code change;
    an edit into a shape the parser cannot execute turns the run **RED** rather than silently
@@ -539,7 +539,7 @@ php scripts/verify/soak_status.php             # accumulated GREEN-day streak
    GREEN cascade symbol without confirming its parent target is also GREEN.
 4. A symbol that is the **only writer** of persisted state other code reads is not deletable on
    a name-reference count. The gate cannot see that; see
-   `migration/10-cleanup/FINDING-20260824-replaceOnboardNIC-not-superseded.md` for the worked
+   `docs/FINDING-20260824-replaceOnboardNIC-not-superseded.md` for the worked
    example.
 
 ### 8.4 Maintenance-mode hardware swap

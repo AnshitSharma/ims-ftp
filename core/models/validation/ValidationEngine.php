@@ -47,35 +47,35 @@ class ValidationEngine
 {
     /** @var string[] fully-qualified class-strings implementing RuleInterface */
     const RULES = [
-        // U-R.1 cpu.* (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.1 cpu.* (docs/RULE_MAP.md)
         CpuSocketMatchRule::class,
         CpuSocketCountRule::class,
         CpuMixedModelsRule::class,
         CpuRequiresBoardRule::class,
-        // U-R.2 memory.* (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.2 memory.* (docs/RULE_MAP.md)
         MemoryTypeRule::class,
         MemoryFormFactorRule::class,
         MemorySlotCountRule::class,
         MemoryEccRule::class,
         MemoryDownclockRule::class,
-        // U-R.3 pcie.slot_placement (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.3 pcie.slot_placement (docs/RULE_MAP.md)
         PcieSlotPlacementRule::class,
-        // U-R.4 pcie.lane_budget (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.4 pcie.lane_budget (docs/RULE_MAP.md)
         PcieLaneBudgetRule::class,
-        // U-R.5 storage.* (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.5 storage.* (docs/RULE_MAP.md)
         StorageInterfacePathRule::class,
         StorageBayCapacityRule::class,
         StorageM2CapacityRule::class,
         StorageCaddyPairingRule::class,
-        // U-R.6 net.* (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.6 net.* (docs/RULE_MAP.md)
         NetSfpPortRule::class,
         NetNicRequirementsRule::class,
-        // U-R.7 system.* (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.7 system.* (docs/RULE_MAP.md)
         SystemRequiredSetRule::class,
         SystemSingletonRule::class,
         SystemPsuCapacityRule::class,
         SystemInventoryStateRule::class,
-        // U-R.8 dependency.blocked_removal (migration/04-validation-engine/RULE_MAP.md)
+        // U-R.8 dependency.blocked_removal (docs/RULE_MAP.md)
         DependencyBlockedRemovalRule::class,
     ];
 

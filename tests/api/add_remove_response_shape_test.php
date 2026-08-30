@@ -1,7 +1,7 @@
 <?php
 /**
  * add_remove_response_shape_test.php — U-A.1 (redesigned flag-gated per
- * owner decision, see migration/08-api-adapters/DEPRECATION.md) structural
+ * owner decision, see docs/API-DEPRECATION.md) structural
  * regression test.
  *
  * The pack's literal acceptance test ("golden fixtures captured pre-change
@@ -94,7 +94,7 @@ check('the handler-level SFP auto-assignment block is still present (NOT deleted
     strpos($src, 'AUTO-ASSIGNMENT TRIGGER') !== false && strpos($src, 'autoAssignSFPsToNIC') !== false);
 
 check('DEPRECATION.md exists and documents the flag-gated deviation', (function () use ($ROOT) {
-    $path = "$ROOT/migration/08-api-adapters/DEPRECATION.md";
+    $path = "$ROOT/docs/API-DEPRECATION.md";
     return is_file($path) && strpos(file_get_contents($path), 'flag-gated') !== false;
 })());
 

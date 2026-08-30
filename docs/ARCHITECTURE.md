@@ -407,10 +407,10 @@ Stated plainly, because several migration documents read as though these are don
    `ReplaceComponentCommand.php:105-107` explicitly excludes `onboard-` UUIDs, and nothing
    calls `OnboardNICHandler::replaceOnboardNIC()`. The capability is unreachable from the API
    today — a shipped regression, documented in
-   `migration/10-cleanup/FINDING-20260824-replaceOnboardNIC-not-superseded.md`.
+   `docs/FINDING-20260824-replaceOnboardNIC-not-superseded.md`.
 4. **Inventory is not unified.** Eleven `{type}inventory` tables remain; `config_components`
    carries `(inventory_table, inventory_id)` with `orphan_report.php` as a *detection*
-   control. Accepted as F-6 in `migration/PLAN_VERIFICATION_REVIEW.md:32`.
+   control. Accepted as F-6 in `docs/PLAN_VERIFICATION_REVIEW.md:32`.
 5. **The legacy JSON columns still exist**, and dual-write still maintains them. U-D.3 (the
    drop) has not run. So there are two stores, and equivalence between them is a gate, not an
    invariant.

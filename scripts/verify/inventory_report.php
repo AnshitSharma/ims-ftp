@@ -139,7 +139,7 @@ function runChecks(PDO $pdo): array {
     }
 
     // Check 2: referenced by a config while Status=1 (available).
-    // Virtual configs are excluded (see migration/PLAN_VERIFICATION_REVIEW.md F-5):
+    // Virtual configs are excluded (see docs/PLAN_VERIFICATION_REVIEW.md F-5):
     // they are sandbox data that reference component UUIDs without ever consuming
     // real inventory, by design — equivalence_report.php already excludes them.
     if (tableExists($pdo, 'server_configurations')) {

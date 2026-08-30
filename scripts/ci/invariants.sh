@@ -10,7 +10,7 @@
 #
 # WHAT IT RUNS
 #   1. Every CHECK the invariants document defines, VERBATIM. Not a copy of them:
-#      scripts/ci/inv_extract.php parses migration/ARCHITECTURAL_INVARIANTS.md at
+#      scripts/ci/inv_extract.php parses docs/ARCHITECTURAL_INVARIANTS.md at
 #      run time and hands the command text over unmodified. Editing the document
 #      changes what this script enforces, immediately, with no code change — and
 #      an edit into a shape the parser cannot execute turns the run RED rather

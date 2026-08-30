@@ -81,7 +81,7 @@ case "$CODE" in
 esac
 
 # --- 2. the architectural invariants ----------------------------------------
-# Every INV CHECK, extracted verbatim from migration/ARCHITECTURAL_INVARIANTS.md
+# Every INV CHECK, extracted verbatim from docs/ARCHITECTURAL_INVARIANTS.md
 # at run time. See scripts/ci/invariants.sh.
 INV_CODE=0
 sh "$ROOT/scripts/ci/invariants.sh" >"$INV_LOG" 2>&1 || INV_CODE=$?

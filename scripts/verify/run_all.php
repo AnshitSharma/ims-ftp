@@ -19,7 +19,7 @@
  * Usage:
  *   php scripts/verify/run_all.php --quick        # schema + inventory + orphan
  *   php scripts/verify/run_all.php --gate P0      # exactly the reports listed for that phase
- *                                                  # in migration/phase-status.json
+ *                                                  # in GATE_REPORTS below
  *
  * Exit: 0 iff every AVAILABLE selected report is GREEN. 1 if any is RED. 2 on usage/setup error.
  */
@@ -27,9 +27,10 @@
 declare(strict_types=1);
 
 // -----------------------------------------------------------------------
-// Report registry. "gates" is informational only (which gate lists mention
-// this report) — actual gate selection reads migration/phase-status.json
-// directly (GATE_REPORTS below), copied from there per the pack.
+// Report registry. Gate selection reads GATE_REPORTS below. Those lists were
+// originally copied from migration/phase-status.json; that file was deleted
+// 2026-08-31 with the migration scaffolding, so GATE_REPORTS is now the sole
+// definition rather than a mirror of one.
 // -----------------------------------------------------------------------
 const REGISTRY = [
     'inventory'   => ['script' => __DIR__ . '/inventory_report.php',   'available' => true,  'lands_in' => null],
@@ -87,7 +88,7 @@ const REGISTRY = [
     // as of 2026-08-24 that gap was 16 PHP files. That residual is now accepted
     // and unmeasured -- see BACKLOG.md B-3.
     // invariants (2026-08-26): U-P.1. Runs every CHECK block in
-    // migration/ARCHITECTURAL_INVARIANTS.md, extracted VERBATIM at run time by
+    // docs/ARCHITECTURAL_INVARIANTS.md, extracted VERBATIM at run time by
     // scripts/ci/inv_extract.php -- no check text lives in either script, so
     // editing the document changes what this gate enforces with no code change.
     //
@@ -95,8 +96,8 @@ const REGISTRY = [
     // launches its children as `php <script>`, so a POSIX sh entry point cannot
     // be a registry entry at all. Until this landed, the invariants were
     // enforced by whoever remembered to call invariants.sh and by NO gate --
-    // including P10, whose entire stated objective (migration/12-post-cutover/
-    // README.md) is "make the invariants permanent (CI)" and whose gate reads
+    // including P10, whose entire stated objective was "make the invariants
+    // permanent (CI)" and whose gate reads
     // ['all']. The phase that exists to make the rules permanent was not
     // checking them.
     //
@@ -138,7 +139,8 @@ const REGISTRY = [
     'regression'  => ['script' => __DIR__ . '/../../tests/run_tests.php', 'available' => true, 'lands_in' => null],
 ];
 
-// Copied verbatim from each phase's "gate_reports" in migration/phase-status.json.
+// Originally copied verbatim from each phase's "gate_reports" in
+// migration/phase-status.json. That file is deleted; this is now the original.
 const GATE_REPORTS = [
     'P0'  => ['baseline', 'orphan', 'regression'],
     'P1'  => ['schema', 'regression'],
@@ -150,7 +152,7 @@ const GATE_REPORTS = [
     // reports is deleted; an unknown name here does not fail, it prints SKIPPED, which is
     // the shape of a gate nobody notices went missing. These are the lists that RUN a gate
     // today -- what each phase was actually shown at the time is in its signoff file, and is
-    // not edited by this. Mirrored into migration/phase-status.json.
+    // not edited by this.
     //
     // P4, P5, P7 and P9 are now ['regression'] alone. That is a thinner gate than it was,
     // and honestly so: their other criteria were shadow-log soaks for flags that no longer

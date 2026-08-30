@@ -1,6 +1,6 @@
 <?php
 /**
- * inv_extract.php — turn migration/ARCHITECTURAL_INVARIANTS.md into an
+ * inv_extract.php — turn docs/ARCHITECTURAL_INVARIANTS.md into an
  * executable manifest, WITHOUT retyping a single check.
  *
  * WHY THIS FILE EXISTS
@@ -54,10 +54,10 @@
  * "must return 0 rows (after U-1.3)", "After U-C.6: must return nothing").
  * Running an "after U-C.6" assertion while U-C.6 is still in_progress would
  * report a violation that the document does not yet claim. So the named unit is
- * resolved against migration/phase-status.json (READ ONLY):
- *      status == verified            -> the check GATES
- *      anything else                 -> the check still RUNS and its output is
- *                                       shown, but it is INFORMATIONAL
+ * resolved against the UNITS_NOT_VERIFIED map below:
+ *      not listed (the migration is done) -> the check GATES
+ *      listed                             -> the check still RUNS and its output
+ *                                            is shown, but it is INFORMATIONAL
  * The pending state is printed loudly; it is not a way to hide a red check.
  *
  * THE ONE INTERPOLATION, STATED PLAINLY
@@ -86,8 +86,7 @@
 declare(strict_types=1);
 
 $ROOT = dirname(__DIR__, 2);                     // ims-ftp/
-$DOC  = $ROOT . '/migration/ARCHITECTURAL_INVARIANTS.md';
-$PHASES = $ROOT . '/migration/phase-status.json';
+$DOC  = $ROOT . '/docs/ARCHITECTURAL_INVARIANTS.md';
 
 $outdir = null;
 $list   = false;
@@ -108,17 +107,28 @@ if (!is_file($DOC)) {
 $lines = preg_split('/\R/', (string)file_get_contents($DOC));
 
 // ---------------------------------------------------------------------------
-// Unit statuses, read only, for the phase-conditional rule above.
-// ---------------------------------------------------------------------------
-$unitStatus = [];
-if (is_file($PHASES)) {
-    $j = json_decode((string)file_get_contents($PHASES), true);
-    foreach (($j['phases'] ?? []) as $phase) {
-        foreach (($phase['units'] ?? []) as $uid => $st) {
-            if (is_string($uid) && is_string($st)) { $unitStatus[$uid] = $st; }
-        }
-    }
-}
+// Unit statuses for the phase-conditional rule above.
+//
+// This used to be read from migration/phase-status.json (250KB of migration
+// bookkeeping), deleted 2026-08-31 with the rest of the migration scaffolding.
+// The migration is complete, so the honest default flipped: a unit named by a
+// check is ASSUMED VERIFIED unless it appears below. That is deliberately
+// fail-CLOSED -- the old code defaulted an unresolvable unit to 'unknown' and
+// downgraded its check from gate to informational, so losing the status file
+// would silently have stopped INV-5/2 and INV-6/1 from gating while still
+// printing them as checks. A gate that quietly becomes a comment is the exact
+// failure this repo keeps re-finding; it does not get to happen by accident.
+//
+// Only units that did NOT complete belong here. Removing a line makes its
+// checks gate, which is the direction that can only ever surface a problem.
+const UNITS_NOT_VERIFIED = [
+    // U-C.6 (transaction-ownership consolidation) was never completed -- it is
+    // BLOCKED and its scope is wrong as written (BACKLOG.md C-1). INV-3's check
+    // asserts commands are the only transaction owners, which is the state
+    // U-C.6 would have produced, so it stays informational.
+    'U-C.6' => 'in_progress',
+];
+$unitStatus = UNITS_NOT_VERIFIED;
 
 // ---------------------------------------------------------------------------
 // Parse.
@@ -284,7 +294,7 @@ foreach ($invariants as $inv) {
         // Phase-conditional assertion.
         if ($gating === 'gate' && preg_match('/\bafter\s+(U-[A-Za-z0-9.]+)/i', $comment, $um)) {
             $unit = rtrim($um[1], '.:,)');
-            $st   = $unitStatus[$unit] ?? 'unknown';
+            $st   = $unitStatus[$unit] ?? 'verified';
             if ($st !== 'verified') {
                 $gating = 'info';
                 $note   = "conditioned on $unit, whose status is '$st' — informational until it is verified";

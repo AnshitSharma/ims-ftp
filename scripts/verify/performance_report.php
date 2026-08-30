@@ -18,7 +18,7 @@
  * (add p95 0.52ms then, 22.5ms now with p50 at 0.89ms -- one cold first sample in a
  * 8-sample series, timing a different engine). That RED is a baseline-provenance
  * artifact, not a regression. It clears when the owner re-blesses on a quiet machine
- * per migration/05-command-layer/PERF-BASELINE-REBLESS.md; that is deliberately not
+ * per docs/PERF-BASELINE-REBLESS.md; that is deliberately not
  * something an implementing session does to itself.
  *
  * Unlike tests/fixture_scenarios_real.php (which hardcodes the production DB name), this
@@ -49,7 +49,7 @@
  *
  * Re-blessing changes what every future run of this report is graded against -- it is a deliberate,
  * reviewed action, not something a verify/implementer session runs on itself. See
- * migration/05-command-layer/PERF-BASELINE-REBLESS.md for the quiet-machine capture procedure this
+ * docs/PERF-BASELINE-REBLESS.md for the quiet-machine capture procedure this
  * flag assumes (machine state affects wall-clock timings; a rebless captured on a noisy machine
  * produces a baseline every future run will unfairly beat or fail against).
  */
@@ -286,7 +286,7 @@ $baselineFile = $reportsDir . '/perf-baseline.json';
 
 if ($rebless && !$confirmed) {
     fwrite(STDERR, "performance_report: --rebless refuses to run without --confirm (this overwrites reports/perf-baseline.json, which every future performance_report.php run is graded against).\n");
-    fwrite(STDERR, "Read migration/05-command-layer/PERF-BASELINE-REBLESS.md first (quiet-machine capture procedure), then re-run with: php scripts/verify/performance_report.php --rebless --confirm\n");
+    fwrite(STDERR, "Read docs/PERF-BASELINE-REBLESS.md first (quiet-machine capture procedure), then re-run with: php scripts/verify/performance_report.php --rebless --confirm\n");
     exit(2);
 }
 
@@ -332,7 +332,7 @@ if ($captureBaseline || $rebless) {
     file_put_contents($baselineFile, json_encode([
         'captured_at' => date('c'),
         'note' => $rebless
-            ? 'p95/p50 wall-time per operation, RE-BLESSED via --rebless --confirm: R1-R10 replayed ' . $iterations . 'x to reach >=' . REBLESS_MIN_ADD_SAMPLES . ' add / >=' . REBLESS_MIN_FINALIZE_SAMPLES . ' finalize samples (see migration/05-command-layer/PERF-BASELINE-REBLESS.md for the capture procedure this run assumed)'
+            ? 'p95/p50 wall-time per operation, RE-BLESSED via --rebless --confirm: R1-R10 replayed ' . $iterations . 'x to reach >=' . REBLESS_MIN_ADD_SAMPLES . ' add / >=' . REBLESS_MIN_FINALIZE_SAMPLES . ' finalize samples (see docs/PERF-BASELINE-REBLESS.md for the capture procedure this run assumed)'
             : 'p95/p50 wall-time per operation, replaying the R1-R10 real-component scenarios from tests/fixture_scenarios_real.php (single pass — small sample count, fine for an initial capture only)',
         'errors' => $replay['errors'],
         'operations' => $stats,

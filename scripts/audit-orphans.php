@@ -111,7 +111,7 @@ function extractRefs(PDO $pdo, array $row): array {
 }
 
 // Virtual configs are sandbox data that intentionally reference component UUIDs
-// without ever consuming real inventory (see migration/PLAN_VERIFICATION_REVIEW.md
+// without ever consuming real inventory (see docs/PLAN_VERIFICATION_REVIEW.md
 // finding F-5) — equivalence_report.php already excludes them; this script and
 // inventory_report.php's Check 2 did not, which produced false-positive orphans.
 $stmt = $pdo->query("SELECT * FROM server_configurations WHERE is_virtual = 0");
