@@ -3,10 +3,15 @@
  * slot_report.php — 11-verification/README.md #4.
  *
  * Green iff, per non-virtual config:
- *   1. No duplicate slot_ref among live config_components rows (defensive
- *      double-check of uq_slot_occupancy — the DB unique key already blocks
- *      this at write time; this only catches a future write path that
- *      bypasses it).
+ *   1. No duplicate slot_ref among live config_components rows. This is NOT a
+ *      defensive double-check of uq_slot_occupancy, whatever that index's name
+ *      suggests: it is keyed (config_uuid, slot_ref, removed_at), every live
+ *      row has removed_at NULL, and MariaDB treats NULLs as distinct in a
+ *      unique key — so the index only ever constrains tombstones sharing a
+ *      timestamp and blocks nothing at write time (probed 2026-08-30; see
+ *      CLAUDE.md and ServerBuilder.php:2053, which does its own check for
+ *      exactly this reason). This check is the ONLY thing standing between a
+ *      write path and a double-booked slot. Do not delete it as redundant.
  *   2. No duplicate (resource, slot_ref) among config_resources rows
  *      (defensive double-check of uq_discrete, same reasoning).
  *   3. Every discrete-resource consumption row (consumer_id IS NOT NULL AND
