@@ -17,7 +17,7 @@
       },
       "indexes": {
         "PRIMARY":           {"columns": ["id"],                          "unique": true},
-        "uq_inventory_once": {"columns": ["inventory_table", "inventory_id"], "unique": true},
+        "uq_inventory_once": {"columns": ["inventory_table", "inventory_id", "component_type"], "unique": true},
         "uq_slot_occupancy": {"columns": ["config_uuid", "slot_ref", "removed_at"], "unique": true},
         "k_config":          {"columns": ["config_uuid"],  "unique": false},
         "k_parent":          {"columns": ["parent_id"],    "unique": false}
@@ -57,6 +57,8 @@
     "pciecardinventory":    {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
     "hbacardinventory":     {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
     "sfpinventory":         {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "risercardinventory":   {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
+    "serverplatforminventory": {"columns": {"status_v2": {"data_type": "enum", "nullable": true}}, "indexes": {}},
     "config_events": {
       "columns": {
         "id":             {"data_type": "bigint",   "nullable": false},
