@@ -198,10 +198,28 @@ exceeds the local count.
 **Why open.** The deadcode gate is a *deletion authority* running against the deployed tree, so
 its corpus is a superset of the source of truth and **nothing detects when that superset starts
 mattering**. Checked 2026-08-24: currently benign (0 production-only files cited by any of the
-23 deployed manifest symbols). Benign today is not benign by construction.
+23 deployed manifest symbols). Benign today is not benign by construction — **and, checked again
+2026-08-30, it no longer is benign.**
 
-**Unblocks.** Nothing. It needs the check written plus a production listing of `api/`, `core/`,
-`scripts/` to diff against — the listing is OWNER (FTP client or shell).
+**2026-08-30 update.** `scripts/verify/deploy_skew_report.php` already exists and is already
+wired into `run_all.php`'s REGISTRY (`available => true`) — the "Unblocks" note below is stale
+about that part. Ran it live against a fresh `server-debug-deadcode` snapshot (read-only,
+admin-gated): production now scans **158** PHP files vs local's **142** (+16 orphans, up from
++16 measured a different way on 2026-08-24), and this time it's RED, not benign —
+`core/models/compatibility/MemoryAuthority.php`, `SlotAuthority.php`,
+`StorageConnectionAuthority.php`, and `core/models/compatibility/ValidationPipeline.php` are all
+still `defined_in` on production (cited by their own manifest symbols) despite being deleted
+locally in commit `9fc55ea` (same commit that deleted the two "authority classes" B-17 already
+found gone from `core/`). The live `server-debug-deadcode` scan reports `symbols_red: 1` right
+now for exactly this reason: **the deployed dead-code gate is currently making a real deletion
+verdict against code that only exists on the server.** Snapshot saved at
+`reports/production-inventory-20260830-manual.json`; full report at
+`reports/deploy-skew-20260830-200933.json`. Not fixed — out of scope for this session, per
+explicit instruction; logged per that instruction ("log it and move on").
+
+**Unblocks.** A production listing of `api/`, `core/`, `scripts/` to diff against (the set-delta
+and mirror tests both read `NOT_EVALUATED` without one) is still OWNER (FTP client or shell) —
+the citation test alone, run today, was enough to turn this RED.
 
 ### B-4 · The characterization baseline cannot gate — CLOSED SUPERSEDED 2026-08-30
 
@@ -384,6 +402,50 @@ this session cannot supply: whether SFP `9a412f95-…` was actually pulled from 
 (tombstone the row — `php scripts/audit-orphans.php --fix` does exactly that via
 `ServerBuilder::removeComponent()`) or the inventory row was deleted in error (restore it from
 the dump). No new ones can appear through the API now.
+
+**Evidence gathered read-only 2026-08-30, row 10388 NOT touched.** Live production, via
+`server-debug-config-dualwrite` (a pre-existing read-only diagnostic, admin/super_admin gated)
+against config `1f61541b`:
+
+- The config is still live and still claims it: `config_components` row 10388 (`sfp`,
+  `sfpinventory` id 99, spec `9a412f95-…`) has `removed_at IS NULL`, `added_at` 2026-08-26
+  12:41:27, actor 54 ("Natasha"). `config_events` for this config has 15 rows total; the SFP
+  `add` (id 10566, revision 15) is the *last* event ever recorded for it — no `remove` event
+  follows. The config is not virtual (it carries real `config_components` rows), so per the
+  system's own model this claim represents a real physical reservation, not bookkeeping.
+- The config itself: `server_name` "Test server 2", `description` "sfdsfdsf", `status` 0
+  (draft), `location` "Noida", `created_at` 2026-08-24 22:52:57, platform "Dell PowerEdge R630 -
+  10SFF". Built by actors 46 ("Dev") and 54 ("Natasha") over 2026-08-25/26, the same window
+  `serverplatform` (2026-08-25) and this SFP-onboarding work shipped — reads like development
+  exercising the new platform/SFP feature, not a real customer build. That is a soft signal about
+  the *config*, not proof either way about the *unit*.
+- **Correction to the "What" section above**: `sfpinventory` is missing more than the one ID.
+  Live listing today: IDs 22-100 hold 74 rows; five are absent — **91, 92, 95, 98, 99** — not
+  only 99. Neighbours 93/94/96/97 (same "BLADE 10GBASE-SR" batch, imported by seeder
+  `2026_08_10_001`) are `Status=2` ("installed"), no `Flag`. Nothing in that neighbourhood reads
+  as test/throwaway stock — id 100, by contrast, was purchased 2026-08-27 (**after** the gap) and
+  is explicitly `Flag: Testing`, so it's a later, unrelated addition, not evidence about 99.
+  `audit-orphans.php` still names only 99 as problematic, because the other four aren't claimed
+  by any live config — this reads as one cleanup/decommission pass touching five units, of which
+  only one happened to still be claimed.
+- **No who/when exists for the inventory-row delete itself.** `deleteComponent()`'s pre-fix bare
+  `DELETE` wrote nothing on success (only `error_log()` on the exception path), and this schema
+  has no `activity_log`/`audit_log` table at all. The only bound I can place: the row still
+  existed at 2026-08-26 12:41:27 (it was addable then) and was already gone by the time
+  `audit-orphans.php` first ran against production after U-D.3c (2026-08-30).
+
+**Hypothesis, not a conclusion**: a single pass deleted five SFP units that looked unclaimed,
+without the guard that exists today; 99 was actually still claimed by a leftover draft/test
+config nobody had cleaned up. **Evidence is ambiguous** between that and a genuine physical pull
+recorded incompletely — nothing above distinguishes "this config was never built" from "it was
+built and later torn down without releasing the row first." Not tombstoning; not restoring.
+
+**What would settle it.** Whether config `1f61541b` ("Test server 2") ever had a physical unit
+racked at all. The config's own `location` field says Noida; the rack/placement view for this
+`config_uuid` in the UI would show whether it has a rack slot assigned. If it does, physically
+check that R630's onboard NIC for a seated SFP module. If the config was never racked, that alone
+answers it — no physical machine means no pull, which points at the inventory-row delete being
+the error rather than the tombstone-worthy case.
 
 ### B-17 · Eight test files lived where the runner never looked — CLOSED 2026-08-30
 
