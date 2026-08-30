@@ -28,11 +28,21 @@ $dbPass = scratch_db_password();
 putenv("DB_HOST=$dbHost"); putenv("DB_NAME=$dbName");
 putenv("DB_USER=$dbUser"); putenv("DB_PASS=$dbPass");
 
-$pdo = new PDO(
-    "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
-    $dbUser, $dbPass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
-);
+// Guarded like storage_bay_authority_unit.php's neighbouring fix: an
+// unreachable scratch DB is an environment fact, not a lane-budget defect.
+// Before this guard, `new PDO` unguarded meant a machine with no MariaDB
+// running hard-fataled (exit 255, no marker) instead of self-skipping, which
+// made run_tests.php's B-17 wiring RED-by-default on any box without the
+// golden fixture -- the same cry-wolf shape B-10 already fixed once.
+try {
+    $pdo = new PDO(
+        "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
+        $dbUser, $dbPass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+    );
+} catch (\Throwable $e) {
+    test_skip_suite('LaneAuthority::evaluateAssembledStorageLaneBudget', 'scratch DB unreachable (' . $e->getMessage() . ')');
+}
 
 require_once $ROOT . '/core/models/compatibility/PcieLaneBudgetValidator.php';
 require_once $ROOT . '/core/models/shared/DataExtractionUtilities.php';
@@ -44,8 +54,7 @@ $dataUtils = new DataExtractionUtilities($pdo);
 $CPU_UUID = '545e143b-57b3-419e-86e5-1df6f7aa8fd3';
 $cpuSpecs = $dataUtils->getCPUByUUID($CPU_UUID);
 if (!$cpuSpecs || !isset($cpuSpecs['pcie_lanes'])) {
-    fwrite(STDERR, "FATAL: CPU $CPU_UUID has no pcie_lanes in scratch DB; cannot run.\n");
-    exit(2);
+    test_skip_suite('LaneAuthority::evaluateAssembledStorageLaneBudget', "CPU $CPU_UUID has no pcie_lanes in scratch DB");
 }
 $cpuLanes = (int)$cpuSpecs['pcie_lanes'];
 

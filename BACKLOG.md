@@ -383,14 +383,31 @@ directory short.
   `extractComponentsFromJson()` outright, so one side of the equivalence no longer exists. Same
   class of defect as the two above — a subject gone by design, not by accident — and the same
   disposition `fixture_scenarios_real.php` got: retired, not stubbed back into passing.
-- `run_tests.php`'s `NOT_A_SUITE` gained itself (self-recursion), `characterize_compatibility.php`
-  (a golden-master CAPTURE tool — running it would overwrite
-  `tests/golden/compatibility_baseline.json` every sweep; still not a working parity gate, B-4),
-  and `fixture_scenarios_real.php` (deliberately exits 2, not pass/fail).
 - The `state_machine_unit.php` DROP-DATABASE landmine this section used to warn about (a
   misrouted `SM_TEST_DB_NAME` destroyed the shared fixture once during this same probe) is now
   enforced in code: the suite refuses to run unless its DB name contains `scratch` and none of
   `golden`/`compat`/`prod`.
+- `lane_authority_unit.php` and `storage_bay_authority_unit.php` both built their `PDO` unguarded
+  — no fixture reachable meant an uncaught `PDOException` (exit 255), which read as suite-level
+  RED on any machine without the golden fixture instead of the honest "ran nothing" every other
+  DB-gated suite in this tree reports. Same cry-wolf shape B-10 already fixed once. Guarded both
+  with the `test_skip_suite()` convention from `tests/regression/_scratch_db.php`. Confirmed both
+  numbers: **without** a fixture, 55/39/0/16 (both self-skip, RED becomes an honest "ran
+  nothing," no false failures); **with** the rebuilt fixture, 55/52/0/3 — unchanged from before
+  the guard, confirming both suites still genuinely pass and the guard only changed the
+  no-fixture behaviour.
+
+**`NOT_A_SUITE` additions, logged explicitly so the exclusion list stays auditable — a silently
+excluded suite is exactly how B-17 happened in the first place:**
+
+1. `run_tests.php` itself (self-recursion — the runner globbed its own directory once `tests/`
+   root was wired in).
+2. `characterize_compatibility.php` — a golden-master CAPTURE tool, not a suite: running it
+   would overwrite `tests/golden/compatibility_baseline.json` on every sweep. Still not a
+   working parity gate — see B-4, closed SUPERSEDED below.
+3. `fixture_scenarios_real.php` — deliberately exits 2 (not pass/fail). Both its subjects are
+   gone: P9 deleted the `validate*` methods it drives, and U-D.3c dropped the columns its
+   fixtures insert. Its R1–R10 scenario table stays because the rule unit tests cite its UUIDs.
 
 **Result.** 50 → 55 discovered, 47 → 52 passed, 0 failed, 3 ran nothing (unchanged — all three
 pre-existing and documented in `tests/MANIFEST.md`). See its 2026-08-30 reconciliation note for

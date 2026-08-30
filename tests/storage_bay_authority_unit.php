@@ -29,11 +29,21 @@ $dbPass = scratch_db_password();
 putenv("DB_HOST=$dbHost"); putenv("DB_NAME=$dbName");
 putenv("DB_USER=$dbUser"); putenv("DB_PASS=$dbPass");
 
-$pdo = new PDO(
-    "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
-    $dbUser, $dbPass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
-);
+// Guarded like lane_authority_unit.php's neighbouring fix: an unreachable
+// scratch DB is an environment fact, not a bay-usage defect. Before this
+// guard, `new PDO` unguarded meant a machine with no MariaDB running
+// hard-fataled (exit 255, no marker) instead of self-skipping, which made
+// run_tests.php's B-17 wiring RED-by-default on any box without the golden
+// fixture -- the same cry-wolf shape B-10 already fixed once.
+try {
+    $pdo = new PDO(
+        "mysql:host=$dbHost;dbname=$dbName;charset=utf8mb4",
+        $dbUser, $dbPass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+    );
+} catch (\Throwable $e) {
+    test_skip_suite('StorageConnectionValidator::evaluateBayUsage', 'scratch DB unreachable (' . $e->getMessage() . ')');
+}
 
 require_once $ROOT . '/core/models/compatibility/StorageConnectionValidator.php';
 $v = new StorageConnectionValidator($pdo);
