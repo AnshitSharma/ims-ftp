@@ -138,12 +138,29 @@ $pdo->exec("
 $pdo->exec("INSERT INTO inventory_status_transitions VALUES ('available','reserved'), ('maintenance','available')");
 // Deliberately NOT inserting ('failed','available') — that's the whole point of test 8.
 
-// Minimal ACL schema (mirrors ACL::loadUserPermissions's JOIN exactly).
+// Minimal ACL schema (mirrors ACL::loadUserPermissions's JOIN exactly, including
+// the direct-grant half added 2026-08-30 -- this suite had no user_permissions
+// table at all until then, which made loadUserPermissions's schema probe
+// (TemporaryAccessManager::hasColumn) throw and fail every permission check
+// closed. Empty is fine: no test here exercises a direct/temporary grant.
 $pdo->exec("CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY)");
 $pdo->exec("CREATE TABLE roles (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50))");
 $pdo->exec("CREATE TABLE user_roles (user_id INT, role_id INT)");
 $pdo->exec("CREATE TABLE permissions (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))");
 $pdo->exec("CREATE TABLE role_permissions (role_id INT, permission_id INT, granted TINYINT(1) DEFAULT 1)");
+$pdo->exec("
+    CREATE TABLE user_permissions (
+        id            INT AUTO_INCREMENT PRIMARY KEY,
+        user_id       INT NOT NULL,
+        permission_id INT NOT NULL,
+        expires_at    DATETIME NULL DEFAULT NULL,
+        revoked_at    DATETIME NULL DEFAULT NULL,
+        granted_by    INT NULL DEFAULT NULL,
+        scope_type    VARCHAR(32) NOT NULL DEFAULT '',
+        scope_id      VARCHAR(64) NOT NULL DEFAULT '',
+        created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+");
 $pdo->exec("INSERT INTO users (id) VALUES (1), (2)"); // user 1 gets server.edit; user 2 gets nothing
 $pdo->exec("INSERT INTO roles (id, name) VALUES (1, 'editor')");
 $pdo->exec("INSERT INTO user_roles (user_id, role_id) VALUES (1, 1)");

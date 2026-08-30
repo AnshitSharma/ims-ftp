@@ -53,8 +53,24 @@ const SUITE_DIRS = [
     'unit'       => __DIR__ . '/unit',
 ];
 
-/** Not suites: shared helpers (_*.php) and single-purpose probes. */
-const NOT_A_SUITE = ['run_serial_less_check.php'];
+/**
+ * Not suites: shared helpers (_*.php), single-purpose probes, and (2026-08-30)
+ * this file itself plus two tools that live in tests/ alongside real suites --
+ * see the root-level scan below.
+ */
+const NOT_A_SUITE = [
+    'run_serial_less_check.php',
+    'run_tests.php',
+    // A golden-master CAPTURE tool, not a suite: running it would overwrite
+    // tests/golden/compatibility_baseline.json on every suite run. See BACKLOG
+    // B-4 -- it is also currently unusable as a parity gate (P9 deleted the
+    // methods it characterises), which is a separate, still-open problem.
+    'characterize_compatibility.php',
+    // Deliberately exits 2 (not a pass/fail suite) -- both its subjects are
+    // gone: P9 deleted the validate* methods it drives, and U-D.3c dropped
+    // the columns its fixtures insert. See its own header.
+    'fixture_scenarios_real.php',
+];
 
 $verbose = in_array('--verbose', $argv, true);
 $php = PHP_BINARY;
@@ -69,6 +85,24 @@ foreach (SUITE_DIRS as $label => $dir) {
         if ($base[0] === '_' || in_array($base, NOT_A_SUITE, true)) { continue; }
         $files[] = [$label, $f->getPathname(), $base];
     }
+}
+
+/**
+ * 2026-08-30: tests/ itself holds real suites SUITE_DIRS never looked at --
+ * lane_authority_unit.php and its siblings. Same wrong-denominator shape this
+ * file's own header describes, one directory up: they had been running green
+ * or red with nobody watching, because the sweep and the suite were different
+ * sets. See BACKLOG B-17.
+ *
+ * Scanned NON-recursively and separately from the loop above: SUITE_DIRS
+ * already recurses into api/, backfill/, regression/ and unit/, so a
+ * recursive scan rooted at __DIR__ would run every one of those suites a
+ * second time.
+ */
+foreach (glob(__DIR__ . '/*.php') as $path) {
+    $base = basename($path);
+    if ($base[0] === '_' || in_array($base, NOT_A_SUITE, true)) { continue; }
+    $files[] = ['root', $path, $base];
 }
 usort($files, function ($a, $b) { return [$a[0], $a[2]] <=> [$b[0], $b[2]]; });
 
