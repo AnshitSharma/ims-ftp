@@ -73,10 +73,12 @@ return [
         'update-location' => 'server.edit_details',
         'movements' => 'server.view', // 2026-08-26 -- relocation history for one config
         'fix-onboard-nics' => 'server.edit',
-        'debug-motherboard-nics' => 'server.view',
-        'debug-config-dualwrite' => 'server.view', // TEMPORARY (U-B.4 soak diagnostic) -- also role-gated admin/super_admin in the handler
-        'debug-shadow-log' => 'server.view', // TEMPORARY (shadow-soak diagnostic) -- also role-gated admin/super_admin in the handler
-        'debug-deadcode' => 'server.view', // TEMPORARY (U-D.1 deletion precondition) -- also role-gated admin/super_admin in the handler
+        // Removed 2026-08-31: the three TEMPORARY debug-* diagnostics
+        // (config-dualwrite, shadow-log, deadcode) went with the migration
+        // scaffolding they served -- see the note at their old dispatch site in
+        // handlers/server/server_api.php. 'debug-motherboard-nics' went with
+        // them: it was mapped here but had no dispatch case anywhere in the
+        // tree, so it could only ever have returned "Invalid action specified".
     ],
 
     // Operations use underscores to match the cases in

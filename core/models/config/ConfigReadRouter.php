@@ -12,8 +12,8 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
  * survives in exactly one place, for a config row carrying no uuid to look rows
  * up by. sample() and the whole json-vs-rows comparison apparatus it drove went
  * with the flag: with nothing left to compare against, a comparator can only
- * report that rows equal themselves. scripts/verify/read_report.php still reads
- * the historical reports/shadow/read-*.jsonl those runs produced.
+ * report that rows equal themselves. The reports/shadow/read-*.jsonl those runs
+ * produced, and read_report.php which read them, were deleted 2026-08-31.
  *
  * The configuration cache in ServerBuilder::getConfigurationDetails() sits ABOVE
  * this router (it short-circuits before the row is even fetched), so a cached

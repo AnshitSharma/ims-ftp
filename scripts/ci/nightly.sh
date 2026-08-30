@@ -13,8 +13,10 @@
 # It writes ONE json record per UTC day to reports/archive/battery-<date>.json,
 # plus the invariant runner's full output alongside it at
 # reports/archive/invariants-<date>.log.
-# Read the accumulated archive with:
-#     php scripts/verify/soak_status.php
+# The archive is a plain per-day record; soak_status.php, which used to count
+# GREEN days out of it to certify a migration soak, was deleted 2026-08-31 along
+# with the soaks. The records are still worth writing -- they are the only
+# history of whether the battery was green on a given day.
 #
 # Usage:
 #     sh scripts/ci/nightly.sh            # --quick (the daily run)
@@ -35,13 +37,12 @@
 #   rather than a placeholder.
 #
 # WHY THE INVARIANTS RUN HERE TOO
-#   soak_status.php certifies a soak by counting archived days whose "status" is
-#   GREEN. Before U-P.1 that word meant "the verification reports passed" and
-#   said nothing at all about the architectural invariants — so a tree could
-#   accumulate a 30-day GREEN streak while violating INV-5. The record now
-#   carries run_all_status and invariants_status separately, and "status" is
-#   GREEN only when BOTH are. soak_status.php needs no change: it reads the
-#   field it always read, which now means what it always appeared to mean.
+#   A day's "status" used to mean "the verification reports passed" and said
+#   nothing at all about the architectural invariants — so a tree could read
+#   GREEN for a month while violating INV-5. The record carries run_all_status
+#   and invariants_status separately, and "status" is GREEN only when BOTH are.
+#   That is still the right shape now that nothing counts streaks: one word per
+#   day that is only green when the whole tree is.
 #
 # Deliberately POSIX sh and dependency-free: this has to run from cron on shared
 # hosting (cPanel "Cron Jobs"), from a laptop, or from a CI runner, unchanged.
@@ -110,7 +111,7 @@ ARGS_JSON=$(printf '%s' "$*" | "$PHP" -r 'echo json_encode(stream_get_contents(S
 INV_TAIL=$(tail -n 40 "$INV_LOG" 2>/dev/null || printf '')
 INV_ESCAPED=$(printf '%s' "$INV_TAIL" | "$PHP" -r 'echo json_encode(stream_get_contents(STDIN));' 2>/dev/null || printf '""')
 
-# A day that already has a record is OVERWRITTEN, not appended: soak_status.php
+# A day that already has a record is OVERWRITTEN, not appended: the archive
 # counts DAYS, and two records for one day would inflate a streak the same way
 # F-8's duplicate rows inflated parity's denominator. One day, one verdict.
 cat > "$OUT" <<JSON

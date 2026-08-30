@@ -187,7 +187,7 @@ repairs that cannot be inverted, would be theatre.
 must be narrowed to match the ruling, or the gate stays permanently red for a reason nobody acts
 on — the definition of a check that has stopped being information.
 
-### B-3 · `deploy_skew` is not a gate check — OPEN
+### B-3 · deploy skew — OPEN / OWNER, and now UNMEASURED
 
 **What.** Production carries 16 PHP files that no longer exist locally (146 local vs 162
 deployed under the deadcode scan roots). FTP uploads and never deletes.
@@ -220,6 +220,34 @@ explicit instruction; logged per that instruction ("log it and move on").
 **Unblocks.** A production listing of `api/`, `core/`, `scripts/` to diff against (the set-delta
 and mirror tests both read `NOT_EVALUATED` without one) is still OWNER (FTP client or shell) —
 the citation test alone, run today, was enough to turn this RED.
+
+**2026-08-31 — the instrument is gone, the risk is not.** The migration-scaffolding cleanup
+deleted `deploy_skew_report.php` along with the dead-code family it depended on
+(`deadcode_report.php`, `deadcode_scan.php`, `deadcode_manifest.json`) and the
+`server-debug-deadcode` endpoint that produced its only possible production snapshot. It could
+not have survived any of those three removals: it `require_once`'d the scan, read the manifest
+for its roots, and had no other way to see the deployed tree. So this entry stops being
+"unfixed but watched" and becomes **accepted and unmeasured** — a deliberate trade, recorded
+here rather than left to be discovered.
+
+What is still true, and is the whole reason this stays OPEN:
+
+- The deployment uploads on save and **never deletes**. Every file this repo has ever removed is
+  still on the server.
+- As of 2026-08-30 that included four PHP files under `core/models/compatibility/` —
+  `MemoryAuthority.php`, `SlotAuthority.php`, `StorageConnectionAuthority.php` and
+  `ValidationPipeline.php` — deleted locally in `9fc55ea` and live on production. Nothing
+  `require`s them any more (the requiring code went with them), so they are inert, but they are
+  inert *by luck of the call graph*, not by removal.
+- **This cleanup made the skew larger, not smaller.** The eleven `scripts/verify/*` files and
+  the ~425 `reports/*` artifacts deleted on 2026-08-31 are all still on the server. They are
+  unreachable — `scripts/.htaccess` and `reports/.htaccess` both `Require all denied`, and the
+  host has no shell — so this is disk residue, not attack surface or behaviour. It is still
+  divergence.
+
+**The only fix is owner-side and manual**: delete the orphans from the server with an FTP
+client. There is no longer a report that will tell you which ones they are; the list has to come
+from diffing a production listing against this repo by hand.
 
 ### B-4 · The characterization baseline cannot gate — CLOSED SUPERSEDED 2026-08-30
 
@@ -824,7 +852,12 @@ explicit product decision that onboard-NIC replacement is withdrawn — in which
 consumer branches and the `Flag='replaced'` vocabulary come out **together**, as one reviewed
 change.
 
-### C-6 · Sole-writer detection in `deadcode_scan.php` — OPEN
+### C-6 · Sole-writer detection in `deadcode_scan.php` — CLOSED MOOT 2026-08-31
+
+> The scanner, its manifest and its report were deleted with the rest of the migration
+> scaffolding on 2026-08-31 (see B-3). There is no dead-code gate left to improve, and the
+> deletions it existed to authorise are done. Kept as the record of a real weakness in a tool
+> that no longer runs — if a dead-code gate is ever rebuilt, start by reading this.
 
 **What.** The scanner asks one question: does any file name this symbol? It cannot ask the one
 that decides whether deletion is safe: does anything still depend on state this code is the only

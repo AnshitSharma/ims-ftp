@@ -22,13 +22,6 @@
  *                                                  # in migration/phase-status.json
  *
  * Exit: 0 iff every AVAILABLE selected report is GREEN. 1 if any is RED. 2 on usage/setup error.
- *
- * The three shadow-log reports (`parity`, `command_parity`, `read`) are always invoked
- * here with `--since PARITY_SINCE_DEFAULT` (below;
- * overridable via the PARITY_SINCE_CUTOFF env var) -- owner-adopted standing gate invocation,
- * 2026-07-13 (see migration/11-verification/README.md #6 and the tenth-session handoff record).
- * This does NOT change parity_report.php's own default behavior: running it directly with no
- * arguments still scans every row in every shadow-log file, unfiltered, exactly as before.
  */
 
 declare(strict_types=1);
@@ -53,26 +46,17 @@ const REGISTRY = [
     // report SKIPPED forever and read as a gate someone still has to satisfy.
     // The rows-vs-inventory half of its job lives on in inventory_report.php's
     // Check 2, which U-D.3c repointed at config_components and made exact.
-    'parity'      => ['script' => __DIR__ . '/parity_report.php',      'available' => true,  'lands_in' => null],
-    // command_parity (2026-07-27): gates the COMMAND_LAYER shadow stream
-    // (reports/shadow/command-*.jsonl). Until it existed nothing consumed that
-    // log at all, so COMMAND_LAYER's soak was unverified even with the flag at
-    // shadow in production -- and U-C.6's enforce soak is downstream of it.
-    // Takes --since like parity, for the same append-only-log reason.
-    'command_parity' => ['script' => __DIR__ . '/command_parity_report.php', 'available' => true, 'lands_in' => null],
-    // read (2026-07-29): gates the READ_FROM_ROWS shadow stream
-    // (reports/shadow/read-*.jsonl). Same gap command_parity closed two days ago
-    // -- nothing consumed that log, and until F-27 nothing COULD, because the
-    // router recorded divergences only: "every read agreed" and "no read ever
-    // reached the router" produced the identical empty artifact. U-X.2's gate
-    // criterion was written against that artifact. Takes --since like the other
-    // two, for the same append-only-log reason.
-    'read'        => ['script' => __DIR__ . '/read_report.php',        'available' => true,  'lands_in' => null],
-    // deadcode (2026-08-20): landed with U-D.1's "Files Created (1)". Gates the P9
-    // deletions -- it is expected to be RED until those units actually run, since
-    // every scheduled symbol still has its callers. It is NOT in QUICK_SET or P8,
-    // so the daily nightly.sh battery is unaffected.
-    'deadcode'    => ['script' => __DIR__ . '/deadcode_report.php',    'available' => true,  'lands_in' => null],
+    // parity, command_parity and read: RETIRED 2026-08-31. All three read only
+    // reports/shadow/*.jsonl, and nothing has written that directory since P9
+    // deleted ShadowRunner and U-D.4 deleted READ_FROM_ROWS -- so each of them
+    // could only ever re-measure a frozen log whose subject no longer exists.
+    // Same treatment as equivalence above: absent, not 'available' => false, so
+    // no gate prints SKIPPED for a criterion nobody has to satisfy any more.
+    // deadcode: RETIRED 2026-08-31 with the deletions it authorised. It was
+    // U-D.1's deletion precondition; P9 discharged it, and its authoritative run
+    // was always the DEPLOYED one via server-debug-deadcode, an endpoint removed
+    // the same day. deadcode_report.php, deadcode_scan.php and
+    // deadcode_manifest.json are deleted.
     // baseline: STILL 'available' => false, deliberately, and this is not an
     // oversight -- checked 2026-08-24. characterize_compatibility.php is a
     // CAPTURE tool, not a comparison: it rewrites tests/golden/
@@ -92,25 +76,16 @@ const REGISTRY = [
     // no JSON side to be half of, fromCurrent() returns an empty TargetState rather
     // than falling back to a decoder that no longer exists, and a component absent
     // from config_components is absent from the configuration, full stop.
-    // deploy_skew (2026-08-24): gates the dead-code gate's own CORPUS. The
-    // authoritative run of the deletion authority is the DEPLOYED one (no shell
-    // on that host, so server-debug-deadcode is the only way it runs against
-    // production), and the SFTP deployment uploads on save but NEVER deletes --
-    // measured the same day, production scans 162 PHP files under the same
-    // _scan_roots minus _excluded_dirs where local has 146. Those 16 orphans sit
-    // INSIDE the gate's corpus. Checked by hand and benign today (none of the 23
-    // deployed symbols' verdicts cites a production-only file), but nothing
-    // detected it, so the next skew could poison a verdict silently: an orphan
-    // that cites a symbol is a permanent unexplained RED, and a stale COPY of a
-    // file we later removed a caller from keeps the gate RED after the real fix
-    // landed. RED only when a production-only file is actually CITED by a symbol
-    // verdict; a bare count delta is a WARN, because a count delta is the normal
-    // state of this deployment and a check that screams every run gets ignored.
-    // NOT RUNNABLE (no production snapshot) reads RED, deliberately -- see
-    // reports/deploy-skew-20260824.md and the file's own header.
-    // NOT in QUICK_SET (P9-scoped, needs a captured snapshot), so nightly.sh is
-    // unaffected.
-    'deploy_skew' => ['script' => __DIR__ . '/deploy_skew_report.php', 'available' => true, 'lands_in' => null],
+    // deploy_skew: RETIRED 2026-08-31, and this one is a deliberate loss worth
+    // stating plainly. It existed to check that the corpus the dead-code gate
+    // scanned was the DEPLOYED tree, and it did that by require_once'ing
+    // deadcode_scan.php and reading deadcode_manifest.json against a snapshot
+    // that only server-debug-deadcode could produce. Both of those are gone, so
+    // it is unrunnable by construction rather than merely unrun. The underlying
+    // risk it measured is NOT gone: the SFTP deployment uploads on save and
+    // NEVER deletes, so production still carries files this repo does not, and
+    // as of 2026-08-24 that gap was 16 PHP files. That residual is now accepted
+    // and unmeasured -- see BACKLOG.md B-3.
     // invariants (2026-08-26): U-P.1. Runs every CHECK block in
     // migration/ARCHITECTURAL_INVARIANTS.md, extracted VERBATIM at run time by
     // scripts/ci/inv_extract.php -- no check text lives in either script, so
@@ -169,31 +144,25 @@ const GATE_REPORTS = [
     'P1'  => ['schema', 'regression'],
     'PL'  => ['schema', 'ledger', 'regression'],
     // 'equivalence' left P2, P6, P8 and P9 on 2026-08-30 with U-D.3c, and 'partial_rows'
-    // left P9 with it. Both reports are deleted; an unknown name here does not fail, it
-    // prints SKIPPED, which is the shape of a gate nobody notices went missing. These are
-    // the lists that RUN a gate today -- what P2, P6 and P8 were actually shown at the time
-    // is in their signoff files, and is not edited by this. Mirrored into
-    // migration/phase-status.json.
+    // left P9 with it. On 2026-08-31 'parity' left P4/P5/P6/P7, 'command_parity' left P6,
+    // 'read' left P8, and 'deadcode' + 'deploy_skew' left P9 -- see the RETIRED notes in
+    // REGISTRY above for why each one can no longer measure anything. Every one of those
+    // reports is deleted; an unknown name here does not fail, it prints SKIPPED, which is
+    // the shape of a gate nobody notices went missing. These are the lists that RUN a gate
+    // today -- what each phase was actually shown at the time is in its signoff file, and is
+    // not edited by this. Mirrored into migration/phase-status.json.
+    //
+    // P4, P5, P7 and P9 are now ['regression'] alone. That is a thinner gate than it was,
+    // and honestly so: their other criteria were shadow-log soaks for flags that no longer
+    // exist, so re-running them would have measured a frozen file, not the system.
     'P2'  => ['orphan', 'ledger', 'inventory'],
     'P3'  => ['schema', 'inventory', 'regression'],
-    'P4'  => ['parity', 'regression'],
-    'P5'  => ['parity', 'regression'],
-    // P6 gains 'command_parity' (2026-07-27): U-C.6 is P6's enforce-soak unit and
-    // its evidence lives in the command stream, which no gate report read before.
-    // Mirrored into migration/phase-status.json's P6 gate_reports.
-    'P6'  => ['parity', 'command_parity', 'regression', 'performance'],
-    'P7'  => ['regression', 'parity'],
-    // P8 gains 'read' (2026-07-29): U-X.2 is P8's read-cutover unit and its
-    // checklist item 1 is a >=72h zero-divergence sample soak. That evidence lives
-    // in the read stream, which no gate report read before -- so the criterion was
-    // being checked by eye against a log whose emptiness meant nothing.
-    // Mirrored into migration/phase-status.json's P8 gate_reports.
-    'P8'  => ['orphan', 'slot', 'ledger', 'inventory', 'performance', 'read'],
-    // P9 gains 'deploy_skew' (2026-08-24): P9 is the phase that DELETES, and
-    // 'deadcode' is trusted to authorise those deletions. deploy_skew is the check
-    // that the corpus deadcode scanned is the source of truth. Mirrored into
-    // migration/phase-status.json's P9 gate_reports.
-    'P9'  => ['deadcode', 'deploy_skew', 'regression'],
+    'P4'  => ['regression'],
+    'P5'  => ['regression'],
+    'P6'  => ['regression', 'performance'],
+    'P7'  => ['regression'],
+    'P8'  => ['orphan', 'slot', 'ledger', 'inventory', 'performance'],
+    'P9'  => ['regression'],
     // P10 reads ['all'], which expands to array_keys(REGISTRY) -- so the
     // 'invariants' entry added 2026-08-26 reaches P10's gate automatically, with
     // no edit here and no mirroring needed in phase-status.json's gate_reports.
@@ -204,43 +173,6 @@ const GATE_REPORTS = [
 ];
 
 const QUICK_SET = ['schema', 'inventory', 'orphan'];
-
-/**
- * Owner-adopted (tenth session, 2026-07-13) standing invocation for the
- * parity gate report: the shadow log is append-only and never rotated, so
- * without a cutoff, rows logged before a fix landed (rule changes, the ghost-
- * config cleanup, etc.) keep tripping the gate forever even though today's
- * live behavior has moved on (ninth-session verify finding). Overridable via
- * PARITY_SINCE_CUTOFF so this doesn't need a code change every time the
- * "known-good since" date moves forward; defaults to the date the shadow log
- * was last known clean of pre-fix rows in this environment. This constant is
- * run_all.php-only -- a bare `php scripts/verify/parity_report.php` (no
- * --since) is completely unaffected and keeps scanning every row, unchanged.
- */
-/**
- * 2026-07-29: moved 2026-07-13 -> 2026-07-29. Three changes landed during the
- * 2026-07-28 evening session and EVERY one of them alters what a shadow row
- * means: F-26 (FINALIZE now subsumes VALIDATE, 4 rules -> 21),
- * SERVER_BUILD_GUIDE Bug 2 (the raw memory-type compare that rejected every
- * finalize in the fleet), and the finalize hook's own two corrections
- * (legacy_blocked now reflects the REAL finalize outcome; dry_run_error
- * separates a deliberate refusal from a crash).
- *
- * The cutoff is the whole day, not the last fix's timestamp, DELIBERATELY. Rows
- * from that evening are development churn -- a mixture of pre- and post-fix
- * behaviour under three different instrumentation contracts -- and picking a
- * time that happens to leave only the agreeing rows would be choosing the
- * answer. Excluding the day excludes the favourable rows too.
- *
- * Consequence, stated plainly: the command gate reads RED with "0 finalize
- * operations" until real post-fix traffic arrives. That is the correct reading.
- * The soak starts from the code as it now stands, not from evidence about code
- * that no longer exists.
- *
- * (The reports accept a time part -- YYYY-MM-DDTHH:MM -- which is what made
- * choosing between a day and a moment a real decision rather than a limitation.)
- */
-const PARITY_SINCE_DEFAULT = '2026-07-29';
 
 function resolveSelection(array $argv): array {
     if (in_array('--quick', $argv, true)) {
@@ -279,21 +211,14 @@ foreach ($selection as $name) {
     }
 
     $cmd = ['php', $entry['script']];
-    // 'read' takes the same standing cutoff (2026-07-29): F-27 changed what a row
-    // in that stream MEANS -- before it, agreement was unrecorded -- so pre-cutoff
-    // rows cannot contribute a denominator and must not contribute a numerator.
-    if ($name === 'parity' || $name === 'command_parity' || $name === 'read') {
-        $since = getenv('PARITY_SINCE_CUTOFF') ?: PARITY_SINCE_DEFAULT;
-        $cmd[] = '--since';
-        $cmd[] = $since;
-    }
 
     // 2026-08-24: child stderr goes to a temp FILE, not a second pipe. It used to
     // be a pipe that was opened, never read, and closed after the child had already
     // been drained on stdout -- so any report writing more than one pipe buffer
     // (~4KB) to stderr blocked forever on its own write, and run_all.php hung with
-    // no output at all rather than failing. deadcode_report.php emits ~3.9KB of
-    // stderr today and `--gate P9` deadlocked on it live. stream_select() is not a
+    // no output at all rather than failing. The report that exposed it,
+    // deadcode_report.php (~3.9KB of stderr, deadlocked `--gate P9` live), has
+    // since been deleted -- the fix stays, because the bug was in this runner. stream_select() is not a
     // fix here: on Windows it does not work on proc_open pipes. Nothing read this
     // stderr before and nothing reads it now -- the only change is that the child
     // can always finish writing it.

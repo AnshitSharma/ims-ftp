@@ -49,7 +49,8 @@ rule change is unconditionally live on deploy.
 `ServerBuilder::addComponent()` is deleted too. The mutation path is the command layer —
 `AddComponentCommand` / `RemoveComponentCommand` / `ReplaceComponentCommand` — so a
 compatibility change lands in the rule alone; there is no second legacy path to mirror it into.
-The `ValidationPipeline.php` file header carries the migration plan.
+(`ValidationPipeline.php` used to carry the migration plan in its file header; the file itself
+was deleted by P9, so that plan now lives only in `tasks/migration-completion.md`.)
 
 ## Server build
 
@@ -162,3 +163,27 @@ before they auto-upload — a syntax error here is a live 500.
 cited), `BACKLOG.md`, `migration/` (the target design — several packs describe intent that was
 never built), and `database/seeders/*.sql` as schema history. Where a doc contradicts the code,
 the code wins; flag the stale doc.
+
+`migration/` is kept, and two of its files are **load-bearing at run time**, not just reference:
+`scripts/ci/inv_extract.php` reads `migration/ARCHITECTURAL_INVARIANTS.md` and
+`migration/phase-status.json` to build the invariants gate, and
+`tests/api/add_remove_response_shape_test.php` reads
+`migration/08-api-adapters/DEPRECATION.md`. Do not tidy those three away.
+
+## The verification gates, after the 2026-08-31 cleanup
+
+`scripts/verify/run_all.php` is the gate runner (`--quick`, or `--gate P<N>`). What survives is
+what can still measure something: `schema`, `inventory`, `orphan`, `slot`, `ledger`,
+`performance`, `invariants`, `regression`. `scripts/ci/nightly.sh` is the daily battery on top
+of it, with an alert-on-red hook.
+
+Deleted 2026-08-31, with the migration they gated: `parity`, `command_parity` and `read` (their
+only input was `reports/shadow/*.jsonl`, which nothing has written since P9 deleted
+`ShadowRunner`), `deadcode` and `deploy_skew` (P9's deletion authority and the check on its
+corpus — both discharged, and both dependent on the `server-debug-deadcode` endpoint removed the
+same day), `prune_shadow_log` and `soak_status` (shadow-log maintenance and soak-streak counting
+for soaks the owner waived). The three `server-debug-*` diagnostics and the orphan
+`debug-motherboard-nics` permission-map entry went with them. `reports/` keeps
+`perf-baseline.json`, `archive/` and the signoff documents; its ~425 generated run artifacts are
+gone. **None of these deletions reached production** — the deployment never deletes; see
+BACKLOG.md B-3.
