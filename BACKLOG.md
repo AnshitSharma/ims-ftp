@@ -347,60 +347,54 @@ this session cannot supply: whether SFP `9a412f95-…` was actually pulled from 
 `ServerBuilder::removeComponent()`) or the inventory row was deleted in error (restore it from
 the dump). No new ones can appear through the API now.
 
-### B-17 · Eight test files live where the runner never looks, and five of them are broken — OPEN
+### B-17 · Eight test files lived where the runner never looked — CLOSED 2026-08-30
 
-**What.** `run_tests.php` discovers by globbing `SUITE_DIRS`, which lists `api/`, `backfill/`,
-`regression/` and `unit/`. It does **not** list `tests/` itself. Eight real test files sit
-there and have never been run by the suite:
+**What it was.** `run_tests.php` discovered by globbing `SUITE_DIRS`, which listed `api/`,
+`backfill/`, `regression/` and `unit/` — never `tests/` itself, where eight real test files sat
+unrun. Probed 2026-08-30: three passed outright, one failed, four hard-fataled. Two of the four
+required `core/models/compatibility/MemoryAuthority.php` / `SlotAuthority.php`, which do not
+exist anywhere under `core/` (CLAUDE.md named all three "authority classes" until this same day
+and has been corrected). This was the *exact* defect `run_tests.php`'s own header was written
+about, one level up: "all six of the omitted ones were exiting 255 ... the suite had been red
+for an unknown length of time while the sweep reported green." A glob cannot drift from the
+directory it globs, but it cannot see a directory it was never pointed at either — the
+2026-08-24 note about adding `api/`/`backfill/` had already learned this lesson and stopped one
+directory short.
 
-| File | State (probed 2026-08-30 against the scratch fixture) |
-|---|---|
-| `lane_authority_unit.php` | passes, 15 checks |
-| `nic_sfp_authority_unit.php` | passes, 11 checks |
-| `storage_bay_authority_unit.php` | passes, 13 checks |
-| `state_machine_unit.php` | **1 FAIL** — needs a `user_permissions` table the fixture lacks; the schema probe fails and check 1 (`building->validating` with `server.edit`) then denies what it should allow |
-| `getDashboardDataShapeTest.php` | **fatal, exit 255** — `PDO object is not initialized` at `BaseFunctions.php:948`. Its `FakePDO extends PDO` overrides only `prepare()`, and `getDashboardData()` now reaches a PDO method it does not stub |
-| `memory_authority_unit.php` | **fatal, exit 255** — requires `core/models/compatibility/MemoryAuthority.php`, which does not exist |
-| `slot_storage_authority_unit.php` | **fatal, exit 255** — requires `core/models/compatibility/SlotAuthority.php`, which does not exist |
-| `serverstate_equivalence.php` | **fatal, exit 255** — `Unknown column 'id' in 'order clause'` at line 70; schema drift |
+**Fixed per file, same day.**
 
-`SlotAuthority`, `StorageConnectionAuthority` and `MemoryAuthority` exist nowhere under `core/`.
-CLAUDE.md named all three until 2026-08-30 and has been corrected; `core/models/compatibility/`
-holds `StorageConnectionValidator` instead.
+- `lane_authority_unit.php`, `nic_sfp_authority_unit.php`, `storage_bay_authority_unit.php` —
+  already passing; just needed discovering.
+- `state_machine_unit.php` — 1 FAIL, not obsolete: its minimal fixture schema had no
+  `user_permissions` table, so `ACL::loadUserPermissions`'s direct-grant JOIN (added 2026-08-30
+  alongside the temporary-access work) threw a schema-probe error and failed every permission
+  check closed. Fixed by adding the table, empty — nothing here exercises a temporary grant.
+- `getDashboardDataShapeTest.php` — fatal, not obsolete: its `FakePDO` stubbed only `prepare()`,
+  and `inventoryTableExists()` (added for the risercard/serverplatform rollout) calls `query()`
+  directly. Fixed by stubbing `query()`, and separately by reading its expected type list from
+  `VALID_COMPONENT_TYPES` instead of a hand-typed list that had silently stopped covering
+  `risercard` and `serverplatform`. Its `check()` helper also printed no `PASS`/`FAIL` lines, so
+  the runner counted it as "ran nothing" the moment it was discovered; fixed to print one line
+  per assertion like every other suite here.
+- `memory_authority_unit.php`, `slot_storage_authority_unit.php` — **deleted**. Their subject
+  classes exist nowhere under `core/`.
+- `serverstate_equivalence.php` — **deleted**. It asserted
+  `ServerState::getComponents() ≡ ServerBuilder::extractComponentsFromJson()`; U-D.3a deleted
+  `extractComponentsFromJson()` outright, so one side of the equivalence no longer exists. Same
+  class of defect as the two above — a subject gone by design, not by accident — and the same
+  disposition `fixture_scenarios_real.php` got: retired, not stubbed back into passing.
+- `run_tests.php`'s `NOT_A_SUITE` gained itself (self-recursion), `characterize_compatibility.php`
+  (a golden-master CAPTURE tool — running it would overwrite
+  `tests/golden/compatibility_baseline.json` every sweep; still not a working parity gate, B-4),
+  and `fixture_scenarios_real.php` (deliberately exits 2, not pass/fail).
+- The `state_machine_unit.php` DROP-DATABASE landmine this section used to warn about (a
+  misrouted `SM_TEST_DB_NAME` destroyed the shared fixture once during this same probe) is now
+  enforced in code: the suite refuses to run unless its DB name contains `scratch` and none of
+  `golden`/`compat`/`prod`.
 
-**Why it matters.** This is the *exact* defect `run_tests.php`'s own header was written about,
-one level up. That header describes a hand-typed list that "omitted six that do [exist] — and
-all six of the omitted ones were exiting 255 with an uncaught PDOException in every
-environment. The suite had been red for an unknown length of time while the sweep reported
-green." The fix was to glob instead of type. But **a glob cannot drift from the directory it
-globs, and it also cannot see a directory it was never pointed at** — which is what the
-2026-08-24 note about adding `api/` and `backfill/` already said, and the lesson stopped one
-directory short. Meanwhile `ims-ftp/CLAUDE.md` advertises `tests/*_authority_unit.php` and
-`tests/serverstate_equivalence.php` as if they were part of the suite.
-
-**Why it was not fixed here.** Adding `tests/` to `SUITE_DIRS` is one line, but on its own it
-turns the suite RED — correctly, which is the point, but it also needs `NOT_A_SUITE` extended
-with `run_tests.php` (self-recursion), `characterize_compatibility.php` (a CAPTURE tool: it
-would overwrite `tests/golden/compatibility_baseline.json` on every suite run) and
-`fixture_scenarios_real.php` (deliberately exits 2). Wiring in five broken suites without
-repairing them trades a false green for a permanent red, which is not obviously better. The
-two `*Authority` ones look retirable on the same grounds as `fixture_scenarios_real.php` —
-their subject is gone — but that is a judgement about what they were for, not a mechanical fix.
-
-**A landmine for whoever does wire it in.** `state_machine_unit.php:36` runs
-`DROP DATABASE IF EXISTS` on whatever `SM_TEST_DB_NAME` names, then rebuilds a minimal schema.
-The suite is right to do that and says so — "this suite must never point at `ims_compat_golden`"
-— but nothing enforces it, and the fixture-runner convention in this project sets the whole
-`GOLDEN_DB_*` / `SM_TEST_DB_*` / `PROBE_DB_*` family from one password file and one host. A
-runner that points `SM_TEST_DB_NAME` at the shared scratch database destroys it on the first
-run. That happened here on 2026-08-30 while probing these eight files, and cost a fixture
-rebuild; it stayed harmless for months only because the suite never discovered this file.
-`SM_TEST_DB_NAME` needs its own throwaway database, and ideally the suite should refuse to run
-when it equals `GOLDEN_DB_NAME` rather than trusting the operator.
-
-**Unblocks.** Nothing. Decide per file: repair, or retire with the reason stated in the file
-(the pattern `fixture_scenarios_real.php` now uses). Then point `SUITE_DIRS` at `tests/`,
-extend `NOT_A_SUITE` as above, and separate `SM_TEST_DB_NAME`.
+**Result.** 50 → 55 discovered, 47 → 52 passed, 0 failed, 3 ran nothing (unchanged — all three
+pre-existing and documented in `tests/MANIFEST.md`). See its 2026-08-30 reconciliation note for
+the full per-file detail.
 
 ### B-9 · `inventory_report` RED — 33 violations — OPEN / OWNER
 

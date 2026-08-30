@@ -10,7 +10,7 @@ in the handoff — don't let the two silently drift.
 None of `tests/` is deployed (SFTP ignore list, per `ims-ftp/CLAUDE.md`) — this
 manifest only matters for local/scratch runs.
 
-## 1. Canonical suite — 45 discovered files, seven directories
+## 1. Canonical suite — 55 discovered files, eight directories
 
 **2026-08-24 reconciliation.** The table below was written on 2026-07-13 and had
 drifted badly by today: it listed 30 files in five directories, while
@@ -39,7 +39,8 @@ are only meaningful as a reconciliation target for the runner's own output.
 | `tests/unit/rules/` | 8 | `cpu_rules_test.php`, `dependency_rule_test.php`, `lane_rule_test.php`, `memory_rules_test.php`, `net_rules_test.php`, `slot_rules_test.php`, `storage_rules_test.php`, `system_rules_test.php` |
 | `tests/unit/compatibility/` | 6 | `compatible_listing_engine_test.php`, `cpu_identity_matcher_test.php`, `motherboard_storage_gate_test.php`, `platform_spec_resolution_test.php`, `spec_resolver_guard_test.php`, `storage_bay_placement_test.php` |
 | `tests/unit/validation/` | 4 | `finalize_trigger_coverage_test.php`, `m2_capacity_rule_test.php`, `onboard_nic_pcie_count_test.php`, `ram_type_normalization_test.php` |
-| **Total discovered** | **50** | |
+| `tests/` (root, non-recursive) | 5 | `getDashboardDataShapeTest.php`, `lane_authority_unit.php`, `nic_sfp_authority_unit.php`, `state_machine_unit.php`, `storage_bay_authority_unit.php` |
+| **Total discovered** | **55** | |
 
 **2026-08-24 (part two) reconciliation.** The regression row read 15 and the
 total 45; a live `run_tests.php` discovery reports 16 and 46 —
@@ -61,6 +62,45 @@ written about. The runner is a glob and cannot drift; this file is typed by hand
 and keeps doing so. Reconcile it against `php tests/run_tests.php` output rather
 than by reading it.
 
+**2026-08-30, later the same day: `tests/` root wired in (B-17).** `SUITE_DIRS`
+never pointed at `tests/` itself, where eight real files lived — the fourth
+instance of the exact drift described above, one directory up. Resolved per
+file rather than deferred:
+
+- `lane_authority_unit.php`, `nic_sfp_authority_unit.php`,
+  `storage_bay_authority_unit.php` — already passing; just needed discovering.
+- `state_machine_unit.php` — its minimal fixture schema had no `user_permissions`
+  table, so `ACL::loadUserPermissions`'s direct-grant JOIN (added 2026-08-30)
+  threw on every permission check and failed them all closed. Fixed by adding
+  the table (empty; nothing here exercises a temporary grant).
+- `getDashboardDataShapeTest.php` — its `FakePDO` stubbed only `prepare()`, and
+  `inventoryTableExists()` (added for the risercard/serverplatform rollout)
+  calls `query()` directly; fatal on load. Fixed by stubbing `query()` too, and
+  by reading `$expectedTypes` from `VALID_COMPONENT_TYPES` instead of a
+  hand-typed 10-item list that had silently stopped covering `risercard` and
+  `serverplatform`. Its `check()` helper was also silent on success — printed
+  no `PASS`/`FAIL` lines, which read as `RAN NOTHING (0 checks)` per this
+  file's own §"Reporting convention" below — so it now prints one line per
+  assertion like every other suite in this tree.
+- `memory_authority_unit.php`, `slot_storage_authority_unit.php`,
+  `serverstate_equivalence.php` — **deleted**, not repaired. Two required
+  `core/models/compatibility/MemoryAuthority.php` / `SlotAuthority.php`, which
+  do not exist anywhere under `core/`. The third asserted
+  `ServerState::getComponents() ≡ ServerBuilder::extractComponentsFromJson()`;
+  U-D.3a deleted `extractComponentsFromJson()` outright (see
+  `tests/regression/read_router_test.php`'s own check that it's gone), so one
+  side of the equivalence no longer exists to compare against. All three tested
+  a subject that is gone by design, not by accident — the same class of defect
+  `fixture_scenarios_real.php` was retired for, not repaired.
+- `run_tests.php`'s `NOT_A_SUITE` gained `run_tests.php` itself (self-recursion),
+  `characterize_compatibility.php` (a golden-master CAPTURE tool — running it
+  would overwrite `tests/golden/compatibility_baseline.json` every sweep), and
+  `fixture_scenarios_real.php` (deliberately exits 2, not pass/fail).
+
+Net: 50 → 55 discovered, 47 → 52 passed, 3 ran nothing unchanged (all three
+pre-existing and documented below), 8 named top-level files → 5 folded into
+the main count + 3 deleted. §2 and §3 below are rewritten to match.
+
 Non-suites in these same directories, excluded by `run_tests.php` itself
 (`_`-prefixed helpers plus the `NOT_A_SUITE` list) and therefore not counted
 above: `tests/regression/_scratch_db.php` (shared `scratch_db_connect()`),
@@ -75,52 +115,50 @@ had not run) is CLOSED:** both files now emit the `SKIPPED: 0 check(s) run`
 marker on that branch and are reported as `RAN NOTHING (declared)`. Their offline
 structural checks are kept and still fail the suite (exit 1) when broken.
 
-## 2. Named top-level legacy scripts — 8 files
+## 2. Named top-level scripts, pre-dating the `*_test.php` convention
 
-Pre-date the `*_test.php` convention; live directly under `tests/`, not in a
-subdirectory. Each is independently named here because `tests/` also contains
-files that are NOT part of the sweep at all (§3).
+**Closed out 2026-08-30 (B-17).** Until today these 8 files lived directly
+under `tests/` and were run by hand, separately from `run_tests.php`'s count,
+because `SUITE_DIRS` never pointed at `tests/` itself. Now: 5 are discovered as
+part of §1's 55 (folded in, no longer named separately), and 3 are deleted. See
+the 2026-08-30 reconciliation note in §1 for the per-file reasoning. This
+section is kept only as a historical record of what used to live here.
 
-| File | Self-skips when DB unreachable? |
+| File | Disposition |
 |---|---|
-| `tests/lane_authority_unit.php` | no (DB-free) |
-| `tests/memory_authority_unit.php` | no (DB-free) |
-| `tests/nic_sfp_authority_unit.php` | no (DB-free) |
-| `tests/slot_storage_authority_unit.php` | no (DB-free) |
-| `tests/storage_bay_authority_unit.php` | no (DB-free) |
-| `tests/serverstate_equivalence.php` | no (DB-free) |
-| `tests/getDashboardDataShapeTest.php` | no (DB-free) |
-| `tests/fixture_scenarios_real.php` | **DISABLED 2026-08-30** — exits 2 immediately. P9 deleted the three `validate*` methods it drives and U-D.3c dropped the columns its fixtures insert; a self-skip would have misreported that as "environment not available". Previously: **yes**, as of 2026-07-13 — env-gated `PROBE_DB_*` connection (default `imsbdcmsbharatda_Ims_Production` local mirror), prints `SKIPPED: ...` and exits 0 if that DB isn't reachable (mirrors `tests/regression/_scratch_db.php`'s convention). Previously hard-fataled (uncaught `PDOException`, exit 255) in any environment without that exact local DB mirror — this was the tenth-session verify finding's root cause, fixed this session. |
+| `tests/lane_authority_unit.php` | now discovered (§1, `root`) |
+| `tests/nic_sfp_authority_unit.php` | now discovered (§1, `root`) |
+| `tests/storage_bay_authority_unit.php` | now discovered (§1, `root`) |
+| `tests/state_machine_unit.php` | now discovered (§1, `root`) — no longer excluded; see §3 |
+| `tests/getDashboardDataShapeTest.php` | now discovered (§1, `root`) |
+| `tests/memory_authority_unit.php` | **deleted** — required `MemoryAuthority.php`, which does not exist under `core/` |
+| `tests/slot_storage_authority_unit.php` | **deleted** — required `SlotAuthority.php`, which does not exist under `core/` |
+| `tests/serverstate_equivalence.php` | **deleted** — asserted equivalence with `ServerBuilder::extractComponentsFromJson()`, which U-D.3a deleted |
 
-**45 discovered + 8 named legacy = 53 files.** (Until 2026-08-24 this line
-read "30 canonical + 8 named legacy = 38" — see §1's reconciliation note for
-why both halves of that arithmetic were wrong.)
-
-The 8 legacy scripts above live directly under `tests/`, which is NOT in
-`run_tests.php`'s `SUITE_DIRS` — adding `tests/` itself would sweep in
-`characterize_compatibility.php` and `state_machine_unit.php`, both explicitly
-excluded (§3). They are therefore still run by hand, and a `run_tests.php`
-number never includes them. Report the two figures separately.
+`tests/fixture_scenarios_real.php` is not in this table: it was never a named
+legacy script counted alongside these 8, and stays excluded from the sweep —
+see §3.
 
 ## 3. Explicitly excluded from the sweep count
 
-- **`tests/state_machine_unit.php`** — DB-backed, but **must never be run
-  against `ims_compat_golden`** (standing rule, all sessions). It targets a
-  different, purpose-built state-machine fixture DB. Not part of any "N/38"
-  or "N/30" figure in this or future handoffs; report it separately by name
-  if it's ever run.
 - **`tests/characterize_compatibility.php`** — not a pass/fail test; it's the
   golden-master capture/diff tool the sweep's "characterization" step invokes
   directly (see phase-status.json's `baseline` gate report, `lands_in` =
   this file). Reported as "byte-identical to baseline" / "N drift", never as
-  exit-code pass/fail alongside the 38.
+  exit-code pass/fail alongside the 55. Also currently unusable as a parity
+  gate — see BACKLOG B-4.
+- **`tests/fixture_scenarios_real.php`** — deliberately exits 2, not 0/1;
+  DISABLED since both its subjects are gone (P9 deleted the `validate*`
+  methods it drives, U-D.3c dropped the columns its fixtures insert). Named in
+  `NOT_A_SUITE` since 2026-08-30 so it is never swept in as a false failure.
 - **`scripts/verify/fleet_parity_sweep.php`** — not a test file at all; the
   offline fleet-wide engine-vs-legacy replay tool. Reported separately as
   "N replays / M configs / unexplained=K", per its own convention.
-- **`scripts/verify/*_report.php`** (schema/ledger/slot/equivalence/orphan/
-  inventory/performance/parity/deadcode) — gate reports, invoked via
+- **`scripts/verify/*_report.php`** (schema/ledger/slot/orphan/inventory/
+  performance/parity/deadcode) — gate reports, invoked via
   `scripts/verify/run_all.php`, reported as GREEN/RED per report name, never
-  folded into the 38.
+  folded into the 55. (`equivalence_report.php` and `partial_rows_report.php`
+  were retired 2026-08-30 with U-D.3c — see `BACKLOG.md` B-8.)
 
 ## Reporting convention going forward
 

@@ -37,8 +37,8 @@ checks, plus `UnifiedSlotTracker`, `PcieLaneBudgetValidator`, `NICPortTracker`,
 
 This paragraph used to name three "authority classes" — `SlotAuthority`,
 `StorageConnectionAuthority`, `MemoryAuthority`. **None of them exists anywhere under `core/`**
-(checked 2026-08-30, `grep -rn 'class SlotAuthority'` and friends return nothing). Two root-level
-test files still `require` two of them and hard-fatal on it; see BACKLOG §B-17.
+(checked 2026-08-30, `grep -rn 'class SlotAuthority'` and friends return nothing). The two
+root-level test files that `require`d them are deleted (BACKLOG §B-17, closed).
 
 **The migration flags are gone.** `ENGINE_MODE`, `COMMAND_LAYER_ENABLED`,
 `STATE_MACHINE_ENABLED`, `DUAL_WRITE_ENABLED`, `READ_FROM_ROWS` and the older
@@ -125,15 +125,21 @@ Hardware specs are JSON in `ims-data/`; the DB holds inventory rows. Load them t
 `php` isn't on PATH; XAMPP's is at `/c/xampp/php/php.exe`. Lint changed files with `php -l`
 before they auto-upload — a syntax error here is a live 500.
 
-- `php tests/run_tests.php` — full suite (50 discovered), needs real MariaDB on a pristine
-  datadir. 47 passed / 0 failed / 3 ran nothing as of 2026-08-30, against a database with the
-  nine columns already dropped — which is the shape production is in now.
+- `php tests/run_tests.php` — full suite (55 discovered, including `tests/` root files as of
+  2026-08-30 — BACKLOG §B-17), needs real MariaDB on a pristine datadir. 52 passed / 0 failed /
+  3 ran nothing as of 2026-08-30, against a database with the nine columns already dropped —
+  which is the shape production is in now.
 - `tests/regression/component_delete_guard_test.php` — pins the `deleteComponent()` in-use guard
   (BACKLOG §B-16). Needs **no** database; it drives recording PDO fakes.
-- `tests/fixture_scenarios_real.php` — **DISABLED**, exits 2. Both its subjects are gone: P9
-  deleted the three validate* methods it drives, and U-D.3c dropped the columns its fixtures
-  insert. Its R1–R10 scenario table is kept because the rule unit tests cite its UUIDs.
-- `tests/*_authority_unit.php` — per-authority units; `tests/serverstate_equivalence.php`.
+- `tests/fixture_scenarios_real.php` — **DISABLED**, exits 2 (`NOT_A_SUITE`, not swept). Both its
+  subjects are gone: P9 deleted the three validate* methods it drives, and U-D.3c dropped the
+  columns its fixtures insert. Its R1–R10 scenario table is kept because the rule unit tests
+  cite its UUIDs.
+- `tests/lane_authority_unit.php`, `tests/nic_sfp_authority_unit.php`,
+  `tests/storage_bay_authority_unit.php`, `tests/state_machine_unit.php`,
+  `tests/getDashboardDataShapeTest.php` — the `tests/` root suites `run_tests.php` now discovers
+  (label `root`). `state_machine_unit.php` refuses to run unless its DB name contains `scratch`
+  and none of `golden`/`compat`/`prod` — it unconditionally DROPs whatever database it is given.
 - `tests/characterize_compatibility.php` — golden master over real `server_configurations` rows
   into `tests/golden/`. **Currently unusable as a parity gate**: P9 deleted the three methods it
   characterises (`validateConfiguration`, `validateConfigurationEnhanced`,

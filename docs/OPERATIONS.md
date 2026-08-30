@@ -396,22 +396,25 @@ Stale claims to ignore: `scripts/ci/invariants.sh:36-42` ("only
 
 ### 5.4 What is *not* in the sweep
 
-Per `tests/MANIFEST.md`:
+**2026-08-30 (BACKLOG §B-17):** `tests/` root is now in the sweep. `SUITE_DIRS` never listed
+`tests/` itself, so 8 named legacy scripts sitting there had never been discovered; 5 are now
+folded into the main count (`lane_authority_unit.php`, `nic_sfp_authority_unit.php`,
+`storage_bay_authority_unit.php`, `state_machine_unit.php`, `getDashboardDataShapeTest.php`) and
+3 were deleted (`memory_authority_unit.php`, `slot_storage_authority_unit.php`,
+`serverstate_equivalence.php` — each required a class or method that no longer exists). See
+`tests/MANIFEST.md`'s 2026-08-30 reconciliation note for the per-file detail.
 
-- **8 named legacy scripts** directly under `tests/` (`lane_authority_unit.php`,
-  `memory_authority_unit.php`, `nic_sfp_authority_unit.php`, `slot_storage_authority_unit.php`,
-  `storage_bay_authority_unit.php`, `serverstate_equivalence.php`,
-  `getDashboardDataShapeTest.php`, `fixture_scenarios_real.php`). `tests/` is not in
-  `SUITE_DIRS`; run these by hand and report the count **separately**.
-- `tests/state_machine_unit.php` — DB-backed, and **must never be run against
-  `ims_compat_golden`**; it targets a purpose-built state-machine fixture DB.
+Per `tests/MANIFEST.md`, still **not** in the sweep:
+
 - `tests/characterize_compatibility.php` — the golden-master capture/diff tool, reported as
-  "byte-identical to baseline" / "N drift", never as a pass/fail alongside the suites.
+  "byte-identical to baseline" / "N drift", never as a pass/fail alongside the suites. Excluded
+  via `NOT_A_SUITE` (running it would overwrite the checked-in baseline every sweep).
+- `tests/fixture_scenarios_real.php` — deliberately exits 2, excluded via `NOT_A_SUITE`.
 - `scripts/verify/fleet_parity_sweep.php` and `scripts/verify/*_report.php` — tools and gate
   reports, reported under their own conventions.
 
 **Reporting convention.** Quote `run_tests.php`'s own final line verbatim: *"N discovered / P
-passed / F failed / R ran nothing"*, plus the legacy-8 count separately if those were run.
+passed / F failed / R ran nothing"* (55/52/0/3 as of 2026-08-30).
 Never a bare "N/M" without saying which list M is, and never fold "ran nothing" into "passed".
 
 ---
