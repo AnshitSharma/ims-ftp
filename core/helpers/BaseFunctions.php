@@ -1516,10 +1516,67 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
 }
 
 /**
- * Delete component
+ * Thrown when a delete is refused because a configuration still depends on the
+ * unit. Its message is safe to show a caller — it names configurations, never
+ * SQL, paths or credentials.
+ *
+ * NOT a PDOException subclass on purpose: PDOException also extends
+ * RuntimeException, so a handler catching RuntimeException to surface this
+ * message would otherwise leak driver text on an unrelated DB error.
+ */
+class ComponentInUseException extends RuntimeException {}
+
+/**
+ * Delete component.
+ *
+ * GUARDED, and the guard is the point. A bare DELETE here is how BACKLOG §B-16
+ * happened: an inventory row was destroyed while a live config_components row
+ * still claimed it, leaving configuration 1f61541b displaying an SFP that no
+ * longer exists. Since U-D.3 dropped the legacy JSON columns, config_components
+ * is the ONLY record of what a configuration contains — that row *is* the
+ * dependency, and nothing else records it.
+ *
+ * Fail-closed (INV-5): if the claim cannot be read, the delete is refused. A
+ * unit that might be in use is never destroyed on the strength of a query that
+ * did not answer.
+ *
+ * Matched on (inventory_table, inventory_id), never on component_type: one
+ * serverplatform unit is claimed by BOTH a motherboard row and a chassis row,
+ * so only the table identifies the physical unit.
+ *
+ * Deliberately NOT keyed on Status or ServerUUID. Those drift — BACKLOG §B-9
+ * has 28 status mismatches and 4 units sitting at Status=2 with no server — so
+ * keying on them would refuse deletes whose real problem is a stale status
+ * column. A live config_components row is unambiguous: a configuration depends
+ * on this unit.
  */
 function deleteComponent($pdo, $type, $id, $userId) {
     $tableName = getComponentTableName($type);
+    $id = (int)$id;
+
+    try {
+        $claim = $pdo->prepare(
+            "SELECT DISTINCT config_uuid
+               FROM config_components
+              WHERE inventory_table = ? AND inventory_id = ? AND removed_at IS NULL
+              ORDER BY config_uuid"
+        );
+        $claim->execute([$tableName, $id]);
+        $claimedBy = $claim->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (PDOException $e) {
+        error_log("Error reading configuration claims before deleting $type #$id: " . $e->getMessage());
+        throw new ComponentInUseException(
+            "Cannot verify whether this $type is installed in a server configuration. Delete refused."
+        );
+    }
+
+    if (!empty($claimedBy)) {
+        $noun = count($claimedBy) === 1 ? 'configuration' : 'configurations';
+        throw new ComponentInUseException(
+            "This $type is installed in server $noun " . implode(', ', $claimedBy)
+            . ". Remove it from the $noun before deleting it."
+        );
+    }
 
     try {
         $stmt = $pdo->prepare("DELETE FROM $tableName WHERE id = ?");

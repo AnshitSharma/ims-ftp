@@ -237,6 +237,11 @@ function handleComponentOperations($module, $operation, $user) {
                 } else {
                     send_json_response(0, 1, 400, "Failed to delete " . $module . " component");
                 }
+            } catch (ComponentInUseException $e) {
+                // A configuration still claims this unit. Not an error condition
+                // to hide behind a 500 — the operator needs the config UUID to
+                // act on it, so the guard's own message is the response.
+                send_json_response(0, 1, 409, $e->getMessage());
             } catch (Exception $e) {
                 error_log("Error deleting $module component: " . $e->getMessage());
                 send_json_response(0, 1, 500, "Failed to delete component");
@@ -333,6 +338,10 @@ function handleComponentOperations($module, $operation, $user) {
                     } else {
                         $entry['error'] = "Failed to delete component";
                     }
+                } catch (ComponentInUseException $e) {
+                    // Per-item refusal, not a failure of the batch — partial-success
+                    // semantics mean the other 99 still delete.
+                    $entry['error'] = $e->getMessage();
                 } catch (Exception $e) {
                     error_log("Error bulk-deleting $module component ID $componentId: " . $e->getMessage());
                     $entry['error'] = "Failed to delete component";
