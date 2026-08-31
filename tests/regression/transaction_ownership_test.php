@@ -96,7 +96,6 @@ $allowed = [
     'core/models/pipelines/PipelineTemplateManager.php' => 'Request Types engine — separate subsystem',
     'api/handlers/auth/auth_api.php'                    => 'auth/session writes',
     'api/handlers/vendors/vendor_api.php'               => 'vendor CRUD',
-    'api/handlers/server/compatibility_api.php'         => 'compatibility bench build lifecycle',
     'api/handlers/server/server_api.php'                => 'handler-owned OUTER transaction for quantity>1 add (commands nest into it — PLAN_VERIFICATION_REVIEW:65)',
 ];
 

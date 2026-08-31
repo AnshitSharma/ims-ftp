@@ -44,15 +44,9 @@ return [
         'allowed-transitions' => 'server.view',
         'get-compatible' => 'server.view',
         'validate-config' => 'server.view',
-        'save-config' => 'server.create',
-        'load-config' => 'server.view',
         'list-configs' => 'server.view',
         'delete-config' => 'server.delete',
-        'clone-config' => 'server.create',
-        'get-statistics' => 'server.view_statistics',
         'update-config' => 'server.edit_details', // 2026-08-23 -- see the note under this array
-        'get-components' => 'server.view',
-        'export-config' => 'server.view',
         'get-config' => 'server.view',
         'get-logs' => 'server.view',
         'finalize-config' => 'server.create',
@@ -72,33 +66,16 @@ return [
         // rack, so the handler refuses one -- moving it is rack-assign-server.
         'update-location' => 'server.edit_details',
         'movements' => 'server.view', // 2026-08-26 -- relocation history for one config
-        'fix-onboard-nics' => 'server.edit',
         // Removed 2026-08-31: the three TEMPORARY debug-* diagnostics
         // (config-dualwrite, shadow-log, deadcode) went with the migration
         // scaffolding they served -- see the note at their old dispatch site in
         // handlers/server/server_api.php. 'debug-motherboard-nics' went with
         // them: it was mapped here but had no dispatch case anywhere in the
         // tree, so it could only ever have returned "Invalid action specified".
-    ],
-
-    // Operations use underscores to match the cases in
-    // handlers/server/compatibility_api.php.
-    'compatibility' => [
-        'check' => 'compatibility.check',
-        'check_pair' => 'compatibility.check',
-        'check_multiple' => 'compatibility.check',
-        'get_compatible_for' => 'compatibility.check',
-        'batch_check' => 'compatibility.check',
-        'analyze_configuration' => 'compatibility.check',
-        'check_storage_direct' => 'compatibility.check',
-        'check_storage_recursive' => 'compatibility.check',
-        'get_rules' => 'compatibility.view_statistics',
-        'get_statistics' => 'compatibility.view_statistics',
-        'benchmark_performance' => 'compatibility.view_statistics',
-        'test_rule' => 'compatibility.manage_rules',
-        'clear_cache' => 'compatibility.manage_rules',
-        'export_rules' => 'compatibility.manage_rules',
-        'import_rules' => 'compatibility.manage_rules',
+        // Removed 2026-08-31 (P2 cleanup): 'save-config', 'load-config',
+        // 'clone-config', 'get-statistics', 'get-components', 'export-config'
+        // and 'fix-onboard-nics' -- same shape, mapped here with no dispatch
+        // case anywhere in server_api.php. No frontend caller used any of them.
     ],
 
     // Rack View — physical racks and server placement.

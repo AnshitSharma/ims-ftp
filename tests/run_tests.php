@@ -71,6 +71,10 @@ const NOT_A_SUITE = [
     // gone: P9 deleted the validate* methods it drives, and U-D.3c dropped
     // the columns its fixtures insert. See its own header.
     'fixture_scenarios_real.php',
+    // Deliberately exits 2 (not a pass/fail suite) -- its subject,
+    // ServerBuilder::validateStorageConnections(), was deleted 2026-08-31 as
+    // unreachable legacy code (P2 cleanup). See its own header.
+    'caddy_finalize_parity_test.php',
 ];
 
 $verbose = in_array('--verbose', $argv, true);

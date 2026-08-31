@@ -21,11 +21,29 @@
  * executing a check and are NOT evidence. A static check costs nothing and holds
  * in any environment.
  *
+ * ============================================================================
+ * DISABLED 2026-08-31 — its subject no longer exists. P2 cleanup deleted
+ * ServerBuilder::validateStorageConnections() as unreachable legacy code:
+ * nothing called it (the live finalize/validate path runs through
+ * ValidationEngine / StorageCaddyPairingRule instead, which P9 had already
+ * moved production onto). Every assertion below isolates that method's source
+ * text and cannot resolve. Kept verbatim as the written record of the F-19
+ * bug this test suite pinned; do not re-enable against a method that is gone.
+ * ============================================================================
+ *
  * Exit 0 = every invariant holds.
  */
 
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
+
+fwrite(STDERR,
+    "caddy_finalize_parity_test.php: DISABLED -- its subject no longer exists.\n" .
+    "  * ServerBuilder::validateStorageConnections() was deleted 2026-08-31 as\n" .
+    "    unreachable legacy code (P2 cleanup); nothing called it at runtime.\n" .
+    "  * The F-19 parity it pinned is now the sole job of ValidationEngine's\n" .
+    "    StorageCaddyPairingRule. See this file's header.\n");
+exit(2);
 
 $ROOT = dirname(__DIR__, 2);
 $failures = 0;

@@ -5,8 +5,11 @@
  *
  * The single class that reads and writes config_components, and appends the
  * paired config_events row / bumps server_configurations.revision that every
- * write must carry (INV-6). Nothing calls this class yet (U-1.4) — it exists
- * so later units (dual-write, command layer) have one place to change.
+ * write must carry (INV-6). Written for U-1.4 with no callers yet by design;
+ * the command layer (AddComponentCommand, RemoveComponentCommand,
+ * ReplaceComponentCommand, BaseCommand), ConfigComponentWriter,
+ * ConfigReadRouter, TargetStateBuilder, StateMachine and ServerBuilder are its
+ * live callers now.
  *
  * Every write method REQUIRES an already-open PDO transaction and THROWS if
  * none is active: this repository never owns transactions itself (a

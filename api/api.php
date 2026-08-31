@@ -138,13 +138,6 @@ try {
             require_once(__DIR__ . '/handlers/server/server_api.php');
             break;
 
-        case 'compatibility':
-            requireModulePermission('compatibility', $operation, $user);
-            // Pass the bare operation (e.g. 'check_pair') to the handler
-            $GLOBALS['operation'] = $operation;
-            require_once(__DIR__ . '/handlers/server/compatibility_api.php');
-            break;
-
         case 'rack':
             // Rack View is accessible to admin and super_admin. hasPermission()
             // grants a blanket bypass to both of those roles, so the explicit

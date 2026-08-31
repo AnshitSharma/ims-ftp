@@ -232,8 +232,9 @@ class BuildAffordances {
      * needs carrying is installed. M.2 / add-in-card storage never needs one.
      *
      * Always addable once visible: caddy count versus drive count is a warning
-     * (`caddy_shortage` in getConfigurationWarnings), not a hard capacity, so it
-     * must not masquerade as one by disabling the button.
+     * (StorageCaddyPairingRule, via the ValidationEngine rule registry -- the
+     * getConfigurationWarnings() this used to cite was deleted with P9), not a
+     * hard capacity, so it must not masquerade as one by disabling the button.
      */
     private function caddyOption(array $components) {
         $bayDrives = 0;
@@ -280,8 +281,10 @@ class BuildAffordances {
      * absent or non-numeric. RAM and CPU are required parts -- a builder that
      * refused to add them because a spec file was unreadable would be a far worse
      * failure than an add that comes back with the engine's own message. Add-time
-     * validation (ServerBuilder::validateComponentQuantity) remains the real gate;
-     * this only decides whether the button is offered.
+     * validation (the ValidationEngine rule registry -- see RULE_MAP.md) remains
+     * the real gate; this only decides whether the button is offered.
+     * (ServerBuilder::validateComponentQuantity(), named here historically, was
+     * deleted with addComponent(); it is not what gates adds today.)
      *
      * `available` stays true throughout: these rows always render. Only `can_add`
      * closes, which is the same available/can_add split slotOption() applies.
