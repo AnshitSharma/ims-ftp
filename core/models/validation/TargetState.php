@@ -134,7 +134,9 @@ final class TargetState
                     $this->onboardParentBoardSpecUuid($c)
                 );
             } else {
-                $provided = $this->catalog->provides($c['component_type'], $c['spec_uuid']);
+                // The row id scopes a riser's provided PCIe slots to that riser — see
+                // ResourceCatalog::providesRisercard().
+                $provided = $this->catalog->provides($c['component_type'], $c['spec_uuid'], $c['id']);
             }
             foreach ($provided as $p) {
                 if ($p['resource'] === 'sfp_port' && $p['slot_ref'] === null) {
@@ -207,9 +209,22 @@ final class TargetState
     {
         $used = [];
         foreach ($this->components as $c) {
-            if ($c['slot_ref'] !== null) {
-                $used[$c['parent_id'] . '|' . $c['slot_ref']] = true;
-                $used['|' . $c['slot_ref']] = true; // unscoped match (pcie_slot/riser_slot: global pool)
+            if ($c['slot_ref'] === null) {
+                continue;
+            }
+            $used[$c['parent_id'] . '|' . $c['slot_ref']] = true;
+            // The UNSCOPED key is what makes a pcie_slot / riser_slot consumer occupy
+            // its slot from the global pool: those consumers carry parent_id null, so
+            // the scoped key above is already '|<slot_ref>'.
+            //
+            // It used to be registered for EVERY consumer, parented or not, which
+            // cross-contaminated per-NIC resources: an SFP in port_1 of NIC A marked
+            // port_1 of every other NIC as occupied, so a second NIC's ports read as
+            // full and NetSfpPortRule refused modules that had somewhere to go. Only
+            // register it when the parent has NOT resolved -- there the conservative
+            // "occupies a port somewhere" reading is the right one.
+            if ($c['parent_id'] === null) {
+                $used['|' . $c['slot_ref']] = true;
             }
         }
         return array_values(array_filter($this->byResource($resource), function ($r) use ($used) {

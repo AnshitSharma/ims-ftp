@@ -244,8 +244,16 @@ class ServerBuilder {
             // A compatibility-bench build is ALWAYS virtual. is_sandbox only keeps it out
             // of the places that legitimately list virtual configs (the Import Template
             // picker); is_virtual is what actually makes it reserve nothing -- see the
-            // $isVirtual guards in addComponent(). Deriving it here rather than trusting
-            // the caller means no path can create a sandbox that reserves real stock.
+            // $isVirtual branches in AddComponentCommand and ReplaceComponentCommand.
+            // Deriving it here rather than trusting the caller means no path can create
+            // a sandbox that reserves real stock.
+            //
+            // That claim was FALSE between P9 and 2026-09-01: this comment pointed at
+            // "the $isVirtual guards in addComponent()", a method P9 had deleted, and
+            // nothing replaced them in the command layer. Every sandbox add claimed a
+            // real unit and moved it out of whatever server held it. Restored in
+            // AddComponentCommand::resolveVirtualComponent(); the row store's NULLable
+            // identity columns come from seeder 2026_09_01_001.
             $isSandbox = !empty($options['is_sandbox']) ? 1 : 0;
             if ($isSandbox) {
                 $isVirtual = 1;
@@ -824,9 +832,22 @@ class ServerBuilder {
             return null;
         }
 
+        // Keyed on rule id PLUS severity (2026-09-01), not rule id alone.
+        //
+        // Suppressing by rule id let a PRE-EXISTING WARNING mask a candidate's ERROR
+        // under the same rule. A config already carrying, say, a cpu.mixed_models
+        // WARNING (a suffix variant, which never blocks) hid every candidate CPU that
+        // failed cpu.mixed_models as an ERROR -- and the listing showed those parts as
+        // "Compatible - validated by the same rules applied when adding", which the add
+        // would then refuse. The listing must disagree with the add path as rarely as
+        // possible; this was a guaranteed disagreement.
+        //
+        // A finding is only "pre-existing, not this candidate's fault" when it is the
+        // same rule AT THE SAME SEVERITY. A severity the baseline never produced is new
+        // information about the candidate.
         $baselineFailed = [];
         foreach ($baseline->failures() as $failure) {
-            $baselineFailed[$failure->ruleId()] = true;
+            $baselineFailed[$failure->ruleId() . '|' . $failure->severity()] = true;
         }
 
         $engine = new ValidationEngine();
@@ -953,8 +974,8 @@ class ServerBuilder {
         $warnings = [];
 
         foreach ($verdict->failures() as $failure) {
-            if (isset($baselineFailed[$failure->ruleId()])) {
-                continue; // pre-existing; not this candidate's fault
+            if (isset($baselineFailed[$failure->ruleId() . '|' . $failure->severity()])) {
+                continue; // same rule AND same severity in the baseline: not this candidate's fault
             }
             if ($failure->severity() === Severity::ERROR) {
                 $blocking[] = $failure->message();
@@ -1586,79 +1607,6 @@ class ServerBuilder {
                 'success' => false,
                 'message' => "Failed to get compatible components: " . $e->getMessage()
             ];
-        }
-    }
-
-    /**
-     * Migrate NIC slot positions for pre-existing components
-     * Runs once per config to assign slot_position to component NICs that pre-date slot auto-assignment
-     * Safe to run on every config load — only acts on NICs that still have no slot_position stored
-     */
-    public function migrateNICSlotPositions($configUuid) {
-        try {
-            // U-D.3b: the lazy migration now repairs config_components.slot_ref instead
-            // of nic_config's slot_position. Same intent -- a component NIC installed
-            // before slot auto-assignment existed has no recorded slot, and every slot
-            // consumer then treats it as unplaced -- against the store that survives.
-            //
-            // This is not a no-op rename: the two stores had DRIFTED. A NIC could carry
-            // a slot_position in the blob (written by an earlier run of this very
-            // method) while its row's slot_ref stayed NULL, so getUsedPCIeSlots() saw
-            // the card occupying a slot and the command layer's slot planner did not.
-            $stmt = $this->pdo->prepare(
-                "SELECT id, spec_uuid FROM config_components
-                  WHERE config_uuid = ? AND component_type = 'nic'
-                    AND removed_at IS NULL AND (slot_ref IS NULL OR slot_ref = '')"
-            );
-            $stmt->execute([$configUuid]);
-            $unplaced = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            if (!$unplaced) {
-                return;
-            }
-
-            $slotTracker = new UnifiedSlotTracker($this->pdo);
-            $dataService = ComponentDataService::getInstance();
-
-            foreach ($unplaced as $row) {
-                $nicUuid = (string)$row['spec_uuid'];
-                // An onboard port is not in a PCIe slot and must never be given one.
-                if (strpos($nicUuid, 'onboard-') === 0) {
-                    continue;
-                }
-
-                $nicSpecs = $dataService->getComponentSpecifications('nic', $nicUuid);
-                if ($nicSpecs && isset($nicSpecs['interface'])) {
-                    preg_match('/x(\d+)/', $nicSpecs['interface'], $matches);
-                    $slotSize = 'x' . ($matches[1] ?? '8');
-                } else {
-                    $slotSize = 'x8';
-                }
-
-                $slotPosition = $slotTracker->assignSlot($configUuid, $slotSize);
-                if (!$slotPosition) {
-                    continue;
-                }
-
-                try {
-                    $upd = $this->pdo->prepare(
-                        "UPDATE config_components SET slot_ref = ? WHERE id = ? AND slot_ref IS NULL"
-                    );
-                    $upd->execute([$slotPosition, (int)$row['id']]);
-                    error_log("NIC-MIGRATE: Assigned slot $slotPosition to NIC $nicUuid in config $configUuid");
-                } catch (\Throwable $slotClash) {
-                    // Left in place as a genuine fail-safe, not as the primary guard:
-                    // uq_slot_occupancy cannot refuse this (see autoAssignSFPPort's
-                    // note -- it is NULL-distinct on removed_at for every live row).
-                    // assignSlot() picking from the current occupancy map is what
-                    // actually prevents a collision.
-                    error_log("NIC-MIGRATE: slot $slotPosition already occupied in config $configUuid: "
-                        . $slotClash->getMessage());
-                }
-            }
-
-        } catch (Exception $e) {
-            error_log("NIC-MIGRATE: Error migrating NIC slots for config $configUuid: " . $e->getMessage());
-            // Non-fatal — don't block the response
         }
     }
 
@@ -3793,101 +3741,6 @@ class ServerBuilder {
         }
     }
 
-
-    /**
-     * Get motherboard specifications from configuration
-     * Returns structured motherboard specs for compatibility checking
-     */
-    public function getMotherboardSpecsFromConfig($configUuid) {
-        try {
-            // Get motherboard UUID from configuration
-            $stmt = $this->pdo->prepare("SELECT motherboard_uuid FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$result || !$result['motherboard_uuid']) {
-                return [
-                    'found' => false,
-                    'error' => 'No motherboard found in configuration',
-                    'specifications' => null
-                ];
-            }
-
-            $motherboardUuid = $result['motherboard_uuid'];
-            
-            // Load motherboard specifications using ComponentCompatibility
-            require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
-            $compatibility = new ComponentCompatibility($this->pdo);
-            
-            return $compatibility->parseMotherboardSpecifications($motherboardUuid);
-            
-        } catch (Exception $e) {
-            error_log("Error getting motherboard specs from config: " . $e->getMessage());
-            return [
-                'found' => false,
-                'error' => 'Error loading motherboard specifications: ' . $e->getMessage(),
-                'specifications' => null
-            ];
-        }
-    }
-
-    /**
-     * Get CPU specifications from configuration
-     * Returns array of CPU specs with UUIDs for compatibility checking
-     */
-    public function getCPUSpecsFromConfig($configUuid) {
-        try {
-            // U-D.3b: CPU identities from config_components rows.
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $configData = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            $cpuResults = [];
-            if ($configData) {
-                foreach ($this->componentsFromRows($configData) as $entry) {
-                    if (($entry['component_type'] ?? null) === 'cpu' && !empty($entry['component_uuid'])) {
-                        $cpuResults[] = ['component_uuid' => $entry['component_uuid']];
-                    }
-                }
-            }
-
-            if (empty($cpuResults)) {
-                return [
-                    'found' => false,
-                    'error' => 'No CPUs found in configuration',
-                    'specifications' => []
-                ];
-            }
-            
-            // Load specifications for each CPU
-            require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
-            $compatibility = new ComponentCompatibility($this->pdo);
-            
-            $cpuSpecs = [];
-            foreach ($cpuResults as $cpu) {
-                $cpuUuid = $cpu['component_uuid'];
-                $specResult = $compatibility->getCPUSpecifications($cpuUuid);
-                
-                if ($specResult['found']) {
-                    $cpuSpecs[] = $specResult['specifications'];
-                }
-            }
-            
-            return [
-                'found' => !empty($cpuSpecs),
-                'error' => empty($cpuSpecs) ? 'No valid CPU specifications found' : null,
-                'specifications' => $cpuSpecs
-            ];
-            
-        } catch (Exception $e) {
-            error_log("Error getting CPU specs from config: " . $e->getMessage());
-            return [
-                'found' => false,
-                'error' => 'Error loading CPU specifications: ' . $e->getMessage(),
-                'specifications' => []
-            ];
-        }
-    }
 
 
     /**

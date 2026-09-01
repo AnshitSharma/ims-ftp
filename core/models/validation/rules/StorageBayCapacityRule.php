@@ -112,11 +112,25 @@ final class StorageBayCapacityRule implements RuleInterface
         }
 
         if (!empty($overflow)) {
-            // Non-blocking on purpose: legacy's count check is dead code. Retained
-            // as a passing result so the tightening pass has the data.
-            return new RuleResult($this->id(), $this->severity(), true,
-                'Bay type available for all 2.5"/3.5" storage; capacity oversubscribed (legacy does not block)',
-                ['overflow' => $overflow]);
+            // REAL, NON-BLOCKING (2026-09-01). Oversubscription used to be reported as
+            // a PASSING result, and a passing result never reaches
+            // Verdict::failures() -- so the one thing this branch computes was
+            // invisible to warnings(), to the add response, and to the operator. It
+            // now fails at Severity::WARNING: blocking() ignores WARNING under every
+            // trigger, so the legacy-parity posture the 2026-07-25 correction
+            // established is unchanged, but the finding is finally reported.
+            $parts = [];
+            foreach ($overflow as $o) {
+                $size = $o['resource'] === 'drive_bay_2_5' ? '2.5"' : '3.5"';
+                $parts[] = "{$o['count']} $size drive(s) against {$o['capacity']} eligible bay(s)";
+            }
+            return new RuleResult($this->id(), Severity::WARNING, false,
+                'Chassis drive bays are oversubscribed: ' . implode('; ', $parts),
+                [
+                    'overflow' => $overflow,
+                    'recommendation' => 'Remove drives, or use a chassis with more bays — '
+                        . 'more drives are installed than there are bays to seat them in.',
+                ]);
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'Bay capacity sufficient for all 2.5"/3.5" storage');

@@ -59,6 +59,8 @@ final class ReplaceComponentCommand extends BaseCommand
     private $newRowId;
     /** @var string|null */
     private $newSlotRef;
+    /** @var bool the config is a sandbox/what-if build that must reserve no stock */
+    private $isVirtual = false;
 
     public function __construct(PDO $pdo, string $configUuid, string $componentType, string $oldComponentUuid, ?string $oldSerialNumber, string $newComponentUuid, array $options = [], $actor = 0, ?int $expectedRevision = null, ?int $oldInventoryId = null)
     {
@@ -134,6 +136,26 @@ final class ReplaceComponentCommand extends BaseCommand
             throw new CommandFailed('component_not_found', "Component to replace not found in configuration$which", 404);
         }
 
+        // A virtual (sandbox) config reserves nothing, so there is no unit to claim
+        // for the incoming part and none to release for the outgoing one. Same guard,
+        // and the same reason, as AddComponentCommand::resolveVirtualComponent():
+        // without it a what-if swap claims real stock and, because uq_inventory_once
+        // is keyed on the physical unit, MOVES the incoming part out of whatever real
+        // server was holding it.
+        $this->isVirtual = !empty($lockedRow['is_virtual']);
+        if ($this->isVirtual) {
+            require_once __DIR__ . '/../components/ComponentDataService.php';
+            if (!ComponentDataService::getInstance()->validateComponentUuid($this->componentType, $this->newComponentUuid)) {
+                throw new CommandFailed(
+                    'component_not_found',
+                    "Component {$this->newComponentUuid} is not a known {$this->componentType} specification",
+                    404
+                );
+            }
+            $this->newInventoryRow = null;
+            return $this->buildReplacedTarget($current);
+        }
+
         $this->newInventoryRow = $this->lockAndCheckComponent();
         if ($this->newInventoryRow === null) {
             // 'inventory_component_not_found' — the REPLACEMENT has no unit in
@@ -148,10 +170,29 @@ final class ReplaceComponentCommand extends BaseCommand
         // quantity>1 add loop inherits this via AddComponentCommand.
         $this->assertInventoryAvailability($this->newInventoryRow['data'], $lockedRow, $this->options);
 
+        return $this->buildReplacedTarget($current);
+    }
+
+    /**
+     * The post-swap TargetState. Split out of buildTarget() so the virtual path,
+     * which locks no inventory row, reaches exactly the same state construction —
+     * the only difference being that $this->newInventoryRow is null, so the new row
+     * carries inventory_table/inventory_id NULL.
+     */
+    private function buildReplacedTarget(TargetState $current): TargetState
+    {
         $withoutOld = TargetStateBuilder::withRemove($current, $this->oldRow['id'], false);
 
+        // risercard added 2026-09-01: it was missing here and in
+        // AddComponentCommand, so every riser was persisted with slot_ref NULL and a
+        // board with one riser bay accepted unlimited risers.
         $this->newSlotRef = null;
-        if (in_array($this->componentType, ['nic', 'pciecard', 'hbacard'], true)
+        if ($this->componentType === 'sfp') {
+            $portIndex = isset($this->options['port_index']) ? (int)$this->options['port_index'] : 0;
+            $this->newSlotRef = $portIndex > 0
+                ? 'port_' . $portIndex
+                : ($this->oldRow['slot_ref'] ?? null);
+        } elseif (in_array($this->componentType, ['nic', 'pciecard', 'hbacard', 'risercard'], true)
             && strpos($this->newComponentUuid, 'onboard-') !== 0
         ) {
             $this->newSlotRef = $this->planSlot($withoutOld);
@@ -175,8 +216,10 @@ final class ReplaceComponentCommand extends BaseCommand
         $newRow = [
             'component_type' => $this->componentType,
             'spec_uuid' => $this->newComponentUuid,
-            'inventory_table' => $this->newInventoryRow['table'],
-            'inventory_id' => (int)$this->newInventoryRow['data']['ID'],
+            'inventory_table' => $this->newInventoryRow['table'] ?? null,
+            'inventory_id' => isset($this->newInventoryRow['data']['ID'])
+                ? (int)$this->newInventoryRow['data']['ID']
+                : null,
             'serial_number' => $this->newInventoryRow['data']['SerialNumber'] ?? null,
             'parent_id' => $parentId,
             'slot_ref' => $this->newSlotRef,
@@ -207,8 +250,10 @@ final class ReplaceComponentCommand extends BaseCommand
         $sb = new ServerBuilder($pdo);
 
         $oldSerial = $this->oldRow['serial_number'];
-        $newInventoryData = $this->newInventoryRow['data'];
-        $newSerial = $newInventoryData['SerialNumber'] ?? null;
+        // NULL on a virtual config: nothing was locked because nothing is reserved.
+        $newInventoryData = $this->newInventoryRow['data'] ?? null;
+        $newInventoryId = isset($newInventoryData['ID']) ? (int)$newInventoryData['ID'] : null;
+        $newSerial = $this->isVirtual ? null : ($newInventoryData['SerialNumber'] ?? null);
 
         if (is_int($this->oldRow['id']) && $this->oldRow['id'] > 0) {
             $repo->tombstone($this->oldRow['id'], $this->actor);
@@ -218,8 +263,8 @@ final class ReplaceComponentCommand extends BaseCommand
 
         $newRowId = $repo->insert($this->configUuid, [
             'component_type' => $this->componentType,
-            'inventory_table' => $this->newInventoryRow['table'],
-            'inventory_id' => (int)$newInventoryData['ID'],
+            'inventory_table' => $this->newInventoryRow['table'] ?? null,
+            'inventory_id' => $newInventoryId,
             'spec_uuid' => $this->newComponentUuid,
             'serial_number' => $newSerial,
             'parent_id' => null, // re-anchor pass below resolves real DB parent_ids after the new row exists
@@ -242,24 +287,29 @@ final class ReplaceComponentCommand extends BaseCommand
             ? (int)$this->oldRow['inventory_id']
             : null;
 
-        $legacyOptions = $this->options;
-        if ($this->newSlotRef !== null) {
-            $legacyOptions['slot_position'] = $this->newSlotRef;
-        }
-        $legacyOptions['inventory_id'] = (int)$newInventoryData['ID'];
-        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->oldComponentUuid, 1, 'remove', $oldSerial, ['inventory_id' => $oldUnitId]);
-        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->newComponentUuid, 1, 'add', $newSerial, $legacyOptions);
-        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
-        $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, (int)$newInventoryData['ID']);
+        // Only stamps server_configurations.motherboard_uuid / chassis_uuid; it reads
+        // no options. Correct for a virtual config too — that is the config's own row.
+        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->oldComponentUuid, 1, 'remove', $oldSerial);
+        $sb->updateServerConfigurationTable($this->configUuid, $this->componentType, $this->newComponentUuid, 1, 'add', $newSerial);
 
-        // ROOT-CAUSE FIX (2026-08-26): both calls above pass null, null for
-        // $serverLocation / $serverRackPosition, which the setter writes
-        // unconditionally onto the unit going IN -- erasing its address rather
-        // than stamping it, and never writing location_uuid. syncConfig()
-        // re-derives the whole config's address from its real placement, in this
-        // command's open transaction. The unit coming OUT keeps its Location and
-        // loses its RackPosition, which is already correct for loose stock.
-        LocationResolver::syncConfig($this->pdo, $this->configUuid);
+        // A virtual config holds no physical unit on either side of the swap, so
+        // there is nothing to release, nothing to claim and no address to re-derive.
+        // Same guard, same reason, as AddComponentCommand::apply(). The config-level
+        // work below (form-factor lock, rack height) still runs: those are properties
+        // of the CONFIGURATION, not of any unit.
+        if (!$this->isVirtual) {
+            $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
+            $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, $newInventoryId);
+
+            // ROOT-CAUSE FIX (2026-08-26): both calls above pass null, null for
+            // $serverLocation / $serverRackPosition, which the setter writes
+            // unconditionally onto the unit going IN -- erasing its address rather
+            // than stamping it, and never writing location_uuid. syncConfig()
+            // re-derives the whole config's address from its real placement, in this
+            // command's open transaction. The unit coming OUT keeps its Location and
+            // loses its RackPosition, which is already correct for loose stock.
+            LocationResolver::syncConfig($this->pdo, $this->configUuid);
+        }
 
         $sb->recalculateFormFactorLock($this->configUuid);
 

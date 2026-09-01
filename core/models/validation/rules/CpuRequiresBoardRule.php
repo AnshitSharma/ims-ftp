@@ -13,10 +13,24 @@ require_once __DIR__ . '/../Trigger.php';
  * configuration - add motherboard first").
  *
  * Intentional diff (A-12, per RULE_MAP): legacy is a hard block (E-equivalent)
- * at every trigger; here it's VALIDATION_FAILURE, so it blocks ADD/VALIDATE
+ * at every trigger; here it's VALIDATION_FAILURE, so it blocks VALIDATE/FINALIZE
  * but NOT REPLACE (a same-socket CPU swap on an already-invalid draft
- * shouldn't be blocked by a board-less state it didn't create) — closes the
- * "adds allowed in draft" gap the pack calls out.
+ * shouldn't be blocked by a board-less state it didn't create).
+ *
+ * DOCBLOCK CORRECTED 2026-09-01, no behaviour change. This used to claim it
+ * "blocks ADD/VALIDATE". It does not, and never did: Verdict::blocking() counts a
+ * VALIDATION_FAILURE only under Trigger::VALIDATE and Trigger::FINALIZE, so listing
+ * ADD in triggers() makes the rule EVALUATE on an add but never REFUSE one. A CPU
+ * can be added to a board-less config today, and CpuSocketMatchRule then passes
+ * vacuously ("No motherboard to check against").
+ *
+ * That is deliberately left as the behaviour, because it is the right one: build
+ * order is the operator's business, and a draft that is temporarily incomplete is
+ * not an error -- it is a draft. What was wrong was the comment claiming otherwise,
+ * which is how a reader concludes the add path is guarded when it is not. The state
+ * IS caught, at the moment it matters: validate and finalize both refuse it.
+ * ADD stays in triggers() so the finding still surfaces in the add response as a
+ * non-blocking failure, telling the operator what is still missing.
  */
 final class CpuRequiresBoardRule implements RuleInterface
 {

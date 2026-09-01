@@ -63,11 +63,27 @@ final class MemoryTypeRule implements RuleInterface
             return new RuleResult($this->id(), $this->severity(), true, 'No motherboard or CPU -- no memory type constraints');
         }
 
-        $mbTypes = ['DDR4'];
+        // FAIL CLOSED when the board spec cannot be read (2026-09-01).
+        //
+        // This used to default $mbTypes to ['DDR4'] whenever memory.type was
+        // unresolvable, which is not a parity port -- it is a GUESS, and a wrong one
+        // half the time. Against an unreadable DDR5 board every DDR5 module was
+        // rejected with a hard ERROR naming DDR4 the board never claimed; against an
+        // unreadable DDR4 board a DDR5 module would have been admitted for the same
+        // reason. CpuSocketMatchRule already fails closed in exactly this situation
+        // ("Socket specifications not found") rather than assuming a socket; this now
+        // matches it. An unreadable spec is a fact about our data, and saying so is
+        // the honest answer -- inventing a memory generation is not.
+        $mbTypes = [];
         if (!empty($motherboards)) {
             $mbSpec = $this->dataUtils->getMotherboardByUUID($motherboards[0]['spec_uuid']);
             $rawType = is_array($mbSpec) ? ($mbSpec['memory']['type'] ?? null) : null;
-            $mbTypes = $rawType !== null ? [$rawType] : ['DDR4'];
+            if ($rawType === null || $rawType === '') {
+                return new RuleResult($this->id(), $this->severity(), false,
+                    'Memory type specifications not found for the installed motherboard',
+                    ['motherboard_uuid' => $motherboards[0]['spec_uuid']]);
+            }
+            $mbTypes = [$rawType];
         }
 
         foreach ($state->byType('ram') as $ram) {

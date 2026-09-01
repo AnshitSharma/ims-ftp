@@ -189,7 +189,7 @@ class ConfigComponentWriter
              VALUES (?, ?, ?, ?, ?, NULL)'
         );
         $providedResources = [];
-        foreach ($catalog->provides($type, $specUuid) as $row) {
+        foreach ($catalog->provides($type, $specUuid, $componentId) as $row) {
             $providerStmt->execute([$configUuid, $row['resource'], $componentId, $row['slot_ref'], $row['capacity']]);
             $providedResources[$row['resource']] = true;
         }

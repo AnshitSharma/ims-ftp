@@ -146,7 +146,7 @@ final class TargetStateBuilder
                 if ($node === null) {
                     continue;
                 }
-                foreach ($catalog->provides($node['component_type'], $node['spec_uuid']) as $p) {
+                foreach ($catalog->provides($node['component_type'], $node['spec_uuid'], $node['id']) as $p) {
                     if ($p['slot_ref'] !== null) {
                         $providedSlotRefs[$p['slot_ref']] = true;
                     }

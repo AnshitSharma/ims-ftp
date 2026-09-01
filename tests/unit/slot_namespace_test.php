@@ -8,9 +8,18 @@
  * The defect being pinned down: three slot-ID namespaces exist and two share a
  * `riser_` prefix, so bare strpos() tests conflated them.
  *
- *   1. Motherboard PCIe slot   pcie_x16_slot_1
- *   2. Motherboard riser BAY   riser_x16_slot_1
- *   3. Riser-PROVIDED PCIe     riser_{uuid}_pcie_x16_slot_1
+ *   1. Motherboard PCIe slot   pcie_1_x16
+ *   2. Motherboard riser BAY   riser_1_x16
+ *   3. Riser-PROVIDED PCIe     riser_{owner}_pcie_1_x16
+ *
+ * NAMESPACE UNIFIED 2026-09-01. These spellings are the LEDGER namespace
+ * (ResourceCatalog / SlotPlanner). UnifiedSlotTracker used to mint a second,
+ * incompatible set -- pcie_x16_slot_1 / riser_x16_slot_1 /
+ * riser_{uuid}_pcie_x16_slot_1 -- and BOTH were written into
+ * config_components.slot_ref, so neither side could see the other's occupants.
+ * The fixtures below were updated with the minters; the legacy spellings are
+ * asserted at the bottom as strings the discriminators must still classify
+ * safely, since a stale row can carry one until seeder 2026_09_01_002 runs.
  *
  * Consequences this test locks out:
  *   D   getUsedPCIeSlots() missed namespace 3  -> riser slots always read as free
@@ -52,10 +61,10 @@ $isPcie     = function ($s) use ($fn) { return $fn('isPcieSlotPosition', $s); };
 $isBay      = function ($s) use ($fn) { return $fn('isRiserBaySlot', $s); };
 
 // Real IDs as minted by the code, with the minting site for each.
-$mbPcie    = 'pcie_x16_slot_1';                          // loadMotherboardPCIeSlots
-$mbBay     = 'riser_x16_slot_1';                         // loadMotherboardRiserSlots
-$mbBay8    = 'riser_x8_slot_3';                          // ditto, sized variant
-$provided  = 'riser_a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d_pcie_x16_slot_1'; // loadRiserCardProvidedPCIeSlots
+$mbPcie    = 'pcie_1_x16';                               // loadMotherboardPCIeSlots
+$mbBay     = 'riser_1_x16';                              // loadMotherboardRiserSlots
+$mbBay8    = 'riser_3_x8';                               // ditto, sized variant
+$provided  = 'riser_412_pcie_1_x16';                     // loadRiserCardProvidedPCIeSlots
 
 echo "\n-- namespace 1: motherboard PCIe slot --\n";
 check('counts as a PCIe slot',        $isPcie($mbPcie) === true);
@@ -90,20 +99,33 @@ check('bay is not routed to the riser-reference check', $isProvided($mbBay) === 
 check('provided slot IS routed to it',                  $isProvided($provided) === true);
 // And the bay-format check used by the elseif must accept real bay ids.
 check('real bay id matches the bay-format pattern',
-    preg_match('/^riser_x\d+_slot_\d+$/i', $mbBay) === 1);
+    preg_match('/^riser_\d+_x\d+$/i', $mbBay) === 1);
 check('sized bay id matches the bay-format pattern',
-    preg_match('/^riser_x\d+_slot_\d+$/i', $mbBay8) === 1);
+    preg_match('/^riser_\d+_x\d+$/i', $mbBay8) === 1);
 check('genuinely malformed riser id is still rejected',
-    preg_match('/^riser_x\d+_slot_\d+$/i', 'riser_garbage') === 0);
+    preg_match('/^riser_\d+_x\d+$/i', 'riser_garbage') === 0);
 
 echo "\n-- uuid shapes cannot break the discriminator --\n";
 // UUIDs are hex+hyphen, so they never contain the `_` that separates segments.
 check('uppercase uuid still detected',
-    $isProvided('riser_A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D_pcie_x8_slot_2') === true);
+    $isProvided('riser_A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D_pcie_2_x8') === true);
 check('x1 provided slot detected',
-    $isProvided('riser_abc-123_pcie_x1_slot_1') === true);
+    $isProvided('riser_abc-123_pcie_1_x1') === true);
 check('riser-ish prefix without _pcie_ is a bay, not provided',
-    $isProvided('riser_x16_slot_10') === false);
+    $isProvided('riser_10_x16') === false);
+
+echo "\n-- legacy-namespace strings are still classified safely --\n";
+// A row written before 2026-09-01 can still carry a legacy id until seeder
+// 2026_09_01_002 runs. The discriminators must not mistake one for another
+// namespace in the meantime — a misclassified occupant is how a slot reads as
+// free while a card sits in it.
+check('legacy motherboard PCIe id is a pcie slot, not a bay',
+    $isPcie('pcie_x16_slot_1') === true && $isBay('pcie_x16_slot_1') === false);
+check('legacy riser BAY id is a bay, not riser-provided',
+    $isBay('riser_x16_slot_1') === true && $isProvided('riser_x16_slot_1') === false);
+check('legacy riser-provided id is still riser-provided, not a bay',
+    $isProvided('riser_a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d_pcie_x16_slot_1') === true
+    && $isBay('riser_a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d_pcie_x16_slot_1') === false);
 
 echo "\n-- degenerate inputs do not throw or misclassify --\n";
 check('empty string is no namespace',
@@ -114,7 +136,7 @@ check('unrelated id is no namespace',
     $isPcie('m2_slot_1') === false && $isBay('m2_slot_1') === false);
 // Substring, not prefix — must not match.
 check('embedded prefix does not match',
-    $isPcie('x_pcie_x16_slot_1') === false);
+    $isPcie('x_pcie_1_x16') === false);
 
 echo "\n";
 if ($failures > 0) {

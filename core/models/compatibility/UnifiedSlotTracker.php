@@ -126,7 +126,10 @@ class UnifiedSlotTracker {
             $mergedSlots = $totalSlots['slots'];
 
             foreach ($riserCards as $riser) {
-                $riserProvidedSlots = $this->loadRiserCardProvidedPCIeSlots($riser['component_uuid']);
+                $riserProvidedSlots = $this->loadRiserCardProvidedPCIeSlots(
+                    $riser['component_uuid'],
+                    $riser['component_id'] ?? null
+                );
 
                 // Merge riser-provided slots into total slots by slot type
                 foreach ($riserProvidedSlots as $slotType => $slotIds) {
@@ -1029,6 +1032,9 @@ class UnifiedSlotTracker {
                 'uuid'          => $c['component_uuid'] ?? null,
                 'quantity'      => $c['quantity'] ?? 1,
                 'slot_position' => $c['slot_position'] ?? null,
+                // Row identity, needed to scope a riser's provided PCIe slot ids to that
+                // riser rather than to its model — see loadRiserCardProvidedPCIeSlots().
+                'config_component_id' => $c['config_component_id'] ?? null,
             ];
             if (isset($c['serial_number'])) {
                 $entry['serial_number'] = $c['serial_number'];
@@ -1103,6 +1109,23 @@ class UnifiedSlotTracker {
             // until the data is populated. See ims-data/CLAUDE.md for the field contract.
             $socketMap = [];
 
+            // LEDGER NAMESPACE (2026-09-01). This used to mint "pcie_{size}_slot_{n}",
+            // numbered per width, while ResourceCatalog::motherboardPcieSlotRows() minted
+            // "pcie_{n}_{size}", numbered across all entries. BOTH were written into
+            // config_components.slot_ref -- this class's ids via
+            // ServerBuilder::migrateNICSlotPositions(), the catalog's via
+            // AddComponentCommand -- and neither could match the other.
+            //
+            // Consequences, both live: calculateAvailableSlots()'s array_diff could not
+            // subtract a catalog-form occupant, so assignSlot() handed out slots that were
+            // already taken; and TargetState::freeSlots() could not see a legacy-form
+            // occupant, so the engine believed an occupied slot was free. Seeder
+            // 2026_08_24_002 already recorded the divergence and chose the ledger form.
+            //
+            // The ledger namespace wins. The running index and the "pcie_{index}_{width}"
+            // shape below are ResourceCatalog::motherboardPcieSlotRows() reproduced exactly
+            // -- the two MUST agree, so any change to one is a change to both.
+            $index = 1;
             foreach ($pcieSlots as $slotConfig) {
                 $slotType = $slotConfig['type'] ?? '';
                 $count = $slotConfig['count'] ?? 0;
@@ -1119,13 +1142,13 @@ class UnifiedSlotTracker {
                         $slots[$slotSize] = [];
                     }
 
-                    $startIndex = count($slots[$slotSize]) + 1;
                     for ($i = 0; $i < $count; $i++) {
-                        $slotId = "pcie_{$slotSize}_slot_" . ($startIndex + $i);
+                        $slotId = "pcie_{$index}_{$slotSize}";
                         $slots[$slotSize][] = $slotId;
                         if ($cpuSocket !== null) {
                             $socketMap[$slotId] = $cpuSocket;
                         }
+                        $index++;
                     }
                 }
             }
@@ -1172,10 +1195,11 @@ class UnifiedSlotTracker {
                 $maxRisers = $mbSpecs['expansion_slots']['riser_compatibility']['max_risers'] ?? 0;
 
                 if ($maxRisers > 0) {
-                    // Generate riser slots from max_risers count (assume x16 for legacy)
+                    // Generate riser slots from max_risers count (assume x16 for legacy).
+                    // LEDGER NAMESPACE -- mirrors ResourceCatalog::motherboardRiserSlotRows().
                     $slots = ['x16' => []];
                     for ($i = 1; $i <= $maxRisers; $i++) {
-                        $slots['x16'][] = "riser_x16_slot_$i";
+                        $slots['x16'][] = "riser_{$i}_x16";
                     }
 
                     return [
@@ -1191,8 +1215,15 @@ class UnifiedSlotTracker {
                 ];
             }
 
-            // Process riser_slots array with size information
+            // Process riser_slots array with size information.
+            //
+            // LEDGER NAMESPACE (2026-09-01): "riser_{index}_{size}", indexed across ALL
+            // entries. This is ResourceCatalog::motherboardRiserSlotRows() reproduced
+            // exactly -- the two MUST agree, so any change to one is a change to both.
+            // It used to mint "riser_{size}_slot_{n}", numbered per width, which no
+            // ledger provider row could ever match.
             $slots = [];
+            $index = 1;
 
             foreach ($riserSlots as $slotConfig) {
                 $count = $slotConfig['count'] ?? 1;
@@ -1210,9 +1241,9 @@ class UnifiedSlotTracker {
                 }
 
                 // Generate slot IDs for this type
-                $startIndex = count($slots[$slotSize]) + 1;
                 for ($i = 0; $i < $count; $i++) {
-                    $slots[$slotSize][] = "riser_{$slotSize}_slot_" . ($startIndex + $i);
+                    $slots[$slotSize][] = "riser_{$index}_{$slotSize}";
+                    $index++;
                 }
             }
 
@@ -1392,9 +1423,16 @@ class UnifiedSlotTracker {
      */
     private function validateSlotAssignment($slotId, $componentUuid) {
         try {
-            // Extract slot size from slot ID (e.g., "pcie_x16_slot_1" → "x16")
-            if (preg_match('/pcie_(x\d+)_slot_/', $slotId, $matches)) {
-                $slotSize = $matches[1];
+            // Extract slot size from slot ID. LEDGER NAMESPACE (2026-09-01): the width is
+            // the TRAILING token — "pcie_1_x16", "riser_2_x8", "riser_7_pcie_1_x16" —
+            // which is the same shape SlotPlanner::widthOf() parses with /_x(\d+)$/.
+            //
+            // This used to match /pcie_(x\d+)_slot_/, the legacy spelling. Every slot id
+            // the system actually mints and persists failed it, so this method's only
+            // reachable answer was "Invalid slot ID format" — a validator that rejected
+            // 100% of valid input.
+            if (preg_match('/_x(\d+)$/i', (string)$slotId, $matches)) {
+                $slotSize = 'x' . $matches[1];
             } else {
                 return [
                     'valid' => false,
@@ -1567,11 +1605,21 @@ class UnifiedSlotTracker {
                         if (!empty($pcie['slot_position']) &&
                             self::isRiserBaySlot($pcie['slot_position'])) {
 
-                            // Verify this is actually a riser card by checking JSON specs
-                            $specs = $this->componentDataService->getComponentSpecifications('pciecard', $pcie['uuid']);
+                            // Verify this is actually a riser card by checking JSON specs.
+                            // 'risercard' FIRST (2026-09-01): risers became their own
+                            // component type on 2026-08-14, and this lookup only kept
+                            // working because all 20 riser UUIDs were also duplicated into
+                            // ims-data/pciecard/pci-level-3.json. That duplication is the
+                            // reason one model could resolve as both types, and it is being
+                            // removed — resolving through the riser file is what makes this
+                            // survive it. The pciecard fallback stays for any row still
+                            // typed 'pciecard' from before the split.
+                            $specs = $this->componentDataService->getComponentSpecifications('risercard', $pcie['uuid'])
+                                ?: $this->componentDataService->getComponentSpecifications('pciecard', $pcie['uuid']);
                             if ($specs && isset($specs['component_subtype']) && $specs['component_subtype'] === 'Riser Card') {
                                 $riserCards[] = [
                                     'component_uuid' => $pcie['uuid'],
+                                    'component_id'   => $pcie['config_component_id'] ?? null,
                                     'slot_position' => $pcie['slot_position'],
                                     'specs' => $specs
                                 ];
@@ -1595,10 +1643,13 @@ class UnifiedSlotTracker {
      * @param string $riserUuid Riser card UUID
      * @return array PCIe slots provided by this riser, grouped by slot type
      */
-    private function loadRiserCardProvidedPCIeSlots($riserUuid) {
+    private function loadRiserCardProvidedPCIeSlots($riserUuid, $riserComponentId = null) {
         try {
-            // Get riser card specifications from JSON
-            $riserSpecs = $this->componentDataService->getComponentSpecifications('pciecard', $riserUuid);
+            // 'risercard' first — see getRiserCardsInConfig() for why the pciecard
+            // lookup cannot be relied on once the duplicated riser entries leave
+            // ims-data/pciecard/pci-level-3.json.
+            $riserSpecs = $this->componentDataService->getComponentSpecifications('risercard', $riserUuid)
+                ?: $this->componentDataService->getComponentSpecifications('pciecard', $riserUuid);
 
             if (!$riserSpecs) {
                 error_log("Riser card specifications not found for UUID: $riserUuid");
@@ -1627,10 +1678,19 @@ class UnifiedSlotTracker {
                 $slotSize = 'x16'; // Default fallback
             }
 
-            // Generate slot IDs with riser UUID prefix
+            // LEDGER NAMESPACE (2026-09-01): "riser_{owner}_pcie_{i}_{size}", identical to
+            // ResourceCatalog::providesRisercard(). The two MUST agree, so a change to one
+            // is a change to both. Scoped by the riser's config_components ROW id, not by
+            // its model UUID: two units of the same riser model would otherwise mint the
+            // same slot ids and shadow each other. Falls back to the UUID when no row id
+            // is available, which is still distinct per model and matches the old spelling
+            // closely enough for the namespace predicates.
+            $scope = $riserComponentId !== null
+                ? preg_replace('/[^a-z0-9]/i', '', (string)$riserComponentId)
+                : $riserUuid;
             $slots = [$slotSize => []];
             for ($i = 1; $i <= $pcieSlots; $i++) {
-                $slots[$slotSize][] = "riser_{$riserUuid}_pcie_{$slotSize}_slot_{$i}";
+                $slots[$slotSize][] = "riser_{$scope}_pcie_{$i}_{$slotSize}";
             }
 
             return $slots;

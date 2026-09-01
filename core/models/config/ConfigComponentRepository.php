@@ -5,11 +5,15 @@
  *
  * The single class that reads and writes config_components, and appends the
  * paired config_events row / bumps server_configurations.revision that every
- * write must carry (INV-6). Written for U-1.4 with no callers yet by design;
- * the command layer (AddComponentCommand, RemoveComponentCommand,
- * ReplaceComponentCommand, BaseCommand), ConfigComponentWriter,
- * ConfigReadRouter, TargetStateBuilder, StateMachine and ServerBuilder are its
- * live callers now.
+ * write must carry (INV-6). Its live callers are the command layer
+ * (AddComponentCommand, RemoveComponentCommand, ReplaceComponentCommand,
+ * BaseCommand), ConfigComponentWriter, ConfigReadRouter, TargetStateBuilder,
+ * StateMachine and ServerBuilder. (It was written for U-1.4 with no callers at
+ * all; that has not been true since the command-layer cutover.)
+ *
+ * insert() accepts a NULL (inventory_table, inventory_id) pair: that is a
+ * virtual-build row, which reserves no physical unit. Seeder 2026_09_01_001
+ * made the columns NULLable for it.
  *
  * Every write method REQUIRES an already-open PDO transaction and THROWS if
  * none is active: this repository never owns transactions itself (a
@@ -98,12 +102,22 @@ class ConfigComponentRepository
         // (seeder 2026_08_25_005): one server compute platform unit legitimately backs
         // TWO rows -- its system board and its chassis -- and without the type this
         // would return an arbitrary one of them and mis-detect a move.
-        $prior = $this->pdo->prepare(
-            'SELECT id, config_uuid FROM config_components
-              WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?'
-        );
-        $prior->execute([$inventoryTable, $inventoryId, $componentType]);
-        $priorRow = $prior->fetch(PDO::FETCH_ASSOC) ?: null;
+        //
+        // A VIRTUAL config's row names a MODEL, not a unit, so both identity columns
+        // are NULL (seeder 2026_09_01_001). There is no physical unit to have moved,
+        // uq_inventory_once cannot fire on NULLs, and `= NULL` matches nothing anyway
+        // -- so skip the lookup rather than issue a query that can only return
+        // nothing.
+        $hasUnit = $inventoryTable !== null && $inventoryId !== null;
+        $priorRow = null;
+        if ($hasUnit) {
+            $prior = $this->pdo->prepare(
+                'SELECT id, config_uuid FROM config_components
+                  WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?'
+            );
+            $prior->execute([$inventoryTable, $inventoryId, $componentType]);
+            $priorRow = $prior->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
 
         $stmt = $this->pdo->prepare('
             INSERT INTO config_components
@@ -128,8 +142,11 @@ class ConfigComponentRepository
 
         // lastInsertId() is unreliable on the UPDATE branch of ON DUPLICATE KEY
         // UPDATE (driver-dependent) — resolve the real id explicitly either way.
+        // Only the unit-backed path can take the UPDATE branch (that is the only key
+        // NULL identity columns can never collide on), so the fallback is scoped to it
+        // -- a `= NULL` lookup would return 0 and hand callers an invalid row id.
         $id = (int)$this->pdo->lastInsertId();
-        if ($id === 0) {
+        if ($id === 0 && $hasUnit) {
             $lookup = $this->pdo->prepare(
                 'SELECT id FROM config_components
                   WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?'

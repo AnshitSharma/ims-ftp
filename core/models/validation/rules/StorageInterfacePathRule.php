@@ -52,6 +52,11 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * shape and same resolution as the owner's 2026-07-25 StorageBayCapacityRule
  * decision: match legacy now, keep the signal, tighten after cutover.
  *
+ * MADE VISIBLE 2026-09-01. The ADD/REPLACE branch still never blocks, but it no
+ * longer reports the finding as a PASS: an unpathed drive comes back as a
+ * Severity::WARNING failure, so it appears in warnings() and in the add response
+ * instead of sitting unread in details. See evaluate().
+ *
  * Legacy only blocks SAS when its path list comes back EMPTY, and its path
  * search grants a chassis-bay path via
  * StorageConnectionValidator::checkChassisBackplaneCapability() (was ~245-342)
@@ -132,14 +137,32 @@ final class StorageInterfacePathRule implements RuleInterface
         $subject = $state->subject();
         if ($subject !== null) {
             $unpathed = $this->unpathedCount($state, $hasSasHba, $sasBackplane);
-            return new RuleResult($this->id(), $this->severity(), true,
-                'Storage connection paths are judged at validate/finalize, not per add (legacy parity)',
-                $unpathed > 0
-                    ? [
-                        'deferred_unpathed_storage' => $unpathed,
-                        'subject_type' => $subject['component_type'] ?? null,
-                    ]
-                    : []);
+            if ($unpathed === 0) {
+                return new RuleResult($this->id(), $this->severity(), true,
+                    'Storage connection paths are judged at validate/finalize, not per add (legacy parity)');
+            }
+            // REAL, NON-BLOCKING (2026-09-01). This branch used to return a PASSING
+            // result whenever a subject was set -- i.e. on every ADD and REPLACE --
+            // and stash the count in details['deferred_unpathed_storage']. A passing
+            // result never reaches Verdict::failures(), so the count was reported to
+            // nobody: the operator adding parts to a config holding an unpathable SAS
+            // drive got no hint at all until they tried to validate.
+            //
+            // WARNING keeps the F-24 cascade fix intact -- blocking() ignores WARNING
+            // under every trigger, so an ADD is still never refused on interface path
+            // and a config with one unpathable drive stays editable. The no-subject
+            // branch below is unchanged and still BLOCKS at ERROR, which is legacy's
+            // own blocking moment.
+            return new RuleResult($this->id(), Severity::WARNING, false,
+                $unpathed === 1
+                    ? '1 SAS drive has no connection path yet (no SAS HBA and no SAS backplane)'
+                    : "$unpathed SAS drives have no connection path yet (no SAS HBA and no SAS backplane)",
+                [
+                    'deferred_unpathed_storage' => $unpathed,
+                    'subject_type' => $subject['component_type'] ?? null,
+                    'recommendation' => 'Add a SAS-capable HBA, or use a chassis whose backplane supports SAS. '
+                        . 'This is not enforced until validate/finalize.',
+                ]);
         }
 
         foreach ($state->byType('storage') as $storage) {

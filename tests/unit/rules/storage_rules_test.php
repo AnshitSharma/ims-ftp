@@ -15,12 +15,34 @@ require_once $ROOT . '/core/models/validation/rules/StorageInterfacePathRule.php
 require_once $ROOT . '/core/models/validation/rules/StorageBayCapacityRule.php';
 require_once $ROOT . '/core/models/validation/rules/StorageM2CapacityRule.php';
 require_once $ROOT . '/core/models/validation/rules/StorageCaddyPairingRule.php';
+require_once $ROOT . '/core/models/validation/Verdict.php';
+require_once $ROOT . '/core/models/validation/Trigger.php';
 
 $fails = 0;
 function check($label, $cond) {
     global $fails;
     echo ($cond ? "  PASS" : "  FAIL") . "  $label\n";
     if (!$cond) { $fails++; }
+}
+
+/**
+ * "Real, but advisory" — the 2026-09-01 posture for the three storage rules that
+ * used to report their findings as PASSES and were therefore invisible to
+ * ValidateConfigService::warnings() (which lists Verdict::failures()).
+ *
+ * A result must now FAIL at Severity::WARNING, and must still block nothing under
+ * any trigger. Asserting both halves is the point: the first half is what makes the
+ * check real, the second is the legacy-parity guarantee the old assertions were
+ * really protecting.
+ */
+function checkAdvisoryFailure($label, RuleResult $r) {
+    check("$label: reports a failure (not a silent pass)", $r->passed() === false);
+    check("$label: severity is WARNING", $r->severity() === Severity::WARNING);
+    $blocksSomewhere = false;
+    foreach (Trigger::all() as $trigger) {
+        if ((new Verdict([$r], $trigger))->blocking()) { $blocksSomewhere = true; }
+    }
+    check("$label: blocks under NO trigger", $blocksSomewhere === false);
 }
 
 // Real fixtures.
@@ -53,7 +75,7 @@ check('1x 2.5" drive in a 2-bay 2.5" chassis: passes', (new StorageBayCapacityRu
 // Blocking here diverged from production on 7 shadow-parity rows.
 $threeDrives = new TargetState([chsRow(1, CHS_2BAY), stRow(2, ST_SSD25), stRow(3, ST_SSD25), stRow(4, ST_SSD25)]);
 $r = (new StorageBayCapacityRule())->evaluate($threeDrives);
-check('3x 2.5" drives in a 2-bay chassis: PASSES -- oversubscription never blocks (legacy parity)', $r->passed() === true);
+checkAdvisoryFailure('3x 2.5" drives in a 2-bay chassis: oversubscription', $r);
 check('...and the overflow is still reported in details for the tightening pass',
     isset($r->details()['overflow'][0]['capacity']) && $r->details()['overflow'][0]['capacity'] === 2);
 
@@ -108,13 +130,13 @@ check('2.5" drive in a 2.5" bay: passes, and no caddy is demanded',
 // Must NOT block -- legacy raises missing_caddy as a warning and admits the build.
 $adapted = new TargetState([chsRow(1, CHS_35ONLY), stRow(2, ST_SSD25)]);
 $rCaddy = (new StorageCaddyPairingRule())->evaluate($adapted);
-check('2.5" drive into a 3.5"-only chassis with no caddy: PASSES -- shortage never blocks (legacy parity)',
-    $rCaddy->passed() === true);
+checkAdvisoryFailure('2.5" drive into a 3.5"-only chassis with no caddy: shortage', $rCaddy);
 check('...and the shortage is reported in details for the tightening pass',
     ($rCaddy->details()['missing'] ?? null) === 1);
 check('...sized to the BAY (3.5"), not to the drive (2.5") -- the F-29 correction',
     ($rCaddy->details()['required_caddy_size'] ?? null) === '3.5');
-check('caddy_pairing severity is still VALIDATION_FAILURE', $rCaddy->severity() === Severity::VALIDATION_FAILURE);
+check('caddy_pairing DECLARES VALIDATION_FAILURE (the shortage result overrides it to WARNING)',
+    (new StorageCaddyPairingRule())->severity() === Severity::VALIDATION_FAILURE);
 
 // A 2.5" caddy cannot carry a drive into a 3.5" bay -- it is the wrong body size.
 // This is the exact part the OLD rule demanded, so it is the sharpest regression guard.
@@ -190,8 +212,7 @@ $addRam = TargetStateBuilder::withAdd($sasOnSataOnlyChassis, [
     'component_type' => 'ram', 'spec_uuid' => 'ram-fixture-not-read-by-this-rule', 'source' => 'pending',
 ]);
 $ramResult = $ifPath->evaluate($addRam);
-check('F-24: adding RAM to a config holding an unpathable drive PASSES',
-    $ramResult->passed() === true);
+checkAdvisoryFailure('F-24: adding RAM to a config holding an unpathable drive', $ramResult);
 check('F-24: ...and the deferred condition is reported, not forgotten',
     ($ramResult->details()['deferred_unpathed_storage'] ?? 0) === 1);
 check('F-24: ...and details name what the operation was about',
@@ -203,8 +224,8 @@ check('F-24: ...and details name what the operation was about',
 $addSasDrive = TargetStateBuilder::withAdd(new TargetState([chsRow(1, CHS_NO_SAS_BP)]), [
     'component_type' => 'storage', 'spec_uuid' => ST_SAS25, 'source' => 'pending',
 ]);
-check('F-24: adding the unpathable SAS drive itself PASSES at add time (legacy parity)',
-    $ifPath->evaluate($addSasDrive)->passed() === true);
+checkAdvisoryFailure('F-24: adding the unpathable SAS drive itself, at add time',
+    $ifPath->evaluate($addSasDrive));
 check('F-24: ...but the same components with no subject still FAIL at validate time',
     $ifPath->evaluate(new TargetState($addSasDrive->components()))->passed() === false);
 

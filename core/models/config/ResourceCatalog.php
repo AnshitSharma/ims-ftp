@@ -150,7 +150,7 @@ class ResourceCatalog
     /**
      * @return array<int, array{resource:string, slot_ref:?string, capacity:int}>
      */
-    public function provides(string $type, string $specUuid): array
+    public function provides(string $type, string $specUuid, $ownerId = null): array
     {
         if ($type === 'nic' && self::isOnboardNicUuid($specUuid)) {
             return []; // see isOnboardNicUuid() docblock — resolved via providesOnboardNic() instead
@@ -161,7 +161,7 @@ class ResourceCatalog
             case 'motherboard':
                 return $this->providesMotherboard($specUuid);
             case 'risercard':
-                return $this->providesRisercard($specUuid);
+                return $this->providesRisercard($specUuid, $ownerId);
             case 'cpu':
                 return $this->providesCpu($specUuid);
             case 'nic':
@@ -636,8 +636,20 @@ class ResourceCatalog
      * component_subtype === 'Riser Card'; they are now their own component type,
      * so the subtype test is gone — reaching this method IS the riser test.
      * A plain (non-riser) pciecard provides nothing, as before.
+     *
+     * SLOT IDS ARE SCOPED TO THE OWNING RISER (2026-09-01). They used to be
+     * "riser_provided_pcie_{i}_{width}" with no riser identity, so two installed
+     * risers both claimed to provide riser_provided_pcie_1_x16 -- one card seated
+     * there marked BOTH risers' first slot as occupied, and the second riser's
+     * slots were unreachable. UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots()
+     * has always scoped its ids by riser; this brings the ledger into line.
+     *
+     * $ownerId is the config_components.id of the riser row. It is the only
+     * discriminator that separates two units of the SAME riser model. When it is
+     * absent the unscoped legacy spelling is kept, so callers with no row identity
+     * (and the fixtures that assert it) are unaffected.
      */
-    private function providesRisercard(string $specUuid): array
+    private function providesRisercard(string $specUuid, $ownerId = null): array
     {
         $spec = $this->dataUtils->getRiserCardByUUID($specUuid);
         if (!is_array($spec)) {
@@ -656,9 +668,17 @@ class ResourceCatalog
         $slotType = $spec['slot_type'] ?? 'x16';
         $width = preg_match('/x(\d+)/i', (string)$slotType, $m) ? 'x' . $m[1] : 'x16';
 
+        // "riser_<owner>_pcie_<i>_<width>" keeps UnifiedSlotTracker's namespace tests
+        // working (isRiserProvidedPcieSlot matches /^riser_[a-z0-9-]+_pcie_/i, and
+        // isRiserBaySlot excludes exactly that shape) and keeps the width as the
+        // trailing token SlotPlanner::widthOf() parses with /_x(\d+)$/.
+        $scope = $ownerId === null ? null : preg_replace('/[^a-z0-9]/i', '', (string)$ownerId);
         $rows = [];
         for ($i = 1; $i <= $pcieSlots; $i++) {
-            $rows[] = ['resource' => 'pcie_slot', 'slot_ref' => "riser_provided_pcie_{$i}_{$width}", 'capacity' => 1];
+            $slotRef = ($scope === null || $scope === '')
+                ? "riser_provided_pcie_{$i}_{$width}"
+                : "riser_{$scope}_pcie_{$i}_{$width}";
+            $rows[] = ['resource' => 'pcie_slot', 'slot_ref' => $slotRef, 'capacity' => 1];
         }
         return $rows;
     }

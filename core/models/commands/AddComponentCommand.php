@@ -41,10 +41,19 @@ final class AddComponentCommand extends BaseCommand
     private $componentUuid;
     /** @var array */
     private $options;
-    /** @var array|null set by buildTarget(), read by apply() */
+    /** @var array|null set by buildTarget(), read by apply(). NULL for a virtual config — see $isVirtual. */
     private $resolvedInventoryRow;
     /** @var string|null set by buildTarget() when a slot was planned */
     private $plannedSlotRef;
+    /**
+     * @var int|null config_components.id of this unit's parent row (an SFP's NIC),
+     * resolved in buildTarget() and PERSISTED by apply(). It used to be resolved for
+     * evaluate()'s benefit and then thrown away at the insert, which is what left every
+     * SFP row parentless -- see apply().
+     */
+    private $resolvedParentId;
+    /** @var bool the config is a sandbox/what-if build that must reserve no stock */
+    private $isVirtual = false;
 
     public function __construct(PDO $pdo, string $configUuid, string $componentType, string $componentUuid, array $options = [], $actor = 0, ?int $expectedRevision = null)
     {
@@ -61,6 +70,83 @@ final class AddComponentCommand extends BaseCommand
 
     protected function buildTarget(TargetState $current, array $lockedRow): TargetState
     {
+        $sb = new ServerBuilder($this->pdo);
+        if (!$sb->isValidComponentType($this->componentType)) {
+            throw new CommandFailed('invalid_component_type', "Invalid component type: {$this->componentType}", 400);
+        }
+
+        $this->isVirtual = !empty($lockedRow['is_virtual']);
+        if ($this->isVirtual) {
+            $this->resolveVirtualComponent();
+        } else {
+            $this->resolveRealComponent($lockedRow);
+        }
+
+        $this->resolvedParentId = $this->resolveParentId($current);
+        $slotRef = $this->resolveSlotRef($current);
+        $this->plannedSlotRef = $slotRef;
+
+        // no 'id' key: TargetStateBuilder::withAdd() assigns a synthetic id for evaluate()'s own purposes.
+        $row = [
+            'component_type' => $this->componentType,
+            'spec_uuid' => $this->componentUuid,
+            'inventory_table' => $this->resolvedInventoryRow['table'] ?? null,
+            'inventory_id' => isset($this->resolvedInventoryRow['data']['ID'])
+                ? (int)$this->resolvedInventoryRow['data']['ID']
+                : null,
+            'serial_number' => $this->resolvedInventoryRow['data']['SerialNumber'] ?? null,
+            'parent_id' => $this->resolvedParentId,
+            'slot_ref' => $slotRef,
+        ];
+
+        return TargetStateBuilder::withAdd($current, $row);
+    }
+
+    /**
+     * A VIRTUAL config is a what-if build and must reserve nothing: no inventory
+     * row is locked, no unit is claimed, and the config_components row it produces
+     * carries inventory_table/inventory_id NULL.
+     *
+     * This restores the guard migration P9 deleted along with
+     * ServerBuilder::addComponent(). Between P9 and this change, a sandbox add
+     * wrote the real unit's identity into config_components and flipped that unit
+     * to Status=2 -- and because uq_inventory_once is keyed on the physical unit,
+     * ConfigComponentRepository::insert()'s ON DUPLICATE KEY UPDATE MOVED the row
+     * out of whatever real server was holding it.
+     *
+     * Refuses (503) rather than falling back to the stock-claiming path while the
+     * columns are still NOT NULL, because the fallback is exactly the theft this
+     * exists to stop. Seeder 2026_09_01_001 relaxes them.
+     */
+    private function resolveVirtualComponent(): void
+    {
+        if (!self::unitlessPlacementSupported($this->pdo)) {
+            throw new CommandFailed(
+                'virtual_placement_unsupported',
+                'Sandbox builds cannot hold components until seeder '
+                . '2026_09_01_001_nullable-config-components-inventory.sql has been run.',
+                503
+            );
+        }
+
+        // Rule 1 still holds for a sandbox: the model must exist in ims-data. What a
+        // virtual build drops is the requirement that we OWN one, which is what made
+        // the Compatibility Bench unable to test hardware not already in stock.
+        require_once __DIR__ . '/../components/ComponentDataService.php';
+        if (!ComponentDataService::getInstance()->validateComponentUuid($this->componentType, $this->componentUuid)) {
+            throw new CommandFailed(
+                'component_not_found',
+                "Component {$this->componentUuid} is not a known {$this->componentType} specification",
+                404
+            );
+        }
+
+        $this->resolvedInventoryRow = null;
+    }
+
+    /** The real (stock-claiming) path: lock a physical unit and gate on its availability. */
+    private function resolveRealComponent(array $lockedRow): void
+    {
         $this->resolvedInventoryRow = $this->lockAndCheckComponent();
         if ($this->resolvedInventoryRow === null) {
             // 'inventory_component_not_found', NOT 'component_not_found': the
@@ -76,78 +162,189 @@ final class AddComponentCommand extends BaseCommand
         // Finding A (verify record 2026-07-12): legacy's post-lock availability
         // gate + override protocol, ported into BaseCommand.
         $this->assertInventoryAvailability($this->resolvedInventoryRow['data'], $lockedRow, $this->options);
+        $this->assertNotAlreadyPlaced();
+    }
 
-        $parentId = null;
-        if ($this->componentType === 'sfp' && !empty($this->options['parent_nic_uuid'])) {
-            foreach ($current->byType('nic') as $nic) {
-                if ($nic['spec_uuid'] === $this->options['parent_nic_uuid']) {
-                    $parentId = $nic['id'];
-                    break;
-                }
-            }
+    /**
+     * Refuse to "add" a physical unit that is ALREADY live in a configuration.
+     *
+     * Observed live 2026-09-01: a model with exactly one unit in stock accepted three
+     * consecutive server-add-component calls, each answering 200 "Component added
+     * successfully", and produced ONE row. Two of those three successes were fiction.
+     *
+     * The mechanism is a gap between two guards that each looked complete:
+     *   * assertInventoryAvailability() passes a Status=2 unit whose ServerUUID is
+     *     THIS config -- an exemption meant for re-adding a unit already bound here;
+     *   * lockAndCheckComponent() with no serial orders available units first but
+     *     falls back to that same in-use unit when the model has no other;
+     *   * ConfigComponentRepository::insert() then takes the ON DUPLICATE KEY branch
+     *     on uq_inventory_once and UPDATEs the row it already wrote.
+     * Nothing in that chain is wrong on its own, and nothing in it says no.
+     *
+     * The live row IS the authority on "already installed", which is why this checks
+     * config_components rather than {type}inventory.Status -- Status and ServerUUID
+     * drift (BACKLOG B-9), a live row does not. A tombstoned row (removed_at set) is
+     * not live, so remove-then-re-add still works. The lookup carries component_type
+     * because one serverplatform unit legitimately backs both a motherboard row and a
+     * chassis row (seeder 2026_08_25_005).
+     */
+    private function assertNotAlreadyPlaced(): void
+    {
+        $table = $this->resolvedInventoryRow['table'] ?? null;
+        $unitId = isset($this->resolvedInventoryRow['data']['ID'])
+            ? (int)$this->resolvedInventoryRow['data']['ID']
+            : null;
+        if ($table === null || $unitId === null) {
+            return; // virtual placement: no physical unit to double-book
         }
 
-        $slotRef = null;
-        if (in_array($this->componentType, ['nic', 'pciecard', 'hbacard'], true)
-            && strpos($this->componentUuid, 'onboard-') !== 0
+        $stmt = $this->pdo->prepare(
+            'SELECT config_uuid FROM config_components
+              WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?
+                AND removed_at IS NULL
+              LIMIT 1'
+        );
+        $stmt->execute([$table, $unitId, $this->componentType]);
+        $holder = $stmt->fetchColumn();
+        if ($holder === false) {
+            return;
+        }
+
+        if ($holder === $this->configUuid) {
+            throw new CommandFailed(
+                'component_already_installed',
+                "This {$this->componentType} unit is already installed in this configuration. "
+                . 'Add a different unit, or take delivery of more stock.',
+                409
+            );
+        }
+
+        throw new CommandFailed(
+            'component_unavailable',
+            "This {$this->componentType} unit is installed in configuration $holder.",
+            409
+        );
+    }
+
+    /**
+     * config_components.id of the row this unit hangs off, or null.
+     *
+     * Today only an SFP has one: its parent NIC. The resolved value is now carried
+     * through to apply() and PERSISTED. It previously existed only for evaluate()'s
+     * benefit and was dropped at the insert (a hardcoded 'parent_id' => null), which
+     * meant NetSfpPortRule saw every SFP as unparented and took its
+     * "staged/unassigned -- allowed" branch, so SFP-to-NIC cage compatibility was
+     * never checked on add and the module read back as status 'unassigned'.
+     */
+    private function resolveParentId(TargetState $current): ?int
+    {
+        if ($this->componentType !== 'sfp' || empty($this->options['parent_nic_uuid'])) {
+            return null;
+        }
+        foreach ($current->byType('nic') as $nic) {
+            if ($nic['spec_uuid'] === $this->options['parent_nic_uuid']) {
+                // Synthetic ids from TargetStateBuilder are negative; only a real
+                // config_components row can be a persisted FK target.
+                return is_int($nic['id']) && $nic['id'] > 0 ? $nic['id'] : null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The slot this unit occupies, in the LEDGER namespace (pcie_1_x16 / riser_1_x16
+     * / port_3) that TargetState::freeSlots() matches providers against.
+     *
+     * risercard is in the slotted list: it was missing, so every riser was persisted
+     * with slot_ref NULL and a board with one riser bay accepted unlimited risers.
+     * ServerBuilder::evaluateOneCandidate() (the get-compatible listing) has always
+     * planned one, so the listing and the add path disagreed.
+     *
+     * An SFP's slot IS its NIC port, written in the canonical "port_N" shape seeder
+     * 2026_08_22_001 established and ConfigReadRouter::portIndexFromSlotRef() reads
+     * back.
+     */
+    private function resolveSlotRef(TargetState $current): ?string
+    {
+        if ($this->componentType === 'sfp') {
+            $portIndex = isset($this->options['port_index']) ? (int)$this->options['port_index'] : 0;
+            return $portIndex > 0 ? 'port_' . $portIndex : null;
+        }
+
+        if (!in_array($this->componentType, ['nic', 'pciecard', 'hbacard', 'risercard'], true)
+            || strpos($this->componentUuid, 'onboard-') === 0
         ) {
-            $plan = $this->planSlot($current);
-            if ($plan['ok']) {
-                $slotRef = $plan['slot_ref'];
-            }
-            // A plan failure (no free slot / unknown width) leaves slot_ref null;
-            // PcieSlotPlacementRule (U-R.3) judges that as infeasible and blocks
-            // the trigger via the SAME registry evaluate() every rule runs
-            // through — this command does not duplicate that judgment.
+            return null;
         }
-        $this->plannedSlotRef = $slotRef;
 
-        // no 'id' key: TargetStateBuilder::withAdd() assigns a synthetic id for evaluate()'s own purposes.
-        $row = [
-            'component_type' => $this->componentType,
-            'spec_uuid' => $this->componentUuid,
-            'inventory_table' => $this->resolvedInventoryRow['table'],
-            'inventory_id' => (int)$this->resolvedInventoryRow['data']['ID'],
-            'serial_number' => $this->resolvedInventoryRow['data']['SerialNumber'] ?? null,
-            'parent_id' => $parentId,
-            'slot_ref' => $slotRef,
-        ];
+        $plan = $this->planSlot($current);
+        // A plan failure (no free slot / unknown width) leaves slot_ref null;
+        // PcieSlotPlacementRule (U-R.3) judges that as infeasible and blocks
+        // the trigger via the SAME registry evaluate() every rule runs
+        // through — this command does not duplicate that judgment.
+        return $plan['ok'] ? $plan['slot_ref'] : null;
+    }
 
-        return TargetStateBuilder::withAdd($current, $row);
+    /**
+     * Does config_components accept a row with no physical unit behind it?
+     *
+     * Code reaches production ~20s after a save; seeders are run by hand afterwards,
+     * so every reference to a newly-relaxed column has to tolerate the old schema.
+     * Same probe-and-degrade shape as platformRowsSupported() in server_api.php.
+     * Never queries the catalog schema — the app DB user is denied it and the guard
+     * would fail open.
+     */
+    private static function unitlessPlacementSupported(PDO $pdo): bool
+    {
+        static $supported = null;
+        if ($supported !== null) {
+            return $supported;
+        }
+        try {
+            $stmt = $pdo->query("SHOW COLUMNS FROM config_components LIKE 'inventory_table'");
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $supported = is_array($row) && strtoupper((string)($row['Null'] ?? 'NO')) === 'YES';
+        } catch (\Throwable $e) {
+            error_log('AddComponentCommand: inventory_table nullability probe failed, assuming NOT NULL: ' . $e->getMessage());
+            $supported = false;
+        }
+        if (!$supported) {
+            error_log('AddComponentCommand: config_components.inventory_table is still NOT NULL -- '
+                . 'run seeder 2026_09_01_001. Sandbox builds are refused until then, because the '
+                . 'only alternative is claiming real stock for a what-if build.');
+        }
+        return $supported;
     }
 
     protected function apply(PDO $pdo, TargetState $target): void
     {
-        $inventoryData = $this->resolvedInventoryRow['data'];
-        $table = $this->resolvedInventoryRow['table'];
-        $serialNumber = $inventoryData['SerialNumber'] ?? ($this->options['serial_number'] ?? null);
+        // NULL for a virtual config: a what-if build names a MODEL, never a unit.
+        // Every reader is already written for this shape (RemoveComponentCommand
+        // guards on inventory_table !== null, TargetStateBuilder::fetchStatusV2()
+        // skips null pairs, ConfigReadRouter omits the inventory_id key).
+        $inventoryData = $this->resolvedInventoryRow['data'] ?? null;
+        $table = $this->resolvedInventoryRow['table'] ?? null;
+        $inventoryId = isset($inventoryData['ID']) ? (int)$inventoryData['ID'] : null;
+        $serialNumber = $this->isVirtual
+            ? null
+            : ($inventoryData['SerialNumber'] ?? ($this->options['serial_number'] ?? null));
 
         $repo = new ConfigComponentRepository($pdo);
         $repo->insert($this->configUuid, [
             'component_type' => $this->componentType,
             'inventory_table' => $table,
-            'inventory_id' => (int)$inventoryData['ID'],
+            'inventory_id' => $inventoryId,
             'spec_uuid' => $this->componentUuid,
             'serial_number' => $serialNumber,
-            'parent_id' => null, // config_components' parent_id is a row-id FK; re-anchored below once the sfp's own row exists is out of this unit's box (single-insert path only, matches legacy's single-component addComponent())
+            'parent_id' => $this->resolvedParentId,
             'slot_ref' => $this->plannedSlotRef,
         ], $this->actor);
 
         $sb = new ServerBuilder($pdo);
-        $legacyOptions = $this->options;
-        if ($this->plannedSlotRef !== null) {
-            $legacyOptions['slot_position'] = $this->plannedSlotRef;
-        }
-        // The legacy add path this command replaced stamped the PHYSICAL unit's row id
-        // into the JSON entry (ServerBuilder::addComponent, A-L5). Without it
-        // componentEntryMatches() falls back to the model UUID, so a second unit of one
-        // model merges into the first entry as quantity:2 and removing either then takes
-        // BOTH -- which is how config 1f61541b lost its cpu_configuration. Invisible at
-        // READ_FROM_ROWS=on; it bites a rollback to =off, the sole remaining purpose of
-        // these columns until U-D.3 drops them.
-        $legacyOptions['inventory_id'] = (int)$inventoryData['ID'];
+        // Only stamps server_configurations.motherboard_uuid / chassis_uuid; it reads
+        // no options. Correct for a virtual config too — that is the config's own row.
         $sb->updateServerConfigurationTable(
-            $this->configUuid, $this->componentType, $this->componentUuid, 1, 'add', $serialNumber, $legacyOptions
+            $this->configUuid, $this->componentType, $this->componentUuid, 1, 'add', $serialNumber
         );
 
         // Mirrors the legacy add path: a racked server's placement was snapshotted at
@@ -172,7 +369,12 @@ final class AddComponentCommand extends BaseCommand
         // legacy path is gone, so this command must call the handler itself.
         // Runs pre-commit inside this same transaction (the handler joins an
         // open transaction rather than opening its own).
-        if ($this->componentType === 'motherboard') {
+        //
+        // Skipped for a virtual config: autoAddOnboardNICs() MATERIALIZES rows in
+        // nicinventory, which is real stock. A what-if build must not create parts.
+        // The trade-off is deliberate and visible: a sandbox board reports no onboard
+        // ports rather than manufacturing inventory rows nobody can account for.
+        if ($this->componentType === 'motherboard' && !$this->isVirtual) {
             require_once __DIR__ . '/../compatibility/OnboardNICHandler.php';
             $onboard = (new OnboardNICHandler($pdo))->autoAddOnboardNICs(
                 $this->configUuid, $this->componentUuid, (int)$inventoryData['ID']
@@ -218,12 +420,19 @@ final class AddComponentCommand extends BaseCommand
             }
         }
 
+        // Everything below claims and re-addresses a PHYSICAL unit. A virtual config
+        // has none, so it stops here -- this is what "reserves nothing" now means,
+        // and it is the guard P9 deleted with ServerBuilder::addComponent().
+        if ($this->isVirtual) {
+            return;
+        }
+
         // Identify the unit by the inventory row this command already locked, not by
         // serial: serial-less stock (SerialNumber NULL, addressed by AssetTag) cannot be
         // matched by serial and would otherwise fall through to the model-wide WHERE and
         // be refused by the ambiguity guard.
         $sb->updateComponentStatusAndServerUuid(
-            $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber, (int)$inventoryData['ID']
+            $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber, $inventoryId
         );
 
         // ROOT-CAUSE FIX (2026-08-26): the call above passes null, null for
@@ -250,11 +459,8 @@ final class AddComponentCommand extends BaseCommand
      */
     private function lockAndCheckComponent(): ?array
     {
-        $sb = new ServerBuilder($this->pdo);
-        if (!$sb->isValidComponentType($this->componentType)) {
-            throw new CommandFailed('invalid_component_type', "Invalid component type: {$this->componentType}", 400);
-        }
-        $table = $sb->getComponentInventoryTable($this->componentType);
+        // Type validity is asserted in buildTarget() before either resolution path.
+        $table = (new ServerBuilder($this->pdo))->getComponentInventoryTable($this->componentType);
 
         $serialNumber = $this->options['serial_number'] ?? null;
         if ($serialNumber !== null) {
@@ -324,7 +530,23 @@ final class AddComponentCommand extends BaseCommand
             || ($spec['component_subtype'] ?? null) === 'Riser Card';
         $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
         $width = SlotPlanner::extractCardWidth($spec);
+
+        // ROOT CAUSE of "no card is ever slotted" (2026-09-01). The frontend sends
+        // slot_position unconditionally, defaulting to '' (server-api.js
+        // addComponentToServer, component-installer.js), and handleAddComponent()
+        // passes it straight through. An empty string is not a manual slot request --
+        // but `?? null` only catches a MISSING key, so '' went to planManual(), which
+        // answered "Slot  does not exist". The plan failed, slot_ref was persisted
+        // NULL, and PcieSlotPlacementRule then re-planned the card and passed it.
+        // Result: every PCIe card in production carries slot_ref NULL, the slot
+        // occupancy key never fires, and slot capacity is not enforced at all.
         $manual = $this->options['slot_position'] ?? null;
+        if (is_string($manual)) {
+            $manual = trim($manual);
+        }
+        if ($manual === '' || $manual === false) {
+            $manual = null;
+        }
 
         return SlotPlanner::plan($current, $resource, $width, $manual);
     }

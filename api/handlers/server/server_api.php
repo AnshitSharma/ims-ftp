@@ -760,10 +760,56 @@ function handleAddComponent($serverBuilder, $user) {
         // Accept both port_index and slot_position (alias for backward compatibility)
         $portIndex = isset($_POST['port_index']) ? (int)$_POST['port_index'] : (isset($_POST['slot_position']) ? (int)$_POST['slot_position'] : null);
 
+        // AUTO-RESOLVE THE PARENT NIC when the caller did not name one (2026-09-01).
+        //
+        // This used to be an unconditional 400, which made an entire class of caller
+        // impossible: ComponentInstaller (template import and compute-platform install)
+        // lists 'sfp' in its INSTALL_ORDER but calls addComponentToServer() with no
+        // parent_nic_uuid, so EVERY SFP in a bundle was rejected and reported to the
+        // operator as "The server rejected this component". There was no way for that
+        // caller to succeed.
+        //
+        // Resolution is deliberately narrow: exactly ONE NIC in the configuration with
+        // a free port. Zero or several is still a 400 -- now naming the candidates
+        // rather than restating the parameter -- because guessing which card a module
+        // goes into is not a decision this endpoint gets to make silently.
         if (empty($parentNicUuid)) {
-            send_json_response(0, 1, 400, "parent_nic_uuid is required for SFP modules", [
-                'hint' => 'Specify which NIC card this SFP should be installed in'
-            ]);
+            // Read through ConfigReadRouter, NOT ServerBuilder::getConfigComponents():
+            // that method deliberately drops onboard NICs (it feeds virtual-template
+            // import, which must not copy them), and an onboard port is very often the
+            // only place an SFP can go.
+            require_once __DIR__ . '/../../../core/models/config/ConfigReadRouter.php';
+            $candidateNics = [];
+            $configRowForSfp = ServerConfiguration::loadByUuid($pdo, $configUuid);
+            if ($configRowForSfp) {
+                $sfpNicRows = ConfigReadRouter::components($serverBuilder, $pdo, $configRowForSfp->getData());
+                foreach ($sfpNicRows as $entry) {
+                    if (($entry['component_type'] ?? null) !== 'nic') {
+                        continue;
+                    }
+                    $candidateUuid = $entry['component_uuid'] ?? null;
+                    if ($candidateUuid === null || isset($candidateNics[$candidateUuid])) {
+                        continue;
+                    }
+                    if ($serverBuilder->autoAssignSFPPort($candidateUuid, $configUuid)) {
+                        $candidateNics[$candidateUuid] = true;
+                    }
+                }
+            }
+            $candidateNics = array_keys($candidateNics);
+
+            if (count($candidateNics) === 1) {
+                $parentNicUuid = $candidateNics[0];
+            } elseif (count($candidateNics) === 0) {
+                send_json_response(0, 1, 400, "No network card in this configuration has a free port for an SFP module", [
+                    'hint' => 'Add a NIC first, or free a port on an existing one'
+                ]);
+            } else {
+                send_json_response(0, 1, 400, "Several network cards could host this SFP module -- name one", [
+                    'hint' => 'Pass parent_nic_uuid to say which NIC this SFP goes into',
+                    'candidate_nic_uuids' => $candidateNics
+                ]);
+            }
         }
 
         if (empty($portIndex) || $portIndex < 1) {
@@ -1411,16 +1457,27 @@ function handleGetConfiguration($serverBuilder, $user) {
         // Use validation results from database
         $configuration = $details['configuration'];
         $validationResults = $configuration['validation_results'] ?? [];
-        $individualComponentChecks = []; // Simplified - no individual component checks
-        // Simple basic validation checks using stored data only
-        $configurationValid = !empty($validationResults);
+        // $individualComponentChecks and $configurationValid were computed here and
+        // never read by anything. Removed 2026-09-01.
 
 
         // Simplified configuration data - use stored values from database
         $configuration['power_consumption'] = $details['power_consumption']['total_with_overhead_watts'] ?? 0;
 
-        // Migrate any component NICs that pre-date slot auto-assignment
-        $serverBuilder->migrateNICSlotPositions($configUuid);
+        // REMOVED 2026-09-01: $serverBuilder->migrateNICSlotPositions($configUuid).
+        //
+        // A lazy "migration" that ran an UNLOCKED WRITE on every GET of this endpoint,
+        // and was wrong in three ways at once:
+        //   * it minted slot ids in the LEGACY UnifiedSlotTracker namespace and wrote
+        //     them into config_components.slot_ref, where nothing in the validation
+        //     engine could match them (see seeder 2026_09_01_002);
+        //   * it read $nicSpecs['interface'], which ComponentDataService::extractNicSpecs()
+        //     renames to 'interface_type', so the width ALWAYS fell through to a
+        //     hardcoded x8 regardless of the card;
+        //   * writing from a read path, with no row lock, is how two concurrent GETs
+        //     could hand the same slot to two cards.
+        // AddComponentCommand has planned and persisted slots since the cutover, and
+        // seeder 2026_09_01_002 repairs the one row this ever touched.
 
         // Get unified slot tracking (PCIe, riser, and M.2)
         $slotTracking = $serverBuilder->getSlotTracking($configUuid);
@@ -1501,10 +1558,19 @@ function handleGetConfiguration($serverBuilder, $user) {
             ],
             'component_options' => $componentOptions,
             'validation' => [
-                'is_valid' => !empty($validationResults),
+                // Was `!empty($validationResults)`, which is TRUE whenever validation
+                // has EVER run, whatever it concluded -- so an INVALID configuration
+                // reported is_valid: true to every consumer of this endpoint. Read the
+                // stored verdict itself. null means "never validated", which is a
+                // different fact from both "valid" and "invalid".
+                'is_valid' => is_array($validationResults) && array_key_exists('valid', $validationResults)
+                    ? (bool)$validationResults['valid']
+                    : null,
                 'last_validated' => $configuration['updated_at'] ?? $configuration['created_at'],
                 'warnings' => $configWarnings,
-                'errors' => []
+                'errors' => is_array($validationResults) && !empty($validationResults['errors'])
+                    ? array_values($validationResults['errors'])
+                    : []
             ]
         ]);
         
@@ -1726,6 +1792,44 @@ function handleListConfigurations($serverBuilder, $user) {
 }
 
 /**
+ * Order components so each type is installed only after the types it depends on.
+ *
+ * Mirrors ComponentInstaller.INSTALL_ORDER in
+ * IMS-Frontend/assets/js/server/component-installer.js. Keep the two identical --
+ * they install the same bundles, and a build that succeeds through one and fails
+ * through the other is a bug in whichever drifted.
+ *
+ * Stable: entries of the same type keep the order they were given in.
+ *
+ * @param array[] $components entries carrying 'component_type'
+ * @return array[]
+ */
+function sortComponentsForInstall(array $components) {
+    static $order = [
+        'motherboard', 'chassis', 'cpu', 'ram', 'storage', 'caddy',
+        // risercard BEFORE the cards that sit on it: four platform boards
+        // (HPE DL360 Gen9, DL380 Gen10, DL325 Gen10 Plus v2, Dell R630) declare
+        // only expansion_slots.riser_slots and no pcie_slots at all, so on those
+        // platforms every card is refused for want of a PCIe slot that only an
+        // installed riser can provide.
+        'risercard', 'nic', 'hbacard', 'pciecard',
+        // sfp last: it needs its parent NIC to already be in the configuration.
+        'sfp',
+    ];
+    $rank = array_flip($order);
+    $indexed = [];
+    foreach ($components as $i => $component) {
+        $indexed[] = ['i' => $i, 'c' => $component];
+    }
+    usort($indexed, function ($a, $b) use ($rank, $order) {
+        $ra = $rank[$a['c']['component_type'] ?? ''] ?? count($order);
+        $rb = $rank[$b['c']['component_type'] ?? ''] ?? count($order);
+        return $ra === $rb ? $a['i'] <=> $b['i'] : $ra <=> $rb;
+    });
+    return array_column($indexed, 'c');
+}
+
+/**
  * Import virtual server configuration to real configuration
  * Creates a new real server with available components from the virtual config
  */
@@ -1797,9 +1901,24 @@ function handleImportVirtual($serverBuilder, $user) {
             StatusMap::CONFIG_LEGACY_TO_V2[0]
         ]);
 
-        // Step 4: Attempt to add each component from virtual to real config
+        // Step 4: Attempt to add each component from virtual to real config,
+        // IN DEPENDENCY ORDER.
+        //
+        // getConfigComponents() returns rows in ConfigReadRouter::LEGACY_TYPE_ORDER --
+        // cpu, ram, storage, caddy, nic, hbacard, MOTHERBOARD, chassis, riser,
+        // pciecard, sfp -- so the board arrived seventh. Every capacity and
+        // compatibility rule short-circuits on "no motherboard", so the CPUs, RAM and
+        // NICs ahead of it were installed with NO slot planned and NO capacity check
+        // at all, and nothing re-plans them once the board lands. An import could
+        // therefore produce a configuration the same rules would have refused to build
+        // by hand, one component at a time.
+        //
+        // This is the frontend's ComponentInstaller.INSTALL_ORDER
+        // (IMS-Frontend/assets/js/server/component-installer.js) mirrored server-side.
+        // The two MUST stay in step: they install the same bundles.
         $importedComponents = [];
         $warnings = [];
+        $components = sortComponentsForInstall($components);
 
         foreach ($components as $component) {
             $componentType = $component['component_type'];
@@ -1810,9 +1929,18 @@ function handleImportVirtual($serverBuilder, $user) {
 
             if ($availableComponent) {
                 // Component is available - add it to real config
+                // NO SERIAL PIN. This used to pass $availableComponent['SerialNumber'],
+                // which AddComponentCommand::lockAndCheckComponent() turns into
+                // `WHERE UUID = ? AND SerialNumber = ?`. Two failures followed:
+                //   * serial-less stock (SerialNumber NULL, addressed by AssetTag)
+                //     matched nothing and every such entry warned 'import_failed';
+                //   * for quantity N, all N dispatches targeted the SAME serial, so
+                //     insert()'s ON DUPLICATE KEY reused one row and N units silently
+                //     became 1 -- contradicting the comment right below this block.
+                // Without the pin each dispatch claims the next available unit, which
+                // is exactly what that comment already promised.
                 $options = [
                     'quantity' => $component['quantity'] ?? 1,
-                    'serial_number' => $availableComponent['SerialNumber'] ?? null
                 ];
 
                 // Add slot_position for PCIe cards if present
@@ -2107,7 +2235,16 @@ function handleGetAvailableComponents($user) {
 
     $configUuid = $_GET['config_uuid'] ?? $_POST['config_uuid'] ?? '';
     $componentType = $_GET['component_type'] ?? $_POST['component_type'] ?? '';
-    $availableOnly = filter_var($_GET['available_only'] ?? $_POST['available_only'] ?? true, FILTER_VALIDATE_BOOLEAN);
+    // The frontend sends `include_in_use` (server-api.js:251); this handler only ever
+    // read `available_only`, so that toggle did nothing at all. Both spellings are
+    // accepted now, with include_in_use read as the inverse it means.
+    if (isset($_GET['include_in_use']) || isset($_POST['include_in_use'])) {
+        $availableOnly = !filter_var(
+            $_GET['include_in_use'] ?? $_POST['include_in_use'], FILTER_VALIDATE_BOOLEAN
+        );
+    } else {
+        $availableOnly = filter_var($_GET['available_only'] ?? $_POST['available_only'] ?? true, FILTER_VALIDATE_BOOLEAN);
+    }
     $limit = (int)($_GET['limit'] ?? 50);
 
 
@@ -2128,10 +2265,17 @@ function handleGetAvailableComponents($user) {
             'total_returned' => count($components)
         ];
 
-        // Add configuration context if provided
+        // Configuration context. $configSummary and $allowedTypes were NEVER ASSIGNED
+        // anywhere in this function, so with a config_uuid supplied this emitted two
+        // null keys and logged an "undefined variable" notice on every call. Report
+        // what the handler can actually establish -- what the configuration already
+        // holds -- instead of two nulls.
         if ($configUuid) {
-            $responseData['configuration_summary'] = $configSummary;
-            $responseData['allowed_types'] = $allowedTypes;
+            $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+            if ($config) {
+                $responseData['configuration_summary'] =
+                    (new ServerBuilder($pdo))->summarizeInstalledComponents($configUuid, $config->getData());
+            }
         }
 
         send_json_response(1, 1, 200, "Available components retrieved successfully", $responseData);

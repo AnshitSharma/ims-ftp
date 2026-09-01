@@ -63,6 +63,14 @@ final class PcieSlotPlacementRule implements RuleInterface
             return new RuleResult($this->id(), $this->severity(), true, 'No motherboard -- slot assignment skipped');
         }
 
+        // Slots handed out EARLIER IN THIS PASS. TargetState::freeSlots() only knows
+        // what is persisted, so without this every unplaced card was offered the same
+        // free slot and N cards all "fit" a board with one slot -- the rule reported
+        // feasible placements that cannot coexist. Combined with the empty-string
+        // manual-slot defect (AddComponentCommand::planSlot) that left every card's
+        // slot_ref NULL, PCIe slot capacity was not enforced at all.
+        $planned = [];
+
         foreach (['nic', 'pciecard', 'risercard', 'hbacard'] as $type) {
             foreach ($state->byType($type) as $component) {
                 if ($component['slot_ref'] !== null) {
@@ -85,12 +93,14 @@ final class PcieSlotPlacementRule implements RuleInterface
                 $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
                 $width = SlotPlanner::extractCardWidth($spec);
 
-                $plan = SlotPlanner::plan($state, $resource, $width, null);
+                $exclude = $planned[$resource] ?? [];
+                $plan = SlotPlanner::plan($state, $resource, $width, null, $exclude);
                 if (!$plan['ok']) {
                     return new RuleResult($this->id(), $this->severity(), false, $plan['error'],
                         ['component_id' => $component['id'], 'component_type' => $type,
                             'resource' => $resource, 'width' => $width, 'error_code' => $plan['error_code']]);
                 }
+                $planned[$resource][] = $plan['slot_ref'];
             }
         }
 

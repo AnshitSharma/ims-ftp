@@ -169,6 +169,11 @@ final class ConfigReadRouter
             $component = [
                 'component_type' => $type,
                 'component_uuid' => $row['spec_uuid'],
+                // The config_components row id. Additive, like 'slot_position' and
+                // 'inventory_id' before it. It is the only stable identity that tells
+                // two units of the SAME model apart, which is what riser-provided PCIe
+                // slot ids are scoped by (ResourceCatalog::providesRisercard()).
+                'config_component_id' => isset($row['id']) ? (int)$row['id'] : null,
                 // Rows are one-per-physical-unit, so quantity is always 1. See the
                 // class docblock (c): totals agree with legacy, per-entry shape
                 // need not.

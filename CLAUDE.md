@@ -93,11 +93,18 @@ their last values are frozen in `server_configurations_json_archive`. `motherboa
   off the row; never infer it from `component_type`.
 - Write through `ConfigComponentRepository` / `ConfigComponentWriter`, inside the caller's
   transaction (fail-closed, INV-5).
-- **Virtual builds (`is_virtual = 1`) are excluded by design.** They reserve no stock, so there
-  is no inventory unit for a row's NOT NULL `inventory_id` to point at, and
-  `ConfigComponentWriter::afterLegacyAdd()` refuses them. A pre-2026-08-21 virtual config
-  therefore reads as having no components at all. That is not a bug to fix by backfilling —
-  it cannot be backfilled. Their old JSON is preserved in `server_configurations_json_archive`.
+- **Virtual builds (`is_virtual = 1`) reserve no stock, and since 2026-09-01 they get rows
+  anyway.** `AddComponentCommand` / `ReplaceComponentCommand` branch on the locked row's
+  `is_virtual`: they write the `config_components` row with `inventory_table` and
+  `inventory_id` **NULL**, and skip the status flip to `in_use` and `LocationResolver::
+  syncConfig()`. Before that they wrote the real unit's identity and moved it out of whatever
+  real server held it (`uq_inventory_once` + `ON DUPLICATE KEY UPDATE config_uuid`), so a
+  sandbox build silently stole production hardware. The NULLable columns come from seeder
+  `2026_09_01_001`; the command probes `SHOW COLUMNS` first and refuses a virtual add with a
+  503 until it has run, rather than falling back to stealing stock. `ConfigComponentWriter::
+  afterLegacyAdd()` still refuses virtual configs, so the onboard-NIC/platform path is
+  unchanged. A pre-2026-08-21 virtual config still reads as having no components at all;
+  that cannot be backfilled, and its old JSON is in `server_configurations_json_archive`.
 - `uq_slot_occupancy (config_uuid, slot_ref, removed_at)` does **not** prevent two live rows
   sharing a slot: every live row has `removed_at` NULL and MariaDB treats NULLs as distinct in a
   unique key, so the index only ever constrains tombstones sharing a timestamp. Probed

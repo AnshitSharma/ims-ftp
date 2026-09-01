@@ -58,12 +58,17 @@ final class SlotPlanner
      *                         'riser_slot' (riser cards themselves)
      * @param string|null $cardWidth from extractCardWidth(), or null if unparseable
      * @param string|null $manualSlotRef a specific slot_ref the caller requests
+     * @param string[] $excludeSlotRefs slot_refs a caller has ALREADY handed out in
+     *        this same pass. TargetState::freeSlots() reflects what is PERSISTED, so
+     *        without this a caller planning several unplaced cards against one
+     *        unchanged state offers them all the same free slot — which is exactly
+     *        what let PcieSlotPlacementRule pass N cards into a board with 1 slot.
      * @return array{ok:bool, slot_ref:?string, error:?string, error_code:?string}
      */
-    public static function plan(TargetState $state, string $resource, ?string $cardWidth, ?string $manualSlotRef = null): array
+    public static function plan(TargetState $state, string $resource, ?string $cardWidth, ?string $manualSlotRef = null, array $excludeSlotRefs = []): array
     {
         if ($manualSlotRef !== null) {
-            return self::planManual($state, $resource, $cardWidth, $manualSlotRef);
+            return self::planManual($state, $resource, $cardWidth, $manualSlotRef, $excludeSlotRefs);
         }
 
         if ($cardWidth === null) {
@@ -71,7 +76,7 @@ final class SlotPlanner
         }
 
         $compatibleWidths = self::SLOT_COMPATIBILITY[$cardWidth] ?? [$cardWidth];
-        $free = $state->freeSlots($resource);
+        $free = self::withoutExcluded($state->freeSlots($resource), $excludeSlotRefs);
 
         foreach ($compatibleWidths as $width) {
             foreach ($free as $row) {
@@ -86,7 +91,19 @@ final class SlotPlanner
             'error_code' => 'no_slots_available'];
     }
 
-    private static function planManual(TargetState $state, string $resource, ?string $cardWidth, string $manualSlotRef): array
+    /** @param array[] $free provider rows @param string[] $exclude */
+    private static function withoutExcluded(array $free, array $exclude): array
+    {
+        if (!$exclude) {
+            return $free;
+        }
+        $excluded = array_flip($exclude);
+        return array_values(array_filter($free, function ($row) use ($excluded) {
+            return !isset($excluded[$row['slot_ref']]);
+        }));
+    }
+
+    private static function planManual(TargetState $state, string $resource, ?string $cardWidth, string $manualSlotRef, array $excludeSlotRefs = []): array
     {
         $all = $state->byResource($resource);
         $target = null;
@@ -100,7 +117,7 @@ final class SlotPlanner
             return ['ok' => false, 'slot_ref' => null, 'error' => "Slot $manualSlotRef does not exist", 'error_code' => 'invalid_slot'];
         }
 
-        $free = $state->freeSlots($resource);
+        $free = self::withoutExcluded($state->freeSlots($resource), $excludeSlotRefs);
         $isFree = false;
         foreach ($free as $row) {
             if ($row['slot_ref'] === $manualSlotRef) {

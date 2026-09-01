@@ -33,12 +33,22 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * fallback and take 3.5" bays; 2.5" drives fill 2.5" bays first and only then
  * spill into whatever 3.5" bays remain. Each spilled drive needs one 3.5" caddy.
  *
- * NON-BLOCKING, same posture as storage.bay_capacity's overflow branch: a
- * shortage is returned as a PASSING result carrying details. Legacy's caddy
- * check raises `missing_caddy` as a warning and admits the build, so failing
- * here would reject at FINALIZE what legacy finalizes today -- the precise
- * regression class the 2026-07-25 bay_capacity correction was written to avoid.
- * The detail payload keeps the signal for the post-cutover tightening pass.
+ * NON-BLOCKING, but REAL (2026-09-01). A shortage used to be returned as a
+ * PASSING result carrying details -- so EVERY branch of this rule returned
+ * passed=true and the check could not fire. Verdict::failures() is what
+ * ValidateConfigService::warnings() lists, so a passing result is invisible:
+ * server-get-config never surfaced a caddy shortage, and
+ * BuildAffordances::caddyOption()'s docblock still pointed at the
+ * `caddy_shortage` warning in the long-deleted getConfigurationWarnings().
+ * A validation that cannot fail is not a validation.
+ *
+ * The shortage branch now returns passed=false at Severity::WARNING. That is
+ * the "make them real, as warnings" posture: Verdict::blocking() ignores
+ * WARNING under every trigger, so nothing that finalizes today stops
+ * finalizing -- the legacy-parity concern the old comment recorded is kept --
+ * while the signal finally reaches the operator. The RESULT severity is what
+ * blocking() reads, not the rule's declared severity(), so overriding it
+ * per-result is the supported way to say "real finding, advisory only".
  */
 final class StorageCaddyPairingRule implements RuleInterface
 {
@@ -131,14 +141,18 @@ final class StorageCaddyPairingRule implements RuleInterface
 
         $missing = $adaptedDrives - $caddies35;
 
-        // Non-blocking by design (see class docblock): legacy warns and admits.
-        return new RuleResult($this->id(), $this->severity(), true,
-            "Caddy shortage (non-blocking, legacy warns): {$adaptedDrives} drive(s) seat in a 3.5\" bay via an adapter but only {$caddies35} 3.5\" caddy(ies) are present",
+        // A real failure at WARNING severity: it reaches warnings() and the add
+        // response, and blocks nothing (see class docblock).
+        return new RuleResult($this->id(), Severity::WARNING, false,
+            "Caddy shortage: {$adaptedDrives} drive(s) seat in a 3.5\" bay via an adapter but only {$caddies35} 3.5\" caddy(ies) are present",
             [
                 'adapted_drives' => $adaptedDrives,
                 'caddy_count' => $caddies35,
                 'missing' => $missing,
                 'required_caddy_size' => '3.5',
+                'recommendation' => $missing === 1
+                    ? 'Add 1 more 3.5" caddy so every adapted drive has a tray.'
+                    : "Add {$missing} more 3.5\" caddies so every adapted drive has a tray.",
             ]);
     }
 }

@@ -46,13 +46,18 @@ foreach ($riserSpecs as $family) {
     foreach ($family['models'] as $m) { $riserUuid = $m['UUID']; $riserSpec = $m; break 2; }
 }
 if ($riserUuid === null) { echo "FATAL: no real risercard fixture found in ims-data\n"; exit(1); }
-// The riser_provided_pcie_1_x8 slot_ref asserted further down is spelled out literally on
+// The riser_1_pcie_1_x8 slot_ref asserted further down is spelled out literally on
 // purpose (deriving it from the catalog under test would be circular), so pin the two spec
 // fields ResourceCatalog::providesRisercard() builds it from. A fixture change must FAIL
 // loudly here rather than silently make that assertion unreachable.
+//
+// The leading "1" is the OWNING RISER'S config_components row id. Riser-provided slot ids
+// were scoped to their riser on 2026-09-01: they used to be riser_provided_pcie_1_x8 with
+// no riser identity at all, so two installed risers both claimed to provide that same slot
+// and one card seated there marked BOTH risers' first slot as occupied.
 if (($riserSpec['pcie_slots'] ?? null) !== 1 || ($riserSpec['slot_type'] ?? null) !== 'x8') {
     echo "FATAL: risercard fixture $riserUuid is no longer 1 slot / x8 — the expected"
-        . " riser_provided_pcie_1_x8 slot_ref below would be stale\n";
+        . " riser_1_pcie_1_x8 slot_ref below would be stale\n";
     exit(1);
 }
 
@@ -150,7 +155,7 @@ check('dependentsOf() on an id not in the state returns []', TargetStateBuilder:
 $riserWithCard = new TargetState([
     // provider side must be typed 'risercard' post-split; the occupant stays a plain pciecard.
     row(1, 'risercard', $riserUuid),
-    row(2, 'pciecard', 'c8384a51-5630-4ecf-9ecc-15bc660a4b17', ['slot_ref' => 'riser_provided_pcie_1_x8']),
+    row(2, 'pciecard', 'c8384a51-5630-4ecf-9ecc-15bc660a4b17', ['slot_ref' => 'riser_1_pcie_1_x8']),
 ]);
 $slotDeps = TargetStateBuilder::dependentsOf($riserWithCard, 1);
 check('dependentsOf(riser) finds the card occupying its provided slot_ref (resource-link, no parent_id needed)', count($slotDeps) === 1 && $slotDeps[0]['id'] === 2);
