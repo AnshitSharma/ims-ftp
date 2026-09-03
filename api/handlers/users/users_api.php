@@ -157,12 +157,21 @@ function handleUserOperations($operation, $user) {
                 send_json_response(0, 1, 400, "Cannot delete your own account");
             }
 
-            $success = deleteUser($pdo, $targetUserId);
+            // deleteUser() reports WHICH outcome happened: a clean delete, or a
+            // retire when audit rows (Requests, request history) reference the
+            // account and a hard delete would destroy the trail. Both are a
+            // success for the admin — the account is gone as far as access goes.
+            $result = deleteUser($pdo, $targetUserId);
 
-            if ($success) {
-                send_json_response(1, 1, 200, "User deleted successfully");
+            if (!empty($result['ok'])) {
+                send_json_response(1, 1, 200, $result['message'], [
+                    'user_id' => (int)$targetUserId,
+                    'mode'    => $result['mode']
+                ]);
+            } elseif (($result['mode'] ?? '') === 'missing') {
+                send_json_response(0, 1, 404, $result['message']);
             } else {
-                send_json_response(0, 1, 400, "Failed to delete user");
+                send_json_response(0, 1, 400, $result['message']);
             }
             break;
 

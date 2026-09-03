@@ -8,6 +8,7 @@ require_once __DIR__ . '/Severity.php';
 // not just transitively through the rule files.
 require_once __DIR__ . '/Trigger.php';
 require_once __DIR__ . '/rules/CpuSocketMatchRule.php';
+require_once __DIR__ . '/rules/CpuGenerationMatchRule.php';
 require_once __DIR__ . '/rules/CpuSocketCountRule.php';
 require_once __DIR__ . '/rules/CpuMixedModelsRule.php';
 require_once __DIR__ . '/rules/CpuRequiresBoardRule.php';
@@ -49,6 +50,9 @@ class ValidationEngine
     const RULES = [
         // U-R.1 cpu.* (docs/RULE_MAP.md)
         CpuSocketMatchRule::class,
+        // socket type alone does not identify a generation -- four sockets in
+        // the catalog are shared across generations (see the rule's docblock)
+        CpuGenerationMatchRule::class,
         CpuSocketCountRule::class,
         CpuMixedModelsRule::class,
         CpuRequiresBoardRule::class,

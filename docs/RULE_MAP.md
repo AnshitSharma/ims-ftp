@@ -6,6 +6,7 @@ per rule + explained-diff mapping when the new rule intentionally differs (audit
 | Unit | New rule id (sev) | Legacy location(s) | Intentional diffs |
 |---|---|---|---|
 | U-R.1 | cpu.socket_match (E) | ServerBuilder::validateCPUAddition 3792-3798 + ComponentValidator::validateCPUSocketCompatibility 265 | none |
+| U-R.1 | cpu.generation_match (E) | none — socket fit was the only CPU↔board gate | NEW rule (2026-09-02); inert until a board declares `cpu_support`, see note below |
 | U-R.1 | cpu.socket_count (E) | validateCPUAddition 3764-3789 (entry count) | counts ROWS ⇒ quantity bypass closes (A-2) |
 | U-R.1 | cpu.mixed_models (E/W) | ComponentValidator::validateMixedCPUCompatibility 377 (ORPHANED — never called) → CpuIdentityMatcher | new firing = expected diffs; see note below |
 | U-R.1 | cpu.requires_board (VF) | validateCPUAddition 3754-3760 hard block | E→VF (A-12): adds allowed in draft |
@@ -27,6 +28,49 @@ per rule + explained-diff mapping when the new rule intentionally differs (audit
 | U-R.7 | system.psu_capacity (E) | checkPowerCompatibilityDetailed 5706 (scoring only!) | scoring → E (V-4) |
 | U-R.7 | system.inventory_state (E) | validateConfiguration 3232 (non-blocking issues!) | non-blocking → E (V-2) |
 | U-R.8 | dependency.blocked_removal (E) | ONLY NIC→SFP existed (removeComponent 987) | every edge now enforced (R-1) — large expected-diff set, all mapped |
+
+## Note — cpu.generation_match, and why socket fit was not enough (2026-09-02)
+
+Socket type does not identify a generation. Four sockets in the catalog are shared, so
+`cpu.socket_match` passed pairings that will not POST:
+
+| Socket | Generations sharing it | Boards |
+|---|---|---|
+| LGA2011-3 / FCLGA2011-3 | Xeon E5 v3 (Haswell-EP) + v4 (Broadwell-EP) | 5 loose + 5 platform |
+| LGA3647 / FCLGA3647 | Skylake-SP; Cascade Lake would join it | 7 loose + 5 platform |
+| SP3 | EPYC 7002 (Zen 2) + 7003 (Zen 3) | 3 loose + 3 platform |
+| AM4 | Zen, Zen 2, Zen 3 | 2 loose |
+
+The board declares an optional `cpu_support` block in `ims-data`
+(`{generations, series}` — documented in `ims-data/CLAUDE.md`); every matching decision
+lives in `core/models/compatibility/CpuGenerationResolver.php`.
+
+**Two axes, because neither vendor's data alone covers both.** `generations` is Intel's
+discriminator, a closed vocabulary, so board entries resolve through an alias table —
+`Broadwell-EP` and `Xeon E5 v4` are one canonical id — matched against the CPU's
+`architecture`, with `series`/`family` as fallback. `series` is AMD's: `architecture`
+cannot express it, since EPYC 7742 and Ryzen 5 3600 both say `Zen 2`, and the
+product-line fact lives in the CPU's `family` (`EPYC 7002`, `Ryzen 9 5000`). That is an
+open vocabulary, so the series axis matches by token subset — a board saying
+`Ryzen 5000` matches family `Ryzen 9 5000`, while `EPYC 7003` does not match `EPYC 7002`.
+
+Each axis is independently optional and declared axes are **ANDed**. A board declaring
+neither is unconstrained, which is why code and `ims-data` may deploy in either order:
+the rule is inert until data appears, and the old code ignores the key as unknown.
+
+Fail-closed detail: a board that declares a constraint plus a CPU with no
+`architecture`/`series`/`family` at all is refused rather than waved through, matching
+`CpuIdentityMatcher`'s posture on an unparseable model name. Unreachable with current
+`ims-data` — all 32 CPU models carry `architecture`.
+
+Boundaries: `cpu.socket_match` owns the physical connector, `cpu.mixed_models` owns
+CPU↔CPU pairing, `cpu.requires_board` owns the no-board case (which this rule passes on),
+and an absent board spec is left for `cpu.socket_match` to report so one root cause does
+not produce two blocking results. Platform compute boards need no special case:
+`getMotherboardByUUID` resolves a platform's embedded `system_board` through
+`PlatformSpecIndex` under type `motherboard`, so the same code reads the same field paths
+for a platform build and a loose spare — covered by a test on both copies of the DL325
+Gen10 Plus v2 board.
 
 ## Note — cpu.mixed_models scope change (2026-08-14)
 

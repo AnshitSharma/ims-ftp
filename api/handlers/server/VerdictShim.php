@@ -27,6 +27,7 @@ final class VerdictShim
      */
     const RULE_TO_LEGACY_TYPE = [
         'cpu.socket_match' => 'socket_mismatch',           // legacy: CPU socket type doesn't match motherboard
+        'cpu.generation_match' => 'generation_mismatch',    // NEW class -- no legacy predecessor; socket fit alone allowed cross-generation CPUs
         'cpu.socket_count' => 'cpu_limit_exceeded',         // legacy: too many CPUs for this motherboard's socket count
         'system.singleton' => 'duplicate_component',        // legacy: "Configuration already has a motherboard/chassis"
         'cpu.requires_board' => 'motherboard_required',      // legacy: CPU/RAM add requires a motherboard present first
