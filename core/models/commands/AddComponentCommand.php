@@ -352,6 +352,23 @@ final class AddComponentCommand extends BaseCommand
         // a real decision (both engines refuse), not a crash.
         if ($this->componentType === 'chassis') {
             require_once __DIR__ . '/../rack/RackPlacement.php';
+            require_once __DIR__ . '/../rack/RackEnclosure.php';
+
+            // An enclosure is not a chassis a server is built IN — it is the box
+            // that HOLDS servers (an FX2s holds four FC630 sleds, each its own
+            // configuration). Building a server on one would give it the
+            // enclosure's 2U and four phantom bays, and leave nothing to slot
+            // the real sleds into. Refused here rather than only filtered out of
+            // the picker, because the picker is not the only way in.
+            if (RackEnclosure::isEnclosureChassis($this->componentUuid)) {
+                throw new CommandFailed(
+                    'chassis_is_enclosure',
+                    'That model is a blade enclosure, not a server chassis. Add it to a rack in Rack View, '
+                        . 'then install servers into its bays.',
+                    400
+                );
+            }
+
             $placementSync = RackPlacement::syncHeightFromChassis($pdo, $this->configUuid);
             if (!$placementSync['success']) {
                 throw new CommandFailed('rack_placement_conflict', $placementSync['message'], 409);

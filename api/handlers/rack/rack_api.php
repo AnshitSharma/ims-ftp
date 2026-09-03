@@ -6,18 +6,23 @@
  * Included by api/api.php after JWT auth + ACL gate. The concrete operation
  * is passed via $GLOBALS['operation'] (e.g. 'assign-server' for rack-assign-server).
  *
- * Data model (see seeder 2026_06_17_001):
- *   racks         — one physical rack (name, location, total_u, numbering)
- *   rack_servers  — placement of a server_configuration at a U-position
+ * Data model (see seeders 2026_06_17_001 and 2026_09_03_003):
+ *   racks           — one physical rack (name, location, total_u, numbering)
+ *   rack_enclosures — a blade/modular chassis occupying a U range in a rack
+ *   rack_servers    — placement of a server_configuration, either DIRECTLY at a
+ *                     U-position or SLOTTED into a bay of an enclosure
  *
- * A server's u_height is derived from its chassis u_size at assignment time
- * and stored as a snapshot. U-range overlaps are enforced here in PHP.
+ * A directly-placed server's u_height is derived from its chassis u_size at
+ * assignment time and stored as a snapshot. A sled's is mirrored from its
+ * enclosure. U-range overlaps are enforced in PHP, over direct servers plus
+ * enclosures — RackPlacement::occupancy() is the one definition.
  */
 
 require_once __DIR__ . '/../../../core/config/app.php';
 require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
 require_once __DIR__ . '/../../../core/models/chassis/ChassisManager.php';
 require_once __DIR__ . '/../../../core/models/rack/RackPlacement.php';
+require_once __DIR__ . '/../../../core/models/rack/RackEnclosure.php';
 require_once __DIR__ . '/../../../core/models/rack/ServerRelocation.php';
 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
 require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
@@ -59,6 +64,18 @@ switch ($action) {
         break;
     case 'placement':
         handleRackPlacement($pdo, $user);
+        break;
+    case 'enclosure-models':
+        handleRackEnclosureModels($pdo, $user);
+        break;
+    case 'enclosure-add':
+        handleRackEnclosureAdd($pdo, $user);
+        break;
+    case 'enclosure-update':
+        handleRackEnclosureUpdate($pdo, $user);
+        break;
+    case 'enclosure-remove':
+        handleRackEnclosureRemove($pdo, $user);
         break;
     default:
         send_json_response(0, 1, 400, "Invalid rack operation: $action");
@@ -106,6 +123,26 @@ function rackChassisName($chassisUuid) {
 }
 
 /**
+ * A chassis form factor ("1U", "Half-width Node"), or null. Lets the placement
+ * dialog tell a sled apart from a rack server before the user picks anywhere.
+ */
+function rackChassisFormFactor($chassisUuid) {
+    if (empty($chassisUuid)) {
+        return null;
+    }
+    try {
+        $manager = new ChassisManager();
+        $specs = $manager->loadChassisSpecsByUUID($chassisUuid);
+        if (!empty($specs['found']) && isset($specs['specifications']['form_factor'])) {
+            return $specs['specifications']['form_factor'];
+        }
+    } catch (Throwable $e) {
+        // best effort only -- a label must never fail a request
+    }
+    return null;
+}
+
+/**
  * A rack's location_uuid, or null while seeder 2026_08_26_003 has not been run.
  *
  * Wrapped rather than read inline because a rack row is `SELECT *` and the
@@ -130,14 +167,24 @@ function handleRackList($pdo, $user) {
     try {
         $racks = $pdo->query("SELECT * FROM racks ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-        // Occupancy per rack in a single grouped query.
+        // Server count per rack in a single grouped query. Sleds are counted --
+        // four FC630s in an FX2s really are four servers in this rack.
         $occ = [];
         $occStmt = $pdo->query("
-            SELECT rack_uuid, COUNT(*) AS server_count, COALESCE(SUM(u_height), 0) AS used_u
+            SELECT rack_uuid, COUNT(*) AS server_count
             FROM rack_servers GROUP BY rack_uuid
         ");
         foreach ($occStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $occ[$row['rack_uuid']] = $row;
+        }
+
+        // USED U IS NOT SUM(u_height). A sled mirrors its enclosure's U range,
+        // so summing would report an FX2s holding four blades as 8U of a 48U
+        // rack. RackPlacement::usedU counts DISTINCT occupied U instead, over
+        // direct servers plus enclosures.
+        $usedByRack = [];
+        foreach ($racks as $r) {
+            $usedByRack[$r['rack_uuid']] = RackPlacement::usedU($pdo, $r['rack_uuid']);
         }
 
         // location_uuid / floor arrive with seeder 2026_08_26_003 and the
@@ -147,8 +194,9 @@ function handleRackList($pdo, $user) {
         $hasLocationUuid = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
         $hasFloor        = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
 
-        $result = array_map(function ($r) use ($occ, $pdo, $hasLocationUuid, $hasFloor) {
-            $o = $occ[$r['rack_uuid']] ?? ['server_count' => 0, 'used_u' => 0];
+        $result = array_map(function ($r) use ($occ, $usedByRack, $pdo, $hasLocationUuid, $hasFloor) {
+            $o = $occ[$r['rack_uuid']] ?? ['server_count' => 0];
+            $usedU = $usedByRack[$r['rack_uuid']] ?? 0;
             $locationUuid = $hasLocationUuid ? ($r['location_uuid'] ?: null) : null;
 
             return [
@@ -164,8 +212,8 @@ function handleRackList($pdo, $user) {
                 'numbering_top_down' => (int)$r['numbering_top_down'],
                 'notes' => $r['notes'],
                 'server_count' => (int)$o['server_count'],
-                'used_u' => (int)$o['used_u'],
-                'free_u' => max(0, (int)$r['total_u'] - (int)$o['used_u']),
+                'used_u' => $usedU,
+                'free_u' => max(0, (int)$r['total_u'] - $usedU),
                 'created_at' => $r['created_at'],
                 'updated_at' => $r['updated_at'],
             ];
@@ -193,12 +241,18 @@ function handleRackGet($pdo, $user) {
             send_json_response(0, 1, 404, "Rack not found");
         }
 
+        // `servers` carries DIRECT placements only. A sled is returned inside
+        // its enclosure's `slots`, where the elevation draws it -- listing it
+        // here too would paint a full-width faceplate over the box it lives in.
+        $directOnly = RackPlacement::enclosuresAvailable($pdo)
+            ? " AND rs.enclosure_uuid IS NULL" : "";
+
         $stmt = $pdo->prepare("
             SELECT rs.config_uuid, rs.start_u, rs.u_height,
                    sc.server_name, sc.configuration_status, sc.chassis_uuid, sc.location
             FROM rack_servers rs
             LEFT JOIN server_configurations sc ON sc.config_uuid = rs.config_uuid
-            WHERE rs.rack_uuid = ?
+            WHERE rs.rack_uuid = ?{$directOnly}
             ORDER BY rs.start_u ASC
         ");
         $stmt->execute([$rackUuid]);
@@ -220,7 +274,15 @@ function handleRackGet($pdo, $user) {
             ];
         }, $rows);
 
-        $usedU = array_sum(array_map(fn($s) => $s['u_height'], $servers));
+        $enclosures = RackEnclosure::listForRack($pdo, $rackUuid);
+
+        // Distinct occupied U, not a sum of heights -- see handleRackList.
+        $usedU = RackPlacement::usedU($pdo, $rackUuid);
+
+        $sledCount = 0;
+        foreach ($enclosures as $e) {
+            $sledCount += $e['slots_used'];
+        }
 
         send_json_response(1, 1, 200, "Rack retrieved successfully", [
             'rack' => [
@@ -235,10 +297,12 @@ function handleRackGet($pdo, $user) {
                 'notes' => $rack['notes'],
                 'used_u' => $usedU,
                 'free_u' => max(0, (int)$rack['total_u'] - $usedU),
+                'server_count' => count($servers) + $sledCount,
                 'created_at' => $rack['created_at'],
                 'updated_at' => $rack['updated_at'],
             ],
             'servers' => $servers,
+            'enclosures' => $enclosures,
         ]);
     } catch (Throwable $e) {
         error_log("handleRackGet error: " . $e->getMessage());
@@ -403,12 +467,20 @@ function handleRackUpdate($pdo, $user) {
             if ($totalU < 1 || $totalU > 100) {
                 send_json_response(0, 1, 400, "Rack height (total_u) must be between 1 and 100");
             }
-            // Don't let the rack shrink below the highest occupied U.
-            $topStmt = $pdo->prepare("SELECT COALESCE(MAX(start_u + u_height - 1), 0) AS top_u FROM rack_servers WHERE rack_uuid = ?");
-            $topStmt->execute([$rackUuid]);
-            $topU = (int)($topStmt->fetch(PDO::FETCH_ASSOC)['top_u'] ?? 0);
+            // Don't let the rack shrink below the highest occupied U. Read from
+            // the shared occupancy so an EMPTY enclosure high in the rack still
+            // blocks the shrink -- it holds no sleds, so rack_servers alone
+            // would not know it is there.
+            $topU = 0;
+            $topLabel = null;
+            foreach (RackPlacement::occupancy($pdo, $rackUuid) as $item) {
+                if ($item['end_u'] > $topU) {
+                    $topU = $item['end_u'];
+                    $topLabel = $item['label'];
+                }
+            }
             if ($totalU < $topU) {
-                send_json_response(0, 1, 400, "Cannot shrink rack to {$totalU}U — a server occupies up to U{$topU}. Move it first.");
+                send_json_response(0, 1, 400, "Cannot shrink rack to {$totalU}U — {$topLabel} occupies up to U{$topU}. Move it first.");
             }
             $fields[] = "total_u = ?";
             $values[] = $totalU;
@@ -466,6 +538,18 @@ function handleRackDelete($pdo, $user) {
             send_json_response(0, 1, 400, "Cannot delete rack — it still has $count server(s) installed. Remove them first.");
         }
 
+        // An empty enclosure holds no servers and so passes the check above, but
+        // deleting the rack around it would strand a row pointing at a rack that
+        // no longer exists.
+        if (RackPlacement::enclosuresAvailable($pdo)) {
+            $encStmt = $pdo->prepare("SELECT COUNT(*) AS c FROM rack_enclosures WHERE rack_uuid = ?");
+            $encStmt->execute([$rackUuid]);
+            $encCount = (int)($encStmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
+            if ($encCount > 0) {
+                send_json_response(0, 1, 400, "Cannot delete rack — it still has $encCount enclosure(s) installed. Remove them first.");
+            }
+        }
+
         $stmt = $pdo->prepare("DELETE FROM racks WHERE rack_uuid = ?");
         $stmt->execute([$rackUuid]);
 
@@ -495,26 +579,46 @@ function handleRackDelete($pdo, $user) {
  *
  * u_height stays overridable for Rack View, which sizes sleds explicitly;
  * omitted, it is re-derived from the chassis as before.
+ *
+ * TWO DESTINATIONS. Send `enclosure_uuid` + `slot_index` to install the server
+ * in a bay — the enclosure supplies the rack and the U range, so rack_uuid and
+ * start_u are not required and are ignored if sent. Send `rack_uuid` +
+ * `start_u` for the direct placement this action has always done; that also
+ * takes a server OUT of a bay, because a server is in one place.
  */
 function handleRackAssignServer($pdo, $user) {
-    $rackUuid   = $_POST['rack_uuid'] ?? '';
-    $configUuid = $_POST['config_uuid'] ?? '';
-    $startU     = isset($_POST['start_u']) ? (int)$_POST['start_u'] : 0;
+    $rackUuid      = $_POST['rack_uuid'] ?? '';
+    $configUuid    = $_POST['config_uuid'] ?? '';
+    $enclosureUuid = trim($_POST['enclosure_uuid'] ?? '');
+    $slotIndex     = isset($_POST['slot_index']) && $_POST['slot_index'] !== '' ? (int)$_POST['slot_index'] : null;
+    $startU        = isset($_POST['start_u']) ? (int)$_POST['start_u'] : 0;
 
-    if (empty($rackUuid) || empty($configUuid)) {
-        send_json_response(0, 1, 400, "rack_uuid and config_uuid are required");
+    if (empty($configUuid)) {
+        send_json_response(0, 1, 400, "config_uuid is required");
     }
-    if ($startU < 1) {
-        send_json_response(0, 1, 400, "start_u must be 1 or greater");
+
+    if ($enclosureUuid !== '') {
+        if ($slotIndex === null || $slotIndex < 1) {
+            send_json_response(0, 1, 400, "slot_index must be 1 or greater when placing a server in an enclosure");
+        }
+    } else {
+        if (empty($rackUuid)) {
+            send_json_response(0, 1, 400, "rack_uuid and config_uuid are required");
+        }
+        if ($startU < 1) {
+            send_json_response(0, 1, 400, "start_u must be 1 or greater");
+        }
     }
 
     $locationUuid = trim($_POST['location_uuid'] ?? '');
 
     $result = ServerRelocation::move($pdo, $configUuid, [
-        'rack_uuid'     => $rackUuid,
-        'location_uuid' => $locationUuid !== '' ? $locationUuid : null,
-        'start_u'       => $startU,
-        'u_height'      => isset($_POST['u_height']) && $_POST['u_height'] !== '' ? (int)$_POST['u_height'] : null,
+        'rack_uuid'      => $rackUuid !== '' ? $rackUuid : null,
+        'enclosure_uuid' => $enclosureUuid !== '' ? $enclosureUuid : null,
+        'slot_index'     => $slotIndex,
+        'location_uuid'  => $locationUuid !== '' ? $locationUuid : null,
+        'start_u'        => $startU > 0 ? $startU : null,
+        'u_height'       => isset($_POST['u_height']) && $_POST['u_height'] !== '' ? (int)$_POST['u_height'] : null,
     ], [
         'user_id' => $user['id'],
         'reason'  => trim($_POST['reason'] ?? ''),
@@ -530,16 +634,21 @@ function handleRackAssignServer($pdo, $user) {
         // Shape preserved from before this refactor: the Rack View and the
         // server card both read data.placement.*, and they still can.
         'placement' => [
-            'rack_uuid'     => $to['rack_uuid'],
-            'config_uuid'   => $configUuid,
-            'server_name'   => $to['server_name'],
-            'start_u'       => $to['start_u'],
-            'u_height'      => $to['u_height'],
-            'end_u'         => $to['end_u'],
-            'rack_name'     => $to['rack_name'],
-            'floor'         => $to['floor'],
-            'location_uuid' => $to['location_uuid'],
-            'location_name' => $to['location_name'],
+            'rack_uuid'      => $to['rack_uuid'],
+            'config_uuid'    => $configUuid,
+            'server_name'    => $to['server_name'],
+            'start_u'        => $to['start_u'],
+            'u_height'       => $to['u_height'],
+            'end_u'          => $to['end_u'],
+            'rack_name'      => $to['rack_name'],
+            'floor'          => $to['floor'],
+            'location_uuid'  => $to['location_uuid'],
+            'location_name'  => $to['location_name'],
+            // Null for a direct placement, which is what every existing caller
+            // reads and continues to get.
+            'enclosure_uuid' => $to['enclosure_uuid'] ?? null,
+            'enclosure_name' => $to['enclosure_name'] ?? null,
+            'slot_index'     => $to['slot_index'] ?? null,
         ],
         'moved'              => $result['data']['moved'],
         'components_updated' => $result['data']['components_updated'],
@@ -640,6 +749,9 @@ function handleRackPlacement($pdo, $user) {
             $height = max(1, (int)$row['u_height']);
             $rack = rackFetchByUuid($pdo, $row['rack_uuid']);
             $rackLocationUuid = $rack ? rackLocationUuid($pdo, $rack) : null;
+            $enclosure = !empty($row['enclosure_uuid'])
+                ? RackEnclosure::get($pdo, $row['enclosure_uuid']) : null;
+
             $placement = [
                 'rack_uuid' => $row['rack_uuid'],
                 'rack_name' => $rack['name'] ?? null,
@@ -647,6 +759,11 @@ function handleRackPlacement($pdo, $user) {
                 'start_u' => $startU,
                 'u_height' => $height,
                 'end_u' => $startU + $height - 1,
+                // Set only for a sled. The Move dialog uses these to open on the
+                // bay the server is in rather than on a U it does not choose.
+                'enclosure_uuid' => $enclosure ? $enclosure['enclosure_uuid'] : null,
+                'enclosure_name' => $enclosure ? $enclosure['name'] : null,
+                'slot_index' => $row['slot_index'] !== null ? (int)$row['slot_index'] : null,
                 // The Move dialog preselects the Location dropdown from these,
                 // so it opens on where the server actually is rather than on the
                 // first site in the list.
@@ -668,6 +785,10 @@ function handleRackPlacement($pdo, $user) {
             'placement' => $placement,
             'required_u_height' => rackDeriveUHeight($server['chassis_uuid'] ?? null),
             'chassis_name' => rackChassisName($server['chassis_uuid'] ?? null),
+            // A half-width node is meant for a bay. Told to the mover so the
+            // dialog can lead with enclosures rather than with a U it will
+            // occupy badly.
+            'chassis_form_factor' => rackChassisFormFactor($server['chassis_uuid'] ?? null),
             // Where it is now, and where it is if it is not in a rack at all.
             'address' => $address,
             'address_text' => $address ? LocationResolver::formatAddress($address) : null,
@@ -681,4 +802,121 @@ function handleRackPlacement($pdo, $user) {
         error_log("handleRackPlacement error: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to retrieve rack placement");
     }
+}
+
+/* ============================================================
+ * Enclosures
+ *
+ * HTTP plumbing only; every check and every write is in RackEnclosure, for the
+ * same reason handleRackAssignServer delegates to ServerRelocation -- a second
+ * copy of the bounds and overlap rules is how a rack and the things in it come
+ * to disagree.
+ *
+ * ACL: these three map onto the EXISTING rack.edit permission in
+ * api/permission_map.php. An enclosure is rack furniture; installing one is the
+ * same authority as editing the rack it goes in. No new permission rows.
+ * ============================================================ */
+
+/**
+ * Chassis models that can be used as an enclosure — everything in the catalog
+ * declaring an `enclosure` block.
+ *
+ * Returns an empty list, not an error, when ims-data has not been uploaded with
+ * an enclosure model in it: "you have no enclosure models" is a true statement
+ * and the picker can say so, where a 500 would just look broken.
+ */
+function handleRackEnclosureModels($pdo, $user) {
+    try {
+        $models = RackEnclosure::availableModels();
+        send_json_response(1, 1, 200, "Enclosure models retrieved successfully", [
+            'models' => $models,
+            'supported' => RackPlacement::enclosuresAvailable($pdo),
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleRackEnclosureModels error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to list enclosure models");
+    }
+}
+
+/**
+ * Install an enclosure in a rack at a U position.
+ */
+function handleRackEnclosureAdd($pdo, $user) {
+    $rackUuid = trim($_POST['rack_uuid'] ?? '');
+    if ($rackUuid === '') {
+        send_json_response(0, 1, 400, "rack_uuid is required");
+    }
+
+    $result = RackEnclosure::create($pdo, $rackUuid, [
+        'name'          => $_POST['name'] ?? '',
+        'chassis_uuid'  => $_POST['chassis_uuid'] ?? '',
+        'start_u'       => $_POST['start_u'] ?? '',
+        'serial_number' => $_POST['serial_number'] ?? '',
+        'notes'         => $_POST['notes'] ?? '',
+    ], $user['id']);
+
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
+    }
+
+    $enclosure = $result['data']['enclosure'];
+    logActivity($pdo, $user['id'], 'Enclosure installed', 'rack', null,
+        "Installed enclosure {$enclosure['name']} ({$enclosure['model']}) at U{$enclosure['start_u']}");
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
+}
+
+/**
+ * Rename, re-tag or move an enclosure. A move carries its sleds with it.
+ */
+function handleRackEnclosureUpdate($pdo, $user) {
+    $enclosureUuid = trim($_POST['enclosure_uuid'] ?? '');
+    if ($enclosureUuid === '') {
+        send_json_response(0, 1, 400, "enclosure_uuid is required");
+    }
+
+    // Only forward the fields actually sent: RackEnclosure::update() uses
+    // array_key_exists to tell "clear this" from "leave it alone", so passing
+    // every key would blank the serial and notes on a rename.
+    $data = [];
+    foreach (['name', 'serial_number', 'notes', 'start_u'] as $field) {
+        if (isset($_POST[$field])) {
+            $data[$field] = $_POST[$field];
+        }
+    }
+
+    $result = RackEnclosure::update($pdo, $enclosureUuid, $data, $user['id']);
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
+    }
+
+    $enclosure = $result['data']['enclosure'];
+    logActivity($pdo, $user['id'], 'Enclosure updated', 'rack', null,
+        "Updated enclosure {$enclosure['name']}"
+        . ($result['data']['sleds_restamped'] > 0
+            ? " (moved with {$result['data']['sleds_restamped']} server(s))" : ''));
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
+}
+
+/**
+ * Remove an enclosure from its rack. Refused while it still holds servers.
+ */
+function handleRackEnclosureRemove($pdo, $user) {
+    $enclosureUuid = trim($_POST['enclosure_uuid'] ?? '');
+    if ($enclosureUuid === '') {
+        send_json_response(0, 1, 400, "enclosure_uuid is required");
+    }
+
+    $enclosure = RackEnclosure::get($pdo, $enclosureUuid);
+
+    $result = RackEnclosure::remove($pdo, $enclosureUuid);
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
+    }
+
+    logActivity($pdo, $user['id'], 'Enclosure removed', 'rack', null,
+        "Removed enclosure " . ($enclosure['name'] ?? $enclosureUuid));
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
 }

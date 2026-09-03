@@ -14,10 +14,20 @@
  *   re-stamping. A second implementation would drift again within a release.
  *
  * WHAT A MOVE IS
- *   A change to any part of the address: location, rack, or start U. Pulling a
- *   server out of a rack while it stays on site is a move too, which is why
- *   rack_uuid is nullable on both sides. The from/to shape is uniform so an
- *   unrack, a rerack and a site transfer all record identically.
+ *   A change to any part of the address: location, rack, start U, or -- since
+ *   blade enclosures -- the enclosure bay. Pulling a server out of a rack while
+ *   it stays on site is a move too, which is why rack_uuid is nullable on both
+ *   sides. The from/to shape is uniform so an unrack, a rerack, a bay change and
+ *   a site transfer all record identically.
+ *
+ * TWO DESTINATIONS, ONE DOOR
+ *   A server goes either DIRECTLY into a rack at a U (validateDirectTarget) or
+ *   into a BAY of an enclosure already in a rack (validateSlotTarget). The
+ *   slotted case takes its rack and U range FROM the enclosure -- a sled cannot
+ *   choose a U, it is bolted into a box that already has one. Both paths end at
+ *   the same upsertPlacement, which is why moving a server out of a bay and
+ *   into the rack proper clears enclosure_uuid rather than leaving a sled that
+ *   claims a bay it has left.
  *
  * VALIDATION HAPPENS AT MOVE TIME, NOT REQUEST TIME
  *   A U-slot that was free when a request was raised may be occupied when it is
@@ -36,6 +46,7 @@
  */
 
 require_once __DIR__ . '/RackPlacement.php';
+require_once __DIR__ . '/RackEnclosure.php';
 require_once __DIR__ . '/../location/LocationResolver.php';
 require_once __DIR__ . '/../../helpers/SchemaHelper.php';
 
@@ -47,19 +58,24 @@ class ServerRelocation
      * @param PDO    $pdo
      * @param string $configUuid
      * @param array  $target ['location_uuid' => ?string, 'rack_uuid' => ?string,
-     *                        'start_u' => ?int, 'u_height' => ?int]
+     *                        'start_u' => ?int, 'u_height' => ?int,
+     *                        'enclosure_uuid' => ?string, 'slot_index' => ?int]
      *                       rack_uuid null (with a location) = keep it at the
      *                       site but out of any rack.
+     *                       enclosure_uuid set = a bay; the rack and U range
+     *                       come from the enclosure and start_u is ignored.
      * @param array  $ctx    ['user_id' => ?int, 'reason' => ?string,
      *                        'ticket_id' => ?int]
      * @return array{success:bool, code:int, message:string, data:array}
      */
     public static function move($pdo, $configUuid, array $target, array $ctx = [])
     {
-        $rackUuid     = !empty($target['rack_uuid'])     ? $target['rack_uuid']     : null;
-        $locationUuid = !empty($target['location_uuid']) ? $target['location_uuid'] : null;
-        $startU       = isset($target['start_u'])  && $target['start_u']  !== '' ? (int)$target['start_u']  : null;
-        $heightGiven  = isset($target['u_height']) && $target['u_height'] !== '' ? (int)$target['u_height'] : null;
+        $rackUuid      = !empty($target['rack_uuid'])      ? $target['rack_uuid']      : null;
+        $locationUuid  = !empty($target['location_uuid'])  ? $target['location_uuid']  : null;
+        $enclosureUuid = !empty($target['enclosure_uuid']) ? $target['enclosure_uuid'] : null;
+        $startU        = isset($target['start_u'])   && $target['start_u']   !== '' ? (int)$target['start_u']   : null;
+        $heightGiven   = isset($target['u_height'])  && $target['u_height']  !== '' ? (int)$target['u_height']  : null;
+        $slotIndex     = isset($target['slot_index']) && $target['slot_index'] !== '' ? (int)$target['slot_index'] : null;
 
         $userId   = isset($ctx['user_id'])   ? $ctx['user_id']   : null;
         $reason   = isset($ctx['reason'])    && $ctx['reason'] !== '' ? substr(trim($ctx['reason']), 0, 255) : null;
@@ -68,8 +84,8 @@ class ServerRelocation
         if (empty($configUuid)) {
             return self::fail(400, 'config_uuid is required');
         }
-        if ($rackUuid === null && $locationUuid === null) {
-            return self::fail(400, 'A destination is required: give a rack, a location, or both');
+        if ($rackUuid === null && $locationUuid === null && $enclosureUuid === null) {
+            return self::fail(400, 'A destination is required: give a rack, an enclosure bay, a location, or both');
         }
 
         // ---- The server ----------------------------------------------------
@@ -100,8 +116,22 @@ class ServerRelocation
         $rack   = null;
         $height = null;
 
-        if ($rackUuid !== null) {
-            $check = self::validateRackTarget($pdo, $rackUuid, $locationUuid, $configUuid, $startU, $heightGiven, $server);
+        if ($enclosureUuid !== null) {
+            // A bay. The enclosure supplies the rack and the U range, so
+            // anything the caller sent for those is overwritten rather than
+            // reconciled: a sled has no say in where its box is bolted.
+            $check = self::validateSlotTarget($pdo, $enclosureUuid, $slotIndex, $locationUuid, $configUuid, $server);
+            if (!$check['success']) {
+                return $check;
+            }
+            $rack         = $check['data']['rack'];
+            $rackUuid     = $check['data']['rack']['rack_uuid'];
+            $height       = $check['data']['height'];
+            $startU       = $check['data']['start_u'];
+            $slotIndex    = $check['data']['slot_index'];
+            $locationUuid = $check['data']['location_uuid'];
+        } elseif ($rackUuid !== null) {
+            $check = self::validateDirectTarget($pdo, $rackUuid, $locationUuid, $configUuid, $startU, $heightGiven, $server);
             if (!$check['success']) {
                 return $check;
             }
@@ -111,13 +141,15 @@ class ServerRelocation
             // A rack decides the location. If the caller named one, it has
             // already been checked to agree; if it did not, we take the rack's.
             $locationUuid = $check['data']['location_uuid'];
+            // Placing directly in the rack LEAVES any bay the server was in.
+            $slotIndex    = null;
         } elseif (!self::locationExists($pdo, $locationUuid)) {
             return self::fail(404, 'Location not found, or it has been retired');
         }
 
         // Nothing to do? Say so rather than writing a movement row that records
         // no movement.
-        if (self::isSamePlace($from, $locationUuid, $rackUuid, $startU)) {
+        if (self::isSamePlace($from, $locationUuid, $rackUuid, $startU, $enclosureUuid, $slotIndex)) {
             return [
                 'success' => true,
                 'code'    => 200,
@@ -137,7 +169,7 @@ class ServerRelocation
 
         try {
             if ($rackUuid !== null) {
-                self::upsertPlacement($pdo, $configUuid, $rackUuid, $startU, $height, $userId);
+                self::upsertPlacement($pdo, $configUuid, $rackUuid, $startU, $height, $userId, $enclosureUuid, $slotIndex);
             } else {
                 // Out of the rack, still on site.
                 $del = $pdo->prepare("DELETE FROM rack_servers WHERE config_uuid = ?");
@@ -272,12 +304,77 @@ class ServerRelocation
      * ============================================================ */
 
     /**
+     * A BAY of an enclosure: the enclosure must exist, be in a rack at the site
+     * the caller named, and have that bay free and the right shape.
+     *
+     * Everything positional is TAKEN from the enclosure, never from the caller.
+     * start_u and u_height are its own, which is what lets four FC630 sleds all
+     * report U20-U21 without any of them overlapping: the U range is claimed
+     * once, by the box.
+     */
+    private static function validateSlotTarget($pdo, $enclosureUuid, $slotIndex, $locationUuid, $configUuid, array $server)
+    {
+        if (!RackPlacement::enclosuresAvailable($pdo)) {
+            return self::fail(503, 'Enclosure support is not available on this database yet');
+        }
+        if ($slotIndex === null || $slotIndex < 1) {
+            return self::fail(400, 'Choose which bay of the enclosure to install the server in');
+        }
+
+        $enclosure = RackEnclosure::get($pdo, $enclosureUuid);
+        if (!$enclosure) {
+            return self::fail(404, 'Enclosure not found');
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM racks WHERE rack_uuid = ? LIMIT 1");
+        $stmt->execute([$enclosure['rack_uuid']]);
+        $rack = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$rack) {
+            return self::fail(404, 'The rack this enclosure is in no longer exists');
+        }
+
+        $rackLocationUuid = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid')
+            ? ($rack['location_uuid'] ?: null)
+            : null;
+
+        // Same rule as the direct path: a named location that disagrees with
+        // where the hardware actually is gets refused, not silently resolved.
+        if ($locationUuid !== null && $rackLocationUuid !== null && $locationUuid !== $rackLocationUuid) {
+            return self::fail(400, 'That enclosure is not at the location you selected');
+        }
+
+        $fit = RackEnclosure::validateSlotFit($pdo, $enclosure, $slotIndex, $server, $configUuid);
+        if (!$fit['success']) {
+            return $fit;
+        }
+
+        return [
+            'success' => true,
+            'code'    => 200,
+            'message' => 'ok',
+            'data'    => [
+                'rack'          => $rack,
+                'enclosure'     => $enclosure,
+                'slot_index'    => (int)$slotIndex,
+                'height'        => max(1, (int)$enclosure['u_height']),
+                'start_u'       => (int)$enclosure['start_u'],
+                'location_uuid' => $locationUuid !== null ? $locationUuid : $rackLocationUuid,
+            ],
+        ];
+    }
+
+    /**
      * Rack bounds, rack/location agreement and U-range overlap.
      *
      * These are the checks handleRackAssignServer has always made; they live
      * here now so the Request path and Rack View cannot diverge from the card.
+     *
+     * The overlap test runs against RackPlacement::occupancy(), which counts
+     * direct servers AND enclosures but not sleds -- so this refuses a 2U server
+     * dropped on top of an FX2s, and does not refuse one merely because four
+     * sleds inside that FX2s all report the same U range.
      */
-    private static function validateRackTarget($pdo, $rackUuid, $locationUuid, $configUuid, $startU, $heightGiven, array $server)
+    private static function validateDirectTarget($pdo, $rackUuid, $locationUuid, $configUuid, $startU, $heightGiven, array $server)
     {
         if ($startU === null || $startU < 1) {
             return self::fail(400, 'start_u must be 1 or greater');
@@ -312,16 +409,16 @@ class ServerRelocation
                 . "\"{$rack['name']}\" ({$rack['total_u']}U)");
         }
 
-        $others = $pdo->prepare("SELECT start_u, u_height FROM rack_servers
-                                  WHERE rack_uuid = ? AND config_uuid <> ?");
-        $others->execute([$rackUuid, $configUuid]);
-        foreach ($others->fetchAll(PDO::FETCH_ASSOC) as $ex) {
-            $exStart = (int)$ex['start_u'];
-            $exEnd   = $exStart + max(1, (int)$ex['u_height']) - 1;
-            if ($startU <= $exEnd && $endU >= $exStart) {
-                return self::fail(409, "U{$startU}-U{$endU} overlaps a server already installed at "
-                    . "U{$exStart}-U{$exEnd} in \"{$rack['name']}\"");
-            }
+        $occupancy = RackPlacement::occupancy($pdo, $rackUuid, ['config_uuid' => $configUuid]);
+        $hit = RackPlacement::findCollision($occupancy, $startU, $endU);
+        if ($hit !== null) {
+            $what = $hit['kind'] === 'enclosure'
+                ? "enclosure {$hit['label']}"
+                : "\"{$hit['label']}\"";
+            return self::fail(409, "U{$startU}-U{$endU} overlaps {$what}, already installed at "
+                . "U{$hit['start_u']}-U{$hit['end_u']} in \"{$rack['name']}\""
+                . ($hit['kind'] === 'enclosure'
+                    ? '. To put this server inside it, choose one of its bays instead.' : ''));
         }
 
         return [
@@ -363,12 +460,21 @@ class ServerRelocation
 
     /**
      * Is the destination the place the server is already in?
+     *
+     * The bay is part of the address: moving a sled from bay 1 to bay 3 of the
+     * same FX2s keeps the location, the rack AND the U range, and is still a
+     * real move that must be written and recorded.
      */
-    private static function isSamePlace(array $from, $locationUuid, $rackUuid, $startU)
+    private static function isSamePlace(array $from, $locationUuid, $rackUuid, $startU, $enclosureUuid = null, $slotIndex = null)
     {
-        return ($from['location_uuid'] ?? null) === $locationUuid
-            && ($from['rack_uuid'] ?? null)     === $rackUuid
-            && (int)($from['start_u'] ?? 0)     === (int)$startU;
+        $fromSlot = isset($from['slot_index']) && $from['slot_index'] !== null ? (int)$from['slot_index'] : null;
+        $toSlot   = $slotIndex !== null ? (int)$slotIndex : null;
+
+        return ($from['location_uuid'] ?? null)  === $locationUuid
+            && ($from['rack_uuid'] ?? null)      === $rackUuid
+            && (int)($from['start_u'] ?? 0)      === (int)$startU
+            && ($from['enclosure_uuid'] ?? null) === $enclosureUuid
+            && $fromSlot === $toSlot;
     }
 
     /* ============================================================
@@ -378,22 +484,48 @@ class ServerRelocation
     /**
      * Place or move the rack_servers row. UNIQUE(config_uuid) means a server is
      * in at most one rack, so this is an update-or-insert, never two rows.
+     *
+     * enclosure_uuid / slot_index are written on EVERY path, including as NULL:
+     * a server moved from a bay into the rack proper must stop claiming that
+     * bay, and the UNIQUE(enclosure_uuid, slot_index) index would otherwise keep
+     * the bay reserved by a server that has left it.
      */
-    private static function upsertPlacement($pdo, $configUuid, $rackUuid, $startU, $height, $userId)
+    private static function upsertPlacement($pdo, $configUuid, $rackUuid, $startU, $height, $userId,
+                                            $enclosureUuid = null, $slotIndex = null)
     {
+        $withSlots = RackPlacement::enclosuresAvailable($pdo);
+
         $cur = $pdo->prepare("SELECT id FROM rack_servers WHERE config_uuid = ? LIMIT 1");
         $cur->execute([$configUuid]);
 
         if ($cur->fetch(PDO::FETCH_ASSOC)) {
-            $stmt = $pdo->prepare("UPDATE rack_servers
-                                      SET rack_uuid = ?, start_u = ?, u_height = ?, updated_at = NOW()
-                                    WHERE config_uuid = ?");
-            $stmt->execute([$rackUuid, $startU, $height, $configUuid]);
+            $set    = "rack_uuid = ?, start_u = ?, u_height = ?";
+            $params = [$rackUuid, $startU, $height];
+            if ($withSlots) {
+                $set .= ", enclosure_uuid = ?, slot_index = ?";
+                $params[] = $enclosureUuid;
+                $params[] = $slotIndex;
+            }
+            $params[] = $configUuid;
+
+            $stmt = $pdo->prepare("UPDATE rack_servers SET {$set}, updated_at = NOW() WHERE config_uuid = ?");
+            $stmt->execute($params);
         } else {
-            $stmt = $pdo->prepare("INSERT INTO rack_servers
-                                      (rack_uuid, config_uuid, start_u, u_height, created_by, created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
-            $stmt->execute([$rackUuid, $configUuid, $startU, $height, $userId]);
+            $cols   = "rack_uuid, config_uuid, start_u, u_height";
+            $marks  = "?, ?, ?, ?";
+            $params = [$rackUuid, $configUuid, $startU, $height];
+            if ($withSlots) {
+                $cols  .= ", enclosure_uuid, slot_index";
+                $marks .= ", ?, ?";
+                $params[] = $enclosureUuid;
+                $params[] = $slotIndex;
+            }
+            $cols  .= ", created_by, created_at, updated_at";
+            $marks .= ", ?, NOW(), NOW()";
+            $params[] = $userId;
+
+            $stmt = $pdo->prepare("INSERT INTO rack_servers ({$cols}) VALUES ({$marks})");
+            $stmt->execute($params);
         }
     }
 

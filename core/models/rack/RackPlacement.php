@@ -16,10 +16,23 @@
  *      A server is normally racked before its chassis is picked (1U default), so
  *      syncHeightFromChassis re-derives it whenever the chassis changes.
  *
- * Used by api/handlers/rack/rack_api.php and core/models/server/ServerBuilder.php.
+ * SINCE BLADE ENCLOSURES (seeder 2026_09_03_003) a placement has two shapes.
+ * A DIRECT placement occupies its own U range in the rack, as it always has. A
+ * SLOTTED one sits in a bay of a `rack_enclosures` row, and the enclosure owns
+ * the U range — the sled MIRRORS its start_u/u_height so every reader below and
+ * in LocationResolver keeps working unchanged.
+ *
+ * occupancy() is the single answer to "what is physically in the way in this
+ * rack", and counts direct servers plus enclosures. Slotted rows are excluded
+ * from it: their U is already claimed by the enclosure they sit in, and
+ * counting it twice is what would make four FX2s sleds read as 8U.
+ *
+ * Used by api/handlers/rack/rack_api.php, core/models/rack/ServerRelocation.php,
+ * core/models/rack/RackEnclosure.php and core/models/server/ServerBuilder.php.
  */
 
 require_once __DIR__ . '/../chassis/ChassisManager.php';
+require_once __DIR__ . '/../../helpers/SchemaHelper.php';
 
 class RackPlacement
 {
@@ -65,14 +78,58 @@ class RackPlacement
     }
 
     /**
+     * Is the enclosure schema present yet? Code deploys ~20s after save and the
+     * seeder is run by hand afterwards, so every enclosure read is behind this.
+     * Answers false until 2026_09_03_003 has been applied, which makes the whole
+     * feature inert rather than fatal.
+     */
+    public static function enclosuresAvailable($pdo)
+    {
+        return SchemaHelper::hasTable($pdo, 'rack_enclosures')
+            && SchemaHelper::hasColumn($pdo, 'rack_servers', 'enclosure_uuid');
+    }
+
+    /**
      * Current placement row for a config, or null when the server isn't racked.
+     * Carries enclosure_uuid / slot_index once the seeder has run; both are NULL
+     * for a direct placement, and absent entirely before it.
      */
     public static function getPlacement($pdo, $configUuid)
     {
-        $stmt = $pdo->prepare("SELECT rack_uuid, start_u, u_height FROM rack_servers WHERE config_uuid = ? LIMIT 1");
+        $cols = "rack_uuid, start_u, u_height";
+        if (self::enclosuresAvailable($pdo)) {
+            $cols .= ", enclosure_uuid, slot_index";
+        }
+        $stmt = $pdo->prepare("SELECT {$cols} FROM rack_servers WHERE config_uuid = ? LIMIT 1");
         $stmt->execute([$configUuid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $row ?: null;
+        if (!$row) {
+            return null;
+        }
+        // Normalise the shape so callers never have to test which era they are in.
+        $row['enclosure_uuid'] = isset($row['enclosure_uuid']) ? $row['enclosure_uuid'] : null;
+        $row['slot_index']     = isset($row['slot_index']) ? (int)$row['slot_index'] : null;
+        return $row;
+    }
+
+    /**
+     * The bare U-range text for a placement — "U12" or "U12-U13", with "/S3"
+     * appended for a sled so two servers in the same enclosure do not read as
+     * being in identical positions.
+     *
+     * `server_configurations.rack_position` is varchar(20), so this stays a
+     * short ASCII string and never embeds the rack or enclosure name. The worst
+     * case, "U100-U103/S8", is 12 characters.
+     */
+    public static function positionText($startU, $height, $slotIndex = null)
+    {
+        $startU = (int)$startU;
+        $height = max(1, (int)$height);
+        $text = $height > 1 ? "U{$startU}-U" . ($startU + $height - 1) : "U{$startU}";
+        if ($slotIndex !== null && (int)$slotIndex > 0) {
+            $text .= '/S' . (int)$slotIndex;
+        }
+        return $text;
     }
 
     /**
@@ -86,9 +143,11 @@ class RackPlacement
 
             $text = null;
             if ($placement) {
-                $startU = (int)$placement['start_u'];
-                $height = max(1, (int)$placement['u_height']);
-                $text = $height > 1 ? "U{$startU}-U" . ($startU + $height - 1) : "U{$startU}";
+                $text = self::positionText(
+                    $placement['start_u'],
+                    $placement['u_height'],
+                    $placement['slot_index']
+                );
             }
 
             $stmt = $pdo->prepare("UPDATE server_configurations SET rack_position = ? WHERE config_uuid = ?");
@@ -96,6 +155,115 @@ class RackPlacement
         } catch (Throwable $e) {
             error_log("RackPlacement::syncPositionText error: " . $e->getMessage());
         }
+    }
+
+    /**
+     * Everything physically occupying U space in a rack, as
+     * [['start_u','end_u','label','kind','ref'], ...].
+     *
+     * The ONE definition of "in the way". Both callers that place something in a
+     * rack — ServerRelocation for a server, RackEnclosure for an enclosure —
+     * test against this, so a sled and a chassis can never disagree about
+     * whether U20 is free.
+     *
+     * Slotted servers are deliberately absent: the enclosure they sit in is
+     * already listed, and its U range is theirs.
+     *
+     * @param array $exclude ['config_uuid' => ?string, 'enclosure_uuid' => ?string]
+     *                       — the thing being moved, which must not block itself.
+     */
+    public static function occupancy($pdo, $rackUuid, array $exclude = [])
+    {
+        $excludeConfig    = isset($exclude['config_uuid'])    ? $exclude['config_uuid']    : null;
+        $excludeEnclosure = isset($exclude['enclosure_uuid']) ? $exclude['enclosure_uuid'] : null;
+        $hasEnclosures    = self::enclosuresAvailable($pdo);
+
+        $out = [];
+
+        // ---- direct server placements ----
+        $sql = "SELECT rs.config_uuid, rs.start_u, rs.u_height, sc.server_name
+                  FROM rack_servers rs
+                  LEFT JOIN server_configurations sc ON sc.config_uuid = rs.config_uuid
+                 WHERE rs.rack_uuid = ?";
+        $params = [$rackUuid];
+        if ($hasEnclosures) {
+            $sql .= " AND rs.enclosure_uuid IS NULL";
+        }
+        if ($excludeConfig !== null) {
+            $sql .= " AND rs.config_uuid <> ?";
+            $params[] = $excludeConfig;
+        }
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $start  = (int)$row['start_u'];
+            $height = max(1, (int)$row['u_height']);
+            $out[] = [
+                'kind'    => 'server',
+                'ref'     => $row['config_uuid'],
+                'label'   => $row['server_name'] !== null ? $row['server_name'] : 'a server',
+                'start_u' => $start,
+                'end_u'   => $start + $height - 1,
+            ];
+        }
+
+        if (!$hasEnclosures) {
+            return $out;
+        }
+
+        // ---- enclosures ----
+        $sql = "SELECT enclosure_uuid, name, model, start_u, u_height
+                  FROM rack_enclosures WHERE rack_uuid = ?";
+        $params = [$rackUuid];
+        if ($excludeEnclosure !== null) {
+            $sql .= " AND enclosure_uuid <> ?";
+            $params[] = $excludeEnclosure;
+        }
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $start  = (int)$row['start_u'];
+            $height = max(1, (int)$row['u_height']);
+            $out[] = [
+                'kind'    => 'enclosure',
+                'ref'     => $row['enclosure_uuid'],
+                'label'   => $row['name'] . ($row['model'] ? " ({$row['model']})" : ''),
+                'start_u' => $start,
+                'end_u'   => $start + $height - 1,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The first entry of occupancy() that intersects [$startU, $endU], or null.
+     */
+    public static function findCollision(array $occupancy, $startU, $endU)
+    {
+        foreach ($occupancy as $item) {
+            if ($startU <= $item['end_u'] && $endU >= $item['start_u']) {
+                return $item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Total U actually consumed in a rack — enclosures counted ONCE, however
+     * many sleds they hold. rack-list and rack-get both report occupancy from
+     * this; summing u_height across rack_servers (as they did before enclosures
+     * existed) would count an FX2s four times over.
+     */
+    public static function usedU($pdo, $rackUuid)
+    {
+        $covered = [];
+        foreach (self::occupancy($pdo, $rackUuid) as $item) {
+            for ($u = $item['start_u']; $u <= $item['end_u']; $u++) {
+                $covered[$u] = true;
+            }
+        }
+        return count($covered);
     }
 
     /**
@@ -115,6 +283,16 @@ class RackPlacement
             $placement = self::getPlacement($pdo, $configUuid);
             if (!$placement) {
                 return ['success' => true, 'changed' => false, 'message' => 'Server is not racked'];
+            }
+
+            // A sled does not own its U range — the enclosure does, and its
+            // height comes from the enclosure's own spec. Re-deriving from the
+            // sled's chassis here would shrink an FX2s bay to the 1U that
+            // ceil(0.5) produces and make the elevation lie. Changing the
+            // chassis of a slotted server is a bay-fit question, answered in
+            // RackEnclosure::validateSlotFit(), not a resize.
+            if (!empty($placement['enclosure_uuid'])) {
+                return ['success' => true, 'changed' => false, 'message' => 'Server is in an enclosure bay; height is the enclosure\'s'];
             }
 
             $cfgStmt = $pdo->prepare("SELECT chassis_uuid FROM server_configurations WHERE config_uuid = ? LIMIT 1");
@@ -149,20 +327,16 @@ class RackPlacement
                 ];
             }
 
-            $othersStmt = $pdo->prepare("SELECT config_uuid, start_u, u_height FROM rack_servers WHERE rack_uuid = ? AND config_uuid <> ?");
-            $othersStmt->execute([$rackUuid, $configUuid]);
-            foreach ($othersStmt->fetchAll(PDO::FETCH_ASSOC) as $other) {
-                $otherStart = (int)$other['start_u'];
-                $otherEnd = $otherStart + max(1, (int)$other['u_height']) - 1;
-                if ($startU <= $otherEnd && $endU >= $otherStart) {
-                    return [
-                        'success' => false,
-                        'changed' => false,
-                        'message' => "This server is installed in rack \"{$rack['name']}\" at U{$startU}. A {$newHeight}U chassis "
-                            . "(U{$startU}-U{$endU}) would overlap the server already at U{$otherStart}-U{$otherEnd}. "
-                            . "Move one of them in Rack View first."
-                    ];
-                }
+            $occupancy = self::occupancy($pdo, $rackUuid, ['config_uuid' => $configUuid]);
+            $hit = self::findCollision($occupancy, $startU, $endU);
+            if ($hit !== null) {
+                return [
+                    'success' => false,
+                    'changed' => false,
+                    'message' => "This server is installed in rack \"{$rack['name']}\" at U{$startU}. A {$newHeight}U chassis "
+                        . "(U{$startU}-U{$endU}) would overlap {$hit['label']}, already at "
+                        . "U{$hit['start_u']}-U{$hit['end_u']}. Move one of them in Rack View first."
+                ];
             }
 
             $updStmt = $pdo->prepare("UPDATE rack_servers SET u_height = ?, updated_at = NOW() WHERE config_uuid = ?");

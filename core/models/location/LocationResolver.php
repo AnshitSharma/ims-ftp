@@ -48,6 +48,10 @@
  */
 
 require_once __DIR__ . '/../../helpers/SchemaHelper.php';
+// For positionText(), the single spelling of the U-range string this class
+// stores in rack_position and RackPosition. RackPlacement does not require this
+// file back, so there is no cycle.
+require_once __DIR__ . '/../rack/RackPlacement.php';
 
 class LocationResolver
 {
@@ -83,6 +87,7 @@ class LocationResolver
         $rackHasLoc     = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
         $rackHasFloor   = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
         $configHasLoc   = SchemaHelper::hasColumn($pdo, 'server_configurations', 'location_uuid');
+        $hasEnclosures  = RackPlacement::enclosuresAvailable($pdo);
 
         // Built up rather than written out, because each piece depends on a
         // column that may not exist yet. Every fragment is a literal — no
@@ -100,11 +105,24 @@ class LocationResolver
         $select[] = $rackHasFloor ? 'r.floor AS floor' : 'NULL AS floor';
         $select[] = $rackHasLoc   ? 'r.location_uuid AS rack_location_uuid' : 'NULL AS rack_location_uuid';
         $select[] = $configHasLoc ? 'sc.location_uuid AS config_location_uuid' : 'NULL AS config_location_uuid';
+        // A sled in an enclosure bay: rs.start_u/u_height already mirror the
+        // enclosure's, so the U range needs nothing here -- only the bay number
+        // and the box's name, which are what distinguish four servers that all
+        // legitimately report U20-U21.
+        $select[] = $hasEnclosures ? 'rs.enclosure_uuid' : 'NULL AS enclosure_uuid';
+        $select[] = $hasEnclosures ? 'rs.slot_index'     : 'NULL AS slot_index';
+        $select[] = $hasEnclosures ? 'e.name AS enclosure_name'  : 'NULL AS enclosure_name';
+        $select[] = $hasEnclosures ? 'e.model AS enclosure_model' : 'NULL AS enclosure_model';
+
+        $enclosureJoin = $hasEnclosures
+            ? 'LEFT JOIN rack_enclosures e ON e.enclosure_uuid = rs.enclosure_uuid'
+            : '';
 
         $sql = "SELECT " . implode(', ', $select) . "
                   FROM server_configurations sc
                   LEFT JOIN rack_servers rs ON rs.config_uuid = sc.config_uuid
                   LEFT JOIN racks r         ON r.rack_uuid    = rs.rack_uuid
+                  {$enclosureJoin}
                  WHERE sc.config_uuid = ? LIMIT 1";
 
         try {
@@ -131,6 +149,9 @@ class LocationResolver
         $startU = $isRacked ? (int)$row['start_u'] : null;
         $height = $isRacked ? max(1, (int)$row['u_height']) : null;
 
+        $slotIndex = ($isRacked && !empty($row['enclosure_uuid']) && $row['slot_index'] !== null)
+            ? (int)$row['slot_index'] : null;
+
         return [
             'config_uuid'   => $row['config_uuid'],
             'server_name'   => $row['server_name'],
@@ -144,7 +165,13 @@ class LocationResolver
             'start_u'       => $startU,
             'u_height'      => $height,
             'end_u'         => $isRacked ? $startU + $height - 1 : null,
-            'u_text'        => self::uText($startU, $height),
+            'u_text'        => self::uText($startU, $height, $slotIndex),
+            // Null for a directly-racked server, which is every server that
+            // existed before seeder 2026_09_03_003.
+            'enclosure_uuid'  => $isRacked && !empty($row['enclosure_uuid']) ? $row['enclosure_uuid'] : null,
+            'enclosure_name'  => $isRacked ? ($row['enclosure_name'] ?: null) : null,
+            'enclosure_model' => $isRacked ? ($row['enclosure_model'] ?: null) : null,
+            'slot_index'      => $slotIndex,
             // Kept so a caller can tell "resolved nothing" from "was never set",
             // and so the pre-seeder fallback has something to display.
             'legacy_location' => $row['legacy_location'],
@@ -155,27 +182,45 @@ class LocationResolver
      * The U-range text stored in server_configurations.rack_position and
      * {type}inventory.RackPosition. Both are varchar(20), which is why this is a
      * bare range and never embeds the rack name.
+     *
+     * A sled adds its bay ("U20-U21/S3"): four servers in one FX2s all report
+     * the same U range truthfully, and without the bay a disk in bay 1 and a
+     * disk in bay 3 would carry identical positions.
+     *
+     * Delegates to RackPlacement::positionText so the two columns cannot drift
+     * into two spellings of one format.
      */
-    public static function uText($startU, $height)
+    public static function uText($startU, $height, $slotIndex = null)
     {
         if (!$startU) {
             return null;
         }
-        $height = max(1, (int)$height);
-        return $height > 1 ? "U{$startU}-U" . ($startU + $height - 1) : "U{$startU}";
+        return RackPlacement::positionText($startU, $height, $slotIndex);
     }
 
     /**
      * One-line address for display. Omits the parts that do not apply, so an
      * unracked server reads "Yotta Noida" rather than "Yotta Noida · — · —".
+     *
+     * A sled gains a final segment naming its box and bay:
+     *   CS-1 · Floor 5 · Rack 1 · U20-U21/S3 · FX2S-01 bay 3
      */
     public static function formatAddress(array $addr)
     {
+        $enclosure = null;
+        if (!empty($addr['enclosure_name'])) {
+            $enclosure = $addr['enclosure_name'];
+            if (!empty($addr['slot_index'])) {
+                $enclosure .= ' bay ' . (int)$addr['slot_index'];
+            }
+        }
+
         $parts = array_filter([
             $addr['location_name'] ?? null,
             !empty($addr['floor']) ? 'Floor ' . $addr['floor'] : null,
             $addr['rack_name'] ?? null,
             $addr['u_text'] ?? null,
+            $enclosure,
         ], function ($p) { return $p !== null && $p !== ''; });
 
         return empty($parts) ? null : implode(" \u{00B7} ", $parts);
@@ -257,15 +302,23 @@ class LocationResolver
             $locJoin  = ($rackHasLoc && $hasLocations)
                 ? 'LEFT JOIN locations l ON l.location_uuid = r.location_uuid' : '';
 
+            $hasEnclosures = RackPlacement::enclosuresAvailable($pdo);
+            $enclSel  = $hasEnclosures
+                ? 'rs.slot_index, e.name AS enclosure_name'
+                : 'NULL AS slot_index, NULL AS enclosure_name';
+            $enclJoin = $hasEnclosures
+                ? 'LEFT JOIN rack_enclosures e ON e.enclosure_uuid = rs.enclosure_uuid' : '';
+
             try {
                 $stmt = $pdo->prepare("
                     SELECT sc.config_uuid, sc.server_name,
                            rs.start_u, rs.u_height,
-                           r.name AS rack_name, {$floorSel}, {$nameSel}
+                           r.name AS rack_name, {$floorSel}, {$nameSel}, {$enclSel}
                       FROM server_configurations sc
                       LEFT JOIN rack_servers rs ON rs.config_uuid = sc.config_uuid
                       LEFT JOIN racks r         ON r.rack_uuid    = rs.rack_uuid
                       {$locJoin}
+                      {$enclJoin}
                      WHERE sc.config_uuid IN ({$in})
                 ");
                 $stmt->execute($uuids);
@@ -298,8 +351,12 @@ class LocationResolver
             }
             $row['location_name'] = $resolved ?: (!empty($row['Location']) ? $row['Location'] : null);
 
+            $row['enclosure_name'] = $server ? ($server['enclosure_name'] ?: null) : null;
+            $row['slot_index']     = ($server && $server['slot_index'] !== null)
+                ? (int)$server['slot_index'] : null;
+
             $uText = $server && !empty($server['start_u'])
-                ? self::uText($server['start_u'], $server['u_height'])
+                ? self::uText($server['start_u'], $server['u_height'], $row['slot_index'])
                 : (!empty($row['RackPosition']) ? $row['RackPosition'] : null);
 
             // Loose stock has a shelf instead of a U. Both are "the last part of
@@ -313,6 +370,8 @@ class LocationResolver
                 'floor'         => $row['floor'],
                 'rack_name'     => $row['rack_name'],
                 'u_text'        => $tail,
+                'enclosure_name' => $row['enclosure_name'],
+                'slot_index'     => $row['slot_index'],
             ]);
         }
         unset($row);

@@ -89,6 +89,14 @@ return [
         'delete' => 'rack.delete',
         'assign-server' => 'rack.assign',
         'unassign-server' => 'rack.assign',
+        // Blade enclosures (seeder 2026_09_03_003). No new permissions: an
+        // enclosure is rack furniture, so installing, moving and removing one
+        // is the same authority as editing the rack it goes in, and the model
+        // list is a read. Slotting a SERVER into a bay is assign-server above.
+        'enclosure-models' => 'rack.view',
+        'enclosure-add' => 'rack.edit',
+        'enclosure-update' => 'rack.edit',
+        'enclosure-remove' => 'rack.edit',
     ],
 
     // Locations — the physical sites racks stand in. Reads are deliberately
