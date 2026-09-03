@@ -3028,6 +3028,7 @@ function platformOwnedComponents($pdo, $config) {
         'motherboard' => $version['system_board']['uuid'] ?? null,
         'chassis'     => $version['chassis']['uuid'] ?? null,
         'nic'         => $version['included_nic']['uuid'] ?? null,
+        'hbacard'     => $version['included_storage_controller']['uuid'] ?? null,
     ]);
 }
 
@@ -3045,9 +3046,14 @@ function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = 
 
     // A board or chassis is single-instance: the type alone identifies it, and an ADD
     // of either is refused outright because the slot is already filled by the platform.
+    // A NIC or an HBA, by contrast, is one of several the build may hold: only the
+    // specific unit the platform supplied is locked, matched by its spec uuid.
     $lockedTypes = ['motherboard', 'chassis'];
+    $byUuidTypes = ['nic', 'hbacard'];
     $isLocked = in_array($componentType, $lockedTypes, true)
-        || ($componentType === 'nic' && $componentUuid !== null && ($owned['nic'] ?? null) === $componentUuid);
+        || (in_array($componentType, $byUuidTypes, true)
+            && $componentUuid !== null
+            && ($owned[$componentType] ?? null) === $componentUuid);
 
     if (!$isLocked) {
         return;
@@ -3057,6 +3063,7 @@ function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = 
         'motherboard' => 'system board',
         'chassis'     => 'chassis',
         'nic'         => 'network card',
+        'hbacard'     => 'storage controller',
     ][$componentType] ?? $componentType;
 
     $platformName = $config->get('platform_name') ?: 'compute platform';
@@ -3084,7 +3091,8 @@ function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = 
  * platform's board and chassis are not stocked units, have no inventory row, and can
  * never be double-allocated. The physical unit here is the box, and it is locked in
  * step 3 with exactly the Status / status_v2 / ServerUUID discipline every other add
- * uses. The included NIC, which IS a stocked unit, goes through the normal add path.
+ * uses. The included NIC and the included storage controller, which ARE stocked units,
+ * go through the normal add path.
  *
  * Installing over an existing build releases the WHOLE build, not just the previous
  * platform's parts: a board and chassis out of a different product cannot be trusted to
@@ -3342,16 +3350,31 @@ function handleSetPlatform($serverBuilder, $user) {
         // handleImportVirtual() on 2026-08-21 (compute-platform support post-dates that
         // fix, 2026-08-25, which is how a fourth ungated call site reappeared). P9 then
         // removed the flag and the legacy branch with it.
-        $nicResult = null;
-        if (!empty($version['included_nic']['uuid'])) {
+        //
+        // The embedded storage controller rides the same path for the same reason: a
+        // front PERC is mounted in the box, but it is separately stocked as an hbacard
+        // unit, so it must be drawn from inventory through the command layer rather
+        // than mirrored in like the board and chassis.
+        $includedResults = ['nic' => null, 'hbacard' => null];
+        $includedUnits = array_filter([
+            'nic'     => $version['included_nic']['uuid'] ?? null,
+            'hbacard' => $version['included_storage_controller']['uuid'] ?? null,
+        ]);
+
+        if ($includedUnits) {
             require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
-            try {
-                (new AddComponentCommand($pdo, $configUuid, 'nic', $version['included_nic']['uuid'], [], (int)$user['id']))->execute();
-                $nicResult = ['success' => true];
-            } catch (CommandFailed $nicFailure) {
-                $nicResult = ['success' => false, 'message' => $nicFailure->getMessage()];
+            foreach ($includedUnits as $includedType => $includedUuid) {
+                try {
+                    (new AddComponentCommand($pdo, $configUuid, $includedType, $includedUuid, [], (int)$user['id']))->execute();
+                    $includedResults[$includedType] = ['success' => true];
+                } catch (CommandFailed $includedFailure) {
+                    $includedResults[$includedType] = ['success' => false, 'message' => $includedFailure->getMessage()];
+                }
             }
         }
+
+        $nicResult = $includedResults['nic'];
+        $controllerResult = $includedResults['hbacard'];
 
         logActivity($pdo, $user['id'], 'Compute platform installed', 'server', $config->get('id'),
             "Installed $platformName (unit {$unit['ID']}) on server config $configUuid");
@@ -3367,7 +3390,8 @@ function handleSetPlatform($serverBuilder, $user) {
             'asset_tag'             => $unit['AssetTag'],
             'onboard_nics_attached' => $onboard['count'] ?? 0,
             'components_released'   => $releasedCount,
-            'included_nic_installed' => $nicResult === null ? null : (bool)($nicResult['success'] ?? false)
+            'included_nic_installed' => $nicResult === null ? null : (bool)($nicResult['success'] ?? false),
+            'included_storage_controller_installed' => $controllerResult === null ? null : (bool)($controllerResult['success'] ?? false)
         ]);
 
     } catch (\Throwable $e) {

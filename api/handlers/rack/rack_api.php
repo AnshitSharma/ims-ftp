@@ -62,6 +62,9 @@ switch ($action) {
     case 'unassigned-servers':
         handleRackUnassignedServers($pdo, $user);
         break;
+    case 'placeable-servers':
+        handleRackPlaceableServers($pdo, $user);
+        break;
     case 'placement':
         handleRackPlacement($pdo, $user);
         break;
@@ -919,4 +922,97 @@ function handleRackEnclosureRemove($pdo, $user) {
         "Removed enclosure " . ($enclosure['name'] ?? $enclosureUuid));
 
     send_json_response(1, 1, 200, $result['message'], $result['data']);
+}
+
+/**
+ * Every physical server that could be installed in an enclosure bay — racked or
+ * not — each carrying where it is right now.
+ *
+ * SEPARATE FROM rack-unassigned-servers ON PURPOSE. That action answers "what
+ * has no home yet" and drives the direct Place-server dialog, which must keep
+ * offering exactly that. A BAY is different: moving a server out of U8 and into
+ * an FX2s bay is an ordinary move that ServerRelocation::move() already
+ * validates and performs, so restricting the bay picker to unracked servers
+ * only made a legal operation unreachable. With every server in an estate
+ * already racked, it made the bays unfillable.
+ *
+ * `current_position` is the whole point of the extra columns: the picker has to
+ * be able to say "this one is at Rack 1 U8 and will be MOVED here", never move
+ * something silently.
+ *
+ * `exclude_config_uuid` drops the server being moved from its own target list.
+ */
+function handleRackPlaceableServers($pdo, $user) {
+    $exclude = trim($_POST['exclude_config_uuid'] ?? $_GET['exclude_config_uuid'] ?? '');
+
+    try {
+        $hasEnclosures = RackPlacement::enclosuresAvailable($pdo);
+
+        // Built up because the enclosure columns exist only after seeder
+        // 2026_09_03_003; the same probe pattern as everywhere else here.
+        $enclSel  = $hasEnclosures
+            ? 'rs.enclosure_uuid, rs.slot_index, e.name AS enclosure_name'
+            : 'NULL AS enclosure_uuid, NULL AS slot_index, NULL AS enclosure_name';
+        $enclJoin = $hasEnclosures
+            ? 'LEFT JOIN rack_enclosures e ON e.enclosure_uuid = rs.enclosure_uuid' : '';
+
+        $sql = "SELECT sc.config_uuid, sc.server_name, sc.configuration_status,
+                       sc.chassis_uuid, sc.location,
+                       rs.rack_uuid, rs.start_u, rs.u_height,
+                       r.name AS rack_name, {$enclSel}
+                  FROM server_configurations sc
+                  LEFT JOIN rack_servers rs ON rs.config_uuid = sc.config_uuid
+                  LEFT JOIN racks r         ON r.rack_uuid    = rs.rack_uuid
+                  {$enclJoin}
+                 WHERE sc.is_virtual = 0";
+        $params = [];
+        if ($exclude !== '') {
+            $sql .= " AND sc.config_uuid <> ?";
+            $params[] = $exclude;
+        }
+        $sql .= " ORDER BY sc.server_name ASC";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $servers = array_map(function ($s) {
+            $isRacked = !empty($s['rack_uuid']);
+
+            $position = null;
+            if ($isRacked) {
+                $slot = ($s['slot_index'] !== null) ? (int)$s['slot_index'] : null;
+                $position = ($s['rack_name'] ?: 'a rack') . ' '
+                    . RackPlacement::positionText($s['start_u'], $s['u_height'], $slot);
+                if (!empty($s['enclosure_name'])) {
+                    $position .= ' (' . $s['enclosure_name'] . " bay {$slot})";
+                }
+            }
+
+            return [
+                'config_uuid' => $s['config_uuid'],
+                'server_name' => $s['server_name'],
+                'configuration_status' => (int)$s['configuration_status'],
+                'status_text' => rackConfigStatusText($s['configuration_status']),
+                'location' => $s['location'],
+                'u_height' => rackDeriveUHeight($s['chassis_uuid'] ?? null),
+                'chassis_name' => rackChassisName($s['chassis_uuid'] ?? null),
+                'is_racked' => $isRacked,
+                'rack_uuid' => $isRacked ? $s['rack_uuid'] : null,
+                'rack_name' => $isRacked ? $s['rack_name'] : null,
+                'enclosure_uuid' => !empty($s['enclosure_uuid']) ? $s['enclosure_uuid'] : null,
+                'slot_index' => ($s['slot_index'] !== null) ? (int)$s['slot_index'] : null,
+                // "Rack 1 U8" / "Rack 1 U30-U31/S2 (FX2s bay 2)" / null when free.
+                'current_position' => $position,
+            ];
+        }, $rows);
+
+        send_json_response(1, 1, 200, "Placeable servers retrieved successfully", [
+            'servers' => $servers,
+            'unracked_count' => count(array_filter($servers, fn($s) => !$s['is_racked'])),
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleRackPlaceableServers error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to list placeable servers");
+    }
 }

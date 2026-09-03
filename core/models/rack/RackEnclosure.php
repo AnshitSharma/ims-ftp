@@ -228,9 +228,15 @@ class RackEnclosure
         $sledStmt->execute([$rackUuid]);
 
         $byEnclosure = [];
+        $sledUuids   = [];
         foreach ($sledStmt->fetchAll(PDO::FETCH_ASSOC) as $s) {
             $byEnclosure[$s['enclosure_uuid']][(int)$s['slot_index']] = $s;
+            if (!empty($s['config_uuid'])) {
+                $sledUuids[] = $s['config_uuid'];
+            }
         }
+
+        $componentCounts = self::componentCounts($pdo, $sledUuids);
 
         $out = [];
         foreach ($rows as $r) {
@@ -258,6 +264,15 @@ class RackEnclosure
                         ? (int)$sled['configuration_status'] : null,
                     'chassis_name' => $sled ? RackPlacement::chassisName($sled['chassis_uuid'] ?? null) : null,
                     'orphaned'     => $sled ? ($sled['server_name'] === null) : false,
+                    // How many physical units are installed in this sled. null,
+                    // not 0, when the count could not be taken — "unknown" and
+                    // "nothing installed" are different statements, and the
+                    // roster must not report a stripped server on the strength
+                    // of an unrun seeder. A config absent from the map genuinely
+                    // has no live rows, so that IS 0.
+                    'component_count' => ($sled === null || $componentCounts === null)
+                        ? null
+                        : (isset($componentCounts[$sled['config_uuid']]) ? $componentCounts[$sled['config_uuid']] : 0),
                 ];
             }
 
@@ -280,6 +295,57 @@ class RackEnclosure
         }
 
         return $out;
+    }
+
+    /**
+     * config_uuid => number of physical units installed, for a set of servers.
+     *
+     * ONE grouped query for the whole rack, not twelve per sled. `config_components`
+     * is the only store of what a configuration contains, so counting its live rows
+     * (removed_at IS NULL) is both cheaper and more accurate than summing
+     * COUNT(*) across the twelve {type}inventory tables the way
+     * LocationResolver::countComponents() has to for a single config.
+     *
+     * DO NOT TURN THIS INTO A JOIN AGAINST rack_servers. `config_components.config_uuid`
+     * is utf8mb4_unicode_ci while `rack_servers.config_uuid` is utf8mb4_general_ci —
+     * joining them raises "Illegal mix of collations". That mismatch is the exact
+     * bug seeder 2026_06_17_002 exists to repair on the other rack_servers join.
+     * Passing the uuids in as bound parameters sidesteps it entirely.
+     *
+     * @return array|null null when the count could not be taken at all — the
+     *                    caller reports "unknown" rather than zero.
+     */
+    private static function componentCounts($pdo, array $configUuids)
+    {
+        if (empty($configUuids)) {
+            return [];
+        }
+        if (!SchemaHelper::hasTable($pdo, 'config_components')) {
+            return null;
+        }
+
+        $unique = array_values(array_unique($configUuids));
+        $in = implode(',', array_fill(0, count($unique), '?'));
+
+        try {
+            $stmt = $pdo->prepare("SELECT config_uuid, COUNT(*) AS c
+                                     FROM config_components
+                                    WHERE config_uuid IN ({$in})
+                                      AND removed_at IS NULL
+                                    GROUP BY config_uuid");
+            $stmt->execute($unique);
+
+            $out = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $out[$row['config_uuid']] = (int)$row['c'];
+            }
+            return $out;
+        } catch (Throwable $e) {
+            // A count is decoration on the roster. Losing it must not take the
+            // rack elevation down with it.
+            error_log("RackEnclosure::componentCounts error: " . $e->getMessage());
+            return null;
+        }
     }
 
     /** slot_index => config_uuid for one enclosure. */

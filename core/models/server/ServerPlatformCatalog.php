@@ -15,7 +15,8 @@
  * UUID. Stock is counted per version, and it is a version the user installs.
  *
  * A version is `selectable` only when everything it installs is on the shelf: the box
- * itself, and the `included_nic` card if it names one. A version that is not selectable
+ * itself, the `included_nic` card if it names one, and the
+ * `included_storage_controller` if it names one. A version that is not selectable
  * is still RETURNED, carrying `unavailable_reason` — a version that vanished would read
  * as "this platform has fewer versions", which is a different and wrong statement.
  *
@@ -49,12 +50,13 @@ class ServerPlatformCatalog
         $platforms = $this->loadPlatforms();
         $platformUnits = $this->availableUnits('serverplatform');
         $nicUnits = $this->availableUnits('nic');
+        $hbaUnits = $this->availableUnits('hbacard');
 
         $out = [];
         foreach ($platforms as $platform) {
             $versions = [];
             foreach ($platform['models'] ?? [] as $version) {
-                $versions[] = $this->describeVersion($version, $platformUnits, $nicUnits);
+                $versions[] = $this->describeVersion($version, $platformUnits, $nicUnits, $hbaUnits);
             }
 
             $out[] = [
@@ -114,7 +116,8 @@ class ServerPlatformCatalog
         return $this->describeVersion(
             $found['version'],
             $this->availableUnits('serverplatform'),
-            $this->availableUnits('nic')
+            $this->availableUnits('nic'),
+            $this->availableUnits('hbacard')
         );
     }
 
@@ -148,12 +151,13 @@ class ServerPlatformCatalog
     /**
      * Flatten one version for the API: what it is, what it installs, whether it can be.
      */
-    private function describeVersion(array $version, array $platformUnits, array $nicUnits)
+    private function describeVersion(array $version, array $platformUnits, array $nicUnits, array $hbaUnits = [])
     {
         $versionUuid = $version['uuid'] ?? null;
         $board = $version['system_board'] ?? [];
         $chassis = $version['chassis'] ?? [];
         $includedNic = $version['included_nic'] ?? null;
+        $includedController = $version['included_storage_controller'] ?? null;
 
         $availableUnits = $versionUuid ? (int)($platformUnits[$versionUuid] ?? 0) : 0;
 
@@ -163,6 +167,20 @@ class ServerPlatformCatalog
                 'uuid'            => $includedNic['uuid'],
                 'model'           => $includedNic['model'] ?? null,
                 'available_units' => (int)($nicUnits[$includedNic['uuid']] ?? 0),
+            ];
+        }
+
+        // An embedded storage controller (a Dell front PERC, say) is not an optional
+        // card: it ships mounted in the box. It IS separately stocked as an hbacard,
+        // so it installs and is stock-checked exactly like the included NIC.
+        $controller = null;
+        if (is_array($includedController) && !empty($includedController['uuid'])) {
+            $controller = [
+                'uuid'            => $includedController['uuid'],
+                'model'           => $includedController['model'] ?? null,
+                'component_type'  => $includedController['component_type'] ?? 'hbacard',
+                'position'        => $includedController['position'] ?? null,
+                'available_units' => (int)($hbaUnits[$includedController['uuid']] ?? 0),
             ];
         }
 
@@ -179,6 +197,9 @@ class ServerPlatformCatalog
         } elseif ($nic !== null && $nic['available_units'] < 1) {
             $selectable = false;
             $reason = 'Included network card is out of stock';
+        } elseif ($controller !== null && $controller['available_units'] < 1) {
+            $selectable = false;
+            $reason = 'Included storage controller is out of stock';
         }
 
         return [
@@ -207,6 +228,7 @@ class ServerPlatformCatalog
                 'total_bays'  => $chassis['drive_bays']['total_bays'] ?? null,
             ],
             'included_nic' => $nic,
+            'included_storage_controller' => $controller,
         ];
     }
 

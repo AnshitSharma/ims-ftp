@@ -83,6 +83,9 @@ return [
         'list' => 'rack.view',
         'get' => 'rack.view',
         'unassigned-servers' => 'rack.view',
+        // Every physical server plus where it is now — the bay picker's source.
+        // A read, so rack.view like its unassigned-only sibling.
+        'placeable-servers' => 'rack.view',
         'placement' => 'rack.view',
         'create' => 'rack.create',
         'update' => 'rack.edit',
