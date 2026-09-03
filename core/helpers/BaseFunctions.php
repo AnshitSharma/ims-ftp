@@ -1003,6 +1003,7 @@ function formatAssetTag($type, $inventoryId) {
     return sprintf('BDC-%s-%06d', getComponentAssetTagCode($type), (int)$inventoryId);
 }
 
+
 /**
  * Turn a duplicate-key PDOException into an operator-readable message.
  *
@@ -1352,6 +1353,26 @@ function addComponent($pdo, $type, $data, $userId) {
 
         if (empty($safeData)) {
             throw new InvalidArgumentException("No valid fields provided for $type component");
+        }
+
+        // A unit with no location is a unit nobody can go and find. Every way a
+        // component enters inventory lands here -- the Add Component form,
+        // bulk-add, and an approved inventory.component.add request -- so this
+        // function is the one place the rule has to exist.
+        //
+        // Either column satisfies it. The Location dropdown posts the site NAME
+        // and its location_uuid together, so an operator sees a single field;
+        // accepting the name on its own keeps a caller that knows only the
+        // legacy free-text column working.
+        $locationNameCol = $allowedCols['location'] ?? null;
+        $locationUuidCol = $allowedCols['location_uuid'] ?? null;
+        $hasLocation =
+            ($locationUuidCol !== null && trim((string)($safeData[$locationUuidCol] ?? '')) !== '')
+            || ($locationNameCol !== null && trim((string)($safeData[$locationNameCol] ?? '')) !== '');
+        if (!$hasLocation) {
+            throw new InvalidArgumentException(
+                "A location is required — select the site this component is at."
+            );
         }
 
         // Defence in depth: even though $safeData keys come from

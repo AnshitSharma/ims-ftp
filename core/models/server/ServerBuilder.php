@@ -296,6 +296,27 @@ class ServerBuilder {
                 $params[] = $isSandbox;
             }
 
+            // The manufacturer serial the operator typed on the Create Server
+            // form. Part of THIS statement rather than a follow-up UPDATE,
+            // because unlike an AssetTag it does not depend on the row's id --
+            // the caller already has the value.
+            //
+            // Same deploy-ordering guard as is_sandbox above: seeder
+            // 2026_09_03_002 is applied by hand after this file reaches
+            // production, and naming a column that does not exist yet would take
+            // server creation down for that whole window.
+            //
+            // A blank serial is stored as NULL, never '': the column is UNIQUE,
+            // and empty strings DO collide with each other under a unique index
+            // while NULLs do not. Writing '' would let exactly one serial-less
+            // server exist.
+            $serialNumber = isset($options['serial_number']) ? trim((string)$options['serial_number']) : '';
+            if ($serialNumber !== '' && ServerConfiguration::serialColumnExists($this->pdo)) {
+                $columns .= ", serial_number";
+                $placeholders .= ", ?";
+                $params[] = $serialNumber;
+            }
+
             $stmt = $this->pdo->prepare("
                 INSERT INTO server_configurations
                 ($columns)

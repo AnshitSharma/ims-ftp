@@ -452,6 +452,9 @@ class ComponentDataService {
                 isset($spec['memory_type']) ? $spec['memory_type'] : null,
                 isset($spec['capacity_GB']) ? $spec['capacity_GB'] . 'GB' : null,
                 isset($spec['module_type']) ? $spec['module_type'] : null,
+                // One brand ships the same capacity/type in several JEDEC reference
+                // designs; the printed module label is all that separates them.
+                !empty($spec['label']) ? '(' . $spec['label'] . ')' : null,
             ]);
             return $parts ? implode(' ', $parts) : null;
         }

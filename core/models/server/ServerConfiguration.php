@@ -14,7 +14,85 @@ class ServerConfiguration {
         $this->pdo = $pdo;
         $this->data = $data;
     }
-    
+
+    /** serial_number is a VARCHAR(50), matching {type}inventory.SerialNumber. */
+    const SERIAL_MAX_LENGTH = 50;
+
+    /**
+     * Is the serial_number column present yet?
+     *
+     * Seeder 2026_09_03_002 is applied by hand AFTER this code reaches
+     * production, so every read and write of the column asks this first. During
+     * that window the Create Server form's serial is neither enforced nor
+     * stored, and creating a server keeps working exactly as it did before.
+     *
+     * @param PDO $pdo
+     * @return bool
+     */
+    public static function serialColumnExists($pdo) {
+        require_once __DIR__ . '/../../helpers/SchemaHelper.php';
+        return SchemaHelper::hasColumn($pdo, 'server_configurations', 'serial_number');
+    }
+
+    /**
+     * The server already holding this serial, if any.
+     *
+     * The serial is typed in by a person off the hardware, so typing one that
+     * already exists is an ordinary operator mistake rather than a server
+     * fault. Checking first lets both the create and the update path answer 400
+     * NAMING the server that holds it -- which is the thing the operator can go
+     * and look at -- instead of surfacing a raw duplicate-key 500. The UNIQUE
+     * index behind it is still what actually guarantees the invariant; this is
+     * only how the mistake gets reported.
+     *
+     * $excludeConfigUuid keeps a row from colliding with itself when an edit
+     * re-submits the serial it already has.
+     *
+     * @param PDO         $pdo
+     * @param string      $serial
+     * @param string|null $excludeConfigUuid
+     * @return array|null ['config_uuid' => ..., 'server_name' => ...] or null
+     */
+    public static function findBySerial($pdo, $serial, $excludeConfigUuid = null) {
+        if (!self::serialColumnExists($pdo) || trim((string)$serial) === '') {
+            return null;
+        }
+
+        $sql = "SELECT config_uuid, server_name FROM server_configurations WHERE serial_number = ?";
+        $params = [trim($serial)];
+
+        if ($excludeConfigUuid !== null && $excludeConfigUuid !== '') {
+            $sql .= " AND config_uuid != ?";
+            $params[] = $excludeConfigUuid;
+        }
+
+        $stmt = $pdo->prepare($sql . " LIMIT 1");
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /**
+     * Validate an operator-typed serial, returning an error message or null.
+     *
+     * One definition for both the create and the update path so the two cannot
+     * drift into disagreeing about what a valid serial is. Emptiness is NOT
+     * checked here: the create form requires a serial, while an edit that omits
+     * the field means "leave it alone" -- so each caller decides what a blank
+     * means for it.
+     *
+     * @param string $serial already trimmed
+     * @return string|null
+     */
+    public static function validateSerial($serial) {
+        if (strlen($serial) > self::SERIAL_MAX_LENGTH) {
+            return "Serial number cannot be longer than " . self::SERIAL_MAX_LENGTH . " characters.";
+        }
+        return null;
+    }
+
+
     /**
      * Create new server configuration
      */

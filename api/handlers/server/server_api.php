@@ -534,6 +534,42 @@ function handleUpdateConfiguration($serverBuilder, $user) {
             'notes'
         ];
 
+        // serial_number IS editable, unlike a derived or lifecycle field: it is
+        // typed in by a person off the hardware, and typed values get mistyped.
+        // Correcting one is an ordinary detail edit.
+        //
+        // Conditional on the column existing (seeder 2026_09_03_002, applied by
+        // hand after this file deploys) -- otherwise the UPDATE below would name
+        // a column that is not there and every server edit would 500.
+        $serialColumnReady = ServerConfiguration::serialColumnExists($pdo);
+        if ($serialColumnReady) {
+            $updatableFields[] = 'serial_number';
+        }
+
+        // Validated and duplicate-checked BEFORE the generic loop builds the
+        // UPDATE, so the operator gets a message naming the server that already
+        // holds the serial instead of the raw duplicate-key error the UNIQUE
+        // index would raise. An absent field means "leave it alone"; an empty
+        // one means "clear it", which is allowed -- a serial can be recorded
+        // wrongly and need removing.
+        if ($serialColumnReady && isset($_POST['serial_number'])) {
+            $newSerial = trim((string)$_POST['serial_number']);
+
+            if ($newSerial !== '') {
+                $serialError = ServerConfiguration::validateSerial($newSerial);
+                if ($serialError !== null) {
+                    send_json_response(0, 1, 400, $serialError);
+                }
+
+                $existing = ServerConfiguration::findBySerial($pdo, $newSerial, $configUuid);
+                if ($existing) {
+                    send_json_response(0, 1, 400,
+                        "Serial number '{$newSerial}' is already recorded against the server '"
+                        . ($existing['server_name'] ?: 'Unnamed Server') . "'.");
+                }
+            }
+        }
+
         // Build update query dynamically based on provided fields
         $updateFields = [];
         $updateValues = [];
@@ -552,7 +588,20 @@ function handleUpdateConfiguration($serverBuilder, $user) {
                             send_json_response(0, 1, 400, "Server name cannot be empty");
                         }
                         break;
-                        
+
+                    case 'serial_number':
+                        // Cleared serial => NULL, never ''. The column is UNIQUE,
+                        // and empty strings DO collide with each other under a
+                        // unique index while NULLs do not -- storing '' would let
+                        // exactly one serial-less server exist and reject the
+                        // next one with a confusing duplicate error.
+                        $newValue = trim($newValue);
+                        if ($newValue === '') {
+                            $newValue = null;
+                        }
+                        break;
+
+
                     default:
                         $newValue = trim($newValue);
                         break;
@@ -680,6 +729,43 @@ function handleCreateStart($serverBuilder, $user) {
         send_json_response(0, 1, 400, "Server name is required");
     }
 
+    // The manufacturer serial printed on the physical server, typed in by the
+    // operator. Nothing derives it, so nothing can supply it on their behalf.
+    //
+    // REQUIRED FOR A PHYSICAL BUILD, and only for one: a virtual config and a
+    // compatibility bench build have no box to read a serial off, so demanding
+    // one would make a template impossible to create. is_virtual is never
+    // UPDATEd anywhere, so this decision holds for the life of the row.
+    //
+    // The whole check is skipped until seeder 2026_09_03_002 lands. Code reaches
+    // production ~20s after save and the seeder is applied by hand afterwards --
+    // refusing every server creation for that window, over a value that could
+    // not be stored anyway, would be a self-inflicted outage.
+    $serialNumber = trim($_POST['serial_number'] ?? '');
+    $serialColumnReady = ServerConfiguration::serialColumnExists($pdo);
+
+    if ($serialColumnReady && !$isVirtual) {
+        if ($serialNumber === '') {
+            send_json_response(0, 1, 400,
+                "A serial number is required — enter the serial printed on the physical server.");
+        }
+
+        $serialError = ServerConfiguration::validateSerial($serialNumber);
+        if ($serialError !== null) {
+            send_json_response(0, 1, 400, $serialError);
+        }
+
+        // Reported before the INSERT so the operator gets the name of the server
+        // that already holds it, rather than the bare duplicate-key error the
+        // UNIQUE index would raise.
+        $existing = ServerConfiguration::findBySerial($pdo, $serialNumber);
+        if ($existing) {
+            send_json_response(0, 1, 400,
+                "Serial number '{$serialNumber}' is already recorded against the server '"
+                . ($existing['server_name'] ?: 'Unnamed Server') . "'.");
+        }
+    }
+
     try {
         // Create configuration
         $configUuid = $serverBuilder->createConfiguration($serverName, $user['id'], [
@@ -688,6 +774,7 @@ function handleCreateStart($serverBuilder, $user) {
             'rack_position' => $rackPosition,
             'is_virtual' => $isVirtual,
             'is_sandbox' => $isSandbox,
+            'serial_number' => $isVirtual ? '' : $serialNumber,
         ]);
 
         // Log server creation start, linked to the new config's numeric id so
@@ -696,9 +783,15 @@ function handleCreateStart($serverBuilder, $user) {
         $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server',
             $newConfig ? $newConfig->get('id') : null,
             "Started server config creation: $serverName");
+        // The stored serial, read back off the row rather than echoed from the
+        // request, so the response can never disagree with the column. Null for a
+        // virtual or sandbox build, and null until seeder 2026_09_03_002 is
+        // applied -- get() returns null for an absent column, so this needs no
+        // schema guard of its own.
         send_json_response(1, 1, 200, "Server configuration created successfully", [
             'config_uuid' => $configUuid,
             'server_name' => $serverName,
+            'serial_number' => $newConfig ? $newConfig->get('serial_number') : null,
             'description' => $description,
             'location' => $location,
             'rack_position' => $rackPosition,
@@ -1527,6 +1620,12 @@ function handleGetConfiguration($serverBuilder, $user) {
             'configuration' => [
                 'config_uuid' => $configuration['config_uuid'],
                 'server_name' => $configuration['server_name'],
+                // Named explicitly because this array is a curated projection, not
+                // the row -- the underlying query is SELECT sc.*, so leaving it out
+                // is what kept the serial out of the detail endpoint while
+                // server-list-configs carried it. Null-coalesced for the window
+                // before seeder 2026_09_03_002 is applied.
+                'serial_number' => $configuration['serial_number'] ?? null,
                 'description' => $configuration['description'] ?? '',
                 'status' => $configuration['configuration_status'],
                 'location' => $configuration['location'] ?? '',
@@ -1900,6 +1999,13 @@ function handleImportVirtual($serverBuilder, $user) {
             $user['id'],
             StatusMap::CONFIG_LEGACY_TO_V2[0]
         ]);
+
+        // NO SERIAL. An imported config is real (the INSERT above hardcodes
+        // is_virtual = 0), but the serial is read off physical hardware by a
+        // person and this path has no operator standing in front of a box -- it
+        // materialises a template. It stays NULL, which the UNIQUE index allows
+        // any number of rows to be, and is filled in from the edit dialog when
+        // the machine it describes actually exists.
 
         // Step 4: Attempt to add each component from virtual to real config,
         // IN DEPENDENCY ORDER.
@@ -2802,6 +2908,31 @@ function handleSearchBySerial($serverBuilder, $user) {
                 if (!empty($row['ServerUUID']) && $row['ServerUUID'] !== 'null') {
                     // ServerUUID in inventory tables stores the config_uuid of the assigned server
                     $matchedConfigUuids[$row['ServerUUID']] = true;
+                }
+            }
+        }
+
+        // The server's OWN serial, not just the serials of the parts inside it.
+        // Before this, searching the serial printed on the server itself found
+        // nothing -- the loop above only ever matched component serials and
+        // reached the config through ServerUUID.
+        //
+        // Merged into the same set, so a hit either way is one result and the
+        // visibility filter below applies to both identically.
+        //
+        // Guarded: the column arrives with seeder 2026_09_03_002, applied by
+        // hand after this file deploys. Until then the search behaves exactly
+        // as it did before rather than 500-ing on an unknown column.
+        if (SchemaHelper::hasColumn($pdo, 'server_configurations', 'serial_number')) {
+            $stmt = $pdo->prepare("
+                SELECT config_uuid FROM server_configurations
+                WHERE serial_number LIKE ? LIMIT 50
+            ");
+            $stmt->execute(['%' . $serial . '%']);
+
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $configUuid) {
+                if (!empty($configUuid)) {
+                    $matchedConfigUuids[$configUuid] = true;
                 }
             }
         }

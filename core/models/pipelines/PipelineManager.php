@@ -25,6 +25,9 @@ require_once(__DIR__ . '/../tickets/TicketHistoryService.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
 require_once(__DIR__ . '/../../helpers/SchemaHelper.php');
 require_once(__DIR__ . '/RequestActionExecutor.php');
+// getRequestActions() asks it what hardware an action names, so an approver reads
+// the component's specification instead of its uuid.
+require_once(__DIR__ . '/ActionComponentSpec.php');
 // Reached transitively through the commands, but named here too: stockMissingActions()
 // asks it for the {type}inventory table name, and a require it does not own is a
 // fatal waiting for somebody to tidy an include list.
@@ -1391,6 +1394,11 @@ class PipelineManager
                     'action_type' => $row['action_type'],
                     'summary' => RequestActionExecutor::summarise($row['action_type'], $payload),
                     'payload' => $payload,
+                    // The model this action is about, resolved from ims-data.
+                    // null when the action names no component, or names one the
+                    // catalogue no longer describes -- display only, and the
+                    // panel copes with its absence.
+                    'component' => ActionComponentSpec::forPayload($row['action_type'], $payload),
                     'status' => $row['status'],
                     'result' => $row['result'] ? json_decode($row['result'], true) : null,
                     'executed_at' => $row['executed_at'],
