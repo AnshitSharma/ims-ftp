@@ -1189,7 +1189,7 @@ function handleRemoveComponent($serverBuilder, $user) {
         // A component the installed compute platform owns cannot be touched on its
         // own. The guard sits here, ahead of the COMMAND_LAYER_ENABLED branch below,
         // so it holds identically in off, shadow and enforce mode.
-        assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid);
+        assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid, $serialNumber);
 
         // Phase 3: NIC removal validation and NIC config update now handled in ServerBuilder::removeComponent()
 
@@ -1306,7 +1306,7 @@ function handleReplaceComponent($serverBuilder, $user) {
 
         // Swapping a platform-owned board or chassis for a loose spare would leave a
         // build that no longer matches the product it was installed from.
-        assertNotPlatformOwned($pdo, $config, $componentType, $oldComponentUuid);
+        assertNotPlatformOwned($pdo, $config, $componentType, $oldComponentUuid, $oldSerial);
 
         $cmd = new ReplaceComponentCommand(
             $pdo, $configUuid, $componentType, $oldComponentUuid, $oldSerial, $newComponentUuid,
@@ -3033,12 +3033,56 @@ function platformOwnedComponents($pdo, $config) {
 }
 
 /**
+ * Does this build hold a SEPARATELY STOCKED unit of this spec, over and above whatever
+ * the platform box supplies?
+ *
+ * The distinguishing mark is the row's inventory_table: everything the box brings --
+ * its board, its chassis, its embedded controller -- is recorded against
+ * `serverplatforminventory`, because the box is the physical unit behind all of them. A
+ * row naming any other table is a unit drawn from stock, which the operator added and
+ * may remove.
+ *
+ * Fails CLOSED: if the rows cannot be read, the answer is "no", and the platform lock
+ * stays on.
+ *
+ * @return bool
+ */
+function configHasStockedUnitOf($pdo, $configUuid, $componentType, $specUuid, $serialNumber = null) {
+    if (empty($configUuid) || empty($specUuid)) {
+        return false;
+    }
+
+    $sql = "SELECT 1 FROM config_components
+             WHERE config_uuid = ? AND component_type = ? AND spec_uuid = ?
+               AND removed_at IS NULL
+               AND (inventory_table IS NULL OR inventory_table <> 'serverplatforminventory')";
+    $params = [$configUuid, $componentType, $specUuid];
+    if ($serialNumber !== null && $serialNumber !== '') {
+        $sql .= " AND serial_number = ?";
+        $params[] = $serialNumber;
+    }
+
+    try {
+        $stmt = $pdo->prepare($sql . " LIMIT 1");
+        $stmt->execute($params);
+        return (bool)$stmt->fetchColumn();
+    } catch (\Throwable $e) {
+        error_log('configHasStockedUnitOf: lookup failed for ' . $configUuid . ': ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Refuse to touch a component the platform owns.
  *
  * Called from add/remove/replace. Sends a 409 and exits when the component is locked;
  * returns quietly otherwise.
+ *
+ * $serialNumber, when the caller has one, names WHICH physical unit is meant. It only
+ * ever narrows the search for a separately stocked twin below -- it cannot unlock the
+ * platform's own unit.
  */
-function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = null) {
+function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = null, $serialNumber = null) {
     $owned = platformOwnedComponents($pdo, $config);
     if (!$owned) {
         return;
@@ -3056,6 +3100,15 @@ function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = 
             && ($owned[$componentType] ?? null) === $componentUuid);
 
     if (!$isLocked) {
+        return;
+    }
+
+    // Same model, different unit: a loose H745 bought as a spare can sit in a build
+    // alongside the one bolted into the box, and removing THAT one is allowed. Only a
+    // row backed by the platform's own box is untouchable, so the lock lifts as soon as
+    // the build holds a separately stocked row of the same spec.
+    if (in_array($componentType, $byUuidTypes, true)
+        && configHasStockedUnitOf($pdo, $config->get('config_uuid'), $componentType, $componentUuid, $serialNumber)) {
         return;
     }
 
@@ -3091,8 +3144,10 @@ function assertNotPlatformOwned($pdo, $config, $componentType, $componentUuid = 
  * platform's board and chassis are not stocked units, have no inventory row, and can
  * never be double-allocated. The physical unit here is the box, and it is locked in
  * step 3 with exactly the Status / status_v2 / ServerUUID discipline every other add
- * uses. The included NIC and the included storage controller, which ARE stocked units,
- * go through the normal add path.
+ * uses. An EMBEDDED included part -- one the box physically contains, flagged
+ * `"embedded": true` in the platform spec -- is in the same position and is mirrored in
+ * the same way. An included part WITHOUT that flag is a separately stocked card and goes
+ * through the normal add path.
  *
  * Installing over an existing build releases the WHOLE build, not just the previous
  * platform's parts: a board and chassis out of a different product cannot be trusted to
@@ -3197,6 +3252,15 @@ function handleSetPlatform($serverBuilder, $user) {
             send_json_response(0, 1, 500, "This platform version is missing its system board or chassis specification");
         }
 
+        // What the box comes with, keyed by the component type each entry defaults to.
+        // Whether a part is EMBEDDED decides which of the two routes below it takes, and
+        // ServerPlatformCatalog::isEmbedded() is the only place that question is asked.
+        $includedParts = array_filter([
+            'nic'     => $version['included_nic'] ?? null,
+            'hbacard' => $version['included_storage_controller'] ?? null,
+        ]);
+        $embeddedIncluded = (bool)array_filter($includedParts, ['ServerPlatformCatalog', 'isEmbedded']);
+
         // What is in the build right now, before anything is touched.
         $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
         $stmt->execute([$configUuid]);
@@ -3285,23 +3349,47 @@ function handleSetPlatform($serverBuilder, $user) {
         // Motherboard FIRST: ConfigComponentWriter::resolveParentId() parents board-hosted
         // types (the onboard NICs below included) to the config's motherboard ROW, looked
         // up from the motherboard_uuid just stamped above.
+        //
+        // An EMBEDDED included part rides the same mirror, for the same reason and off
+        // the same unit: a front PERC is bolted into the box, is never stocked as a
+        // loose hbacard, and cannot be added to inventory by hand -- so there is no unit
+        // to draw and nothing to consume. It is written AFTER the board because
+        // ConfigComponentWriter parents board-hosted types (hbacard among them) to the
+        // motherboard row. uq_inventory_once carries component_type, so a third row on
+        // the same box is exactly as legal as the second.
         $rowsMirrored = false;
+        $embeddedRows = [];
         if (platformRowsSupported($pdo)) {
             require_once __DIR__ . '/../../../core/models/config/ConfigComponentWriter.php';
-            foreach (['motherboard' => $board, 'chassis' => $chassis] as $rowType => $rowSpec) {
+            // A list, not a map: two entries could name the same component type only
+            // through a malformed spec, and one silently overwriting the other is a
+            // worse outcome than the duplicate-row error that would follow.
+            $platformRows = [['motherboard', $board], ['chassis', $chassis]];
+            foreach ($includedParts as $defaultType => $partSpec) {
+                if (!ServerPlatformCatalog::isEmbedded($partSpec) || empty($partSpec['uuid'])) {
+                    continue;
+                }
+                $platformRows[] = [$partSpec['component_type'] ?? $defaultType, $partSpec];
+                $embeddedRows[$defaultType] = true;
+            }
+
+            foreach ($platformRows as list($rowType, $rowSpec)) {
                 ConfigComponentWriter::afterLegacyAdd(
                     $pdo,
                     $configUuid,
                     $rowType,
                     $rowSpec['uuid'],
                     $unit['SerialNumber'],
-                    null,                        // neither occupies a PCIe slot or bay
-                    'serverplatforminventory',   // the box is the unit behind both rows
+                    null,                        // none of them occupies a PCIe slot or bay
+                    'serverplatforminventory',   // the box is the unit behind every one of these rows
                     (int)$unit['ID'],
                     (int)$user['id']
                 );
             }
             $rowsMirrored = true;
+        } elseif ($embeddedIncluded) {
+            error_log('handleSetPlatform: uq_inventory_once is not widened yet -- the embedded '
+                . 'part(s) of this platform version were not recorded on config ' . $configUuid);
         }
 
         // The ports on this physical box. Identity is keyed on the platform unit, which
@@ -3351,15 +3439,20 @@ function handleSetPlatform($serverBuilder, $user) {
         // fix, 2026-08-25, which is how a fourth ungated call site reappeared). P9 then
         // removed the flag and the legacy branch with it.
         //
-        // The embedded storage controller rides the same path for the same reason: a
-        // front PERC is mounted in the box, but it is separately stocked as an hbacard
-        // unit, so it must be drawn from inventory through the command layer rather
-        // than mirrored in like the board and chassis.
+        // An EMBEDDED part does NOT come this way: it was mirrored in above, against the
+        // platform unit, because it has no inventory row of its own to draw. Only a
+        // separately stocked included card reaches the command layer here.
         $includedResults = ['nic' => null, 'hbacard' => null];
-        $includedUnits = array_filter([
-            'nic'     => $version['included_nic']['uuid'] ?? null,
-            'hbacard' => $version['included_storage_controller']['uuid'] ?? null,
-        ]);
+        foreach ($embeddedRows as $embeddedType => $_written) {
+            $includedResults[$embeddedType] = ['success' => true, 'embedded' => true];
+        }
+
+        $includedUnits = [];
+        foreach ($includedParts as $includedType => $partSpec) {
+            if (!ServerPlatformCatalog::isEmbedded($partSpec) && !empty($partSpec['uuid'])) {
+                $includedUnits[$includedType] = $partSpec['uuid'];
+            }
+        }
 
         if ($includedUnits) {
             require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';

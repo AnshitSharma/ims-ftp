@@ -106,6 +106,17 @@ final class RemoveComponentCommand extends BaseCommand
             if ($this->serialNumber !== null && $row['serial_number'] !== $this->serialNumber) {
                 continue;
             }
+            // A row backed by serverplatforminventory is not a unit that was added to
+            // this build -- it is part of the compute platform box (its board, its
+            // chassis, an embedded controller), removable only by removing the platform,
+            // which the API guard already refuses. It matters here because a build may
+            // hold BOTH the box's embedded card and a separately stocked one of the same
+            // model: a serial-less removal must resolve to the stocked one. Releasing
+            // the other could not work anyway -- the release looks the unit up in
+            // {type}inventory, where the platform box has no row.
+            if (($row['inventory_table'] ?? null) === 'serverplatforminventory') {
+                continue;
+            }
             $this->targetRow = $row;
             break;
         }

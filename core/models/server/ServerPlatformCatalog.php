@@ -15,8 +15,10 @@
  * UUID. Stock is counted per version, and it is a version the user installs.
  *
  * A version is `selectable` only when everything it installs is on the shelf: the box
- * itself, the `included_nic` card if it names one, and the
- * `included_storage_controller` if it names one. A version that is not selectable
+ * itself, and any included card that is SEPARATELY STOCKED. An included part flagged
+ * `"embedded": true` is not separately stocked — it is mounted in the box and ships with
+ * it, exactly like the system board and the chassis — so it is never stock-checked and
+ * never makes a version unselectable (see isEmbedded()). A version that is not selectable
  * is still RETURNED, carrying `unavailable_reason` — a version that vanished would read
  * as "this platform has fewer versions", which is a different and wrong statement.
  *
@@ -146,7 +148,52 @@ class ServerPlatformCatalog
         return $version['chassis'] ?? null;
     }
 
+    /**
+     * Does this included part come mounted in the box?
+     *
+     * `"embedded": true` in the platform spec is the whole rule, and it is asked in
+     * exactly two places: here, where it decides whether a version is stock-checked
+     * against the part, and in handleSetPlatform(), where it decides whether the part
+     * is drawn from inventory or mirrored in against the platform unit. An included
+     * part WITHOUT the flag is a separately stocked card that happens to ship with the
+     * product -- it is bought, stocked and consumed like any other unit.
+     *
+     * @param array|null $includedSpec `included_nic` / `included_storage_controller`
+     * @return bool
+     */
+    public static function isEmbedded($includedSpec)
+    {
+        return is_array($includedSpec) && !empty($includedSpec['embedded']);
+    }
+
     // ---------------------------------------------------------------- internals
+
+    /**
+     * One `included_*` entry flattened for the API.
+     *
+     * `available_units` is the stock of that model and is meaningless for an embedded
+     * part -- it is inside a box, never on a shelf of its own -- so it is reported as
+     * null there rather than as a 0 that reads like "none left".
+     *
+     * @return array|null null when the version includes no such part
+     */
+    private function describeIncludedPart($includedSpec, array $unitCounts, $defaultType)
+    {
+        if (!is_array($includedSpec) || empty($includedSpec['uuid'])) {
+            return null;
+        }
+
+        $embedded = self::isEmbedded($includedSpec);
+
+        return [
+            'uuid'            => $includedSpec['uuid'],
+            'model'           => $includedSpec['model'] ?? null,
+            'component_type'  => $includedSpec['component_type'] ?? $defaultType,
+            'position'        => $includedSpec['position'] ?? null,
+            'embedded'        => $embedded,
+            'available_units' => $embedded ? null : (int)($unitCounts[$includedSpec['uuid']] ?? 0),
+        ];
+    }
 
     /**
      * Flatten one version for the API: what it is, what it installs, whether it can be.
@@ -161,31 +208,18 @@ class ServerPlatformCatalog
 
         $availableUnits = $versionUuid ? (int)($platformUnits[$versionUuid] ?? 0) : 0;
 
-        $nic = null;
-        if (is_array($includedNic) && !empty($includedNic['uuid'])) {
-            $nic = [
-                'uuid'            => $includedNic['uuid'],
-                'model'           => $includedNic['model'] ?? null,
-                'available_units' => (int)($nicUnits[$includedNic['uuid']] ?? 0),
-            ];
-        }
+        $nic = $this->describeIncludedPart($includedNic, $nicUnits, 'nic');
 
         // An embedded storage controller (a Dell front PERC, say) is not an optional
-        // card: it ships mounted in the box. It IS separately stocked as an hbacard,
-        // so it installs and is stock-checked exactly like the included NIC.
-        $controller = null;
-        if (is_array($includedController) && !empty($includedController['uuid'])) {
-            $controller = [
-                'uuid'            => $includedController['uuid'],
-                'model'           => $includedController['model'] ?? null,
-                'component_type'  => $includedController['component_type'] ?? 'hbacard',
-                'position'        => $includedController['position'] ?? null,
-                'available_units' => (int)($hbaUnits[$includedController['uuid']] ?? 0),
-            ];
-        }
+        // card and is not a separately stocked one either: it is mounted in the box and
+        // comes with it, like the system board and the chassis. describeIncludedPart()
+        // reports that as `embedded`, and the selectability rule below leaves it alone.
+        $controller = $this->describeIncludedPart($includedController, $hbaUnits, 'hbacard');
 
-        // Everything the box brings must be on the shelf, or the install would half
-        // succeed and leave a build that matches no catalogued product.
+        // Everything the box brings SEPARATELY must be on the shelf, or the install
+        // would half succeed and leave a build that matches no catalogued product. An
+        // embedded part brings itself: there is no stock to be out of, and asking would
+        // grey out a version over a unit nobody can ever add to inventory.
         $selectable = true;
         $reason = null;
         if ($versionUuid === null) {
@@ -194,10 +228,10 @@ class ServerPlatformCatalog
         } elseif ($availableUnits < 1) {
             $selectable = false;
             $reason = 'Out of stock';
-        } elseif ($nic !== null && $nic['available_units'] < 1) {
+        } elseif ($nic !== null && !$nic['embedded'] && $nic['available_units'] < 1) {
             $selectable = false;
             $reason = 'Included network card is out of stock';
-        } elseif ($controller !== null && $controller['available_units'] < 1) {
+        } elseif ($controller !== null && !$controller['embedded'] && $controller['available_units'] < 1) {
             $selectable = false;
             $reason = 'Included storage controller is out of stock';
         }
