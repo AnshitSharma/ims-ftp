@@ -2085,8 +2085,16 @@ function buildInventoryLogFilters(array $params) {
     $bindings = [];
 
     if (!empty($params['search'])) {
-        $where[] = "(u.username LIKE :search OR il.action LIKE :search OR il.notes LIKE :search OR CAST(il.component_id AS CHAR) LIKE :search)";
-        $bindings[':search'] = '%' . $params['search'] . '%';
+        // One placeholder per occurrence: PDO runs with ATTR_EMULATE_PREPARES=false,
+        // and native prepares reject a named placeholder reused across the statement
+        // (SQLSTATE HY093), which turned any search into a 500.
+        $where[] = "(u.username LIKE :search_username OR il.action LIKE :search_action"
+            . " OR il.notes LIKE :search_notes OR CAST(il.component_id AS CHAR) LIKE :search_component)";
+        $term = '%' . $params['search'] . '%';
+        $bindings[':search_username'] = $term;
+        $bindings[':search_action'] = $term;
+        $bindings[':search_notes'] = $term;
+        $bindings[':search_component'] = $term;
     }
     if (!empty($params['user_id'])) {
         $where[] = "il.user_id = :user_id";
