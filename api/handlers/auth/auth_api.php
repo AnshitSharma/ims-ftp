@@ -363,9 +363,22 @@ function handleForgotPassword() {
                 'expires_at' => $expiresAt
             ]);
 
-            // Construct reset link
-            $frontendUrl = getenv('FRONTEND_URL') ?: 'http://localhost:3000';
-            $resetLink = $frontendUrl . '/reset-password?token=' . $resetToken;
+            // Construct reset link.
+            //
+            // Two corrections (2026-09-13): the path was /reset-password, which
+            // 404s -- the page is reset-password.html, served from the domain
+            // root -- and the fallback base was localhost:3000, so with no
+            // FRONTEND_URL set every emailed link pointed at the recipient's own
+            // machine. The fallback is now the host that served this request.
+            $frontendUrl = getenv('FRONTEND_URL');
+            if (!$frontendUrl) {
+                $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                    || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+                    ? 'https' : 'http';
+                $host = $_SERVER['HTTP_HOST'] ?? '';
+                $frontendUrl = $host !== '' ? $scheme . '://' . $host : '';
+            }
+            $resetLink = rtrim($frontendUrl, '/') . '/reset-password.html?token=' . urlencode($resetToken);
 
             // Send email
             require_once __DIR__ . '/../../../core/helpers/EmailHelper.php';

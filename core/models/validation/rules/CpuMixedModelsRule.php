@@ -58,7 +58,10 @@ final class CpuMixedModelsRule implements RuleInterface
      */
     public function triggers(): array
     {
-        return [Trigger::ADD, Trigger::VALIDATE];
+        // REPLACE added 2026-09-13: swapping one of two CPUs for a different
+        // model is exactly the mixed-model case, and it was only caught later
+        // at VALIDATE.
+        return [Trigger::ADD, Trigger::REPLACE, Trigger::VALIDATE];
     }
 
     public function scope(): string

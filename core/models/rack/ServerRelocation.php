@@ -399,9 +399,34 @@ class ServerRelocation
             return self::fail(400, 'That rack is not at the location you selected');
         }
 
-        $height = $heightGiven !== null
-            ? max(1, $heightGiven)
-            : RackPlacement::deriveUHeight($server['chassis_uuid'] ?? null);
+        // F-11: THE CHASSIS DECIDES, WHENEVER THERE IS ONE.
+        //
+        // u_height is what the rack elevation draws and what every later
+        // collision check measures against, so a caller-supplied value that
+        // disagrees with the installed hardware does real damage: send 1 for a
+        // 2U server and it drops into a 1U gap, the elevation under-draws it,
+        // and the next placement one U above overlaps it in the real rack while
+        // passing every check here.
+        //
+        // A caller height survives only as a PRE-BUILD RESERVATION — a server
+        // racked before its chassis is picked, which is the normal order of
+        // work. That height is a claim, not a measurement, and
+        // syncHeightFromChassis() replaces it (or refuses, and asks for a move)
+        // the moment a chassis arrives.
+        $verifiedHeight = RackPlacement::chassisUHeight($server['chassis_uuid'] ?? null);
+
+        if ($verifiedHeight !== null) {
+            if ($heightGiven !== null && max(1, $heightGiven) !== $verifiedHeight) {
+                $chassisName = RackPlacement::chassisName($server['chassis_uuid']);
+                return self::fail(400, "\"{$server['server_name']}\" is {$verifiedHeight}U — its installed chassis"
+                    . ($chassisName ? " ({$chassisName})" : '')
+                    . " decides that, so it cannot be placed as " . max(1, $heightGiven) . "U");
+            }
+            $height = $verifiedHeight;
+        } else {
+            $height = $heightGiven !== null ? max(1, $heightGiven) : 1;
+        }
+
         $endU = $startU + $height - 1;
 
         if ($endU > (int)$rack['total_u']) {

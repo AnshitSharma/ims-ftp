@@ -28,12 +28,12 @@ class EmailHelper {
 
         $success = mail($email, $subject, $htmlBody, $headers);
 
-        // Log for debugging
+        // Outcome only. This used to log the recipient address AND the reset
+        // link itself (2026-09-13): anyone who could read the error log held a
+        // working, unexpired account-takeover link for every reset requested.
         error_log(sprintf(
-            "[EmailHelper] Password reset email %s to %s. Link: %s",
-            $success ? 'sent' : 'FAILED',
-            $email,
-            $resetLink
+            "[EmailHelper] Password reset email %s",
+            $success ? 'sent' : 'FAILED'
         ));
 
         return $success;

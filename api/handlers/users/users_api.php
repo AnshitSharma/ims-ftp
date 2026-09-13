@@ -78,6 +78,11 @@ function handleUserOperations($operation, $user) {
                 $roleCheck = $pdo->prepare("SELECT id FROM roles WHERE id = ?");
                 $roleCheck->execute([$roleId]);
                 if ($roleCheck->fetch()) {
+                    // Role ceiling (C-01/F-14). Existence was the ONLY test here, so
+                    // users.create plus role_id=<super_admin> minted an account more
+                    // privileged than its creator.
+                    requireGrantPolicy();
+                    GrantPolicy::assertMayAssignRole($pdo, $user, $roleId);
                     $resolvedRoleId = $roleId;
                 }
             }
@@ -133,9 +138,23 @@ function handleUserOperations($operation, $user) {
                 send_json_response(0, 1, 400, "User ID and at least one field to update are required");
             }
 
+            // Protected-target policy (F-15). users.edit alone used to be enough to
+            // rewrite ANY account's email -- which hands over its password-reset
+            // channel -- or flip its status.
+            requireGrantPolicy();
+            GrantPolicy::assertMayEditUser($pdo, $user, $targetUserId, $updateData);
+
+            $deactivating = isset($updateData['status']) && $updateData['status'] !== 'active';
+
             $success = updateUser($pdo, $targetUserId, $updateData);
 
             if ($success) {
+                if ($deactivating) {
+                    // Refresh and reset tokens are credentials of their own and
+                    // outlived deactivation until 2026-09-13.
+                    requireGrantPolicy();
+                    GrantPolicy::revokeCredentials($pdo, $targetUserId);
+                }
                 send_json_response(1, 1, 200, "User updated successfully");
             } else {
                 send_json_response(0, 1, 400, "Failed to update user");

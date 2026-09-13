@@ -557,9 +557,17 @@ class ComponentValidator {
         $cpuMaxSpeed = null;
 
         // Get CPU max memory speed if CPU specs provided
-        if ($cpuSpecs && isset($cpuSpecs['compatibility']['memory_types'])) {
+        // `memory_types` is TOP LEVEL in ims-data; the `compatibility` wrapper this
+        // used to require has never existed on a CPU record, so no CPU ever
+        // constrained memory speed here. Both shapes accepted (2026-09-13).
+        $cpuDeclaredMemoryTypes = is_array($cpuSpecs)
+            ? ($cpuSpecs['memory_types']
+                ?? ($cpuSpecs['compatibility']['memory_types']
+                ?? ($cpuSpecs['compatibility_fields']['memory_types'] ?? null)))
+            : null;
+        if (is_array($cpuDeclaredMemoryTypes)) {
             // Extract speed from memory types like DDR5-4800
-            foreach ($cpuSpecs['compatibility']['memory_types'] as $memType) {
+            foreach ($cpuDeclaredMemoryTypes as $memType) {
                 if (preg_match('/DDR\d+-(\d+)/', $memType, $matches)) {
                     $speed = (int)$matches[1];
                     if ($cpuMaxSpeed === null || $speed > $cpuMaxSpeed) {
@@ -801,7 +809,11 @@ class ComponentValidator {
         // memory controller must support the RAM type.
         $allCpuMemoryTypes = [];
         foreach ($this->normalizeCpuSpecList($cpuSpecs) as $cpu) {
-            $cpuMemoryTypes = $cpu['compatibility']['memory_types'] ?? null;
+            // Top level in ims-data; the `compatibility` wrapper never exists there
+            // (2026-09-13) -- this read silently skipped every CPU.
+            $cpuMemoryTypes = $cpu['memory_types']
+                ?? ($cpu['compatibility']['memory_types']
+                ?? ($cpu['compatibility_fields']['memory_types'] ?? null));
             if (!is_array($cpuMemoryTypes) || empty($cpuMemoryTypes)) {
                 continue; // this CPU does not declare memory types -> cannot constrain
             }

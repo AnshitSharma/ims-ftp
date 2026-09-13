@@ -75,6 +75,9 @@ function handleACLOperations($operation, $user) {
                 send_json_response(0, 1, 400, "User ID and role ID are required");
             }
 
+            requireGrantPolicy();
+            GrantPolicy::assertMayAssignRole($pdo, $user, $roleId);
+
             $success = assignRoleToUser($pdo, $targetUserId, $roleId);
 
             if ($success) {
@@ -91,6 +94,13 @@ function handleACLOperations($operation, $user) {
             if (empty($targetUserId) || empty($roleId)) {
                 send_json_response(0, 1, 400, "User ID and role ID are required");
             }
+
+            // Both guards were missing here while roles-remove_user had the second
+            // one (F-21): this endpoint could strip a super_admin's role, or a
+            // user's only role, leaving an account with no grants at all.
+            requireGrantPolicy();
+            GrantPolicy::assertMayAssignRole($pdo, $user, $roleId, 'revoke');
+            GrantPolicy::assertNotLastRole($pdo, $targetUserId);
 
             $success = revokeRoleFromUser($pdo, $targetUserId, $roleId);
 

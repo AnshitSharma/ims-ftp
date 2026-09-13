@@ -43,8 +43,23 @@ class RackPlacement
      */
     public static function deriveUHeight($chassisUuid)
     {
+        $u = self::chassisUHeight($chassisUuid);
+        return $u === null ? 1 : $u;
+    }
+
+    /**
+     * VERIFIED U-height from the installed chassis, or null when there is no
+     * chassis yet or its spec cannot be resolved.
+     *
+     * deriveUHeight() collapses both of those to 1U, which is right for sizing
+     * a placement but wrong for deciding whether to trust a caller-supplied
+     * height (F-11): "the chassis really is 1U" and "we have no idea how tall
+     * this is" have to be told apart before one of them can overrule a POST.
+     */
+    public static function chassisUHeight($chassisUuid)
+    {
         if (empty($chassisUuid)) {
-            return 1;
+            return null;
         }
         try {
             $specs = self::chassisManager()->loadChassisSpecsByUUID($chassisUuid);
@@ -53,9 +68,9 @@ class RackPlacement
                 return $u >= 1 ? $u : 1;
             }
         } catch (Throwable $e) {
-            error_log("RackPlacement::deriveUHeight error: " . $e->getMessage());
+            error_log("RackPlacement::chassisUHeight error: " . $e->getMessage());
         }
-        return 1;
+        return null;
     }
 
     /**
@@ -264,6 +279,66 @@ class RackPlacement
             }
         }
         return count($covered);
+    }
+
+    /**
+     * The contiguous free U ranges in a rack, lowest U first.
+     *
+     * free_u alone says how much room is left, never whether it is usable: a
+     * 48U rack with 12U free in six 2U gaps cannot take a 4U server, and the
+     * placement picker offering it is how a create gets as far as the collision
+     * check before failing. Occupancy is shared with usedU(), so enclosures are
+     * counted once here too.
+     *
+     * @return array<int, array{start_u:int, end_u:int, u:int}>
+     */
+    public static function freeIntervals($pdo, $rackUuid, $totalU)
+    {
+        $totalU = (int)$totalU;
+        if ($totalU < 1) {
+            return [];
+        }
+
+        $covered = [];
+        foreach (self::occupancy($pdo, $rackUuid) as $item) {
+            for ($u = $item['start_u']; $u <= $item['end_u']; $u++) {
+                $covered[$u] = true;
+            }
+        }
+
+        $intervals = [];
+        $runStart  = null;
+        // One past the end so a run reaching the top of the rack still closes.
+        for ($u = 1; $u <= $totalU + 1; $u++) {
+            $free = ($u <= $totalU) && !isset($covered[$u]);
+            if ($free && $runStart === null) {
+                $runStart = $u;
+            } elseif (!$free && $runStart !== null) {
+                $intervals[] = [
+                    'start_u' => $runStart,
+                    'end_u'   => $u - 1,
+                    'u'       => $u - $runStart,
+                ];
+                $runStart = null;
+            }
+        }
+
+        return $intervals;
+    }
+
+    /**
+     * Height of the largest single opening in a rack — the tallest server that
+     * could actually be placed in it right now.
+     */
+    public static function largestFreeU($pdo, $rackUuid, $totalU)
+    {
+        $largest = 0;
+        foreach (self::freeIntervals($pdo, $rackUuid, $totalU) as $gap) {
+            if ($gap['u'] > $largest) {
+                $largest = $gap['u'];
+            }
+        }
+        return $largest;
     }
 
     /**

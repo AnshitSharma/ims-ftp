@@ -211,7 +211,15 @@ switch ($operation) {
             if ($role['name'] === 'super_admin' && !$acl->hasRole($user['id'], ['super_admin'])) {
                 send_json_response(0, 1, 403, "Only super administrators can modify super admin role");
             }
-            
+
+            // You cannot grant what you do not hold (C-01). A no-op for
+            // admin/super_admin, who hold everything through hasPermission()'s
+            // bypass; it stops a role holding only roles.edit from writing acl.*
+            // into a role and then wearing it.
+            requireGrantPolicy();
+            GrantPolicy::assertMayGrantPermissions($pdo, $user, $permissions);
+
+
             if ($acl->updateRolePermissions($roleId, $permissions)) {
                 logActivity($pdo, $user['id'], 'update_permissions', 'role', $roleId, "Updated permissions for role: " . $role['name']);
                 
@@ -289,6 +297,9 @@ switch ($operation) {
             send_json_response(0, 1, 400, "User ID and Role ID are required");
         }
         
+        requireGrantPolicy();
+        GrantPolicy::assertMayAssignRole($pdo, $user, $roleId);
+
         try {
             if ($acl->assignRole($userId, $roleId, $user['id'])) {
                 logActivity($pdo, $user['id'], 'assign_role', 'user', $userId, "Assigned role ID: $roleId");
@@ -318,16 +329,12 @@ switch ($operation) {
             send_json_response(0, 1, 400, "User ID and Role ID are required");
         }
         
+        // Same two guards as acl-revoke_role, from the one place that defines them.
+        requireGrantPolicy();
+        GrantPolicy::assertMayAssignRole($pdo, $user, $roleId, 'revoke');
+        GrantPolicy::assertNotLastRole($pdo, $userId);
+
         try {
-            // Prevent removing the last role from a user
-            $stmt = $pdo->prepare("SELECT COUNT(*) as role_count FROM user_roles WHERE user_id = ?");
-            $stmt->execute([$userId]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($result['role_count'] <= 1) {
-                send_json_response(0, 1, 409, "Cannot remove the last role from a user");
-            }
-            
             if ($acl->removeRole($userId, $roleId)) {
                 logActivity($pdo, $user['id'], 'remove_role', 'user', $userId, "Removed role ID: $roleId");
                 

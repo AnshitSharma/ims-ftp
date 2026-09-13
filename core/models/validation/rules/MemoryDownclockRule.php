@@ -5,6 +5,7 @@ require_once __DIR__ . '/../RuleResult.php';
 require_once __DIR__ . '/../Severity.php';
 require_once __DIR__ . '/../Trigger.php';
 require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
+require_once __DIR__ . '/../../shared/DataNormalizationUtils.php';
 
 /**
  * RULE_MAP.md: memory.downclock (W). Legacy:
@@ -15,6 +16,21 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * the pack calls out preserving the response-enrichment detail (effective
  * frequency, limiting component) in RuleResult::details() for the future
  * API shim (U-A.3) to surface.
+ *
+ * 2026-09-13: three corrections.
+ *  - CPU speeds were read from `compatibility.memory_types`, a key no ims-data
+ *    CPU record has. Every CPU limit was silently absent. Now read through
+ *    DataExtractionUtilities::getCpuMemoryTypes().
+ *  - The CPU limit was a single minimum taken across ALL declared types, so a
+ *    CPU offering DDR4-3200 and DDR5-4800 capped DDR5 modules at 3200. Limits
+ *    are now tracked per memory generation and matched to the module's own.
+ *  - `?? 3200` defaults invented a rated speed whenever a spec was unreadable.
+ *    Unknown is now reported as unknown; only published numbers constrain.
+ *
+ * Speeds are MT/s. ims-data labels the DDR field `frequency_MHz` (and carries
+ * the correctly named `speed_MTs` alongside it); the stored value is MT/s in
+ * both, so `speed_MTs` is preferred and user-facing text says MT/s. Detail
+ * keys keep their existing names for API consumers.
  */
 final class MemoryDownclockRule implements RuleInterface
 {
@@ -51,27 +67,45 @@ final class MemoryDownclockRule implements RuleInterface
         $motherboards = $state->byType('motherboard');
         $cpus = $state->byType('cpu');
 
-        $cpuMaxFrequency = null;
-        $limitingCpu = null;
+        // Per-generation CPU speed limits: 'DDR5' => ['speed' => 4800, 'cpu' => 'Platinum 8480+'].
+        // Slowest CPU wins within a generation; generations never constrain each other.
+        $cpuLimits = [];
         foreach ($cpus as $cpu) {
             $cpuSpec = $this->dataUtils->getCPUByUUID($cpu['spec_uuid']);
-            $cpuMemoryTypes = is_array($cpuSpec) ? ($cpuSpec['compatibility']['memory_types'] ?? []) : [];
-            foreach ((array)$cpuMemoryTypes as $memType) {
-                if (preg_match('/DDR\d+-(\d+)/', (string)$memType, $m)) {
-                    $freq = (int)$m[1];
-                    if ($cpuMaxFrequency === null || $freq < $cpuMaxFrequency) {
-                        $cpuMaxFrequency = $freq;
-                        $limitingCpu = $cpuSpec['basic_info']['model'] ?? 'Unknown CPU';
-                    }
+            $cpuModel = is_array($cpuSpec) ? ($cpuSpec['model'] ?? 'Unknown CPU') : 'Unknown CPU';
+            foreach ($this->dataUtils->getCpuMemoryTypes($cpuSpec) as $memType) {
+                if (!preg_match('/DDR\d+-(\d+)/', (string)$memType, $m)) {
+                    continue; // generation with no published speed -- cannot constrain
+                }
+                $generation = DataNormalizationUtils::normalizeMemoryType($memType);
+                if ($generation === null) {
+                    continue;
+                }
+                $speed = (int)$m[1];
+                if (!isset($cpuLimits[$generation]) || $speed < $cpuLimits[$generation]['speed']) {
+                    $cpuLimits[$generation] = ['speed' => $speed, 'cpu' => $cpuModel];
                 }
             }
         }
 
         foreach ($state->byType('ram') as $ram) {
             $ramSpec = $this->dataUtils->getRAMByUUID($ram['spec_uuid']);
-            $ramFrequency = is_array($ramSpec) ? (int)($ramSpec['frequency_MHz'] ?? 3200) : 3200;
+            $ramSpeed = $this->readRamSpeed($ramSpec);
+            if ($ramSpeed === null) {
+                continue; // no published module speed -- nothing to compare against
+            }
 
-            $analysis = $this->analyze($ramFrequency, $motherboards, $cpuMaxFrequency, $limitingCpu);
+            $generation = is_array($ramSpec)
+                ? DataNormalizationUtils::normalizeMemoryType($ramSpec['memory_type'] ?? null)
+                : null;
+            $cpuLimit = ($generation !== null && isset($cpuLimits[$generation])) ? $cpuLimits[$generation] : null;
+
+            $analysis = $this->analyze(
+                $ramSpeed,
+                $motherboards,
+                $cpuLimit === null ? null : $cpuLimit['speed'],
+                $cpuLimit === null ? null : $cpuLimit['cpu']
+            );
 
             if ($analysis['status'] !== 'optimal') {
                 return new RuleResult($this->id(), $this->severity(), false, $analysis['message'],
@@ -82,51 +116,69 @@ final class MemoryDownclockRule implements RuleInterface
         return new RuleResult($this->id(), $this->severity(), true, 'No memory downclock');
     }
 
-    private function analyze(int $ramFrequency, array $motherboards, ?int $cpuMaxFrequency, ?string $limitingCpu): array
+    /**
+     * Rated module speed in MT/s, or null when the module publishes none.
+     * `speed_MTs` is the correctly named field; `frequency_MHz` holds the same
+     * MT/s value under a legacy label and is the fallback.
+     */
+    private function readRamSpeed($ramSpec): ?int
     {
-        if (empty($motherboards) && $cpuMaxFrequency !== null) {
-            if ($ramFrequency <= $cpuMaxFrequency) {
-                return ['status' => 'optimal', 'ram_frequency' => $ramFrequency, 'system_max_frequency' => $cpuMaxFrequency,
-                    'effective_frequency' => $ramFrequency, 'limiting_component' => $limitingCpu,
-                    'message' => "RAM will operate at full rated speed of {$ramFrequency}MHz with CPU"];
+        if (!is_array($ramSpec)) {
+            return null;
+        }
+        $raw = $ramSpec['speed_MTs'] ?? ($ramSpec['frequency_MHz'] ?? null);
+        if ($raw === null || $raw === '' || (int)$raw <= 0) {
+            return null;
+        }
+        return (int)$raw;
+    }
+
+    private function analyze(int $ramSpeed, array $motherboards, ?int $cpuMaxSpeed, ?string $limitingCpu): array
+    {
+        $mbMaxSpeed = null;
+        if (!empty($motherboards)) {
+            $mbSpec = $this->dataUtils->getMotherboardByUUID($motherboards[0]['spec_uuid']);
+            $rawMbSpeed = is_array($mbSpec) ? ($mbSpec['memory']['max_frequency_MHz'] ?? null) : null;
+            if ($rawMbSpeed !== null && $rawMbSpeed !== '' && (int)$rawMbSpeed > 0) {
+                $mbMaxSpeed = (int)$rawMbSpeed;
             }
-            return ['status' => 'limited', 'ram_frequency' => $ramFrequency, 'system_max_frequency' => $cpuMaxFrequency,
-                'effective_frequency' => $cpuMaxFrequency, 'limiting_component' => $limitingCpu,
-                'message' => "RAM will operate at {$cpuMaxFrequency}MHz (limited by CPU) instead of rated {$ramFrequency}MHz"];
         }
 
-        if (empty($motherboards) && $cpuMaxFrequency === null) {
-            return ['status' => 'optimal', 'ram_frequency' => $ramFrequency, 'system_max_frequency' => $ramFrequency,
-                'effective_frequency' => $ramFrequency, 'limiting_component' => null,
-                'message' => "RAM frequency {$ramFrequency}MHz accepted (no constraints)"];
+        // Nothing published to compare against. Say so rather than assuming a
+        // speed -- the old `?? 3200` turned missing data into a confident
+        // number and produced downclock warnings nobody could trace.
+        if ($mbMaxSpeed === null && $cpuMaxSpeed === null) {
+            $message = empty($motherboards)
+                ? "RAM speed {$ramSpeed}MT/s accepted (no constraints)"
+                : "RAM speed {$ramSpeed}MT/s accepted - no rated memory speed published for the installed motherboard or CPU";
+            return ['status' => 'optimal', 'ram_frequency' => $ramSpeed, 'system_max_frequency' => null,
+                'effective_frequency' => $ramSpeed, 'limiting_component' => null, 'message' => $message];
         }
 
-        $mbSpec = $this->dataUtils->getMotherboardByUUID($motherboards[0]['spec_uuid']);
-        $motherboardMaxFrequency = is_array($mbSpec) ? (int)($mbSpec['memory']['max_frequency_MHz'] ?? 3200) : 3200;
-
-        $systemMaxFrequency = $motherboardMaxFrequency;
+        $systemMaxSpeed = $mbMaxSpeed;
         $limitingComponent = 'motherboard';
-        if ($cpuMaxFrequency !== null && $cpuMaxFrequency < $systemMaxFrequency) {
-            $systemMaxFrequency = $cpuMaxFrequency;
-            $limitingComponent = $limitingCpu;
+        if ($cpuMaxSpeed !== null && ($systemMaxSpeed === null || $cpuMaxSpeed < $systemMaxSpeed)) {
+            $systemMaxSpeed = $cpuMaxSpeed;
+            $limitingComponent = $limitingCpu ?? 'CPU';
         }
 
-        if ($ramFrequency <= $systemMaxFrequency) {
+        if ($ramSpeed <= $systemMaxSpeed) {
             $status = 'optimal';
-            $effectiveFrequency = $ramFrequency;
-            $message = "RAM will operate at full rated speed of {$ramFrequency}MHz";
+            $effectiveSpeed = $ramSpeed;
+            $message = "RAM will operate at full rated speed of {$ramSpeed}MT/s";
         } else {
             $status = 'limited';
-            $effectiveFrequency = $systemMaxFrequency;
-            $message = "RAM will operate at {$systemMaxFrequency}MHz (limited by $limitingComponent) instead of rated {$ramFrequency}MHz";
+            $effectiveSpeed = $systemMaxSpeed;
+            $message = "RAM will operate at {$systemMaxSpeed}MT/s (limited by $limitingComponent) instead of rated {$ramSpeed}MT/s";
         }
 
-        if ($ramFrequency < ($systemMaxFrequency * 0.8)) {
+        // Legacy parity: the headroom warning only applies once a board is installed.
+        if ($mbMaxSpeed !== null && $ramSpeed < ($systemMaxSpeed * 0.8)) {
             $status = 'suboptimal';
-            $message = "RAM frequency may impact performance - consider higher frequency memory";
+            $message = "RAM speed may impact performance - consider faster memory";
         }
 
-        return ['status' => $status, 'ram_frequency' => $ramFrequency, 'system_max_frequency' => $systemMaxFrequency,
-            'effective_frequency' => $effectiveFrequency, 'limiting_component' => $limitingComponent, 'message' => $message];
+        return ['status' => $status, 'ram_frequency' => $ramSpeed, 'system_max_frequency' => $systemMaxSpeed,
+            'effective_frequency' => $effectiveSpeed, 'limiting_component' => $limitingComponent, 'message' => $message];
     }
 }

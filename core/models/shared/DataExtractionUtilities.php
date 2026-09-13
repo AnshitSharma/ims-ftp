@@ -715,6 +715,44 @@ class DataExtractionUtilities {
     }
 
     /**
+     * Memory types a CPU declares, e.g. ["DDR5-4800"]. Returns [] when it
+     * declares none.
+     *
+     * ims-data CPU records carry `memory_types` at the TOP LEVEL (see
+     * cpu/Cpu-details-level-3.json); the legacy ComponentValidator path passed
+     * raw JSON through under a `compatibility` wrapper, so rules were written
+     * against `compatibility.memory_types` — a key no fixture has ever had.
+     * Both shapes are accepted here so there is one contract to read.
+     *
+     * Deliberately does NOT fall back to ['DDR4'] the way extractMemoryTypes()
+     * does: callers must treat [] as "cannot constrain", never as a generation.
+     */
+    public function getCpuMemoryTypes($cpuSpec) {
+        if (!is_array($cpuSpec)) {
+            return [];
+        }
+
+        // Three shapes in circulation: raw ims-data (top level), the legacy
+        // ComponentValidator passthrough (`compatibility`), and
+        // ComponentCompatibility::parseSpecifications()'s wrapper
+        // (`compatibility_fields`). Only the first one ever holds data.
+        $types = $cpuSpec['memory_types']
+            ?? ($cpuSpec['compatibility']['memory_types']
+            ?? ($cpuSpec['compatibility_fields']['memory_types'] ?? null));
+        if (!is_array($types)) {
+            $types = ($types === null || $types === '') ? [] : [$types];
+        }
+
+        $out = [];
+        foreach ($types as $type) {
+            if (is_string($type) && trim($type) !== '') {
+                $out[] = trim($type);
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Extract memory types from component specs (CPU or Motherboard)
      */
     public function extractMemoryTypes($specs) {

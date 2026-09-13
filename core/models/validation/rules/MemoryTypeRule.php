@@ -17,10 +17,15 @@ require_once __DIR__ . '/../../shared/DataNormalizationUtils.php';
  * reproduced inline where they diverge from the raw field name (motherboard
  * memory.type is a single string in ims-data; ComponentValidator::parseMotherboardSpecifications
  * wraps it into a 1-element 'types' array, default ['DDR4'] — mirrored below).
- * CPU memory-type constraint reads raw `compatibility.memory_types`
- * (ComponentValidator::validateCPUExists passes raw JSON through verbatim
- * under this same key) — real ims-data fixtures rarely populate it, matching
- * legacy's own "cannot constrain" skip-continue behavior when absent.
+ * CPU memory-type constraint reads through
+ * DataExtractionUtilities::getCpuMemoryTypes(). This used to read
+ * `compatibility.memory_types` directly, inherited from
+ * ComponentValidator::validateCPUExists — but no ims-data CPU record has ever
+ * had a `compatibility` key (memory_types is top-level), so the constraint was
+ * silently skipped on every CPU while the motherboard half kept running and
+ * made the verdict look complete. The shared accessor reads both shapes.
+ * A genuinely empty list still means "cannot constrain" (skip-continue),
+ * matching legacy.
  */
 final class MemoryTypeRule implements RuleInterface
 {
@@ -108,8 +113,8 @@ final class MemoryTypeRule implements RuleInterface
 
             foreach ($cpus as $cpu) {
                 $cpuSpec = $this->dataUtils->getCPUByUUID($cpu['spec_uuid']);
-                $cpuMemoryTypes = is_array($cpuSpec) ? ($cpuSpec['compatibility']['memory_types'] ?? null) : null;
-                if (!is_array($cpuMemoryTypes) || empty($cpuMemoryTypes)) {
+                $cpuMemoryTypes = $this->dataUtils->getCpuMemoryTypes($cpuSpec);
+                if (empty($cpuMemoryTypes)) {
                     continue; // this CPU does not declare memory types -- cannot constrain
                 }
                 $cpuCompatible = false;

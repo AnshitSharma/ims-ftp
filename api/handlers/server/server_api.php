@@ -699,110 +699,76 @@ function handleUpdateConfiguration($serverBuilder, $user) {
 function handleCreateStart($serverBuilder, $user) {
     global $pdo;
 
-    $serverName = trim($_POST['server_name'] ?? '');
-    $description = trim($_POST['description'] ?? '');
-    $location = trim($_POST['location'] ?? '');
-    $isVirtual = filter_var($_POST['is_virtual'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
-
-    // Compatibility bench build (Server Compatibility section). Implies is_virtual --
-    // createConfiguration() forces it too, so a sandbox can never reserve real stock.
-    $isSandbox = filter_var($_POST['is_sandbox'] ?? false, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
-    if ($isSandbox) {
-        $isVirtual = 1;
-
-        // Refuse rather than quietly create a normal virtual config that the Server
-        // Compatibility section could never find again -- and that WOULD show up in the
-        // Import Template picker. A clear 503 tells the operator exactly what is missing.
-        if (!ServerBuilder::sandboxColumnExists($pdo)) {
-            send_json_response(0, 1, 503,
-                "Compatibility bench builds are unavailable: database migration " .
-                "2026_08_18_003 (server_configurations.is_sandbox) has not been applied yet.");
-        }
-    }
-
-    // rack_position is DERIVED from the real placement in rack_servers
-    // (RackPlacement::syncPositionText, called by rack-assign-server / rack-unassign-server).
-    // A new config is created unracked; the client places it with rack-assign-server.
-    $rackPosition = null;
-
-    if (empty($serverName)) {
-        send_json_response(0, 1, 400, "Server name is required");
-    }
-
-    // The manufacturer serial printed on the physical server, typed in by the
-    // operator. Nothing derives it, so nothing can supply it on their behalf.
+    // Every rule about what a server must have now lives in one place
+    // (F-01..F-04). This handler is HTTP plumbing: read the request, hand it
+    // over, report what came back.
     //
-    // REQUIRED FOR A PHYSICAL BUILD, and only for one: a virtual config and a
-    // compatibility bench build have no box to read a serial off, so demanding
-    // one would make a template impossible to create. is_virtual is never
-    // UPDATEd anywhere, so this decision holds for the life of the row.
-    //
-    // The whole check is skipped until seeder 2026_09_03_002 lands. Code reaches
-    // production ~20s after save and the seeder is applied by hand afterwards --
-    // refusing every server creation for that window, over a value that could
-    // not be stored anyway, would be a self-inflicted outage.
-    $serialNumber = trim($_POST['serial_number'] ?? '');
-    $serialColumnReady = ServerConfiguration::serialColumnExists($pdo);
+    // A PHYSICAL BUILD IS REFUSED WITHOUT A SITE, A RACK AND A U. It used to be
+    // created anyway and placed by two follow-up calls from the browser, so a
+    // failed placement left a real server row with nowhere to be -- and the
+    // form's "-- Not racked --" option made that the documented happy path.
+    // Creation and placement now commit together or not at all.
+    requireServerCreationService();
 
-    if ($serialColumnReady && !$isVirtual) {
-        if ($serialNumber === '') {
-            send_json_response(0, 1, 400,
-                "A serial number is required — enter the serial printed on the physical server.");
-        }
-
-        $serialError = ServerConfiguration::validateSerial($serialNumber);
-        if ($serialError !== null) {
-            send_json_response(0, 1, 400, $serialError);
-        }
-
-        // Reported before the INSERT so the operator gets the name of the server
-        // that already holds it, rather than the bare duplicate-key error the
-        // UNIQUE index would raise.
-        $existing = ServerConfiguration::findBySerial($pdo, $serialNumber);
-        if ($existing) {
-            send_json_response(0, 1, 400,
-                "Serial number '{$serialNumber}' is already recorded against the server '"
-                . ($existing['server_name'] ?: 'Unnamed Server') . "'.");
-        }
+    // is_sandbox needs its column before it can mean anything. Refuse rather
+    // than quietly create a normal virtual config that the Server Compatibility
+    // section could never find again -- and that WOULD show up in the Import
+    // Template picker.
+    $isSandbox = filter_var($_POST['is_sandbox'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    if ($isSandbox && !ServerBuilder::sandboxColumnExists($pdo)) {
+        send_json_response(0, 1, 503,
+            "Compatibility bench builds are unavailable: database migration " .
+            "2026_08_18_003 (server_configurations.is_sandbox) has not been applied yet.");
     }
 
-    try {
-        // Create configuration
-        $configUuid = $serverBuilder->createConfiguration($serverName, $user['id'], [
-            'description' => $description,
-            'location' => $location,
-            'rack_position' => $rackPosition,
-            'is_virtual' => $isVirtual,
-            'is_sandbox' => $isSandbox,
-            'serial_number' => $isVirtual ? '' : $serialNumber,
-        ]);
+    // rack_position is NOT accepted from the client. It is derived from the real
+    // placement in rack_servers by RackPlacement::syncPositionText().
+    $result = ServerCreationService::create($pdo, $serverBuilder, [
+        'server_name'    => $_POST['server_name']    ?? '',
+        'description'    => trim($_POST['description'] ?? ''),
+        'is_virtual'     => filter_var($_POST['is_virtual'] ?? false, FILTER_VALIDATE_BOOLEAN),
+        'is_sandbox'     => $isSandbox,
+        'serial_number'  => $_POST['serial_number']  ?? '',
+        'location_uuid'  => $_POST['location_uuid']  ?? '',
+        'rack_uuid'      => $_POST['rack_uuid']      ?? '',
+        'start_u'        => $_POST['start_u']        ?? '',
+        'enclosure_uuid' => $_POST['enclosure_uuid'] ?? '',
+        'slot_index'     => $_POST['slot_index']     ?? '',
+        'u_height'       => $_POST['u_height']       ?? '',
+    ], [
+        'user_id' => $user['id'],
+        'reason'  => 'Server created',
+    ]);
 
-        // Log server creation start, linked to the new config's numeric id so
-        // this event shows up in the per-server history (server-get-logs).
-        $newConfig = ServerConfiguration::loadByUuid($pdo, $configUuid);
-        $logResult = logActivity($pdo, $user['id'], 'Server configuration started', 'server',
-            $newConfig ? $newConfig->get('id') : null,
-            "Started server config creation: $serverName");
-        // The stored serial, read back off the row rather than echoed from the
-        // request, so the response can never disagree with the column. Null for a
-        // virtual or sandbox build, and null until seeder 2026_09_03_002 is
-        // applied -- get() returns null for an absent column, so this needs no
-        // schema guard of its own.
-        send_json_response(1, 1, 200, "Server configuration created successfully", [
-            'config_uuid' => $configUuid,
-            'server_name' => $serverName,
-            'serial_number' => $newConfig ? $newConfig->get('serial_number') : null,
-            'description' => $description,
-            'location' => $location,
-            'rack_position' => $rackPosition,
-            'is_virtual' => $isVirtual,
-            'is_sandbox' => $isSandbox,
-        ]);
-        
-    } catch (Exception $e) {
-        error_log("Error in server creation start: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to initialize server creation");
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
     }
+
+    $data = $result['data'];
+
+    // Linked to the new config's numeric id so the event shows up in the
+    // per-server history (server-get-logs).
+    $newConfig = ServerConfiguration::loadByUuid($pdo, $data['config_uuid']);
+    logActivity($pdo, $user['id'], 'Server configuration started', 'server',
+        $newConfig ? $newConfig->get('id') : null,
+        "Started server config creation: {$data['server_name']}"
+        . (!empty($data['address_text']) ? " at {$data['address_text']}" : ''));
+
+    // The stored serial is read back off the row rather than echoed from the
+    // request, so the response can never disagree with the column.
+    send_json_response(1, 1, 200, $result['message'], [
+        'config_uuid'   => $data['config_uuid'],
+        'server_name'   => $data['server_name'],
+        'serial_number' => $newConfig ? $newConfig->get('serial_number') : null,
+        'description'   => trim($_POST['description'] ?? ''),
+        'location'      => $newConfig ? $newConfig->get('location') : null,
+        'rack_position' => $newConfig ? $newConfig->get('rack_position') : null,
+        'address'       => $data['address'],
+        'address_text'  => $data['address_text'] ?? null,
+        'placed'        => $data['placed'],
+        'is_virtual'    => $data['is_virtual'],
+        'is_sandbox'    => $data['is_sandbox'],
+    ]);
 }
 
 
@@ -1936,13 +1902,15 @@ function handleImportVirtual($serverBuilder, $user) {
     global $pdo;
 
     $virtualConfigUuid = $_POST['virtual_config_uuid'] ?? '';
-    $serverName = trim($_POST['server_name'] ?? '');
-    $description = trim($_POST['description'] ?? '');
-    $location = trim($_POST['location'] ?? '');
+    $serverName   = trim($_POST['server_name'] ?? '');
+    $description  = trim($_POST['description'] ?? '');
+    $serialNumber = trim($_POST['serial_number'] ?? '');
+    $locationUuid = trim($_POST['location_uuid'] ?? '');
 
-    // Derived from rack_servers, never accepted from the client — see handleCreateStart.
-    // An imported config starts unracked; place it with rack-assign-server.
-    $rackPosition = null;
+    // An import produces a PHYSICAL server, so it is placed at creation like any
+    // other (F-01). rack_position is still never accepted from the client: it is
+    // derived from the real placement in rack_servers.
+    requireServerCreationService();
 
     // Validate required parameters
     if (empty($virtualConfigUuid)) {
@@ -1964,8 +1932,15 @@ function handleImportVirtual($serverBuilder, $user) {
             send_json_response(0, 1, 400, "Configuration is not a virtual configuration");
         }
 
-        // Check permissions
-        if ($virtualConfig->get('created_by') != $user['id'] && !hasPermission($pdo, 'server.create', $user['id'])) {
+        // Can this actor SEE the source config? (F-06, 2026-09-13)
+        //
+        // This used to escalate on server.create -- the very permission
+        // permission_map.php already requires to reach import-virtual -- so the
+        // ownership half could never fail for anyone who got here, and any
+        // builder could import a virtual config belonging to someone else.
+        // userCanActOnConfig() is the same owner / view_all / scoped-grant policy
+        // every other config read on this endpoint uses.
+        if (!userCanActOnConfig($pdo, $virtualConfig, $user['id'], 'server.view_all')) {
             send_json_response(0, 1, 403, "Insufficient permissions to import this configuration");
         }
 
@@ -1975,37 +1950,45 @@ function handleImportVirtual($serverBuilder, $user) {
             send_json_response(0, 1, 400, "Virtual configuration has no components to import");
         }
 
-        // Step 3: Create new real server configuration
+        // Step 3: Create the real configuration through the one creation path.
+        //
+        // This used to be a THIRD hand-written INSERT with its own idea of what a
+        // server needs, which is how it acquired the same status_v2 omission
+        // ServerBuilder::createConfiguration() had (F-21) and why it could
+        // produce a physical server with no site, no rack and no serial.
+        //
+        // AN IMPORT IS A PHYSICAL BUILD -- it hardcoded is_virtual = 0 then, and
+        // the service is told the same now -- so it answers to the same rules as
+        // the Create Server form: a site, a destination and a serial, or it is
+        // refused. The old "no operator is standing in front of a box" argument
+        // for skipping the serial does not survive the placement rule: whoever
+        // names the rack and U this machine occupies is looking at it.
         $pdo->beginTransaction();
 
-        $realConfigUuid = generateUUID();
-        // status_v2 rides in the same statement as configuration_status -- this is the
-        // third config-creating INSERT and it had the same omission as
-        // ServerBuilder::createConfiguration(), leaving imported configs invisible to
-        // the state machine (it fails closed on NULL). [F-21]
-        require_once(__DIR__ . '/../../../core/models/state/StatusMap.php');
-        $stmt = $pdo->prepare("
-            INSERT INTO server_configurations (
-                config_uuid, server_name, description, location, rack_position,
-                created_by, created_at, updated_at, configuration_status, status_v2, is_virtual
-            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, 0)
-        ");
-        $stmt->execute([
-            $realConfigUuid,
-            $serverName,
-            $description,
-            $location,
-            $rackPosition,
-            $user['id'],
-            StatusMap::CONFIG_LEGACY_TO_V2[0]
+        $creation = ServerCreationService::create($pdo, $serverBuilder, [
+            'server_name'    => $serverName,
+            'description'    => $description,
+            'is_virtual'     => false,
+            'serial_number'  => $serialNumber,
+            'location_uuid'  => $locationUuid,
+            'rack_uuid'      => $_POST['rack_uuid']      ?? '',
+            'start_u'        => $_POST['start_u']        ?? '',
+            'enclosure_uuid' => $_POST['enclosure_uuid'] ?? '',
+            'slot_index'     => $_POST['slot_index']     ?? '',
+            'u_height'       => $_POST['u_height']       ?? '',
+        ], [
+            'user_id' => $user['id'],
+            'reason'  => 'Server imported from template',
         ]);
 
-        // NO SERIAL. An imported config is real (the INSERT above hardcodes
-        // is_virtual = 0), but the serial is read off physical hardware by a
-        // person and this path has no operator standing in front of a box -- it
-        // materialises a template. It stays NULL, which the UNIQUE index allows
-        // any number of rows to be, and is filled in from the edit dialog when
-        // the machine it describes actually exists.
+        if (!$creation['success']) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            send_json_response(0, 1, $creation['code'], $creation['message']);
+        }
+
+        $realConfigUuid = $creation['data']['config_uuid'];
 
         // Step 4: Attempt to add each component from virtual to real config,
         // IN DEPENDENCY ORDER.

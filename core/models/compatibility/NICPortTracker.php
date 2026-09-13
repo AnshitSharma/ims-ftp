@@ -219,51 +219,50 @@ class NICPortTracker {
         $nicPortType = strtoupper(trim($nicPortType));
         $sfpType = strtoupper(trim($sfpType));
 
-        // RJ45 ports don't accept SFPs
+        // RJ45 ports don't accept SFPs. Substring test, not an exact one: cage
+        // strings arrive as "RJ45", "RJ-45", "4x RJ45" and similar.
         if (strpos($nicPortType, 'RJ45') !== false || strpos($nicPortType, 'RJ-45') !== false) {
             return false;
         }
 
-        // Exact match is always compatible
+        // Exact match is always compatible, including cage types the matrix
+        // below does not enumerate.
         if ($nicPortType === $sfpType) {
             return true;
         }
 
-        // SFP28 ports accept SFP+ modules (backward compatibility)
-        if ($nicPortType === 'SFP28' && $sfpType === 'SFP+') {
-            return true;
-        }
+        return in_array($sfpType, self::compatibilityMatrix()[$nicPortType] ?? [], true);
+    }
 
-        // SFP28 ports accept SFP+ DAC
-        if ($nicPortType === 'SFP28' && $sfpType === 'SFP+ DAC') {
-            return true;
-        }
-
-        // SFP+ and SFP28 cages are physically backward-compatible with 1G SFP
-        // modules. [Fixes H5: the matrix omitted SFP+ <- SFP, wrongly rejecting a
-        // valid 1G SFP in an SFP+/SFP28 cage.]
-        if (in_array($nicPortType, ['SFP+', 'SFP28'], true) &&
-            in_array($sfpType, ['SFP', 'SFP DAC', '1G SFP'], true)) {
-            return true;
-        }
-
-        // QSFP28 ports accept QSFP+ modules (backward compatibility)
-        if ($nicPortType === 'QSFP28' && $sfpType === 'QSFP+') {
-            return true;
-        }
-
-        // QSFP56 ports accept QSFP28 and QSFP+ modules (backward compatibility)
-        if ($nicPortType === 'QSFP56' && ($sfpType === 'QSFP28' || $sfpType === 'QSFP+')) {
-            return true;
-        }
-
-        // OSFP ports (future-proofing)
-        if ($nicPortType === 'OSFP' && in_array($sfpType, ['OSFP', 'QSFP56', 'QSFP28'])) {
-            return true;
-        }
-
-        // No other combinations are compatible
-        return false;
+    /**
+     * THE cage -> accepted module matrix. Single authority for all three
+     * directions: isCompatible(), getCompatibleSfpTypes() and the inverted
+     * getCompatiblePortTypesForSFP().
+     *
+     * Unified 2026-09-13. isCompatible() used to carry its own hand-written
+     * chain of if-statements, which had already drifted from this map: it
+     * omitted QSFP+ from the OSFP row, so the listing offered a QSFP+ module
+     * for an OSFP cage and the add then refused it.
+     *
+     * OPEN HARDWARE QUESTION on the OSFP row: an OSFP cage takes a QSFP-family
+     * module only through a physical adapter, and we hold no adapter record to
+     * check against. The permissive row below is preserved as-is so this
+     * unification changes no verdict; tightening it is a policy decision.
+     *
+     * @return array<string,string[]>
+     */
+    private static function compatibilityMatrix() {
+        // SFP+/SFP28 cages accept 1G SFP. [H5]
+        return [
+            'SFP+' => ['SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC', '1G SFP'],
+            'SFP28' => ['SFP28', 'SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC', '1G SFP'],
+            'QSFP+' => ['QSFP+'],
+            'QSFP28' => ['QSFP28', 'QSFP+'],
+            'QSFP56' => ['QSFP56', 'QSFP28', 'QSFP+'],
+            'OSFP' => ['OSFP', 'QSFP56', 'QSFP28', 'QSFP+'],
+            'RJ45' => [],
+            'RJ-45' => []
+        ];
     }
 
     /**
@@ -275,19 +274,7 @@ class NICPortTracker {
     public static function getCompatibleSfpTypes($nicPortType) {
         $nicPortType = strtoupper(trim($nicPortType));
 
-        // Kept in sync with isCompatible(): SFP+/SFP28 cages accept 1G SFP. [H5]
-        $compatibilityMap = [
-            'SFP+' => ['SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC'],
-            'SFP28' => ['SFP28', 'SFP+', 'SFP+ DAC', 'SFP', 'SFP DAC'],
-            'QSFP+' => ['QSFP+'],
-            'QSFP28' => ['QSFP28', 'QSFP+'],
-            'QSFP56' => ['QSFP56', 'QSFP28', 'QSFP+'],
-            'OSFP' => ['OSFP', 'QSFP56', 'QSFP28', 'QSFP+'],
-            'RJ45' => [],
-            'RJ-45' => []
-        ];
-
-        return $compatibilityMap[$nicPortType] ?? [];
+        return self::compatibilityMatrix()[$nicPortType] ?? [];
     }
 
     /**

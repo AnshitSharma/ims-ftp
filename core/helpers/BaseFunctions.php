@@ -99,8 +99,14 @@ function authenticateWithJWT($pdo) {
         // revocation is silently bypassed.
         $payload = JWTHelper::verifyToken($token, $pdo);
 
-        // Get user from database
-        $stmt = $pdo->prepare("SELECT id, username, email, firstname, lastname FROM users WHERE id = ?");
+        // Get user from database.
+        //
+        // The status filter matches authenticateUser()'s login query (2026-09-13).
+        // Without it, deactivating an account stopped that person LOGGING IN but
+        // did nothing to the access token already in their hands: it stayed valid
+        // for the rest of its 24h life, and refresh could extend that further.
+        // Deactivation has to take effect on the next request, not the next day.
+        $stmt = $pdo->prepare("SELECT id, username, email, firstname, lastname FROM users WHERE id = ? AND status = 'active'");
         $stmt->execute([$payload['user_id']]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 

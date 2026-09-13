@@ -90,7 +90,20 @@ class RequestActionExecutor
             'label'    => 'Create a new server configuration',
             'scope'    => 'server',
             'required' => ['server_name'],
-            'optional' => ['description', 'location', 'rack_position', 'is_virtual', 'is_sandbox'],
+            // A PHYSICAL build must name its site, its destination and its
+            // serial, exactly as the Create Server form must (F-01/F-03/F-04).
+            // They are 'optional' HERE only because a VIRTUAL build legitimately
+            // has none of them; ServerCreationService is what actually decides,
+            // so the two routes cannot drift apart again.
+            //
+            // rack_position is still NOT accepted (removed 2026-09-13): it was
+            // forwarded with no occupancy check behind it, writing a placement
+            // string no rack agreed with. A real destination is rack_uuid +
+            // start_u, or enclosure_uuid + slot_index, and it is checked.
+            'optional' => ['description', 'location', 'is_virtual', 'is_sandbox',
+                           'serial_number', 'location_uuid',
+                           'rack_uuid', 'start_u', 'enclosure_uuid', 'slot_index',
+                           'location_name', 'rack_name', 'enclosure_name'],
         ],
         'server.config.update' => [
             'label'    => 'Update a server\'s details',
@@ -120,7 +133,17 @@ class RequestActionExecutor
             // "move to Jaipur Office - RACK 12 - U8" without a join. They are
             // never read when performing the move -- the uuids are -- so a stale
             // or forged name misleads nobody about what actually happens.
-            'optional' => ['rack_uuid', 'start_u', 'reason', 'location_name', 'rack_name'],
+            //
+            // TWO DESTINATION SHAPES, matching rack-assign-server (F-12).
+            // `rack_uuid` + `start_u` is a direct placement. `enclosure_uuid` +
+            // `slot_index` installs the server in a BAY, where the enclosure
+            // supplies the rack and the U range. Before these two keys existed
+            // here, a request to move a sled into an FX2s could not be
+            // expressed at all -- validateShape() rejects undeclared keys -- so
+            // the only way to do it was the admin-only rack module, which is
+            // precisely the route this action exists to avoid.
+            'optional' => ['rack_uuid', 'start_u', 'enclosure_uuid', 'slot_index',
+                           'reason', 'location_name', 'rack_name', 'enclosure_name'],
         ],
         'inventory.component.add' => [
             'label'    => 'Add a component to inventory',
@@ -588,7 +611,7 @@ class RequestActionExecutor
                     return $this->runCommand($actionType, $payload, $subjectUserId);
 
                 case 'server.config.create':
-                    return $this->createConfiguration($payload, $subjectUserId);
+                    return $this->createConfiguration($payload, $subjectUserId, $ticketId);
 
                 case 'server.config.update':
                     return $this->updateConfiguration($payload);
@@ -854,46 +877,85 @@ class RequestActionExecutor
 
     // ---------------------------------------------------------------- servers
 
-    private function createConfiguration(array $payload, $subjectUserId)
+    private function createConfiguration(array $payload, $subjectUserId, $ticketId = null)
     {
+        // Straight through to ServerCreationService, the same call the Create
+        // Server form makes. An approved request now creates a server on exactly
+        // the terms a direct create does: a physical build names its site, its
+        // rack and U (or its enclosure bay) and its serial, or it is refused.
+        //
+        // It used to create an UNRACKED server and leave placement to a separate
+        // rack-assign-server call the requester cannot make, so an approved "new
+        // server" arrived nowhere and stayed there.
+        //
+        // The service is a NEW file, so it is never hard-required: a missing one
+        // must refuse the approval rather than fall back to creating an unplaced
+        // server, which is the exact outcome this replaces.
+        if (!class_exists('ServerCreationService')) {
+            $servicePath = __DIR__ . '/../server/ServerCreationService.php';
+            if (is_readable($servicePath)) {
+                require_once($servicePath);
+            }
+        }
+        if (!class_exists('ServerCreationService')) {
+            return [
+                'success' => false,
+                'errors'  => ['Server creation is temporarily unavailable while the server finishes updating'],
+                'result'  => ['error_code' => 'service_unavailable'],
+            ];
+        }
+
         $builder = new ServerBuilder($this->pdo);
 
-        $options = [];
-        foreach (['description', 'location', 'rack_position', 'is_virtual', 'is_sandbox'] as $key) {
+        $input = ['server_name' => trim((string)$payload['server_name'])];
+        foreach (['description', 'is_virtual', 'is_sandbox', 'serial_number', 'location_uuid',
+                  'rack_uuid', 'start_u', 'enclosure_uuid', 'slot_index'] as $key) {
             if (isset($payload[$key]) && $payload[$key] !== '') {
-                $options[$key] = $payload[$key];
+                $input[$key] = $payload[$key];
             }
         }
 
         // created_by is the REQUESTER: the build is theirs, and
         // userCanActOnConfig() lets an owner act on their own configuration —
         // which is what makes an approved "new server" actually usable to them.
-        $result = $builder->createConfiguration(trim((string)$payload['server_name']), $subjectUserId, $options);
+        //
+        // RETURN CONTRACT (F-05, fixed 2026-09-13). The old code called
+        // ServerBuilder::createConfiguration() and read its plain STRING return
+        // as an array -- `empty($result['success'])` on a string is true on
+        // PHP 8, so the failure branch was taken every single time and
+        // PipelineManager rolled the approval back; on PHP 7.4 the same
+        // expression yields $str[0] and would have stored a one-character
+        // config_uuid. Either way, creating a server through an approved Request
+        // had never once worked. The service returns move()'s explicit
+        // success/code/message shape, which has no such ambiguity.
+        //
+        // Runs inside completeStage()'s open transaction; the service joins it
+        // rather than opening its own, so a refused placement rolls the whole
+        // approval back with it.
+        $result = ServerCreationService::create($this->pdo, $builder, $input, [
+            'user_id'   => $subjectUserId,
+            'ticket_id' => $ticketId,
+            'reason'    => 'Server created by approved request',
+        ]);
 
-        if (empty($result['success'])) {
+        if (!$result['success']) {
             return [
                 'success' => false,
-                'errors'  => [!empty($result['message']) ? $result['message'] : 'Could not create the server configuration'],
-                'result'  => null,
+                'errors'  => [$result['message']],
+                'result'  => ['error_code' => 'creation_refused', 'message' => $result['message']],
             ];
-        }
-
-        $configUuid = null;
-        foreach (['config_uuid', 'configUuid', 'uuid'] as $key) {
-            if (!empty($result[$key])) {
-                $configUuid = $result[$key];
-                break;
-            }
         }
 
         return [
             'success' => true,
             'errors'  => [],
             'result'  => [
-                'action'      => 'server.config.create',
-                'config_uuid' => $configUuid,
-                'server_name' => $payload['server_name'],
-                'owner'       => (int)$subjectUserId,
+                'action'       => 'server.config.create',
+                'config_uuid'  => $result['data']['config_uuid'],
+                'server_name'  => $result['data']['server_name'],
+                'owner'        => (int)$subjectUserId,
+                'address_text' => isset($result['data']['address_text']) ? $result['data']['address_text'] : null,
+                'placed'       => $result['data']['placed'],
             ],
         ];
     }
@@ -928,9 +990,13 @@ class RequestActionExecutor
             $this->pdo,
             $payload['config_uuid'],
             [
-                'location_uuid' => $payload['location_uuid'],
-                'rack_uuid'     => isset($payload['rack_uuid']) ? $payload['rack_uuid'] : null,
-                'start_u'       => isset($payload['start_u'])   ? $payload['start_u']   : null,
+                'location_uuid'  => $payload['location_uuid'],
+                'rack_uuid'      => isset($payload['rack_uuid']) ? $payload['rack_uuid'] : null,
+                'start_u'        => isset($payload['start_u'])   ? $payload['start_u']   : null,
+                // A bay destination. move() prefers this over rack_uuid/start_u
+                // and takes the rack and U range from the enclosure itself.
+                'enclosure_uuid' => isset($payload['enclosure_uuid']) ? $payload['enclosure_uuid'] : null,
+                'slot_index'     => isset($payload['slot_index'])     ? $payload['slot_index']     : null,
             ],
             [
                 'user_id'   => $subjectUserId,
@@ -958,6 +1024,8 @@ class RequestActionExecutor
                 'location_name'      => isset($to['location_name']) ? $to['location_name'] : null,
                 'rack_name'          => isset($to['rack_name'])     ? $to['rack_name']     : null,
                 'start_u'            => isset($to['start_u'])       ? $to['start_u']       : null,
+                'enclosure_uuid'     => isset($to['enclosure_uuid']) ? $to['enclosure_uuid'] : null,
+                'slot_index'         => isset($to['slot_index'])     ? $to['slot_index']     : null,
                 'components_updated' => $result['data']['components_updated'],
                 'message'            => $result['message'],
             ],

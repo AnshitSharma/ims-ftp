@@ -53,13 +53,20 @@ final class VerdictShim
         })));
 
         if (!$verdict->blocking()) {
+            // details/recommendations used to be [] here (2026-09-13): a
+            // successful add carried its warning TEXT but dropped the structured
+            // objects behind it, so a caller could see "RAM will operate at
+            // 4800MT/s (limited by ...)" and had nothing to render the effective
+            // speed or the limiting component from. The non-passed results on a
+            // non-blocking verdict are exactly the warnings, so they map the
+            // same way the blocking path maps its failures.
             return [
                 'success' => true,
                 'message' => 'Component validation passed',
                 'error_type' => null,
                 'warnings' => $warnings,
-                'details' => [],
-                'recommendations' => [],
+                'details' => self::detailsFor($verdict->failures()),
+                'recommendations' => self::recommendationsFor($verdict),
             ];
         }
 
@@ -84,20 +91,8 @@ final class VerdictShim
             ? (self::RULE_TO_LEGACY_TYPE[$primary->ruleId()] ?? self::FALLBACK_TYPE)
             : self::FALLBACK_TYPE;
 
-        $details = array_map(function (RuleResult $r) {
-            return ['rule_id' => $r->ruleId(), 'severity' => $r->severity(), 'message' => $r->message()] + $r->details();
-        }, $blocking);
-
-        // RAM enrichment (per the pack: "RAM enrichment mapped from
-        // MemoryDownclockRule details") -- surfaced alongside details rather
-        // than replacing them, since downclock is a WARNING (never the
-        // blocking reason itself) but legacy callers expect this specific key.
-        $recommendations = [];
-        foreach ($verdict->results() as $r) {
-            if ($r->ruleId() === 'memory.downclock' && !$r->passed()) {
-                $recommendations[] = $r->details();
-            }
-        }
+        $details = self::detailsFor($blocking);
+        $recommendations = self::recommendationsFor($verdict);
 
         return [
             'success' => false,
@@ -107,5 +102,35 @@ final class VerdictShim
             'details' => $details,
             'recommendations' => $recommendations,
         ];
+    }
+
+    /**
+     * @param RuleResult[] $results
+     * @return array[] one structured object per non-passed result
+     */
+    private static function detailsFor(array $results): array
+    {
+        return array_map(function (RuleResult $r) {
+            return ['rule_id' => $r->ruleId(), 'severity' => $r->severity(), 'message' => $r->message()] + $r->details();
+        }, array_values($results));
+    }
+
+    /**
+     * RAM enrichment (per the pack: "RAM enrichment mapped from
+     * MemoryDownclockRule details") -- surfaced alongside details rather than
+     * replacing them, since downclock is a WARNING (never the blocking reason
+     * itself) but legacy callers expect this specific key. It follows that it
+     * belongs on the SUCCESS path too, which is where a downclock warning
+     * almost always lands.
+     */
+    private static function recommendationsFor(Verdict $verdict): array
+    {
+        $recommendations = [];
+        foreach ($verdict->results() as $r) {
+            if ($r->ruleId() === 'memory.downclock' && !$r->passed()) {
+                $recommendations[] = $r->details();
+            }
+        }
+        return $recommendations;
     }
 }

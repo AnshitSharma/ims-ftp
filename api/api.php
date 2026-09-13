@@ -25,6 +25,53 @@ header('Content-Type: application/json');
 require_once(__DIR__ . '/../core/config/app.php');
 require_once(__DIR__ . '/../core/helpers/BaseFunctions.php');
 
+// GrantPolicy is loaded DEFENSIVELY, not with a bare require_once.
+//
+// A brand-new file reaches production on its own upload, which can lag the
+// already-deployed file that references it — the same ordering gap seeders have.
+// A hard require turned that lag into a blank 500 on every action, auth-login
+// included: the whole API, down, because one new helper had not landed yet.
+// Endpoints that need it fail closed individually via requireGrantPolicy().
+$grantPolicyPath = __DIR__ . '/../core/helpers/GrantPolicy.php';
+if (is_readable($grantPolicyPath)) {
+    require_once($grantPolicyPath);
+}
+
+/**
+ * Fail closed when the access-policy helper has not deployed yet. Refusing the
+ * write is correct; running it without its privilege-escalation checks is not.
+ */
+function requireGrantPolicy() {
+    if (!class_exists('GrantPolicy')) {
+        send_json_response(0, 1, 503,
+            "This action is temporarily unavailable while the server finishes updating");
+    }
+}
+
+/**
+ * Same deal, same reason as GrantPolicy: ServerCreationService is a new file,
+ * so it is never hard-required and every creation path fails closed until it
+ * lands. Creating a server without its placement checks is exactly what the
+ * class exists to stop, so a missing file must refuse the create rather than
+ * fall back to the old unplaced one.
+ *
+ * Loaded HERE rather than at the top of the file because it pulls in the rack,
+ * location and configuration models; every request would pay for that, and only
+ * the three creation paths need it.
+ */
+function requireServerCreationService() {
+    if (!class_exists('ServerCreationService')) {
+        $path = __DIR__ . '/../core/models/server/ServerCreationService.php';
+        if (is_readable($path)) {
+            require_once($path);
+        }
+    }
+    if (!class_exists('ServerCreationService')) {
+        send_json_response(0, 1, 503,
+            "Server creation is temporarily unavailable while the server finishes updating");
+    }
+}
+
 // CORS: only origins listed in CORS_ALLOWED_ORIGINS (.env, comma-separated)
 // receive an Access-Control-Allow-Origin header. Requests from any other
 // origin get no CORS headers and are blocked by the browser. Same-origin and
@@ -139,13 +186,13 @@ try {
             break;
 
         case 'rack':
-            // Rack View is accessible to admin and super_admin. hasPermission()
-            // grants a blanket bypass to both of those roles, so the explicit
-            // role gate below just keeps every other role out before the
-            // standard permission check runs.
-            if (!userHasRole($pdo, $user['id'], 'super_admin') && !userHasRole($pdo, $user['id'], 'admin')) {
-                send_json_response(0, 1, 403, "Insufficient permissions: admin or super_admin role required");
-            }
+            // Permission-gated like every other module (2026-09-13). This used to
+            // carry an extra hard-coded admin/super_admin role test in front of
+            // requireModulePermission(), which made the rack.* grants unreachable:
+            // manager and technician already hold rack.view and rack.assign, and
+            // the role test rejected them before their grants were ever read. That
+            // is the "manager cannot place a server in a rack" report -- not a
+            // missing grant, so no amount of granting could have fixed it.
             requireModulePermission('rack', $operation, $user);
             // Pass operation to rack_api.php via global scope
             $GLOBALS['operation'] = $operation;

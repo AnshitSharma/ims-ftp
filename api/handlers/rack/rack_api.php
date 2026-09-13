@@ -185,9 +185,13 @@ function handleRackList($pdo, $user) {
         // so summing would report an FX2s holding four blades as 8U of a 48U
         // rack. RackPlacement::usedU counts DISTINCT occupied U instead, over
         // direct servers plus enclosures.
+        // free_u is likewise not enough on its own to choose a destination: 12U
+        // free in six 2U gaps takes no 4U server. The picker needs the openings.
         $usedByRack = [];
+        $gapsByRack = [];
         foreach ($racks as $r) {
             $usedByRack[$r['rack_uuid']] = RackPlacement::usedU($pdo, $r['rack_uuid']);
+            $gapsByRack[$r['rack_uuid']] = RackPlacement::freeIntervals($pdo, $r['rack_uuid'], (int)$r['total_u']);
         }
 
         // location_uuid / floor arrive with seeder 2026_08_26_003 and the
@@ -197,9 +201,16 @@ function handleRackList($pdo, $user) {
         $hasLocationUuid = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
         $hasFloor        = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
 
-        $result = array_map(function ($r) use ($occ, $usedByRack, $pdo, $hasLocationUuid, $hasFloor) {
+        $result = array_map(function ($r) use ($occ, $usedByRack, $gapsByRack, $pdo, $hasLocationUuid, $hasFloor) {
             $o = $occ[$r['rack_uuid']] ?? ['server_count' => 0];
             $usedU = $usedByRack[$r['rack_uuid']] ?? 0;
+            $gaps  = $gapsByRack[$r['rack_uuid']] ?? [];
+            $largestFree = 0;
+            foreach ($gaps as $gap) {
+                if ($gap['u'] > $largestFree) {
+                    $largestFree = $gap['u'];
+                }
+            }
             $locationUuid = $hasLocationUuid ? ($r['location_uuid'] ?: null) : null;
 
             return [
@@ -217,6 +228,8 @@ function handleRackList($pdo, $user) {
                 'server_count' => (int)$o['server_count'],
                 'used_u' => $usedU,
                 'free_u' => max(0, (int)$r['total_u'] - $usedU),
+                'largest_free_u' => $largestFree,
+                'free_intervals' => $gaps,
                 'created_at' => $r['created_at'],
                 'updated_at' => $r['updated_at'],
             ];
@@ -580,8 +593,11 @@ function handleRackDelete($pdo, $user) {
  * rather than silently resolved, so the response can never describe a place the
  * caller did not choose.
  *
- * u_height stays overridable for Rack View, which sizes sleds explicitly;
- * omitted, it is re-derived from the chassis as before.
+ * u_height is only ever a PRE-BUILD RESERVATION now (F-11). Once a chassis is
+ * installed, the chassis spec decides the height and a disagreeing u_height is
+ * refused rather than honoured — a value smaller than the hardware is how a
+ * server gets placed in a gap it does not fit, with the collision check none
+ * the wiser. Omitted, it is derived from the chassis as before.
  *
  * TWO DESTINATIONS. Send `enclosure_uuid` + `slot_index` to install the server
  * in a bay — the enclosure supplies the rack and the U range, so rack_uuid and

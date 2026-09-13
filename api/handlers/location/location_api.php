@@ -33,6 +33,8 @@ require_once __DIR__ . '/../../../core/config/app.php';
 require_once __DIR__ . '/../../../core/helpers/BaseFunctions.php';
 require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
+require_once __DIR__ . '/../../../core/models/rack/RackPlacement.php';
+require_once __DIR__ . '/../../../core/models/rack/RackEnclosure.php';
 
 header('Content-Type: application/json');
 
@@ -293,6 +295,14 @@ function handleLocationRacks($pdo, $user) {
 /**
  * Racks at a location with used/free U, shaped like rack-list so the frontend
  * can render either through the same code path.
+ *
+ * USED U IS NOT SUM(u_height), and this function used to compute it that way
+ * (F-22). A sled mirrors its enclosure's U range, so summing reports an FX2s
+ * holding four blades as 8U rather than 2U, and an enclosure holding none as
+ * 0U. RackPlacement::occupancy is the one authority on what is physically in
+ * the way; it counts direct servers plus enclosures, each once.
+ *
+ * free_u alone was also never enough to pick a destination — see freeIntervals.
  */
 function locationRacksFor($pdo, $locationUuid) {
     if (!SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid')) {
@@ -305,11 +315,9 @@ function locationRacksFor($pdo, $locationUuid) {
     $stmt = $pdo->prepare("
         SELECT r.rack_uuid, r.name, r.location, r.location_uuid, {$floorSel},
                r.total_u, r.numbering_top_down, r.notes,
-               COALESCE(o.server_count, 0) AS server_count,
-               COALESCE(o.used_u, 0)       AS used_u
+               COALESCE(o.server_count, 0) AS server_count
           FROM racks r
-          LEFT JOIN (SELECT rack_uuid, COUNT(*) AS server_count,
-                            COALESCE(SUM(u_height), 0) AS used_u
+          LEFT JOIN (SELECT rack_uuid, COUNT(*) AS server_count
                        FROM rack_servers GROUP BY rack_uuid) o
                  ON o.rack_uuid = r.rack_uuid
          WHERE r.location_uuid = ?
@@ -317,21 +325,84 @@ function locationRacksFor($pdo, $locationUuid) {
     ");
     $stmt->execute([$locationUuid]);
 
-    return array_map(function ($r) {
-        return [
+    $out = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $totalU    = (int)$r['total_u'];
+        $intervals = RackPlacement::freeIntervals($pdo, $r['rack_uuid'], $totalU);
+
+        $freeU = 0;
+        $largest = 0;
+        foreach ($intervals as $gap) {
+            $freeU += $gap['u'];
+            if ($gap['u'] > $largest) {
+                $largest = $gap['u'];
+            }
+        }
+
+        $out[] = [
             'rack_uuid'          => $r['rack_uuid'],
             'name'               => $r['name'],
             'location'           => $r['location'],
             'location_uuid'      => $r['location_uuid'],
             'floor'              => $r['floor'],
-            'total_u'            => (int)$r['total_u'],
+            'total_u'            => $totalU,
             'numbering_top_down' => (int)$r['numbering_top_down'],
             'notes'              => $r['notes'],
             'server_count'       => (int)$r['server_count'],
-            'used_u'             => (int)$r['used_u'],
-            'free_u'             => max(0, (int)$r['total_u'] - (int)$r['used_u']),
+            'used_u'             => max(0, $totalU - $freeU),
+            'free_u'             => $freeU,
+            // What will actually fit, as opposed to how much room is left.
+            'largest_free_u'     => $largest,
+            'free_intervals'     => $intervals,
+            'enclosures'         => locationRackBays($pdo, $r['rack_uuid']),
         ];
-    }, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    return $out;
+}
+
+/**
+ * The enclosures in a rack, reduced to what is needed to CHOOSE a free bay.
+ *
+ * This is the requester-facing surface (F-12). Someone raising a "move my
+ * server" request has no rack.view, so location-racks is the only rack data
+ * they can see — and before this, a bay could not be named from here at all,
+ * which meant a sled move had to go through the admin-only rack module, the
+ * exact detour the relocate action exists to remove.
+ *
+ * Deliberately NOT RackEnclosure::listForRack's full shape: that carries every
+ * bay's occupant name, serial number, status and component count, none of which
+ * a requester needs to point at an empty slot. Only free bays are listed, by
+ * index; occupied ones are a count.
+ */
+function locationRackBays($pdo, $rackUuid) {
+    if (!RackPlacement::enclosuresAvailable($pdo)) {
+        return [];
+    }
+
+    $out = [];
+    foreach (RackEnclosure::listForRack($pdo, $rackUuid) as $enc) {
+        $freeSlots = [];
+        foreach ($enc['slots'] as $slot) {
+            if (empty($slot['occupied'])) {
+                $freeSlots[] = (int)$slot['slot_index'];
+            }
+        }
+
+        $out[] = [
+            'enclosure_uuid' => $enc['enclosure_uuid'],
+            'name'           => $enc['name'],
+            'model'          => $enc['model'],
+            'start_u'        => $enc['start_u'],
+            'u_height'       => $enc['u_height'],
+            'end_u'          => $enc['end_u'],
+            'slot_count'     => $enc['slot_count'],
+            'slots_used'     => $enc['slots_used'],
+            'free_slots'     => $freeSlots,
+        ];
+    }
+
+    return $out;
 }
 
 /**

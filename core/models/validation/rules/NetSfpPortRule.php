@@ -87,6 +87,25 @@ final class NetSfpPortRule implements RuleInterface
             $nicSpec = $this->dataUtils->getNICByUUID($parentNic['spec_uuid']);
             $sfpSpec = $this->dataUtils->getSFPByUUID($sfp['spec_uuid']);
 
+            // The port INDEX must exist on this NIC. Occupancy alone never checked
+            // that: replacing an 8-port NIC with a 4-port one left the modules on
+            // ports 5-8 parented to a NIC that has no such ports, and every one of
+            // them validated clean. Port count is the same `ports` field
+            // ResourceCatalog::providesNic() expands into port_1..port_N.
+            if ($sfp['slot_ref'] !== null && is_array($nicSpec) && isset($nicSpec['ports'])
+                && is_numeric($nicSpec['ports'])) {
+                $portCount = (int)$nicSpec['ports'];
+                if (preg_match('/^(?:port_)?(\d+)$/i', (string)$sfp['slot_ref'], $m)) {
+                    $portIndex = (int)$m[1];
+                    if ($portIndex < 1 || $portIndex > $portCount) {
+                        return new RuleResult($this->id(), $this->severity(), false,
+                            "Port {$sfp['slot_ref']} does not exist on NIC {$parentNic['id']}, which has $portCount port(s)",
+                            ['sfp_id' => $sfp['id'], 'nic_id' => $parentNic['id'],
+                                'port' => $sfp['slot_ref'], 'nic_port_count' => $portCount]);
+                    }
+                }
+            }
+
             $nicPortType = is_array($nicSpec) ? ($nicSpec['port_type'] ?? null) : null;
             $sfpType = is_array($sfpSpec) ? ($sfpSpec['type'] ?? null) : null;
 

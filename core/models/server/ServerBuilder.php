@@ -834,9 +834,11 @@ class ServerBuilder {
      *     same sfp parent resolution -- anything else would be a third answer.
      *
      * @param array  $candidates rows from the inventory scan (UUID, SerialNumber, ...)
-     * @return array<string,array{compatible:bool,reason:string,warnings:string[]}>|null
-     *         keyed by spec UUID; null when the engine is off or unusable (caller falls
-     *         back to the legacy branches).
+     * @return array<string,array{compatible:bool,reason:string,warnings:string[]}>
+     *         keyed by spec UUID. Always an array — the registry is the sole
+     *         validation authority (U-D.4 removed ENGINE_MODE), so there is no
+     *         "engine off" state to fall back from, and an engine that could not
+     *         run reports every candidate as undetermined rather than compatible.
      */
     private function evaluateCandidatesWithEngine($configUuid, $componentType, array $candidates, $parentNicUuid = null) {
         require_once __DIR__ . '/../validation/ValidationEngine.php';
@@ -848,9 +850,15 @@ class ServerBuilder {
             $current = TargetStateBuilder::fromCurrent($this->pdo, $configUuid);
             $baseline = (new ValidationEngine())->evaluate($current, Trigger::ADD);
         } catch (\Throwable $e) {
-            // The listing must never 500 because the engine could not build state.
+            // The listing must never 500 because the engine could not build state --
+            // but it must not lie either. FAIL CLOSED (2026-09-13): this used to
+            // return null, which handed the listing to the legacy branches below,
+            // and on a configuration with no components yet that branch answers
+            // "No existing components - all components available". An engine crash
+            // therefore presented EVERY part in stock as compatible. An engine we
+            // could not run is not evidence of compatibility.
             error_log("getCompatibleComponents: engine baseline failed for $configUuid: " . $e->getMessage());
-            return null;
+            return $this->undeterminedVerdicts($candidates);
         }
 
         // Keyed on rule id PLUS severity (2026-09-01), not rule id alone.
@@ -894,6 +902,27 @@ class ServerBuilder {
             }
         }
 
+        return $results;
+    }
+
+    /**
+     * Every candidate marked undetermined, for the case where the engine could
+     * not be run at all. Retriable: the caller surfaces it as a reason, not as
+     * an incompatibility finding.
+     */
+    private function undeterminedVerdicts(array $candidates) {
+        $results = [];
+        foreach ($candidates as $candidate) {
+            $specUuid = $candidate['UUID'] ?? null;
+            if ($specUuid === null) {
+                continue;
+            }
+            $results[$specUuid] = [
+                'compatible' => false,
+                'reason' => 'Compatibility could not be determined right now - please try again',
+                'warnings' => []
+            ];
+        }
         return $results;
     }
 
@@ -1242,9 +1271,11 @@ class ServerBuilder {
                 }, $allComponents);
                 } // end if ($includeDebug)
 
-                // The engine answers the listing whenever it answers the add (ENGINE_MODE
-                // != off), so the two cannot disagree. Null => engine off/unusable, and
-                // the legacy branches below remain the authority.
+                // The engine answers the listing exactly as it answers the add, so the
+                // two cannot disagree. Since 2026-09-13 this never returns null: there
+                // is no engine-off state (U-D.4) and an unusable engine now reports
+                // undetermined per candidate. The legacy branches below are retained
+                // for the historical shapes they still serve, not as a fallback.
                 $engineVerdicts = $this->evaluateCandidatesWithEngine(
                     $configUuid, $componentType, $allComponents, $options['parent_nic_uuid'] ?? null
                 );

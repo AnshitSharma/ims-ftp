@@ -16,8 +16,9 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * Only evaluates components that still need placement: nic/pciecard/risercard/hbacard
  * rows with slot_ref === null, excluding onboard NICs (spec_uuid prefix
  * "onboard-", which legitimately never get a discrete slot — mirrors
- * slot_report.php's slotless_card check exclusion). Rows that already carry
- * a slot_ref (placed via a prior legitimate add) are not re-planned.
+ * slot_report.php's slotless_card check exclusion) and platform-owned
+ * embedded parts (see isPlatformOwned(), added 2026-09-13). Rows that already
+ * carry a slot_ref (placed via a prior legitimate add) are not re-planned.
  *
  * Divergence note: this rule judges PLACEMENT FEASIBILITY only — the chosen
  * slot_ref rides in RuleResult::details() for a future command layer (U-C.2)
@@ -79,6 +80,9 @@ final class PcieSlotPlacementRule implements RuleInterface
                 if ($type === 'nic' && strpos((string)$component['spec_uuid'], 'onboard-') === 0) {
                     continue; // onboard NICs never get a discrete slot
                 }
+                if ($this->isPlatformOwned($component)) {
+                    continue; // bolted into the box -- occupies no expansion slot
+                }
 
                 $spec = $this->specFor($type, $component['spec_uuid']);
                 if (!is_array($spec)) {
@@ -105,6 +109,25 @@ final class PcieSlotPlacementRule implements RuleInterface
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'All unplaced cards have a feasible slot');
+    }
+
+    /**
+     * Is this row a part of the platform box rather than a card installed in it?
+     *
+     * handleSetPlatform() mirrors a platform's EMBEDDED parts (a front PERC, for
+     * example) against the serverplatforminventory unit itself, with a null
+     * slot_ref, because they are bolted in and are never stocked as loose cards.
+     * Charging them an expansion slot is wrong everywhere and actively breaks
+     * DL380 Gen10-class platforms, which publish 0 direct PCIe slots, so the
+     * embedded PERC consumed riser capacity that is physically free.
+     *
+     * Keyed on the inventory table the row was written against, which is an
+     * explicit fact recorded at import time -- not on a spec_uuid prefix, which
+     * an embedded part (a real catalog part with a real UUID) never carries.
+     */
+    private function isPlatformOwned(array $component): bool
+    {
+        return ($component['inventory_table'] ?? null) === 'serverplatforminventory';
     }
 
     private function specFor(string $type, string $specUuid): ?array

@@ -1521,13 +1521,20 @@ class ComponentCompatibility {
                 : [$cpuSpecs];
             foreach ($cpuSpecList as $cpuSpec) {
                 // Extract max memory frequency from CPU memory types (e.g., DDR5-4800)
-                $cpuMemoryTypes = $cpuSpec['compatibility']['memory_types'] ?? [];
-                foreach ($cpuMemoryTypes as $memType) {
-                    if (preg_match('/DDR\d+-(\d+)/', $memType, $matches)) {
+                // Accepts all three CPU spec shapes (2026-09-13): raw ims-data puts
+                // memory_types at the TOP LEVEL, parseSpecifications() wraps it into
+                // compatibility_fields, and the legacy passthrough used
+                // `compatibility` -- a key no record has, so this read had been
+                // returning [] for every CPU and no CPU ever limited memory speed.
+                $cpuMemoryTypes = $cpuSpec['memory_types']
+                    ?? ($cpuSpec['compatibility_fields']['memory_types']
+                    ?? ($cpuSpec['compatibility']['memory_types'] ?? []));
+                foreach ((array)$cpuMemoryTypes as $memType) {
+                    if (preg_match('/DDR\d+-(\d+)/', (string)$memType, $matches)) {
                         $cpuFreq = (int)$matches[1];
                         if ($cpuMaxFrequency === null || $cpuFreq < $cpuMaxFrequency) {
                             $cpuMaxFrequency = $cpuFreq;
-                            $limitingCPU = $cpuSpec['basic_info']['model'] ?? 'Unknown CPU';
+                            $limitingCPU = $cpuSpec['model'] ?? ($cpuSpec['basic_info']['model'] ?? 'Unknown CPU');
                         }
                     }
                 }
