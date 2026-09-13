@@ -163,6 +163,12 @@ final class AddComponentCommand extends BaseCommand
         // gate + override protocol, ported into BaseCommand.
         $this->assertInventoryAvailability($this->resolvedInventoryRow['data'], $lockedRow, $this->options);
         $this->assertNotAlreadyPlaced();
+        // Both rows are already locked here, which is the whole point. [F-07]
+        $this->assertUnitAtServerLocation(
+            (string)$this->resolvedInventoryRow['table'],
+            (int)$this->resolvedInventoryRow['data']['ID'],
+            $lockedRow
+        );
     }
 
     /**
@@ -448,9 +454,24 @@ final class AddComponentCommand extends BaseCommand
         // serial: serial-less stock (SerialNumber NULL, addressed by AssetTag) cannot be
         // matched by serial and would otherwise fall through to the model-wide WHERE and
         // be refused by the ambiguity guard.
-        $sb->updateComponentStatusAndServerUuid(
+        // The return is not advisory. [M-08] It is false when the setter could
+        // not decide WHICH unit it was talking about — the ambiguity refusal, or
+        // an UPDATE that matched no row because the unit moved between this
+        // command's lock and here. Ignoring it committed a config_components row
+        // claiming a unit whose inventory row still said "available", which the
+        // next build is then free to claim as well. RemoveComponentCommand has
+        // always checked it; Add and Replace now do too.
+        $claimed = $sb->updateComponentStatusAndServerUuid(
             $this->componentType, $this->componentUuid, 2, $this->configUuid, 'Added via command layer (U-C.2)', null, null, $serialNumber, $inventoryId
         );
+        if (!$claimed) {
+            throw new CommandFailed(
+                'unit_claim_failed',
+                "Could not identify which physical {$this->componentType} unit to claim for this server. "
+                . 'Nothing was added.',
+                409
+            );
+        }
 
         // ROOT-CAUSE FIX (2026-08-26): the call above passes null, null for
         // $serverLocation / $serverRackPosition, and updateComponentStatusAndServerUuid()

@@ -370,14 +370,32 @@ class ACL {
     /**
      * Check if user has specific permission
      */
+    /**
+     * Delegates to the ONE evaluator. [F-13 part 2]
+     *
+     * This method used to answer independently, and without the admin bypass its
+     * BaseFunctions counterpart has — so a super admin was allowed an action by
+     * the endpoint (which asks hasPermission()) and told they could not perform
+     * it by the screen (which asks this, through
+     * permissions-get_user_permissions). Two evaluators cannot both be the
+     * policy; this one is now a view onto the other.
+     *
+     * The local query below survives as the fallback for a context where
+     * BaseFunctions is not loaded — ACL is constructed in a few places that do
+     * not go through api.php — so nothing that worked stops working.
+     */
     public function hasPermission($userId, $permission) {
         try {
+            if (function_exists('hasPermission')) {
+                return hasPermission($this->pdo, $permission, $userId);
+            }
+
             // Check cache first
             if (!isset($this->userPermissions[$userId])) {
                 $this->loadUserPermissions($userId);
             }
-            
-            return isset($this->userPermissions[$userId][$permission]) && 
+
+            return isset($this->userPermissions[$userId][$permission]) &&
                    $this->userPermissions[$userId][$permission] == 1;
         } catch (Exception $e) {
             error_log("ACL hasPermission error: " . $e->getMessage());

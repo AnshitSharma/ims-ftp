@@ -14,10 +14,15 @@ require_once __DIR__ . '/../Trigger.php';
  * failed/retired/maintenance blocks VALIDATE/FINALIZE.
  *
  * Reads TargetState's 'status_v2' field (added this unit — see
- * TargetStateBuilder's class docblock). status_v2 === null (json-fallback
- * rows, or a rows-path row whose inventory_table/inventory_id could not be
- * resolved) is treated as "unknown, cannot judge" and passes — never
- * fabricating a bad state legacy itself has no way to see either pre-backfill.
+ * TargetStateBuilder's class docblock).
+ *
+ * status_v2 === null used to mean one thing to this rule — "unknown, cannot
+ * judge" — and pass. It is actually two things, and only one of them is
+ * unknowable. [M-13, 2026-09-13] A row with no inventory_table/inventory_id
+ * claims no hardware (virtual build, embedded component) and still passes. A row
+ * that names a table and an ID whose status cannot be read is an ORPHAN CLAIM,
+ * and it now blocks: the build says a unit is installed and the inventory has no
+ * such unit to show for it.
  */
 final class SystemInventoryStateRule implements RuleInterface
 {
@@ -49,6 +54,32 @@ final class SystemInventoryStateRule implements RuleInterface
         $offenders = [];
         foreach ($state->components() as $c) {
             $status = $c['status_v2'] ?? null;
+
+            // "No unit" and "a unit we cannot read" are not the same fact. [M-13]
+            //
+            // A row with no inventory_table/inventory_id is a row that never
+            // claimed hardware — a virtual build's component, or an embedded one
+            // that exists as part of its parent. Nothing to verify, so nothing to
+            // fail: it passes, as it always did.
+            //
+            // A row that DOES name a table and an ID and still has no status is a
+            // different animal: it says "unit 412 of cpuinventory is installed
+            // here" and the inventory has no such row, or has one whose state is
+            // unreadable. That is an orphan claim — from a delete that raced the
+            // claim check (M-04), a partial migration, or an older inconsistency —
+            // and the rule used to hand it the same pass a virtual row gets, so a
+            // build resting on hardware that is not there validated as deployable.
+            $physical = ($c['inventory_table'] ?? null) !== null && ($c['inventory_id'] ?? null) !== null;
+            if ($physical && $status === null) {
+                $offenders[] = [
+                    'id'             => $c['id'],
+                    'component_type' => $c['component_type'],
+                    'status_v2'      => null,
+                    'reason'         => 'physical inventory state unavailable',
+                ];
+                continue;
+            }
+
             if ($status !== null && in_array($status, self::BLOCKING_STATUSES, true)) {
                 $offenders[] = ['id' => $c['id'], 'component_type' => $c['component_type'], 'status_v2' => $status];
             }
@@ -56,7 +87,10 @@ final class SystemInventoryStateRule implements RuleInterface
 
         if (!empty($offenders)) {
             $summary = implode(', ', array_map(function ($o) {
-                return "{$o['component_type']}#{$o['id']} ({$o['status_v2']})";
+                $what = $o['status_v2'] === null
+                    ? 'no readable inventory row'
+                    : $o['status_v2'];
+                return "{$o['component_type']}#{$o['id']} ({$what})";
             }, $offenders));
             return new RuleResult($this->id(), $this->severity(), false,
                 "Configuration contains component(s) in a non-deployable inventory state: $summary",

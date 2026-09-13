@@ -50,10 +50,29 @@ try {
     }
 
     // Stage overrides (accept JSON string or object)
+    //
+    // ONLY FROM SOMEONE WHO MAY MANAGE REQUESTS. [M-07 / F-18]
+    //
+    // A step's default owner is who the request type says must sign that step
+    // off — a supervisor's review, a second pair of eyes. This input replaced
+    // that owner with any user the caller named, so an ordinary requester could
+    // nominate THEMSELVES as their own reviewer and then complete the step. The
+    // separate reassign operation has always been restricted; creating the
+    // request with the assignment already changed went around it.
+    //
+    // Nothing in the product sends this field — the Raise a Request form does
+    // not offer it — so gating it takes no feature away. The one legitimate
+    // reassignment, the Hardware Handover carrier, is NOT this: PipelineManager
+    // derives it server-side from the validated action data, after this point.
     $overridesRaw = $_POST['stage_overrides'] ?? '{}';
     $overrides = is_array($overridesRaw) ? $overridesRaw : json_decode($overridesRaw, true);
     if (!is_array($overrides)) {
         $overrides = [];
+    }
+    if (!empty($overrides) && !$canManage) {
+        send_json_response(false, true, 403,
+            "Step owners are set by the request type and cannot be chosen when raising a request", null);
+        exit;
     }
 
     // actions: the work this request performs once approved. A JSON array of

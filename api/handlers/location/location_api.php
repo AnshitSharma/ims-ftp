@@ -314,7 +314,7 @@ function locationRacksFor($pdo, $locationUuid) {
 
     $stmt = $pdo->prepare("
         SELECT r.rack_uuid, r.name, r.location, r.location_uuid, {$floorSel},
-               r.total_u, r.numbering_top_down, r.notes,
+               r.total_u, r.numbering_top_down,
                COALESCE(o.server_count, 0) AS server_count
           FROM racks r
           LEFT JOIN (SELECT rack_uuid, COUNT(*) AS server_count
@@ -347,7 +347,11 @@ function locationRacksFor($pdo, $locationUuid) {
             'floor'              => $r['floor'],
             'total_u'            => $totalU,
             'numbering_top_down' => (int)$r['numbering_top_down'],
-            'notes'              => $r['notes'],
+            // `notes` is gone. [M-02 / F-17] This is the surface a requester with
+            // no rack.view reads to point at a free U, and a rack's notes are
+            // operational commentary written for the people who run the room —
+            // "PDU B flaky", "reserved for the migration". Choosing a slot never
+            // needed them. The rack module still shows and edits them.
             'server_count'       => (int)$r['server_count'],
             'used_u'             => max(0, $totalU - $freeU),
             'free_u'             => $freeU,
@@ -630,14 +634,35 @@ function handleLocationDelete($pdo, $user) {
             if (!locationFetchByUuid($pdo, $reassignTo)) {
                 send_json_response(0, 1, 404, "The location to reassign to was not found");
             }
+        }
+
+        // Reassign, recount and delete are ONE operation. [M-12] Split across
+        // three unprotected steps, a failure in the middle emptied part of a site
+        // into another one and then refused the delete, so the operator was told
+        // nothing had happened while half their stock had already moved.
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
+
+        $rollback = function () use ($pdo, $ownsTransaction) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+        };
+
+        if ($reassignTo !== '') {
             locationReassignReferences($pdo, $locationUuid, $reassignTo);
         }
 
+        // Counted AFTER the reassignment and inside the same transaction, so what
+        // is counted is what the delete is about to face.
         $counts = locationObjectCounts($pdo);
         $c = $counts[$locationUuid] ?? ['racks' => 0, 'servers' => 0, 'components' => 0];
         $total = $c['racks'] + $c['servers'] + $c['components'];
 
         if ($total > 0) {
+            $rollback();
             $bits = [];
             if ($c['racks'])      { $bits[] = $c['racks']      . ' rack'      . ($c['racks'] === 1 ? '' : 's'); }
             if ($c['servers'])    { $bits[] = $c['servers']    . ' server'    . ($c['servers'] === 1 ? '' : 's'); }
@@ -652,13 +677,20 @@ function handleLocationDelete($pdo, $user) {
         $stmt = $pdo->prepare("DELETE FROM locations WHERE location_uuid = ?");
         $stmt->execute([$locationUuid]);
 
+        if ($ownsTransaction) {
+            $pdo->commit();
+        }
+
         logActivity($pdo, $user['id'], 'Location deleted', 'location', null,
             "Deleted location: " . $existing['name']);
 
         send_json_response(1, 1, 200, "Location deleted successfully", ['location_uuid' => $locationUuid]);
     } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         error_log("handleLocationDelete error: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to delete location");
+        send_json_response(0, 1, 500, "Failed to delete location — nothing was moved or removed");
     }
 }
 
@@ -698,12 +730,15 @@ function locationReassignReferences($pdo, $fromUuid, $toUuid) {
         if (!SchemaHelper::hasTable($pdo, $table) || !SchemaHelper::hasColumn($pdo, $table, 'location_uuid')) {
             continue;
         }
-        try {
-            $stmt = $pdo->prepare("UPDATE `{$table}` SET location_uuid = ?, Location = ?, UpdatedAt = NOW()
-                                    WHERE location_uuid = ?");
-            $stmt->execute([$toUuid, $toName, $fromUuid]);
-        } catch (Throwable $e) {
-            error_log("locationReassignReferences error on {$table}: " . $e->getMessage());
-        }
+        // THROWS. [M-12] This used to log and carry on, so a table that failed to
+        // repoint left its stock behind at a location the caller was in the middle
+        // of deleting — some types moved, some did not, and nothing recorded which.
+        // The count check downstream then refused the delete, leaving the site
+        // half-emptied with no way to tell that from a normal partial move. A
+        // reassignment is one operation: it either moves everything or it moves
+        // nothing, and the caller's transaction is what makes that true.
+        $stmt = $pdo->prepare("UPDATE `{$table}` SET location_uuid = ?, Location = ?, UpdatedAt = NOW()
+                                WHERE location_uuid = ?");
+        $stmt->execute([$toUuid, $toName, $fromUuid]);
     }
 }

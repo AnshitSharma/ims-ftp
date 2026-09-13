@@ -406,6 +406,13 @@ function handleServerMovements($user) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
 
+        // Same policy as get-config. [M-02] A movement history is a record of
+        // where a machine has physically been, and who moved it — not something
+        // a `server.view` holder should read about a build they cannot open.
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
+            send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
+        }
+
         $rows = ServerRelocation::history($pdo, $configUuid, $_POST['limit'] ?? 50);
 
         $movements = array_map(function ($m) {
@@ -1000,8 +1007,12 @@ function handleAddComponent($serverBuilder, $user) {
                     // sfp_configuration.unassigned_sfps bucket. Assigning one sets its
                     // parent_id to the new NIC's row and its slot_ref to the port, which
                     // is exactly what moving it between the two JSON buckets meant.
+                    // inventory_id comes along because it is the ONLY thing that
+                    // says WHICH unit. [M-10] spec_uuid is the model, so the
+                    // inventory stamp below used to hit every identical SFP in
+                    // stock at once.
                     $stmt = $pdo->prepare(
-                        "SELECT id, spec_uuid FROM config_components
+                        "SELECT id, spec_uuid, inventory_id FROM config_components
                           WHERE config_uuid = ? AND component_type = 'sfp'
                             AND parent_id IS NULL AND removed_at IS NULL
                           ORDER BY id"
@@ -1026,11 +1037,15 @@ function handleAddComponent($serverBuilder, $user) {
                             $resolver = new SFPCompatibilityResolver($pdo);
 
                             $sfpRowIdByUuid = [];
+                            $sfpUnitIdByUuid = [];
                             foreach ($unassignedSfps as $sfpRow) {
                                 // First row wins per spec uuid, matching the order the
                                 // resolver assigns ports in.
                                 if (!isset($sfpRowIdByUuid[$sfpRow['spec_uuid']])) {
                                     $sfpRowIdByUuid[$sfpRow['spec_uuid']] = (int)$sfpRow['id'];
+                                    $sfpUnitIdByUuid[$sfpRow['spec_uuid']] = isset($sfpRow['inventory_id']) && $sfpRow['inventory_id'] !== null
+                                        ? (int)$sfpRow['inventory_id']
+                                        : null;
                                 }
                             }
                             $sfpUuids = array_keys($sfpRowIdByUuid);
@@ -1039,6 +1054,16 @@ function handleAddComponent($serverBuilder, $user) {
                             $assignmentResult = $resolver->autoAssignSFPsToNIC($configUuid, $componentUuid, $sfpUuids);
 
                             if ($assignmentResult['success']) {
+                                // The rows-store write and the inventory stamp are one
+                                // fact — "this unit is on that port" — so they commit
+                                // together or not at all. [M-10] Before this, a failure
+                                // between them left a config row pointing at a port
+                                // while the SFP's own record still said unassigned.
+                                $ownsSfpTransaction = !$pdo->inTransaction();
+                                if ($ownsSfpTransaction) {
+                                    $pdo->beginTransaction();
+                                }
+                                try {
                                 foreach ($assignmentResult['assignments'] as $assignment) {
                                     $sfpRowId = $sfpRowIdByUuid[$assignment['uuid']] ?? null;
                                     if ($sfpRowId !== null) {
@@ -1054,9 +1079,31 @@ function handleAddComponent($serverBuilder, $user) {
                                         ]);
                                     }
 
-                                    // Update SFP inventory
-                                    $stmt = $pdo->prepare("UPDATE sfpinventory SET ParentNICUUID = ?, PortIndex = ?, UpdatedAt = NOW() WHERE UUID = ?");
-                                    $stmt->execute([$assignment['parent_nic_uuid'], $assignment['port_index'], $assignment['uuid']]);
+                                    // Stamp the ONE unit, by its inventory row id. [M-10]
+                                    // The old `WHERE UUID = ?` addressed the spec, so
+                                    // every identical SFP in stock — installed, loose,
+                                    // in another server — was bound to this NIC's port.
+                                    // No unit id means the rows store does not know
+                                    // which unit this is; refuse rather than guess.
+                                    $sfpUnitId = $sfpUnitIdByUuid[$assignment['uuid']] ?? null;
+                                    if ($sfpUnitId === null) {
+                                        throw new RuntimeException(
+                                            'SFP ' . $assignment['uuid'] . ' has no inventory row bound to it, '
+                                            . 'so no single unit can be assigned to a port.'
+                                        );
+                                    }
+                                    $stmt = $pdo->prepare(
+                                        "UPDATE sfpinventory SET ParentNICUUID = ?, PortIndex = ?, UpdatedAt = NOW() WHERE ID = ?");
+                                    $stmt->execute([$assignment['parent_nic_uuid'], $assignment['port_index'], $sfpUnitId]);
+                                }
+                                if ($ownsSfpTransaction) {
+                                    $pdo->commit();
+                                }
+                                } catch (Throwable $sfpWriteError) {
+                                    if ($ownsSfpTransaction && $pdo->inTransaction()) {
+                                        $pdo->rollBack();
+                                    }
+                                    throw $sfpWriteError;
                                 }
 
                                 // Add auto-assignment info to response
@@ -1247,14 +1294,20 @@ function handleReplaceComponent($serverBuilder, $user) {
     $newComponentUuid = $_POST['new_component_uuid'] ?? '';
     $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
 
-    // ReplaceComponentCommand's only $options key is parent_nic_uuid (sfp
-    // re-parenting) -- it does not accept a new_serial or cascade option
-    // (see its own buildTarget()/apply(): new_serial is read off the locked
-    // inventory row, not the caller; a replace re-anchors children, it does
-    // not cascade-remove them), so nothing else is forwarded here.
+    // parent_nic_uuid re-parents an sfp. serial_number / new_inventory_id name
+    // WHICH unit of the replacement model goes in [M-11] — they used not to be
+    // forwarded, and the command picked by model, so a technician holding a
+    // specific card got whichever unit sorted first. A replace still does not
+    // cascade-remove children; it re-anchors them.
     $options = [];
     if ($componentType === 'sfp' && !empty($_POST['parent_nic_uuid'])) {
         $options['parent_nic_uuid'] = $_POST['parent_nic_uuid'];
+    }
+    if (!empty($_POST['new_serial'])) {
+        $options['serial_number'] = $_POST['new_serial'];
+    }
+    if (!empty($_POST['new_inventory_id'])) {
+        $options['new_inventory_id'] = (int)$_POST['new_inventory_id'];
     }
 
     if (empty($configUuid) || empty($componentType) || empty($oldComponentUuid) || empty($newComponentUuid)) {
@@ -2276,6 +2329,15 @@ function handleGetServerLogs($serverBuilder, $user) {
             send_json_response(0, 1, 404, "Server configuration not found");
         }
 
+        // The same policy get-config applies. [M-02] A server's log carries actor
+        // identities, IP addresses and free-text notes about the machine; a
+        // `server.view` holder who cannot open someone else's build could still
+        // read its whole history by naming its UUID. Reading a config's history
+        // is reading the config.
+        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
+            send_json_response(0, 1, 403, "Insufficient permissions to view this configuration");
+        }
+
         $configId = $config->get('id');
 
         // Clamp pagination the same way dashboard-get-logs does.
@@ -2361,7 +2423,12 @@ function handleGetAvailableComponents($user) {
         // holds -- instead of two nulls.
         if ($configUuid) {
             $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
-            if ($config) {
+            // That summary says what is inside someone's build, so it is gated by
+            // the same policy as opening the build. [M-02] The available-stock
+            // list above is not: it is shared inventory, which is the point of
+            // this endpoint. A caller who cannot see the config simply gets the
+            // stock list without the summary, rather than a refusal.
+            if ($config && userCanActOnConfig($pdo, $config, $user['id'], 'server.view_all')) {
                 $responseData['configuration_summary'] =
                     (new ServerBuilder($pdo))->summarizeInstalledComponents($configUuid, $config->getData());
             }
@@ -3206,9 +3273,15 @@ function handleSetPlatform($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
-        if ((int)$config->get('configuration_status') === 3) {
-            send_json_response(0, 1, 409, "This server is finalized. Its compute platform can no longer be changed.");
-        }
+        // The legacy `configuration_status === 3` test that used to sit here is
+        // gone. [H-04 / M-09 / F-09] It read an UNLOCKED row before the
+        // transaction, so it answered a question about a moment that had already
+        // passed, and it enforced a different rule from the one every ordinary
+        // component operation obeys: StateGuard decides whether a config's
+        // contents may change, and a platform install changes them more than any
+        // single add does — it releases everything in the box. The real check now
+        // runs below, against the locked row, alongside the virtual and revision
+        // checks it belongs with.
 
         $catalog = new ServerPlatformCatalog($pdo);
         $found = $catalog->getVersion($versionUuid);
@@ -3244,13 +3317,60 @@ function handleSetPlatform($serverBuilder, $user) {
         ]);
         $embeddedIncluded = (bool)array_filter($includedParts, ['ServerPlatformCatalog', 'isEmbedded']);
 
-        // What is in the build right now, before anything is touched.
-        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
+        // EVERYTHING BELOW READS THE LOCKED ROW. [H-04 / M-09 / F-09]
+        //
+        // This used to read the config unlocked, decide, and only then open a
+        // transaction — so a platform install and a concurrent component add each
+        // saw a config the other was about to change, and the "is it finalized?"
+        // answer was already stale by the time it was acted on. The lock comes
+        // first now, and the three gates below are the ones the component
+        // commands apply, applied to the same row in the same transaction.
+        require_once __DIR__ . '/../../../core/models/state/StateGuard.php';
+
+        $pdo->beginTransaction();
+
+        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ? FOR UPDATE");
         $stmt->execute([$configUuid]);
         $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$configRow) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 404, "Server configuration not found");
+        }
+
+        // A platform install claims a REAL box out of serverplatforminventory —
+        // it marks a physical unit in_use and binds it to this config. A virtual
+        // build reserves nothing by definition; letting it through here was the
+        // one route by which a design could consume hardware. Every component
+        // command refuses this; so does this one now.
+        if (!empty($configRow['is_virtual'])) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, "This is a virtual configuration, so it cannot be given a physical "
+                . "compute platform. Convert it with server-import-virtual first.");
+        }
+
+        $guardVerdict = StateGuard::checkMutation($pdo, $configRow);
+        if ($guardVerdict !== null) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, $guardVerdict['message'] ?? "This server's contents can no longer be changed.");
+        }
+
+        // Optimistic concurrency, offered rather than required — the same shape
+        // the component endpoints expose. A caller that read the config and wants
+        // to be sure nothing moved since sends the revision it saw.
+        $expectedRevision = $_POST['expected_revision'] ?? $_GET['expected_revision'] ?? null;
+        if ($expectedRevision !== null && $expectedRevision !== ''
+            && (int)$expectedRevision !== (int)($configRow['revision'] ?? 0)) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, "This server changed while you were working on it (expected revision "
+                . (int)$expectedRevision . ", it is now " . (int)($configRow['revision'] ?? 0) . "). Reload and try again.");
+        }
+
+        // What is in the build right now, read under the lock that will hold
+        // until the wipe below commits.
         $installed = $serverBuilder->summarizeInstalledComponents($configUuid, $configRow);
 
         if ($installed['total'] > 0 && !$confirmWipe) {
+            $pdo->rollBack();
             send_json_response(0, 1, 409, "Installing a compute platform releases everything currently in this server ("
                 . $installed['summary'] . "). Confirm to continue.", [
                 'error_type'            => 'confirm_wipe_required',
@@ -3261,8 +3381,6 @@ function handleSetPlatform($serverBuilder, $user) {
                 'hint'                  => 'Retry with confirm_wipe=true'
             ]);
         }
-
-        $pdo->beginTransaction();
 
         $releasedCount = 0;
         if ($installed['total'] > 0) {
@@ -3506,21 +3624,46 @@ function handleRemovePlatform($serverBuilder, $user) {
             send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
         }
 
-        if ((int)$config->get('configuration_status') === 3) {
-            send_json_response(0, 1, 409, "This server is finalized. Its compute platform can no longer be removed.");
+        // Lock first, then decide — the same order and the same three gates as
+        // handleSetPlatform, for the same reasons. [H-04 / M-09 / F-09] Removal
+        // releases a physical unit back to stock, so it is exactly as much a
+        // content change as the install was.
+        require_once __DIR__ . '/../../../core/models/state/StateGuard.php';
+
+        $pdo->beginTransaction();
+
+        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ? FOR UPDATE");
+        $stmt->execute([$configUuid]);
+        $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$configRow) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 404, "Server configuration not found");
         }
 
-        $versionUuid = (string)($config->get('platform_version_uuid') ?? '');
+        $guardVerdict = StateGuard::checkMutation($pdo, $configRow);
+        if ($guardVerdict !== null) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, $guardVerdict['message'] ?? "This server's contents can no longer be changed.");
+        }
+
+        $expectedRevision = $_POST['expected_revision'] ?? $_GET['expected_revision'] ?? null;
+        if ($expectedRevision !== null && $expectedRevision !== ''
+            && (int)$expectedRevision !== (int)($configRow['revision'] ?? 0)) {
+            $pdo->rollBack();
+            send_json_response(0, 1, 409, "This server changed while you were working on it (expected revision "
+                . (int)$expectedRevision . ", it is now " . (int)($configRow['revision'] ?? 0) . "). Reload and try again.");
+        }
+
+        $versionUuid = (string)($configRow['platform_version_uuid'] ?? '');
         if ($versionUuid === '') {
+            $pdo->rollBack();
             send_json_response(0, 1, 400, "This server has no compute platform installed");
         }
 
-        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-        $stmt->execute([$configUuid]);
-        $configRow = $stmt->fetch(PDO::FETCH_ASSOC);
         $installed = $serverBuilder->summarizeInstalledComponents($configUuid, $configRow);
 
         if (!$confirmWipe) {
+            $pdo->rollBack();
             send_json_response(0, 1, 409, "Removing the compute platform releases everything in this server ("
                 . $installed['summary'] . "). Confirm to continue.", [
                 'error_type'           => 'confirm_wipe_required',
@@ -3531,9 +3674,7 @@ function handleRemovePlatform($serverBuilder, $user) {
             ]);
         }
 
-        $platformName = $config->get('platform_name') ?: 'compute platform';
-
-        $pdo->beginTransaction();
+        $platformName = $configRow['platform_name'] ?: 'compute platform';
 
         // clearConfigurationComponents releases serverplatforminventory too, so the box
         // goes back on the shelf by the same ServerUUID-driven statement as everything

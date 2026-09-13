@@ -275,6 +275,25 @@ function loadUserPermissionData($pdo, $userId) {
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         $data['is_admin'] = ($result['count'] > 0);
 
+        // An admin's EFFECTIVE set is every permission there is. [F-13 part 2]
+        //
+        // This used to leave `permissions` empty for an admin and rely on the
+        // is_admin bypass below, which is why the UI could not be told what an
+        // admin may do: permissions-get_user_permissions asked
+        // ACL::hasPermission() — an evaluator with NO admin bypass — and
+        // published whatever the role rows happened to carry. Two evaluators,
+        // two answers, and the screen showed the narrower one.
+        //
+        // The bypass in hasPermission() still decides, and deliberately: a
+        // permission whose seeder has not been run yet is absent from this table,
+        // and an admin must not be locked out of a new action for the length of
+        // that window. This list is the effective set for PUBLICATION and for
+        // every non-admin check.
+        if ($data['is_admin']) {
+            $all = $pdo->query("SELECT name FROM permissions");
+            $data['permissions'] = $all ? $all->fetchAll(PDO::FETCH_COLUMN) : [];
+        }
+
         // If not admin, load all permissions (direct + role-based) in single query.
         // Direct grants in user_permissions may be TEMPORARY: activeGrantClause()
         // drops the ones that have expired or been revoked, and returns an empty
@@ -306,6 +325,24 @@ function loadUserPermissionData($pdo, $userId) {
     }
 
     return $data;
+}
+
+/**
+ * The ONE effective-capability evaluator. [F-13 part 2]
+ *
+ * Two lived in this codebase: this one, and ACL::hasPermission(), which had no
+ * admin bypass — so the same account could be allowed an action by the endpoint
+ * and told it could not perform it by the screen. ACL::hasPermission() now
+ * delegates here, and this is the single answer to "what may this user do".
+ *
+ * @return array{is_admin:bool, permissions:string[]}
+ */
+function effectiveCapabilities($pdo, $userId) {
+    $cacheKey = "user_{$userId}";
+    if (!isset($GLOBALS['_permission_cache'][$cacheKey])) {
+        $GLOBALS['_permission_cache'][$cacheKey] = loadUserPermissionData($pdo, $userId);
+    }
+    return $GLOBALS['_permission_cache'][$cacheKey];
 }
 
 /**
@@ -870,21 +907,46 @@ function performGlobalSearch($pdo, $query, $limit, $user) {
             continue;
         }
 
+        // SEARCH IS NOT A SEPARATE DOOR. [M-02] This function took $user and
+        // ignored it, so `search.use` alone read every inventory table —
+        // including the types whose `.view` permission the account had
+        // deliberately been denied. Searching is reading; it obeys the same
+        // permission the list view obeys.
+        if (!hasPermission($pdo, $type . '.view', $user['id'] ?? null)) {
+            continue;
+        }
+
         $tableName = getComponentTableName($type);
-        $sql = "SELECT *, '$type' as component_type FROM $tableName WHERE
+        // Named columns, not SELECT *. [M-02] A hit is "this part exists, here is
+        // what it is and where" — the fields a person needs to go and find the
+        // unit. A star projection hands back every column the table will ever
+        // grow, which is how a search result becomes an export of whatever the
+        // next seeder adds.
+        $sql = "SELECT ID, UUID, AssetTag, SerialNumber, Status, status_v2, ServerUUID,
+                       Location, location_uuid, RackPosition, StoreLocation, Notes, CreatedAt,
+                       '$type' as component_type
+                FROM $tableName WHERE
                 AssetTag LIKE ? OR
                 SerialNumber LIKE ? OR
                 Notes LIKE ? OR
                 Location LIKE ?
-                ORDER BY id DESC
+                ORDER BY ID DESC
                 LIMIT ?";
 
         $escapedQuery = addcslashes($query, '%_\\');
         $searchTerm = '%' . $escapedQuery . '%';
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm, $limit]);
-
-        $typeResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm, $limit]);
+            $typeResults = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            // Now that the projection names columns, a table that has not caught
+            // up with a seeder yet fails HERE rather than returning extra fields.
+            // Same rule as inventoryTableExists() above: one type mid-rollout must
+            // not take the whole search down.
+            error_log("performGlobalSearch: skipping $type: " . $e->getMessage());
+            continue;
+        }
         $results = array_merge($results, $typeResults);
     }
 
@@ -1240,6 +1302,23 @@ function getInventoryTableColumns($pdo, $tableName) {
  * Columns that must NEVER be settable through the component CRUD endpoint,
  * even if the caller has a matching form field. Primary keys and audit
  * timestamps belong to the system, not the client.
+ *
+ * KEPT, but no longer the boundary. [H-03 / F-10, 2026-09-13]
+ *
+ * A blacklist answers "what did we think of?" and this one had thought of
+ * primary keys and timestamps. It had not thought of the columns that record
+ * a unit's PLACE IN THE WORLD, so on 2026-09-13 a plain `cpu-add` carrying
+ * `Status=2` and `ServerUUID=00000000-dead-beef-...` was accepted verbatim
+ * (component 236, since removed) and a following `cpu-update` moved it to
+ * `Status=0` while `status_v2` stayed `installed` — a unit that is
+ * simultaneously failed, installed, and claimed by a configuration that does
+ * not exist. Nothing downstream can reconcile that: the availability gate in
+ * BaseCommand reads Status, the state machine reads status_v2, and the delete
+ * guard reads ServerUUID.
+ *
+ * The boundary is now getEditableComponentColumns() below — an ALLOWLIST, so a
+ * column added by a future seeder is un-writable by clients until someone
+ * names it here on purpose.
  */
 function getBlockedComponentColumns() {
     return [
@@ -1251,6 +1330,145 @@ function getBlockedComponentColumns() {
         'createdat',
         'updatedat',
     ];
+}
+
+/**
+ * The columns a CLIENT may write on an inventory unit, per component type.
+ *
+ * Everything here is metadata an operator holding the unit actually knows:
+ * what it is, what is written on it, where it is kept, what it cost, what we
+ * think of it. Names are matched case-insensitively and intersected with the
+ * table's real columns, so listing one a type does not have is harmless —
+ * that is how `FailDate` can sit in the common set while only
+ * serverplatforminventory carries it.
+ *
+ * Deliberately ABSENT, and why each belongs to the command layer instead:
+ *
+ *   ServerUUID            which configuration claims this unit. Written by
+ *                         AddComponentCommand / ReplaceComponentCommand /
+ *                         RemoveComponentCommand, inside the transaction that
+ *                         locks the config. A client that can set it can hand
+ *                         a unit to a server that never asked for it, or hide
+ *                         a real claim from the delete guard.
+ *   status_v2             derived from Status, always, in the same statement —
+ *                         see applyComponentStatusPair().
+ *   RackPosition          re-stamped from the real rack placement on every
+ *                         move (ServerRelocation). The forms send it back
+ *                         read-only; dropping it silently is exactly right.
+ *   AssetTag, ID          system-issued identity.
+ *   CreatedAt/UpdatedAt   audit.
+ *   SourceType,           nicinventory's provenance for auto-imported onboard
+ *   ParentComponentUUID,  NICs — set by the importer that created the row.
+ *   ParentInventoryID,
+ *   OnboardNICIndex
+ *   ParentNICUUID,        sfpinventory's port binding — set by SFP assignment,
+ *   PortIndex             which knows the NIC's real port count.
+ *
+ * UUID is absent too, but is handled separately: addComponent() accepts it once
+ * (validated against the ims-data spec) and updateComponent() refuses it.
+ *
+ * @param string $type one of the 12 canonical component types
+ * @return string[] lower-cased column names
+ */
+function getEditableComponentColumns($type) {
+    $common = [
+        'serialnumber',
+        'status',            // constrained to {0,1} — see applyComponentStatusPair()
+        'vendorid',
+        'location',
+        'location_uuid',
+        'storelocation',
+        'purchasedate',
+        'installationdate',
+        'warrantyenddate',
+        'faildate',
+        'flag',
+        'notes',
+    ];
+
+    // Room for genuinely type-specific operator metadata. Empty today; the
+    // point is that adding one is a decision made here rather than a column
+    // that silently became writable because a seeder created it.
+    $perType = [];
+
+    $extra = $perType[strtolower((string)$type)] ?? [];
+    return array_values(array_unique(array_merge($common, $extra)));
+}
+
+/**
+ * Validate a client-supplied Status and derive status_v2 from it, in the one
+ * statement that writes the row. [H-03 / F-10]
+ *
+ * Status is operator metadata for exactly two of its three values:
+ *
+ *   1 available — "this unit is on the shelf and fit to use"
+ *   0 failed    — "this unit is dead"
+ *
+ * The third, 2 = in_use, is not an opinion an operator can hold; it is a
+ * statement that some configuration has claimed this unit, and only
+ * AddComponentCommand / ReplaceComponentCommand can make it true. Accepting it
+ * from a form produced a unit that reports itself installed with no config
+ * behind it, which every availability check then honours by refusing the unit
+ * to the config that really wants it.
+ *
+ * The same reasoning runs the other way: a unit that IS claimed cannot be
+ * edited back to available, because the claim would survive in
+ * config_components while the inventory row advertised itself as free. Remove
+ * the component from its configuration instead — that path releases both.
+ *
+ * @param array  $safeData    by reference; Status is validated, status_v2 added
+ * @param array  $allowedCols lower => canonical, from getInventoryTableColumns()
+ * @param array|null $existing current row (update only); null on insert
+ * @throws InvalidArgumentException on a status the client may not set
+ */
+function applyComponentStatusPair(array &$safeData, array $allowedCols, ?array $existing = null) {
+    require_once(__DIR__ . '/../models/state/StatusMap.php');
+
+    $statusCol   = $allowedCols['status'] ?? null;
+    $statusV2Col = $allowedCols['status_v2'] ?? null;
+
+    $given = ($statusCol !== null && array_key_exists($statusCol, $safeData))
+        ? (int)$safeData[$statusCol]
+        : null;
+
+    if ($given !== null) {
+        if ($given === 2) {
+            throw new InvalidArgumentException(
+                "A unit becomes In Use by being installed in a server configuration, "
+                . "not by being edited. Add it to the configuration instead."
+            );
+        }
+        if ($given !== 0 && $given !== 1) {
+            throw new InvalidArgumentException("Unknown status: $given");
+        }
+
+        $claimedBy = $existing === null ? null : trim((string)($existing['ServerUUID'] ?? ''));
+        $wasInUse  = $existing !== null && (int)($existing['Status'] ?? -1) === 2;
+        if ($wasInUse && $claimedBy !== '') {
+            throw new InvalidArgumentException(
+                "This unit is installed in configuration $claimedBy. Remove it from that "
+                . "configuration to change its status."
+            );
+        }
+    }
+
+    if ($statusV2Col === null) {
+        return;
+    }
+
+    // The pair rides in ONE statement or not at all. On insert with no Status
+    // given, the column default (1) is what will land, so derive from that.
+    $effective = $given;
+    if ($effective === null) {
+        if ($existing === null) {
+            $effective = 1;
+        } else {
+            return; // update that does not touch Status leaves the pair alone
+        }
+    }
+    if (array_key_exists($effective, StatusMap::INVENTORY_LEGACY_TO_V2)) {
+        $safeData[$statusV2Col] = StatusMap::INVENTORY_LEGACY_TO_V2[$effective];
+    }
 }
 
 /**
@@ -1281,29 +1499,65 @@ function addComponent($pdo, $type, $data, $userId) {
             $convertedData[$dbColumn] = $value;
         }
 
-        // Generate UUID if not provided
-        if (!isset($convertedData['UUID']) || empty($convertedData['UUID'])) {
-            $convertedData['UUID'] = generateUUID();
-        } else {
-            // SECURITY: when the caller supplies a UUID it must reference a
-            // real component spec in ims-data/.
-            require_once(__DIR__ . '/../models/components/ComponentDataService.php');
-            $componentService = ComponentDataService::getInstance();
-            if (!$componentService->validateComponentUuid($type, $convertedData['UUID'])) {
-                throw new InvalidArgumentException(
-                    "Component UUID not found in $type specifications"
-                );
-            }
+        // A UUID is REQUIRED, and it is always checked against the catalog. [M-03]
+        //
+        // This used to generate one when the caller sent none. A UUID on an
+        // inventory row is not that unit's identity — AssetTag is — it is WHICH
+        // CATALOGUE PART the unit is, the key every compatibility rule resolves
+        // specs through. A generated one names a part that does not exist, so the
+        // unit could never be validated against anything, could never be matched
+        // to a socket or a DIMM slot, and could not be explained to the person
+        // holding it. The root-level contract says this check is never bypassed;
+        // omitting the field was the bypass.
+        //
+        // Applies identically to the direct endpoint, bulk-add, and an approved
+        // inventory.component.add Request — all three call this function, which
+        // is what makes it ONE schema rather than three. [F-20]
+        if (!isset($convertedData['UUID']) || !is_string($convertedData['UUID'])
+            || trim($convertedData['UUID']) === '') {
+            throw new InvalidArgumentException(
+                "Choose which $type model this unit is — a catalog model is required."
+            );
+        }
+        $convertedData['UUID'] = trim($convertedData['UUID']);
+
+        // SECURITY: the UUID must reference a real component spec in ims-data/.
+        require_once(__DIR__ . '/../models/components/ComponentDataService.php');
+        $componentService = ComponentDataService::getInstance();
+        if (!$componentService->validateComponentUuid($type, $convertedData['UUID'])) {
+            throw new InvalidArgumentException(
+                "Component UUID not found in $type specifications"
+            );
         }
 
-        // Whitelist against real table columns
+        // Serial policy, declared rather than assumed. [F-20]
+        //
+        // A unit with no readable serial is NORMAL here and always has been — a
+        // worn label, a white-box part, a pull — and such a unit stays addressable
+        // by its AssetTag, so a blanket serial requirement would refuse legitimate
+        // stock. The types below are the ones whose serial is treated as
+        // mandatory. The set is EMPTY on purpose: no such policy exists in this
+        // system yet, and inventing one here would reject parts the owner can
+        // actually hold in their hand. Name a type here when that policy is
+        // decided, and this enforces it everywhere at once.
+        $serialRequiredTypes = [];
+        if (in_array(strtolower((string)$type), $serialRequiredTypes, true)
+            && trim((string)($convertedData['SerialNumber'] ?? '')) === '') {
+            throw new InvalidArgumentException(
+                "A serial number is required for every $type unit."
+            );
+        }
+
+        // Whitelist against real table columns, then against the columns a
+        // client is allowed to write at all. [H-03 / F-10]
         $allowedCols = getInventoryTableColumns($pdo, $tableName);
         $blocked     = array_flip(getBlockedComponentColumns());
+        $editable    = array_flip(getEditableComponentColumns($type));
 
         $safeData = [];
         foreach ($convertedData as $col => $value) {
             $lc = strtolower($col);
-            if (isset($blocked[$lc])) {
+            if (isset($blocked[$lc]) || !isset($editable[$lc])) {
                 continue;
             }
             if (!isset($allowedCols[$lc])) {
@@ -1313,6 +1567,14 @@ function addComponent($pdo, $type, $data, $userId) {
             }
             // Use the canonical casing from the DB schema
             $safeData[$allowedCols[$lc]] = $value;
+        }
+
+        // UUID is not in the editable set — it is not metadata, it is which
+        // catalog part this unit IS — but insert is the one moment it is
+        // legitimately client-supplied, and it has already been generated or
+        // validated against the ims-data spec above.
+        if (isset($allowedCols['uuid'])) {
+            $safeData[$allowedCols['uuid']] = $convertedData['UUID'];
         }
 
         // A unit with no readable manufacturer serial is normal (worn label,
@@ -1344,18 +1606,9 @@ function addComponent($pdo, $type, $data, $userId) {
         // Same defect class as F-14 (OnboardNICHandler wrote Status with raw UPDATEs
         // and never touched status_v2) and the same fix: the pair rides in ONE
         // statement, so no window exists in which a row has one without the other.
-        $statusV2Col = $allowedCols['status_v2'] ?? null;
-        $statusCol   = $allowedCols['status'] ?? null;
-        if ($statusV2Col !== null && !array_key_exists($statusV2Col, $safeData)) {
-            require_once(__DIR__ . '/../models/state/StatusMap.php');
-            // No Status in $safeData means the column default (1 = available) applies.
-            $effectiveStatus = ($statusCol !== null && array_key_exists($statusCol, $safeData))
-                ? (int)$safeData[$statusCol]
-                : 1;
-            if (array_key_exists($effectiveStatus, StatusMap::INVENTORY_LEGACY_TO_V2)) {
-                $safeData[$statusV2Col] = StatusMap::INVENTORY_LEGACY_TO_V2[$effectiveStatus];
-            }
-        }
+        // Derivation AND the {0,1} constraint now live in one shared helper so
+        // update cannot drift from insert the way it had. [H-03 / F-10]
+        applyComponentStatusPair($safeData, $allowedCols, null);
 
         if (empty($safeData)) {
             throw new InvalidArgumentException("No valid fields provided for $type component");
@@ -1483,16 +1736,18 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
             $convertedData[$dbColumn] = $value;
         }
 
-        // Whitelist against real table columns
+        // Whitelist against real table columns, then against the client-editable
+        // set. [H-03 / F-10] UUID is fine to set on insert but must not change
+        // on update, and it is not in the editable set either way.
         $allowedCols = getInventoryTableColumns($pdo, $tableName);
         $blocked     = array_flip(getBlockedComponentColumns());
-        // UUID is fine to set on insert but must not change on update.
         $blocked['uuid'] = true;
+        $editable    = array_flip(getEditableComponentColumns($type));
 
         $safeData = [];
         foreach ($convertedData as $col => $value) {
             $lc = strtolower($col);
-            if (isset($blocked[$lc])) {
+            if (isset($blocked[$lc]) || !isset($editable[$lc])) {
                 continue;
             }
             if (!isset($allowedCols[$lc])) {
@@ -1514,20 +1769,50 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
             throw new InvalidArgumentException("No valid fields provided for $type update");
         }
 
-        $columns = array_keys($safeData);
-        foreach ($columns as $col) {
-            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
-                throw new InvalidArgumentException("Invalid column name: $col");
-            }
+        // The status decision needs the row's CURRENT claim, and that claim can
+        // change under us — a build can install this unit between the read and
+        // the write — so read it locked and hold the lock through the UPDATE.
+        // [H-03 / F-10]
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
         }
-        $setClause = implode(' = ?, ', $columns) . ' = ?';
-        $values = array_values($safeData);
-        $values[] = $id; // Add ID for WHERE clause
 
-        $sql = "UPDATE $tableName SET $setClause WHERE ID = ?";
+        try {
+            $existingStmt = $pdo->prepare("SELECT * FROM $tableName WHERE ID = ? FOR UPDATE");
+            $existingStmt->execute([$id]);
+            $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$existing) {
+                throw new InvalidArgumentException("Component not found");
+            }
 
-        $stmt = $pdo->prepare($sql);
-        return $stmt->execute($values);
+            applyComponentStatusPair($safeData, $allowedCols, $existing);
+
+            $columns = array_keys($safeData);
+            foreach ($columns as $col) {
+                if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+                    throw new InvalidArgumentException("Invalid column name: $col");
+                }
+            }
+            $setClause = implode(' = ?, ', $columns) . ' = ?';
+            $values = array_values($safeData);
+            $values[] = $id; // Add ID for WHERE clause
+
+            $sql = "UPDATE $tableName SET $setClause WHERE ID = ?";
+
+            $stmt = $pdo->prepare($sql);
+            $ok = $stmt->execute($values);
+
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+            return $ok;
+        } catch (Throwable $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
 
     } catch (InvalidArgumentException $e) {
         throw $e;
@@ -1581,36 +1866,72 @@ function deleteComponent($pdo, $type, $id, $userId) {
     $tableName = getComponentTableName($type);
     $id = (int)$id;
 
-    try {
-        $claim = $pdo->prepare(
-            "SELECT DISTINCT config_uuid
-               FROM config_components
-              WHERE inventory_table = ? AND inventory_id = ? AND removed_at IS NULL
-              ORDER BY config_uuid"
-        );
-        $claim->execute([$tableName, $id]);
-        $claimedBy = $claim->fetchAll(PDO::FETCH_COLUMN, 0);
-    } catch (PDOException $e) {
-        error_log("Error reading configuration claims before deleting $type #$id: " . $e->getMessage());
-        throw new ComponentInUseException(
-            "Cannot verify whether this $type is installed in a server configuration. Delete refused."
-        );
-    }
-
-    if (!empty($claimedBy)) {
-        $noun = count($claimedBy) === 1 ? 'configuration' : 'configurations';
-        throw new ComponentInUseException(
-            "This $type is installed in server $noun " . implode(', ', $claimedBy)
-            . ". Remove it from the $noun before deleting it."
-        );
+    // The check and the delete are ONE decision, so they are one transaction. [M-04]
+    //
+    // They used to be two unlocked statements with a gap between them, and an
+    // install fits in that gap: read "nobody claims this unit", a build claims
+    // it, DELETE. The inventory row is gone and config_components still points at
+    // it — an orphan claim, which until today validated as deployable (see
+    // SystemInventoryStateRule / M-13) and now blocks the build it poisoned.
+    //
+    // LOCK ORDER matches AddComponentCommand's: it takes the config lock, then
+    // the inventory row (lockAndCheckComponent). So an add cannot write a
+    // config_components row for this unit without first waiting on the inventory
+    // row lock taken below — which means that once we hold it, the claim read is
+    // stable and needs no second lock, and there is no cycle to deadlock on.
+    $ownsTransaction = !$pdo->inTransaction();
+    if ($ownsTransaction) {
+        $pdo->beginTransaction();
     }
 
     try {
-        $stmt = $pdo->prepare("DELETE FROM $tableName WHERE id = ?");
-        return $stmt->execute([$id]);
+        $lock = $pdo->prepare("SELECT ID FROM $tableName WHERE ID = ? FOR UPDATE");
+        $lock->execute([$id]);
+        if ($lock->fetchColumn() === false) {
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+            return false;   // already gone; nothing to delete and nothing to report
+        }
 
-    } catch (Exception $e) {
-        error_log("Error deleting $type component from table $tableName: " . $e->getMessage());
+        try {
+            $claim = $pdo->prepare(
+                "SELECT DISTINCT config_uuid
+                   FROM config_components
+                  WHERE inventory_table = ? AND inventory_id = ? AND removed_at IS NULL
+                  ORDER BY config_uuid"
+            );
+            $claim->execute([$tableName, $id]);
+            $claimedBy = $claim->fetchAll(PDO::FETCH_COLUMN, 0);
+        } catch (PDOException $e) {
+            error_log("Error reading configuration claims before deleting $type #$id: " . $e->getMessage());
+            throw new ComponentInUseException(
+                "Cannot verify whether this $type is installed in a server configuration. Delete refused."
+            );
+        }
+
+        if (!empty($claimedBy)) {
+            $noun = count($claimedBy) === 1 ? 'configuration' : 'configurations';
+            throw new ComponentInUseException(
+                "This $type is installed in server $noun " . implode(', ', $claimedBy)
+                . ". Remove it from the $noun before deleting it."
+            );
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM $tableName WHERE ID = ?");
+        $ok = $stmt->execute([$id]);
+
+        if ($ownsTransaction) {
+            $pdo->commit();
+        }
+        return $ok;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        if (!($e instanceof ComponentInUseException)) {
+            error_log("Error deleting $type component from table $tableName: " . $e->getMessage());
+        }
         throw $e;
     }
 }

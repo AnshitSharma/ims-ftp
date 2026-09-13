@@ -84,7 +84,11 @@ class RequestActionExecutor
             // inventory row id is the only thing that separates them. Optional,
             // never required: it cannot be known for a configuration whose state
             // comes from the legacy JSON columns, where it is always NULL.
-            'optional' => ['old_serial_number', 'old_inventory_id', 'serial_number', 'slot_position', 'notes'],
+            // new_inventory_id is old_inventory_id's mirror for the part going IN
+            // [M-11]: same argument, same reason it cannot be required.
+            // serial_number, when given, also names the incoming unit.
+            'optional' => ['old_serial_number', 'old_inventory_id', 'new_inventory_id',
+                           'serial_number', 'slot_position', 'notes'],
         ],
         'server.config.create' => [
             'label'    => 'Create a new server configuration',
@@ -842,7 +846,7 @@ class RequestActionExecutor
     private function addOptions(array $payload)
     {
         $options = [];
-        foreach (['serial_number', 'slot_position', 'parent_nic_uuid', 'port_index', 'notes'] as $key) {
+        foreach (['serial_number', 'new_inventory_id', 'slot_position', 'parent_nic_uuid', 'port_index', 'notes'] as $key) {
             if (isset($payload[$key]) && $payload[$key] !== '') {
                 $options[$key] = $payload[$key];
             }
@@ -1243,8 +1247,16 @@ class RequestActionExecutor
         }
 
         // UUID validation against the ims-data JSON happens inside addComponent()
-        // and is never bypassed — including here.
-        $result = addComponent($this->pdo, $payload['component_type'], $payload['data'], $subjectUserId);
+        // and is never bypassed — including here. Neither is the client-editable
+        // column allowlist [H-03/F-10]: an approved request is a request from a
+        // person, so a payload naming ServerUUID or Status=2 is refused here for
+        // the same reason the direct endpoint refuses it. Its InvalidArgument
+        // message is our own text and is safe to show the approver.
+        try {
+            $result = addComponent($this->pdo, $payload['component_type'], $payload['data'], $subjectUserId);
+        } catch (InvalidArgumentException $e) {
+            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => null];
+        }
 
         if (empty($result) || empty($result['id'])) {
             $message = (is_array($result) && !empty($result['message']))
@@ -1313,13 +1325,19 @@ class RequestActionExecutor
             ];
         }
 
-        $ok = updateComponent(
-            $this->pdo,
-            $payload['component_type'],
-            (int)$payload['inventory_id'],
-            $payload['data'],
-            $subjectUserId
-        );
+        try {
+            $ok = updateComponent(
+                $this->pdo,
+                $payload['component_type'],
+                (int)$payload['inventory_id'],
+                $payload['data'],
+                $subjectUserId
+            );
+        } catch (InvalidArgumentException $e) {
+            // Editable-column allowlist, the Status constraint, or a row that
+            // vanished between the check above and the locked read. [H-03/F-10]
+            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => null];
+        }
 
         if (!$ok) {
             return ['success' => false, 'errors' => ['Could not update that inventory record'], 'result' => null];

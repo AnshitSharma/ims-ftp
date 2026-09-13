@@ -561,6 +561,33 @@ class PipelineTemplateManager
             $errors = array_merge($errors, $this->validateStageEffect($stage, $label));
         }
 
+        // AT MOST ONE EXECUTION STEP. [M-06]
+        //
+        // A request's actions are performed once, at the step that carries the
+        // execution effect. A type with two such steps asked for them to be
+        // performed twice — a second identical unit added to stock, a second
+        // relocation — and the second run has no way to know it is a repeat
+        // beyond the 'executed' stamp that applyStageEffect() now honours. The
+        // predicate there makes the second run a no-op; this makes the type
+        // unauthorable in the first place, so an admin finds out while designing
+        // the workflow rather than an approver finding out mid-approval.
+        //
+        // If dividing actions across several steps is ever wanted, it needs a
+        // rule saying WHICH actions belong to which step. There is none, so two
+        // execution steps mean "all of them, twice".
+        $executionSteps = [];
+        foreach ($stages as $i => $stage) {
+            if (!empty($stage['effect_type'])
+                && trim($stage['effect_type']) === PipelineConfig::EFFECT_EXECUTE_REQUEST) {
+                $executionSteps[] = 'Stage #' . ((int)$i + 1);
+            }
+        }
+        if (count($executionSteps) > 1) {
+            $errors[] = 'Only one step may perform the request\'s actions, and '
+                . implode(', ', $executionSteps) . ' all do. '
+                . 'The actions would be performed once for each of them.';
+        }
+
         return ['valid' => empty($errors), 'errors' => $errors];
     }
 

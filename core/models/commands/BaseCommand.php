@@ -242,6 +242,98 @@ abstract class BaseCommand
         throw new CommandFailed('component_unavailable', $message, 409);
     }
 
+    /**
+     * Is this exact unit at the site the server stands at? [F-07]
+     *
+     * The rule already existed, in the wrong place and in a waivable form:
+     * RequestActionExecutor::locationGate() applied it to approved add/replace
+     * Requests only, matched on the spec uuid plus an optional serial rather than
+     * on the unit, and returned "proceed" whenever it could not tell — an
+     * unreadable location, a resolver exception, a part with no site. So a user
+     * holding direct install rights simply called the endpoint and skipped the
+     * handover the requester was made to raise, and the location sync that runs
+     * afterwards then RELABELLED the part as being at the server's site,
+     * recording a physical transfer that never happened.
+     *
+     * Here it is judged against the two rows this command has already locked, so
+     * there is no second lookup to disagree with them and no window to race, and
+     * it FAILS CLOSED: unknown is a refusal, not a waiver. That is affordable
+     * because it was measured before shipping — on 2026-09-13 exactly 2 of 356
+     * inventory rows had no location_uuid, and both were SourceType='onboard'
+     * NICs, which is the one exemption below.
+     *
+     * An onboard port is not separately locatable: it is a region of silicon on a
+     * board that is already installed in this server, it cannot be carried
+     * anywhere on its own, and no handover could ever move it.
+     *
+     * The two columns it needs — location_uuid everywhere, SourceType on
+     * nicinventory alone — are read here rather than added to each command's
+     * locked SELECT: SourceType does not exist on the other eleven tables, and
+     * location_uuid arrived in a seeder, so naming either unconditionally in a
+     * shared statement is the deploy-ordering trap. The unit is already locked
+     * FOR UPDATE by the caller, so re-reading it by ID sees the same row.
+     *
+     * @param string $table     the {type}inventory table the unit is in
+     * @param int    $unitId    its ID, already locked by the caller
+     * @param array  $lockedRow the locked server_configurations row
+     */
+    protected function assertUnitAtServerLocation(string $table, int $unitId, array $lockedRow): void
+    {
+        if (!empty($lockedRow['is_virtual'])) {
+            return; // reserves no physical unit — nothing to be anywhere
+        }
+
+        require_once __DIR__ . '/../../helpers/SchemaHelper.php';
+
+        if (!SchemaHelper::hasColumn($this->pdo, $table, 'location_uuid')
+            || !SchemaHelper::hasColumn($this->pdo, 'server_configurations', 'location_uuid')) {
+            // The seeder that adds the column has not been run yet. Nothing can
+            // be compared, so nothing can be asserted — and this is the one case
+            // that must NOT fail closed, because it would take every add on the
+            // whole system down for the length of that window.
+            return;
+        }
+
+        $select = 'location_uuid, Location'
+            . (SchemaHelper::hasColumn($this->pdo, $table, 'SourceType') ? ', SourceType' : '');
+        $stmt = $this->pdo->prepare("SELECT $select FROM `$table` WHERE ID = ?");
+        $stmt->execute([$unitId]);
+        $inventoryData = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        if (($inventoryData['SourceType'] ?? null) === 'onboard') {
+            return;
+        }
+
+        $serverSite = trim((string)($lockedRow['location_uuid'] ?? ''));
+        $unitSite   = trim((string)($inventoryData['location_uuid'] ?? ''));
+
+        if ($serverSite === '') {
+            throw new CommandFailed(
+                'server_location_unknown',
+                'This server has no site recorded, so there is no way to tell whether the part is where '
+                . 'the server is. Set the server\'s location first.',
+                409
+            );
+        }
+        if ($unitSite === '') {
+            throw new CommandFailed(
+                'component_location_unknown',
+                'This unit has no site recorded, so it cannot be shown to be where the server is. '
+                . 'Set the unit\'s location, or raise a Hardware Handover request to move it here.',
+                409
+            );
+        }
+        if ($unitSite !== $serverSite) {
+            $where = trim((string)($inventoryData['Location'] ?? '')) ?: 'another site';
+            throw new CommandFailed(
+                'location_mismatch',
+                "This unit is at {$where}, and the server is somewhere else. Raise a Hardware Handover "
+                . 'request to move the part first. Nothing has been changed.',
+                409
+            );
+        }
+    }
+
     /** @return int server_configurations.revision for this command's config, read fresh after apply(). */
     protected function currentRevision(): int
     {

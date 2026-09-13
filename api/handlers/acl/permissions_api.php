@@ -117,11 +117,24 @@ switch ($operation) {
                 $groupedPermissions[$permission['category']][] = $permission;
             }
             
+            // The EFFECTIVE set, flat, from the one evaluator. [F-13 part 2]
+            //
+            // The grouped list above is built by asking about each catalogued
+            // permission one at a time, which is the shape the settings screen
+            // renders. `capabilities` is what a UI should actually gate on: the
+            // same answer the backend will give when the button is pressed,
+            // including the admin bypass, in one array it can test membership in.
+            // Publishing it is what stops the frontend from re-deriving policy
+            // and getting a different answer.
+            $effective = effectiveCapabilities($pdo, $requestedUserId);
+
             send_json_response(1, 1, 200, "User permissions retrieved successfully", [
                 'user_id' => $requestedUserId,
                 'roles' => $userRoles,
                 'permissions' => $groupedPermissions,
-                'total_permissions' => count($userPermissions)
+                'total_permissions' => count($userPermissions),
+                'capabilities' => array_values($effective['permissions']),
+                'is_admin' => (bool)$effective['is_admin'],
             ]);
             
         } catch (Exception $e) {

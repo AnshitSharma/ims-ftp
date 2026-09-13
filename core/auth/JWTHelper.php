@@ -127,8 +127,30 @@ class JWTHelper {
             throw new Exception('Invalid token payload');
         }
 
+        // REQUIRED, AND TYPED. A missing claim is not a waiver.
+        //
+        // Every one of these was previously guarded by isset()/!empty(), so a
+        // token that simply did not carry the claim skipped the check it exists
+        // for — no `exp` meant a token that never expired, no `jti` meant logout
+        // could not revoke it, no `iat` meant a password change could not cut it
+        // off. The signature is what makes a token ours; it is not what makes the
+        // token's CONTENTS complete, and a forger who can strip a claim does not
+        // need to forge a signature to benefit from its absence.
+        //
+        // Typed, too: `exp` as a numeric string would still compare, but
+        // "0"/false/"" would compare as an expiry in 1970 or as absent, and this
+        // is the wrong place to be lenient about what a number is.
+        foreach (['exp', 'iat'] as $claim) {
+            if (!isset($payload[$claim]) || !is_int($payload[$claim])) {
+                throw new Exception('Token is missing its ' . $claim . ' claim');
+            }
+        }
+        if (!isset($payload['jti']) || !is_string($payload['jti']) || $payload['jti'] === '') {
+            throw new Exception('Token is missing its jti claim');
+        }
+
         // Check expiration
-        if (isset($payload['exp']) && $payload['exp'] < time()) {
+        if ($payload['exp'] < time()) {
             throw new Exception('Token has expired');
         }
 
@@ -151,14 +173,21 @@ class JWTHelper {
         // Error handling strategy: distinguish between "the revocation
         // migration hasn't been applied yet" (MySQL error 1146 table missing
         // / 1054 column missing) and any other DB error.
-        //   - Schema-missing → log once, fail OPEN. Lets operators deploy
-        //     the code before running the migration without locking users
-        //     out.
+        //   - Schema-missing → USED to log and fail OPEN, so operators could
+        //     deploy the code before running the migration. That migration
+        //     (2026_06_11_001) has been applied since June: revocation was
+        //     verified working against production on 2026-09-13 — a logged-out
+        //     token was refused on its very next call, which it could only be if
+        //     revoked_tokens exists. The branch was dead, and a dead fail-open
+        //     branch on an auth path is a trapdoor waiting for the day someone
+        //     restores a database without that table. It now fails CLOSED like
+        //     every other error, and the log says which seeder to run.
         //   - Any other error → fail CLOSED. A real DB problem should not
         //     be silently ignored on an auth path.
         if ($pdo !== null) {
-            // 1. Per-token blacklist (handleLogout path)
-            if (!empty($payload['jti'])) {
+            // 1. Per-token blacklist (handleLogout path). jti is required above,
+            //    so there is no "no jti, no check" path left.
+            {
                 try {
                     $stmt = $pdo->prepare("SELECT 1 FROM revoked_tokens WHERE jti = ? LIMIT 1");
                     $stmt->execute([$payload['jti']]);
@@ -167,17 +196,19 @@ class JWTHelper {
                     }
                 } catch (PDOException $e) {
                     if (self::isMissingSchemaError($e)) {
-                        error_log("JWT revocation: revoked_tokens table missing — run seeder 2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql");
+                        error_log("JWT revocation UNAVAILABLE: revoked_tokens table missing — run seeder "
+                            . "2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql. "
+                            . "Tokens are refused until it is applied.");
                     } else {
                         error_log("JWT revocation check failed: " . $e->getMessage());
-                        throw new Exception('Token revocation check unavailable');
                     }
+                    throw new Exception('Token revocation check unavailable');
                 }
             }
 
             // 2. Global cutoff per user (handleResetPassword path).
             // Any token issued before users.password_changed_at is rejected.
-            if (!empty($payload['user_id']) && !empty($payload['iat'])) {
+            if (!empty($payload['user_id'])) {
                 try {
                     $stmt = $pdo->prepare("SELECT password_changed_at FROM users WHERE id = ?");
                     $stmt->execute([$payload['user_id']]);
@@ -187,11 +218,13 @@ class JWTHelper {
                     }
                 } catch (PDOException $e) {
                     if (self::isMissingSchemaError($e)) {
-                        error_log("JWT revocation: users.password_changed_at missing — run seeder 2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql");
+                        error_log("JWT revocation UNAVAILABLE: users.password_changed_at missing — run seeder "
+                            . "2026_06_11_001_jwt-revocation-schema-and-token-hashing-cleanup.sql. "
+                            . "Tokens are refused until it is applied.");
                     } else {
                         error_log("JWT password-cutoff check failed: " . $e->getMessage());
-                        throw new Exception('Token revocation check unavailable');
                     }
+                    throw new Exception('Token revocation check unavailable');
                 }
             }
         }

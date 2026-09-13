@@ -169,6 +169,14 @@ final class ReplaceComponentCommand extends BaseCommand
         // gate + override protocol, ported into BaseCommand. The U-A.2
         // quantity>1 add loop inherits this via AddComponentCommand.
         $this->assertInventoryAvailability($this->newInventoryRow['data'], $lockedRow, $this->options);
+        $this->assertIncomingNotAlreadyPlaced();
+        // The part going IN has to be here. The one coming out is leaving, and is
+        // physically in this server whatever its row says. [F-07]
+        $this->assertUnitAtServerLocation(
+            (string)$this->newInventoryRow['table'],
+            (int)$this->newInventoryRow['data']['ID'],
+            $lockedRow
+        );
 
         return $this->buildReplacedTarget($current);
     }
@@ -298,8 +306,30 @@ final class ReplaceComponentCommand extends BaseCommand
         // work below (form-factor lock, rack height) still runs: those are properties
         // of the CONFIGURATION, not of any unit.
         if (!$this->isVirtual) {
-            $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
-            $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, $newInventoryId);
+            // Both returns are checked. [M-08] A swap that silently fails to
+            // release the outgoing unit leaves it claimed by a config that no
+            // longer lists it — undeletable and unclaimable — and one that fails
+            // to claim the incoming unit leaves it advertised as available while
+            // this config already holds it. Either half failing means the setter
+            // could not tell which unit it meant; the whole swap rolls back.
+            $released = $sb->updateComponentStatusAndServerUuid($this->componentType, $this->oldComponentUuid, 1, null, 'Replaced via command layer (U-C.4)', null, null, $oldSerial, $oldUnitId);
+            if (!$released) {
+                throw new CommandFailed(
+                    'unit_release_failed',
+                    "Could not identify which physical {$this->componentType} unit to release from this server. "
+                    . 'Nothing was replaced.',
+                    409
+                );
+            }
+            $claimed = $sb->updateComponentStatusAndServerUuid($this->componentType, $this->newComponentUuid, 2, $this->configUuid, 'Replaced via command layer (U-C.4)', null, null, $newSerial, $newInventoryId);
+            if (!$claimed) {
+                throw new CommandFailed(
+                    'unit_claim_failed',
+                    "Could not identify which physical {$this->componentType} unit to install in this server. "
+                    . 'Nothing was replaced.',
+                    409
+                );
+            }
 
             // ROOT-CAUSE FIX (2026-08-26): both calls above pass null, null for
             // $serverLocation / $serverRackPosition, which the setter writes
@@ -339,21 +369,108 @@ final class ReplaceComponentCommand extends BaseCommand
         // LOCATION PREFERENCE (2026-08-26): see AddComponentCommand's own copy.
         // Null when the location columns or the server's location are unknown,
         // and the SQL is then byte-identical to what it was.
-        $preferLocation = LocationResolver::preferredUnitLocation($this->pdo, $table, $this->configUuid);
-        $locationOrder  = $preferLocation !== null ? '(location_uuid = ?) DESC, ' : '';
-        $params         = $preferLocation !== null
-            ? [$this->newComponentUuid, $preferLocation]
-            : [$this->newComponentUuid];
+        // WHEN THE CALLER NAMES THE UNIT, USE THAT UNIT. [M-11]
+        //
+        // Add has always honoured an explicit serial; Replace ignored one and
+        // picked by model, so a technician who said "put THIS card in" got
+        // whichever unit of that model sorted first. On a replacement that is
+        // worse than on an add: the person is standing at the machine with a
+        // specific part in their hand, and the row that ends up bound to the
+        // server is a record of which physical object is in it.
+        $explicitUnitId = isset($this->options['new_inventory_id']) && $this->options['new_inventory_id'] !== null
+            ? (int)$this->options['new_inventory_id']
+            : null;
+        $explicitSerial = isset($this->options['serial_number']) && $this->options['serial_number'] !== ''
+            ? (string)$this->options['serial_number']
+            : null;
 
-        $stmt = $this->pdo->prepare("
-            SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
-            FROM `$table` WHERE UUID = ?
-            ORDER BY (Status = 1) DESC, (Status = 2) DESC, {$locationOrder}ID ASC
-            LIMIT 1 FOR UPDATE
-        ");
-        $stmt->execute($params);
+        if ($explicitUnitId !== null) {
+            $stmt = $this->pdo->prepare("
+                SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                FROM `$table` WHERE ID = ? AND UUID = ? FOR UPDATE
+            ");
+            $stmt->execute([$explicitUnitId, $this->newComponentUuid]);
+        } elseif ($explicitSerial !== null) {
+            $stmt = $this->pdo->prepare("
+                SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                FROM `$table` WHERE UUID = ? AND SerialNumber = ? FOR UPDATE
+            ");
+            $stmt->execute([$this->newComponentUuid, $explicitSerial]);
+        } else {
+            $preferLocation = LocationResolver::preferredUnitLocation($this->pdo, $table, $this->configUuid);
+            $locationOrder  = $preferLocation !== null ? '(location_uuid = ?) DESC, ' : '';
+            $params         = $preferLocation !== null
+                ? [$this->newComponentUuid, $preferLocation]
+                : [$this->newComponentUuid];
+
+            $stmt = $this->pdo->prepare("
+                SELECT ID, UUID, SerialNumber, Status, ServerUUID, Location, RackPosition
+                FROM `$table` WHERE UUID = ?
+                ORDER BY (Status = 1) DESC, (Status = 2) DESC, {$locationOrder}ID ASC
+                LIMIT 1 FOR UPDATE
+            ");
+            $stmt->execute($params);
+        }
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? ['table' => $table, 'data' => $row] : null;
+    }
+
+    /**
+     * Refuse to swap IN a unit that is already live in some configuration. [M-11]
+     *
+     * AddComponentCommand::assertNotAlreadyPlaced() has guarded this since
+     * 2026-09-01, after a model with one unit in stock accepted three consecutive
+     * adds and produced one row. Replace had no equivalent, and reaches the same
+     * end by the same route: assertInventoryAvailability() exempts a Status=2 unit
+     * whose ServerUUID is THIS config, the picker falls back to an in-use unit
+     * when the model has nothing free, and the repository's ON DUPLICATE KEY
+     * branch then quietly updates the row that already existed.
+     *
+     * The live config_components row is the authority, not {type}inventory.Status
+     * — Status and ServerUUID drift, a live row does not. A tombstoned row is not
+     * live, so removing a unit and swapping it back in still works. The
+     * component_type is part of the lookup because one serverplatform unit
+     * legitimately backs both a motherboard row and a chassis row.
+     *
+     * The unit coming OUT is exempt by construction: it is live in THIS config,
+     * which is the whole point of replacing it.
+     */
+    private function assertIncomingNotAlreadyPlaced(): void
+    {
+        $table = $this->newInventoryRow['table'] ?? null;
+        $unitId = isset($this->newInventoryRow['data']['ID'])
+            ? (int)$this->newInventoryRow['data']['ID']
+            : null;
+        if ($table === null || $unitId === null) {
+            return; // virtual placement: no physical unit to double-book
+        }
+
+        $outgoingId = $this->oldInventoryId;
+        if ($outgoingId === null && isset($this->oldRow['inventory_id']) && $this->oldRow['inventory_id'] !== null) {
+            $outgoingId = (int)$this->oldRow['inventory_id'];
+        }
+        if ($outgoingId !== null && $outgoingId === $unitId) {
+            return; // swapping a unit for itself is a no-op, not a double-booking
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT config_uuid FROM config_components
+              WHERE inventory_table = ? AND inventory_id = ? AND component_type = ?
+                AND removed_at IS NULL
+              LIMIT 1'
+        );
+        $stmt->execute([$table, $unitId, $this->componentType]);
+        $holder = $stmt->fetchColumn();
+        if ($holder === false) {
+            return;
+        }
+
+        throw new CommandFailed(
+            'component_unavailable',
+            "That physical {$this->componentType} unit is already installed in configuration {$holder}. "
+            . 'Remove it from that server first.',
+            409
+        );
     }
 
     private function planSlot(TargetState $withoutOld): ?string

@@ -112,6 +112,59 @@ class ServerRelocation
             return self::fail(404, 'Server configuration not found');
         }
 
+        // ---- Lock the destination rack BEFORE reading its geometry ----------
+        //
+        // [M-05 / F-23] Every occupancy question below — is U14 free, does this
+        // 2U server fit, is that bay taken — used to be asked outside any
+        // transaction, and only then was a transaction opened to write. Two moves
+        // into the same U therefore both read "free" and both wrote, and the rack
+        // ended up holding two servers in one slot with nothing in the data to
+        // say which arrived second. Locking the RACK (not the individual rows,
+        // which do not exist yet for the incoming server) is what serialises
+        // them: the second move waits, then re-reads an occupancy that now
+        // includes the first.
+        //
+        // The lock is taken here and held through the write below — one
+        // transaction for the whole decision, opened early rather than late.
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
+        // Any early return between here and the commit must release it.
+        $release = function ($result) use ($pdo, $ownsTransaction) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            return $result;
+        };
+
+        try {
+            $destinationRackUuid = $rackUuid;
+            if ($enclosureUuid !== null) {
+                // A sled names its enclosure; the enclosure names the rack. Read
+                // that one hop before validating so the right rack is the one
+                // being held.
+                $encStmt = $pdo->prepare("SELECT rack_uuid FROM rack_enclosures WHERE enclosure_uuid = ? LIMIT 1");
+                $encStmt->execute([$enclosureUuid]);
+                $encRack = $encStmt->fetchColumn();
+                if ($encRack === false) {
+                    return $release(self::fail(404, 'Enclosure not found'));
+                }
+                $destinationRackUuid = $encRack;
+            }
+
+            if ($destinationRackUuid !== null) {
+                $lock = $pdo->prepare("SELECT rack_uuid FROM racks WHERE rack_uuid = ? FOR UPDATE");
+                $lock->execute([$destinationRackUuid]);
+                if ($lock->fetchColumn() === false) {
+                    return $release(self::fail(404, 'Rack not found'));
+                }
+            }
+        } catch (Throwable $e) {
+            error_log("ServerRelocation::move lock error: " . $e->getMessage());
+            return $release(self::fail(500, 'The destination rack could not be reserved; nothing was changed'));
+        }
+
         // ---- The destination ------------------------------------------------
         $rack   = null;
         $height = null;
@@ -122,7 +175,7 @@ class ServerRelocation
             // reconciled: a sled has no say in where its box is bolted.
             $check = self::validateSlotTarget($pdo, $enclosureUuid, $slotIndex, $locationUuid, $configUuid, $server);
             if (!$check['success']) {
-                return $check;
+                return $release($check);
             }
             $rack         = $check['data']['rack'];
             $rackUuid     = $check['data']['rack']['rack_uuid'];
@@ -133,7 +186,7 @@ class ServerRelocation
         } elseif ($rackUuid !== null) {
             $check = self::validateDirectTarget($pdo, $rackUuid, $locationUuid, $configUuid, $startU, $heightGiven, $server);
             if (!$check['success']) {
-                return $check;
+                return $release($check);
             }
             $rack         = $check['data']['rack'];
             $height       = $check['data']['height'];
@@ -144,28 +197,26 @@ class ServerRelocation
             // Placing directly in the rack LEAVES any bay the server was in.
             $slotIndex    = null;
         } elseif (!self::locationExists($pdo, $locationUuid)) {
-            return self::fail(404, 'Location not found, or it has been retired');
+            return $release(self::fail(404, 'Location not found, or it has been retired'));
         }
 
         // Nothing to do? Say so rather than writing a movement row that records
         // no movement.
         if (self::isSamePlace($from, $locationUuid, $rackUuid, $startU, $enclosureUuid, $slotIndex)) {
-            return [
+            return $release([
                 'success' => true,
                 'code'    => 200,
                 'message' => 'The server is already there — nothing was changed',
                 'data'    => ['moved' => false, 'from' => $from, 'to' => $from, 'components_updated' => 0],
-            ];
+            ]);
         }
 
         // ---- Apply ----------------------------------------------------------
-        // Only open a transaction if the caller has not already: the Request
-        // path wraps every action of an approval in one, and a nested BEGIN
-        // would throw.
-        $ownsTransaction = !$pdo->inTransaction();
-        if ($ownsTransaction) {
-            $pdo->beginTransaction();
-        }
+        // The transaction was opened above, before the geometry was read, and the
+        // destination rack has been held FOR UPDATE ever since. [M-05 / F-23] It
+        // is only opened when the caller has not already opened one: the Request
+        // path wraps every action of an approval in one, and a nested BEGIN would
+        // throw.
 
         try {
             if ($rackUuid !== null) {

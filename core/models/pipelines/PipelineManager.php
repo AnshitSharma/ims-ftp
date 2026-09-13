@@ -2251,17 +2251,39 @@ class PipelineManager
             ];
         }
 
+        // status = 'pending' AND FOR UPDATE. [M-06]
+        //
+        // Without the predicate, a request type carrying TWO execution steps ran
+        // every action again at the second one — a second identical unit added to
+        // inventory, a second relocation, a second claim — and the rows had
+        // already been stamped 'executed' by the first, which is exactly the
+        // evidence that says not to. Without the lock, two approvers landing on
+        // the same request at once each read the same pending set and each ran it.
+        //
+        // Retry semantics, stated rather than implied: 'pending' is the only
+        // status this picks up. An action stamped 'executed' is done and is never
+        // re-run. An action stamped 'failed' is NOT re-run either — a failure
+        // rolls its own transaction back, so the 'failed' stamp only survives on
+        // a row whose approval was separately committed, and replaying that
+        // blind is how a half-applied approval doubles up. Re-raise the work.
         $stmt = $this->pdo->prepare(
             "SELECT id, position, action_type, payload FROM ticket_actions
-             WHERE ticket_id = ? ORDER BY position ASC, id ASC"
+             WHERE ticket_id = ? AND status = 'pending'
+             ORDER BY position ASC, id ASC
+             FOR UPDATE"
         );
         $stmt->execute([$ticketId]);
         $actions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         if (empty($actions)) {
+            $any = $this->pdo->prepare("SELECT COUNT(*) FROM ticket_actions WHERE ticket_id = ?");
+            $any->execute([$ticketId]);
+            $message = ((int)$any->fetchColumn() > 0)
+                ? 'This request\'s work has already been performed'
+                : 'This request has nothing to perform';
             return [
                 'success' => false,
-                'errors' => ['This request has nothing to perform'],
+                'errors' => [$message],
                 'applied' => null
             ];
         }
@@ -2543,13 +2565,50 @@ class PipelineManager
     {
         $date = date('Ymd');
         $prefix = "TKT-{$date}-";
+
+        // A DAY-SCOPED COUNTER, CLAIMED ATOMICALLY. [M-14]
+        //
+        // This used to read MAX(...) and add one. Two people raising a request in
+        // the same moment read the same maximum and were handed the same number,
+        // and with no unique index behind it both were written — two different
+        // requests answering to TKT-20260913-0007, so every later reference to
+        // that number is ambiguous.
+        //
+        // The INSERT ... ON DUPLICATE KEY UPDATE below is the atomic claim: the
+        // row lock is held to commit, LAST_INSERT_ID() is per-connection, and the
+        // number it returns is nobody else's. A rolled-back request leaves a gap
+        // in the sequence, which is the correct trade — gaps are readable, and
+        // duplicates are not.
+        //
+        // The seeder also puts a UNIQUE index on tickets.ticket_number, so even a
+        // caller that somehow bypassed this is refused by the database rather
+        // than quietly duplicating.
+        require_once(__DIR__ . '/../../helpers/SchemaHelper.php');
+        if (SchemaHelper::hasTable($this->pdo, 'ticket_number_counters')) {
+            $claim = $this->pdo->prepare(
+                "INSERT INTO ticket_number_counters (counter_date, next_seq)
+                 VALUES (?, LAST_INSERT_ID(1))
+                 ON DUPLICATE KEY UPDATE next_seq = LAST_INSERT_ID(next_seq + 1)"
+            );
+            $claim->execute([date('Y-m-d')]);
+            $seq = (int)$this->pdo->lastInsertId();
+            // Four digits is the FLOOR, not the width. The old code read the last
+            // four characters of the number back, so on the 10,000th request of a
+            // day it read '9999' out of '...-10000' and proposed 10000 for ever.
+            return $prefix . str_pad((string)$seq, 4, '0', STR_PAD_LEFT);
+        }
+
+        // Seeder 2026_09_13_001 has not been applied yet. Code reaches production
+        // ~20s after a save and seeders are run by hand, so this window is real.
+        // Keep the old behaviour, minus its truncation bug: read the sequence
+        // after the PREFIX rather than the last four characters.
         $stmt = $this->pdo->prepare("
-            SELECT MAX(CAST(SUBSTRING(ticket_number, -4) AS UNSIGNED)) AS max_seq
+            SELECT MAX(CAST(SUBSTRING(ticket_number, ?) AS UNSIGNED)) AS max_seq
             FROM tickets WHERE ticket_number LIKE ?
         ");
-        $stmt->execute([$prefix . '%']);
+        $stmt->execute([strlen($prefix) + 1, $prefix . '%']);
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         $nextSeq = ($result['max_seq'] ?? 0) + 1;
-        return $prefix . str_pad($nextSeq, 4, '0', STR_PAD_LEFT);
+        return $prefix . str_pad((string)$nextSeq, 4, '0', STR_PAD_LEFT);
     }
 }

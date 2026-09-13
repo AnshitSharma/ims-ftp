@@ -113,8 +113,40 @@ final class TransitionStatusCommand extends BaseCommand
         return false;
     }
 
+    /**
+     * The lifecycle states a VIRTUAL configuration may legitimately reach. [F-08]
+     *
+     * A virtual build is a design. It can be drafted, worked on, validated
+     * against the specs, and eventually abandoned — every one of those is a
+     * statement about a document. The three that are missing are statements
+     * about MATTER: `finalized` means the build is settled and its units are
+     * installed (apply() below promotes allocated -> installed on exactly that
+     * edge), `deployed` means it is running in a rack, and `maintenance` means
+     * someone is standing at it. A virtual config reserves no physical unit, so
+     * it can satisfy every specification rule the FINALIZE suite runs and still
+     * be backed by nothing.
+     *
+     * `handleFinalize` has always refused virtual builds, but it is one route of
+     * three: `server-transition-status` and the `server.config.transition`
+     * Request action both reach this command without passing it. The rule
+     * belongs here, against the locked row, so all three agree.
+     */
+    const VIRTUAL_ALLOWED_STATES = ['draft', 'building', 'validating', 'validated', 'retired'];
+
     protected function buildTarget(TargetState $current, array $lockedRow): TargetState
     {
+        // Read from the LOCKED row, not from a second query that could disagree
+        // with the row this transition is about to write. [F-08]
+        if (!empty($lockedRow['is_virtual'])
+            && !in_array($this->toStatus, self::VIRTUAL_ALLOWED_STATES, true)) {
+            throw new CommandFailed(
+                'virtual_config_prohibited',
+                "A virtual configuration cannot become '{$this->toStatus}' — that state means real hardware is "
+                . 'installed, and this build reserves none. Convert it with server-import-virtual first.',
+                409
+            );
+        }
+
         $transitionCheck = StateMachine::assertConfigTransition(
             $this->pdo,
             $this->configUuid,
