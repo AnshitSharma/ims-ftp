@@ -17,8 +17,12 @@ function handleAuthOperations($operation) {
 
     global $pdo;
 
-    // Rate limit the password-bearing operations
-    if (in_array($operation, ['login', 'forgot_password', 'reset_password', 'change_password'])) {
+    // Rate limit the password-bearing operations, plus the two Microsoft
+    // operations that do real work (a state row, an outbound token exchange).
+    // microsoft_status is a constant-answer read and is deliberately not
+    // limited — the login page calls it on every load.
+    if (in_array($operation, ['login', 'forgot_password', 'reset_password', 'change_password',
+                              'microsoft_start', 'microsoft_callback'])) {
         require_once(__DIR__ . '/../../../core/helpers/RateLimiter.php');
         $rateLimiter = new RateLimiter();
         $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
@@ -28,6 +32,8 @@ function handleAuthOperations($operation) {
             'forgot_password' => [3, 3600], // 3 attempts per hour
             'reset_password' => [5, 3600],  // 5 attempts per hour
             'change_password' => [5, 900],  // 5 attempts per 15 minutes
+            'microsoft_start' => [20, 60],  // 20 redirects started per minute
+            'microsoft_callback' => [10, 60], // matches login
         ];
         [$maxAttempts, $window] = $limits[$operation];
 
@@ -65,9 +71,51 @@ function handleAuthOperations($operation) {
             handleChangePassword();
             break;
 
+        // Microsoft (Entra ID) sign-in. The handler is a NEW file, so it is
+        // loaded defensively — a hard require would take the entire auth module
+        // down, login included, during the window between this file landing in
+        // production and its companion arriving. See api.php's GrantPolicy note.
+        case 'microsoft_status':
+        case 'microsoft_start':
+        case 'microsoft_callback':
+            requireMicrosoftAuthHandler($operation);
+            handleMicrosoftAuthOperation($operation);
+            break;
+
         default:
             send_json_response(0, 0, 400, "Invalid authentication operation: $operation");
     }
+}
+
+/**
+ * Load the Microsoft sign-in handler, or fail in the least damaging way.
+ *
+ * `microsoft_status` answers "no" instead of erroring: the login page asks it
+ * on every load purely to decide whether to show the button, and a page that
+ * pops an error toast because a file has not uploaded yet is worse than one
+ * that quietly shows only the password form. The two operations that would
+ * actually start or finish a sign-in refuse with a 503 instead.
+ */
+function requireMicrosoftAuthHandler($operation) {
+    if (function_exists('handleMicrosoftAuthOperation')) {
+        return;
+    }
+
+    $path = __DIR__ . '/microsoft_auth.php';
+    if (is_readable($path)) {
+        require_once($path);
+    }
+
+    if (function_exists('handleMicrosoftAuthOperation')) {
+        return;
+    }
+
+    if ($operation === 'microsoft_status') {
+        send_json_response(1, 0, 200, "Microsoft sign-in is not available", ['enabled' => false]);
+    }
+
+    send_json_response(0, 0, 503,
+        "Microsoft sign-in is temporarily unavailable while the server finishes updating");
 }
 
 /**
@@ -113,57 +161,74 @@ function handleLogin() {
 
         error_log("Login successful for user: $username (ID: " . $user['id'] . ")");
 
-        // Generate JWT tokens
-        $jwtExpiryHours = defined('JWT_EXPIRY_HOURS') ? JWT_EXPIRY_HOURS : 24;
-        $accessTokenExpiry = $rememberMe ? 86400 : ($jwtExpiryHours * 3600); // 24h or configured hours
-        $refreshTokenExpiry = $rememberMe ? 2592000 : 604800; // 30 days or 7 days
-
-        $accessToken = JWTHelper::generateToken([
-            'user_id' => $user['id'],
-            'username' => $user['username']
-        ], $accessTokenExpiry);
-
-        $refreshToken = JWTHelper::generateRefreshToken();
-
-        // Store refresh token
-        JWTHelper::storeRefreshToken($pdo, $user['id'], $refreshToken, $refreshTokenExpiry);
-
-        // Get user permissions
-        $permissions = getUserPermissions($pdo, $user['id']);
-
-        // Get user roles (used by frontend for UI-level role gating, e.g. Vendors menu)
-        $roleStmt = $pdo->prepare("
-            SELECT r.name FROM roles r
-            JOIN user_roles ur ON r.id = ur.role_id
-            WHERE ur.user_id = ?
-        ");
-        $roleStmt->execute([$user['id']]);
-        $userRoleNames = $roleStmt->fetchAll(PDO::FETCH_COLUMN);
-
-        send_json_response(1, 1, 200, "Login successful", [
-            'user' => [
-                'id' => (int)$user['id'],
-                'username' => $user['username'],
-                'email' => $user['email'],
-                'firstname' => $user['firstname'],
-                'lastname' => $user['lastname'],
-                'roles' => $userRoleNames,
-                // Permission name list (or ['*'] for admins) so the frontend can
-                // gate UI elements. Real enforcement is always server-side.
-                'permissions' => $permissions
-            ],
-            'tokens' => [
-                'access_token' => $accessToken,
-                'refresh_token' => $refreshToken,
-                'expires_in' => $accessTokenExpiry
-            ]
-
-        ]);
+        send_json_response(1, 1, 200, "Login successful", buildUserSession($pdo, $user, $rememberMe));
 
     } catch (Exception $e) {
         error_log("Login error: " . $e->getMessage());
         send_json_response(0, 0, 500, "Login failed");
     }
+}
+
+/**
+ * Mint a session for an ALREADY-AUTHENTICATED user and build the response body.
+ *
+ * Shared by password login and Microsoft sign-in so the two can never drift:
+ * whatever proves the identity, what comes out the other side — token expiry,
+ * refresh-token storage, the user object the frontend caches — is identical,
+ * and a session is indistinguishable downstream from the one the other path
+ * would have produced.
+ *
+ * This function authenticates NOTHING. Every caller must have established the
+ * identity before calling it.
+ *
+ * @param array $user Must carry id, username, email, firstname, lastname.
+ * @return array The `data` payload for send_json_response.
+ */
+function buildUserSession($pdo, array $user, $rememberMe = false) {
+    $jwtExpiryHours = defined('JWT_EXPIRY_HOURS') ? JWT_EXPIRY_HOURS : 24;
+    $accessTokenExpiry = $rememberMe ? 86400 : ($jwtExpiryHours * 3600); // 24h or configured hours
+    $refreshTokenExpiry = $rememberMe ? 2592000 : 604800; // 30 days or 7 days
+
+    $accessToken = JWTHelper::generateToken([
+        'user_id' => $user['id'],
+        'username' => $user['username']
+    ], $accessTokenExpiry);
+
+    $refreshToken = JWTHelper::generateRefreshToken();
+
+    // Store refresh token
+    JWTHelper::storeRefreshToken($pdo, $user['id'], $refreshToken, $refreshTokenExpiry);
+
+    // Get user permissions
+    $permissions = getUserPermissions($pdo, $user['id']);
+
+    // Get user roles (used by frontend for UI-level role gating, e.g. Vendors menu)
+    $roleStmt = $pdo->prepare("
+        SELECT r.name FROM roles r
+        JOIN user_roles ur ON r.id = ur.role_id
+        WHERE ur.user_id = ?
+    ");
+    $roleStmt->execute([$user['id']]);
+    $userRoleNames = $roleStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    return [
+        'user' => [
+            'id' => (int)$user['id'],
+            'username' => $user['username'],
+            'email' => $user['email'],
+            'firstname' => $user['firstname'],
+            'lastname' => $user['lastname'],
+            'roles' => $userRoleNames,
+            // Permission name list (or ['*'] for admins) so the frontend can
+            // gate UI elements. Real enforcement is always server-side.
+            'permissions' => $permissions
+        ],
+        'tokens' => [
+            'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
+            'expires_in' => $accessTokenExpiry
+        ]
+    ];
 }
 
 /**

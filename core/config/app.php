@@ -134,6 +134,23 @@ define('JWT_ISSUER', getenv('JWT_ISSUER') ?: 'bdc-ims-api');
 define('JWT_AUDIENCE', getenv('JWT_AUDIENCE') ?: 'bdc-ims-client');
 
 // =============================================================================
+// MICROSOFT (ENTRA ID) SIGN-IN
+// =============================================================================
+//
+// All four default to '' so the whole feature is INERT until .env carries them:
+// MicrosoftOAuth::isConfigured() is false, auth-microsoft_status reports
+// enabled=false and the frontend never renders the button. Password login is
+// unaffected either way.
+//
+// MS_CLIENT_SECRET is a secret like JWT_SECRET — it is never echoed into a
+// response, a log line or an error message.
+
+define('MS_TENANT_ID', getenv('MS_TENANT_ID') ?: '');
+define('MS_CLIENT_ID', getenv('MS_CLIENT_ID') ?: '');
+define('MS_CLIENT_SECRET', getenv('MS_CLIENT_SECRET') ?: '');
+define('MS_REDIRECT_URI', getenv('MS_REDIRECT_URI') ?: '');
+
+// =============================================================================
 // SECURITY CONFIGURATION
 // =============================================================================
 

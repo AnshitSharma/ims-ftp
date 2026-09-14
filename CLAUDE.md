@@ -23,6 +23,22 @@ engine flags). Never print its values.
 - ACL reads the `permissions` table only. `acl_permissions` was dropped in seeder
   `2026_06_11_002` — never reference it.
 
+## Two ways in, one session
+
+Password login and Microsoft (Entra ID) sign-in both end at
+`auth_api.php::buildUserSession()`, which mints the JWT, stores the refresh token and builds
+the response. Whatever proved the identity, what comes out is identical — so never issue a
+token anywhere else, and never change one path's expiry or payload without the other.
+
+`auth-microsoft_start` / `_callback` run an authorization-code + PKCE flow: `MicrosoftOAuth`
+(`core/auth/`) talks to Microsoft and verifies the id_token in full (RS256 against the tenant
+JWKS, plus `iss`/`aud`/`tid`/`nonce`/`exp`); `handlers/auth/microsoft_auth.php` owns the
+single-use `oauth_login_states` row and the user lookup. **Link only** — a Microsoft account
+must already match an active `users` row by `azure_oid`, or once by email, which then writes
+`azure_oid`. Nothing auto-provisions. The whole feature is inert unless `MS_TENANT_ID`,
+`MS_CLIENT_ID`, `MS_CLIENT_SECRET` and `MS_REDIRECT_URI` are all set in `.env`;
+`auth-microsoft_status` is what the login page asks before showing its button.
+
 ## Compatibility validation — two generations, both live
 
 The newer one is `core/models/validation/`: `ValidationEngine` dispatching ~20 rules from
