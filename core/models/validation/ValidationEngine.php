@@ -83,6 +83,9 @@ class ValidationEngine
         DependencyBlockedRemovalRule::class,
     ];
 
+    /** @var RuleInterface[]|null Built once on first evaluate(); see ruleInstances(). */
+    private $ruleInstances = null;
+
     /*
      * U-D.4: the ENGINE_MODE reader lived here. The registry below is the sole
      * validation authority now -- there is no 'off' to fall back to.
@@ -118,6 +121,38 @@ class ValidationEngine
      * storage.caddy_pairing — ADD,VALIDATE, VALIDATION_FAILURE — could not block
      * anywhere finalize actually reached before this.
      */
+    /**
+     * The 23 rule objects, constructed once per engine instance. (audit JSON-016)
+     *
+     * evaluate() used to do `new $ruleClass()` for all 23 rules on every call. That is
+     * invisible for a single add, and the dominant allocation cost on the listing path:
+     * ServerBuilder::evaluateCandidatesWithEngine() calls evaluate() once per candidate
+     * spec, so a full get-compatible scan built 200 x 23 = 4,600 rule objects -- and 14 of
+     * those rules construct their own DataExtractionUtilities in the constructor, so it
+     * also built ~2,800 of those.
+     *
+     * Safe to reuse because rules are stateless across evaluations: every rule assigns
+     * $this only in its constructor (verified across all 23 files, 2026-09-16) and
+     * evaluate() reads the TargetState passed in. If a rule ever needs per-evaluation
+     * state, it must keep it in a local, not on $this -- reuse is the contract now.
+     *
+     * Per engine INSTANCE, not static: callers that want a guaranteed-fresh rule set
+     * (a test pinning construction behaviour, a future engine with injected rules) get it
+     * by constructing a new ValidationEngine, which is what they already do.
+     *
+     * @return RuleInterface[]
+     */
+    private function ruleInstances(): array
+    {
+        if ($this->ruleInstances === null) {
+            $this->ruleInstances = [];
+            foreach (static::RULES as $ruleClass) {
+                $this->ruleInstances[] = new $ruleClass();
+            }
+        }
+        return $this->ruleInstances;
+    }
+
     private static function rulesFor(RuleInterface $rule, string $trigger): bool
     {
         $triggers = $rule->triggers();
@@ -138,9 +173,8 @@ class ValidationEngine
     public function evaluate(TargetState $state, string $trigger): Verdict
     {
         $results = [];
-        foreach (static::RULES as $ruleClass) {
+        foreach ($this->ruleInstances() as $rule) {
             /** @var RuleInterface $rule */
-            $rule = new $ruleClass();
             if (!self::rulesFor($rule, $trigger)) {
                 continue;
             }

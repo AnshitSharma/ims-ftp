@@ -70,7 +70,15 @@ function send_json_response($success, $authenticated, $code, $message, $data = n
         $response['data'] = $data;
     }
 
-    echo json_encode($response, JSON_PRETTY_PRINT);
+    // JSON-013: JSON_PRETTY_PRINT added ~26% to every payload before compression and no
+    // consumer parses on whitespace (the only .text() reads in the frontend are HTML
+    // partials). Kept available behind an explicit ?pretty=1 for hand-debugging.
+    $flags = 0;
+    if (isset($_REQUEST['pretty']) && $_REQUEST['pretty'] === '1') {
+        $flags = JSON_PRETTY_PRINT;
+    }
+
+    echo json_encode($response, $flags);
     exit();
 }
 

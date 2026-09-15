@@ -15,11 +15,30 @@ function handleComponentOperations($module, $operation, $user) {
 
     switch ($operation) {
         case 'list':
-            // Pagination/search are opt-in: requests without a limit param keep
-            // the original return-everything behavior (server builder, scripts).
-            // The dashboard sends limit/offset/search (dashboard.js loadComponentList).
+            // Pagination is CAPPED BY DEFAULT (audit JSON-004, 2026-09-16).
+            //
+            // This used to be opt-in: no limit param meant no LIMIT clause, and the
+            // comment here named "server builder, scripts" as the callers relying on
+            // that. Neither does any more -- getComponentsByType() has exactly one
+            // caller in the backend (this line), and the one frontend caller
+            // (dashboard.js loadComponentList) has always sent limit/offset. So the
+            // return-everything path was serving nobody but was still one forgotten
+            // param away from a fatal: ram-list measured 625 KB for 463 rows, which is
+            // ~135 MB at 100K DIMMs -- over memory_limit during json_encode, before the
+            // response reaches the wire.
+            //
+            // A caller that genuinely wants the whole table must now say so with all=1,
+            // which is greppable; forgetting a param now costs you 100 rows, not the
+            // table. The 500 ceiling on an explicit limit is unchanged.
             $limitParam = $_GET['limit'] ?? $_POST['limit'] ?? null;
-            $limit = ($limitParam !== null && $limitParam !== '') ? max(1, min((int)$limitParam, 500)) : null;
+            $wantAll = ($_GET['all'] ?? $_POST['all'] ?? '') === '1';
+            if ($limitParam !== null && $limitParam !== '') {
+                $limit = max(1, min((int)$limitParam, 500));
+            } elseif ($wantAll) {
+                $limit = null; // explicit, deliberate, unbounded
+            } else {
+                $limit = 100;
+            }
             $offset = max(0, (int)($_GET['offset'] ?? $_POST['offset'] ?? 0));
             $search = trim($_GET['search'] ?? $_POST['search'] ?? '');
             // Optional site filter — "show me everything at Jaipur". Ignored
@@ -37,44 +56,52 @@ function handleComponentOperations($module, $operation, $user) {
                 error_log("[ModelName] ComponentDataService load failed: " . $e->getMessage());
             }
 
+            // Name derivation now lives in ComponentNamer (audit JSON-007). This copy of
+            // the chain did not know about onboard NICs, which is why 69 of 78 nic-list
+            // rows came back with "ModelName": null.
+            //
+            // is_readable, not a bare require: a new file reaches production AFTER the file
+            // that references it, so a hard require here would fatal the whole API for the
+            // gap between the two uploads. Absent namer == exactly yesterday's output.
+            $namer = __DIR__ . '/../../../core/helpers/ComponentNamer.php';
+            $haveNamer = is_readable($namer);
+            if ($haveNamer) {
+                require_once $namer;
+            }
+
+            $onboardUtils = null;
             foreach ($components as &$comp) {
                 $comp['ModelName'] = null;
-                if ($componentService !== null && !empty($comp['UUID'])) {
+                if ($haveNamer && !empty($comp['UUID'])) {
                     try {
-                        $spec = $componentService->findComponentByUuid($module, $comp['UUID']);
-                        if ($spec !== null) {
-                            $brand = $spec['brand'] ?? null;
-                            $model = $spec['model'] ?? $spec['name'] ?? $spec['model_name'] ?? $spec['product_name'] ?? null;
-
-                            // RAM: build "Brand Type CapacityGB Module"
-                            if ($model === null && $module === 'ram') {
-                                $parts = array_filter([$brand, $spec['memory_type'] ?? null,
-                                    isset($spec['capacity_GB']) ? $spec['capacity_GB'] . 'GB' : null,
-                                    $spec['module_type'] ?? null]);
-                                $comp['ModelName'] = $parts ? implode(' ', $parts) : null;
-                            }
-                            // Storage: build "Brand Type CapacityGB"
-                            elseif ($model === null && $module === 'storage') {
-                                $cap = null;
-                                if (isset($spec['capacity_GB'])) {
-                                    $cap = $spec['capacity_GB'] >= 1000
-                                        ? round($spec['capacity_GB'] / 1000, 1) . 'TB'
-                                        : $spec['capacity_GB'] . 'GB';
+                        if ($module === 'nic' && ComponentNamer::isOnboardNicUuid($comp['UUID'])) {
+                            // Onboard NICs are synthesized rows whose UUID resolves to
+                            // nothing in the catalogue; the name comes from the parent
+                            // board's spec. Utils built once for the whole page, not per row.
+                            if ($onboardUtils === null) {
+                                $utilsPath = __DIR__ . '/../../../core/models/shared/DataExtractionUtilities.php';
+                                if (is_readable($utilsPath)) {
+                                    require_once $utilsPath;
+                                    $onboardUtils = new DataExtractionUtilities();
+                                } else {
+                                    $onboardUtils = false;
                                 }
-                                $parts = array_filter([$brand, $spec['storage_type'] ?? null, $cap]);
-                                $comp['ModelName'] = $parts ? implode(' ', $parts) : null;
                             }
-                            elseif ($brand && $model) {
-                                $comp['ModelName'] = $brand . ' ' . $model;
-                            } elseif ($model) {
-                                $comp['ModelName'] = $model;
-                            }
+                            $comp['ModelName'] = ComponentNamer::onboardNicName(
+                                $pdo, $onboardUtils ?: null, $comp['UUID']
+                            );
+                        } elseif ($componentService !== null) {
+                            $spec = $componentService->findComponentByUuid($module, $comp['UUID']);
+                            $comp['ModelName'] = ComponentNamer::fromSpec($module, $spec);
                         }
-                    } catch (Exception $e) {
-                        // Silent fail per component
+                    } catch (Throwable $e) {
+                        // Silent fail per component -- a name is decoration, never a 500.
                     }
                 }
-                // Fallback: extract from Notes field
+                // Notes fallback (JSON-018): kept ONLY for rows the namer cannot resolve.
+                // Parsing free text as structured data is the thing this fallback exists to
+                // apologise for; with onboard NICs handled above it should now fire for
+                // nothing, and it can be deleted once a run confirms that.
                 if ($comp['ModelName'] === null && !empty($comp['Notes'])) {
                     if (preg_match('/Brand:\s*([^,]+).*Model:\s*(.+?)(\r|\n|$)/i', $comp['Notes'], $matches)) {
                         $comp['ModelName'] = trim($matches[1]) . ' ' . trim($matches[2]);

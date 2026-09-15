@@ -105,31 +105,13 @@ class ServerBuilder {
             if (!$spec || empty($spec['found'])) {
                 return null;
             }
-            $s = $spec['specifications'];
-            $brand = $s['brand'] ?? null;
-            // Try common name fields in priority order
-            foreach (['model', 'name', 'model_name', 'product_name'] as $field) {
-                if (!empty($s[$field])) {
-                    return $brand ? trim($brand . ' ' . $s[$field]) : $s[$field];
-                }
-            }
-            // For RAM: build "Brand Type CapacityGB Module"
-            if ($componentType === 'ram') {
-                $parts = array_filter([$s['brand'] ?? null, $s['memory_type'] ?? null,
-                    isset($s['capacity_GB']) ? $s['capacity_GB'] . 'GB' : null,
-                    $s['module_type'] ?? null]);
-                if ($parts) return implode(' ', $parts);
-            }
-            // For Storage: build "Brand Type CapacityGB"
-            if ($componentType === 'storage') {
-                $cap = null;
-                if (isset($s['capacity_GB'])) {
-                    $cap = $s['capacity_GB'] >= 1000
-                        ? round($s['capacity_GB'] / 1000, 1) . 'TB'
-                        : $s['capacity_GB'] . 'GB';
-                }
-                $parts = array_filter([$s['brand'] ?? null, $s['storage_type'] ?? null, $cap]);
-                if ($parts) return implode(' ', $parts);
+            // The chain itself lives in ComponentNamer now (audit JSON-007) so this and
+            // the inventory listing cannot drift again. Guarded include: a new file
+            // deploys after its callers, and a build listing must not 500 in that gap.
+            $namer = __DIR__ . '/../../helpers/ComponentNamer.php';
+            if (is_readable($namer)) {
+                require_once $namer;
+                return ComponentNamer::fromSpec($componentType, $spec['specifications']);
             }
             return null;
         } catch (Exception $e) {
@@ -138,41 +120,17 @@ class ServerBuilder {
     }
 
     /**
-     * Get onboard NIC name from motherboard specs via nicinventory
+     * Get onboard NIC name from motherboard specs via nicinventory.
+     * Delegates to ComponentNamer so the inventory listing gives the same answer
+     * (audit JSON-007 -- it used to give none at all).
      */
     private function getOnboardNICName($onboardNicUuid) {
-        try {
-            $stmt = $this->pdo->prepare(
-                "SELECT ParentComponentUUID, OnboardNICIndex FROM nicinventory WHERE UUID = ? AND SourceType = 'onboard'"
-            );
-            $stmt->execute([$onboardNicUuid]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$row || empty($row['ParentComponentUUID'])) {
-                return 'Onboard NIC';
-            }
-
-            $mbSpecs = $this->dataUtils->getMotherboardByUUID($row['ParentComponentUUID']);
-            if (!$mbSpecs || !isset($mbSpecs['networking']['onboard_nics'])) {
-                return 'Onboard NIC';
-            }
-
-            $index = ($row['OnboardNICIndex'] ?? 1) - 1;
-            $onboardNICs = $mbSpecs['networking']['onboard_nics'];
-            if (!isset($onboardNICs[$index])) {
-                return 'Onboard NIC';
-            }
-
-            $nic = $onboardNICs[$index];
-            return sprintf('%s %dp %s %s',
-                $nic['controller'] ?? 'Onboard',
-                $nic['ports'] ?? 0,
-                $nic['speed'] ?? '',
-                $nic['connector'] ?? ''
-            );
-        } catch (Exception $e) {
+        $namer = __DIR__ . '/../../helpers/ComponentNamer.php';
+        if (!is_readable($namer)) {
             return 'Onboard NIC';
         }
+        require_once $namer;
+        return ComponentNamer::onboardNicName($this->pdo, $this->dataUtils, $onboardNicUuid);
     }
 
     /**
