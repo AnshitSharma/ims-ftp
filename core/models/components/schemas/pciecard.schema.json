@@ -1,0 +1,89 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "pciecard model",
+    "$comment": "DERIVED from the 15 pciecard records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNOTE: this type spells the identity key UUID; 8 of the 12 use lowercase uuid.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  height: number|integer\n  length: integer|number\n  width: integer|number",
+    "type": "object",
+    "required": [
+        "UUID",
+        "form_factor",
+        "interface",
+        "m2_form_factors",
+        "m2_slots",
+        "max_capacity_per_slot",
+        "model",
+        "part_number",
+        "power_consumption",
+        "slot_compatibility",
+        "total_max_capacity"
+    ],
+    "properties": {
+        "UUID": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to pciecardinventory."
+        },
+        "cooling": {
+            "type": "object",
+            "$comment": "present on 9 of 15 records"
+        },
+        "dimensions_mm": {
+            "type": "object",
+            "$comment": "present on 13 of 15 records"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "interface": {
+            "type": "string"
+        },
+        "m2_form_factors": {
+            "type": "array"
+        },
+        "m2_slots": {
+            "type": "integer"
+        },
+        "max_capacity_TB": {
+            "type": "integer",
+            "$comment": "present on 2 of 15 records"
+        },
+        "max_capacity_per_slot": {
+            "type": "string"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 6 of 15 records"
+        },
+        "part_number": {
+            "type": "string"
+        },
+        "pcie_slots": {
+            "type": "integer",
+            "$comment": "present on 1 of 15 records"
+        },
+        "performance": {
+            "type": "object",
+            "$comment": "present on 13 of 15 records"
+        },
+        "power_consumption": {
+            "type": "object"
+        },
+        "slot_compatibility": {
+            "type": "object"
+        },
+        "slot_type": {
+            "type": "string",
+            "$comment": "present on 1 of 15 records"
+        },
+        "support_u2": {
+            "type": "boolean",
+            "$comment": "present on 1 of 15 records"
+        },
+        "total_max_capacity": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": false
+}

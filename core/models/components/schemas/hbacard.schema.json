@@ -1,0 +1,101 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "hbacard model",
+    "$comment": "DERIVED from the 22 hbacard records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNOTE: this type spells the identity key UUID; 8 of the 12 use lowercase uuid.",
+    "type": "object",
+    "required": [
+        "UUID",
+        "connector_type",
+        "data_rate",
+        "external_ports",
+        "form_factor",
+        "interface",
+        "internal_ports",
+        "max_devices",
+        "model",
+        "part_number",
+        "protocol",
+        "slot_compatibility"
+    ],
+    "properties": {
+        "UUID": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to hbacardinventory."
+        },
+        "cache": {
+            "type": "object",
+            "$comment": "present on 5 of 22 records"
+        },
+        "connector_type": {
+            "type": "string"
+        },
+        "controller_chip": {
+            "type": "string",
+            "$comment": "present on 6 of 22 records"
+        },
+        "data_rate": {
+            "type": "string"
+        },
+        "dimensions_mm": {
+            "type": "object",
+            "$comment": "present on 16 of 22 records"
+        },
+        "external_ports": {
+            "type": "integer"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "host_interface": {
+            "type": "string",
+            "$comment": "present on 1 of 22 records"
+        },
+        "interface": {
+            "type": "string"
+        },
+        "internal_ports": {
+            "type": "integer"
+        },
+        "max_devices": {
+            "type": "integer"
+        },
+        "max_virtual_disks": {
+            "type": "integer",
+            "$comment": "present on 5 of 22 records"
+        },
+        "mode": {
+            "type": "string",
+            "$comment": "present on 5 of 22 records"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 6 of 22 records"
+        },
+        "part_number": {
+            "type": "string"
+        },
+        "performance": {
+            "type": "object",
+            "$comment": "present on 1 of 22 records"
+        },
+        "power_consumption": {
+            "type": "object",
+            "$comment": "present on 17 of 22 records"
+        },
+        "protocol": {
+            "type": "string"
+        },
+        "raid_levels": {
+            "type": "array",
+            "$comment": "present on 5 of 22 records"
+        },
+        "slot_compatibility": {
+            "type": "object"
+        }
+    },
+    "additionalProperties": false
+}

@@ -64,6 +64,18 @@ const ALLOWED_DUPLICATES = [
     //   buildUuidIndex() keeps the last writer, so the real product was unreachable behind
     //   the test fixture. caddyinventory was empty, so the TEST caddy was renumbered to
     //   cf5f8847-fe08-4f25-92b6-f0e44c791695 and the Slim caddy is reachable again.
+    //
+    // Two MALFORMED caddy uuids were repaired the same day, found by the Phase 2.3 schemas
+    // rather than by this gate -- which is the point of having both. This gate only asks
+    // whether a uuid is unique; it never asked whether it was a uuid at all.
+    //   "Generic Test Caddy 1" held 'd7f1a3b5-8e4c-4f9d-9a2b-3c5d6e7f8a9' -- the Slim caddy's
+    //     uuid with the last hex digit missing. 35 characters in a CHAR(36) join key: unique,
+    //     so invisible here, and a near-miss of the collision repaired just above.
+    //   "Test Caddy Invalid" held the literal string 'invalid-test-uuid-999'.
+    //   caddyinventory was empty, so both were renumbered (4e181816-... and 652ed437-...).
+    //
+    // Worth a decision separately: 6 of the 16 caddy records are test fixtures living in the
+    // production catalogue. They are reachable by the picker like any other model.
 ];
 
 $paths = ComponentSpecPaths::getAll();

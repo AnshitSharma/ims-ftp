@@ -1,0 +1,97 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "chassis model",
+    "$comment": "DERIVED from the 28 chassis records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  height: number|string\n  low_profile: boolean|integer\n  u_size: integer|number",
+    "type": "object",
+    "required": [
+        "brand",
+        "chassis_type",
+        "form_factor",
+        "height",
+        "model",
+        "series",
+        "type",
+        "u_size",
+        "uuid"
+    ],
+    "properties": {
+        "backplane": {
+            "type": "object",
+            "$comment": "present on 27 of 28 records"
+        },
+        "brand": {
+            "type": "string"
+        },
+        "chassis_type": {
+            "type": "string"
+        },
+        "connectivity": {
+            "type": "object",
+            "$comment": "present on 13 of 28 records"
+        },
+        "cooling": {
+            "type": "object",
+            "$comment": "present on 14 of 28 records"
+        },
+        "dimensions": {
+            "type": "object",
+            "$comment": "present on 10 of 28 records"
+        },
+        "drive_bays": {
+            "type": "object",
+            "$comment": "present on 27 of 28 records"
+        },
+        "enclosure": {
+            "type": "object",
+            "$comment": "present on 1 of 28 records"
+        },
+        "expansion_slots": {
+            "type": "object",
+            "$comment": "present on 9 of 28 records"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "height": {
+            "type": "number"
+        },
+        "memory_support": {
+            "type": "object",
+            "$comment": "present on 7 of 28 records"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 2 of 28 records"
+        },
+        "power_supply": {
+            "type": "object",
+            "$comment": "present on 20 of 28 records"
+        },
+        "processor_support": {
+            "type": "object",
+            "$comment": "present on 7 of 28 records"
+        },
+        "series": {
+            "type": "string"
+        },
+        "type": {
+            "type": "string"
+        },
+        "u_size": {
+            "type": [
+                "integer",
+                "number"
+            ],
+            "$comment": "MIXED TYPE in the corpus (integer, number) -- reconcile"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to chassisinventory."
+        }
+    },
+    "additionalProperties": false
+}

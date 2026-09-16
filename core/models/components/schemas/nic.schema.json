@@ -1,0 +1,77 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "nic model",
+    "$comment": "DERIVED from the 53 nic records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  ports: integer|null",
+    "type": "object",
+    "required": [
+        "interface",
+        "model",
+        "port_type",
+        "ports",
+        "speeds",
+        "uuid"
+    ],
+    "properties": {
+        "chipset": {
+            "type": "string",
+            "$comment": "present on 3 of 53 records"
+        },
+        "compatible_servers": {
+            "type": "array",
+            "$comment": "present on 6 of 53 records"
+        },
+        "features": {
+            "type": "array",
+            "$comment": "present on 49 of 53 records"
+        },
+        "form_factor": {
+            "type": "string",
+            "$comment": "present on 8 of 53 records"
+        },
+        "interface": {
+            "type": "string"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 16 of 53 records"
+        },
+        "part_number": {
+            "type": "string",
+            "$comment": "present on 1 of 53 records"
+        },
+        "port_breakdown": {
+            "type": "string",
+            "$comment": "present on 8 of 53 records"
+        },
+        "port_type": {
+            "type": "string"
+        },
+        "ports": {
+            "type": [
+                "integer",
+                "null"
+            ],
+            "$comment": "MIXED TYPE in the corpus (integer, null) -- reconcile"
+        },
+        "power": {
+            "type": "string",
+            "$comment": "present on 48 of 53 records"
+        },
+        "speeds": {
+            "type": "array"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to nicinventory."
+        },
+        "verification_status": {
+            "type": "string",
+            "$comment": "present on 4 of 53 records"
+        }
+    },
+    "additionalProperties": false
+}

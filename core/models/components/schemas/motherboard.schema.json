@@ -1,0 +1,101 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "motherboard model",
+    "$comment": "DERIVED from the 26 motherboard records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  controller: string|null\n  height_mm: integer|number\n  length_mm: integer|number\n  max_capacity_TB: integer|number",
+    "type": "object",
+    "required": [
+        "chipset",
+        "dimensions",
+        "expansion_slots",
+        "form_factor",
+        "memory",
+        "model",
+        "networking",
+        "socket",
+        "use_cases",
+        "uuid"
+    ],
+    "properties": {
+        "bios": {
+            "type": "object",
+            "$comment": "present on 7 of 26 records"
+        },
+        "certification": {
+            "type": "array",
+            "$comment": "present on 7 of 26 records"
+        },
+        "chipset": {
+            "type": "string"
+        },
+        "compatible_memory": {
+            "type": "array",
+            "$comment": "present on 7 of 26 records"
+        },
+        "compatible_storage": {
+            "type": "array",
+            "$comment": "present on 7 of 26 records"
+        },
+        "cooling": {
+            "type": "object",
+            "$comment": "present on 7 of 26 records"
+        },
+        "cpu_support": {
+            "type": "object",
+            "$comment": "present on 25 of 26 records"
+        },
+        "dimensions": {
+            "type": "object"
+        },
+        "expansion_slots": {
+            "type": "object"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "memory": {
+            "type": "object"
+        },
+        "model": {
+            "type": "string"
+        },
+        "networking": {
+            "type": "object"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 3 of 26 records"
+        },
+        "other_connectors": {
+            "type": "array",
+            "$comment": "present on 7 of 26 records"
+        },
+        "part_number": {
+            "type": "string",
+            "$comment": "present on 6 of 26 records"
+        },
+        "power_management": {
+            "type": "object",
+            "$comment": "present on 7 of 26 records"
+        },
+        "socket": {
+            "type": "object"
+        },
+        "storage": {
+            "type": "object",
+            "$comment": "present on 23 of 26 records"
+        },
+        "usb": {
+            "type": "object",
+            "$comment": "present on 7 of 26 records"
+        },
+        "use_cases": {
+            "type": "array"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to motherboardinventory."
+        }
+    },
+    "additionalProperties": false
+}

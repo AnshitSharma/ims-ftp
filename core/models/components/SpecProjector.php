@@ -58,6 +58,9 @@ class SpecProjector
         'category'     => 'category',
         'family'       => 'family',
         'generation'   => 'generation',
+        // pciecard / risercard / hbacard groups carry this, and ComponentDataService merges it
+        // into the resolved spec. SpecRepository has to reproduce that shape byte for byte.
+        'component_subtype' => 'component_subtype',
     ];
 
     /**
@@ -165,6 +168,18 @@ class SpecProjector
             'specs'          => $node,
             'source_file'    => $file,
             'source_trail'   => $trail,
+
+            // Group-tier context, kept separate from `specs` because it is NOT part of the
+            // model object in the file -- it is inherited from the node above it. Resolvers
+            // merge it into the returned spec; the projection stores brand/series as columns.
+            'context'        => [
+                'brand'             => $brand,
+                'series'            => $series,
+                'family'            => $context['family'] ?? null,
+                'category'          => $context['category'] ?? null,
+                'generation'        => $context['generation'] ?? null,
+                'component_subtype' => $context['component_subtype'] ?? null,
+            ],
         ];
     }
 
@@ -317,7 +332,10 @@ class SpecProjector
     {
         $canonical = $specs;
         self::ksortRecursive($canonical);
-        return sha1(json_encode($canonical, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        // JSON_PRESERVE_ZERO_FRACTION so that the float 2.0 and the integer 2 hash
+        // differently. They are different values to the validation rules, so a checksum that
+        // conflated them would report "unchanged" for an edit that changes behaviour.
+        return sha1(json_encode($canonical, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION));
     }
 
     private static function ksortRecursive(array &$node): void

@@ -2570,6 +2570,13 @@ function handleGetCompatible($serverBuilder, $user) {
                 'config_uuid' => $configUuid,
                 'component_type' => $componentType,
                 'compatible_components' => $result['compatible_components'],
+                // JSON-001: the same answer grouped by MODEL, added alongside the per-unit
+                // list rather than replacing it. 53 compatible RAM units on a live build are
+                // 11 actual choices. Null-coalesced because this handler and ServerBuilder
+                // deploy as separate files about twenty seconds apart, so one of them is
+                // briefly older than the other on every save.
+                'compatible_models' => $result['compatible_models'] ?? [],
+                'total_compatible_models' => $result['total_compatible_models'] ?? 0,
                 'incompatible_components' => $result['incompatible_components'],
                 'total_compatible' => count($result['compatible_components']),
                 'total_compatible_and_available' => $result['totals']['compatible_and_available'],

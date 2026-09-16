@@ -1,0 +1,57 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "serverplatform model",
+    "$comment": "DERIVED from the 24 serverplatform records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  connection: string|null\n  controller: string|null\n  height_mm: integer|number\n  length_mm: integer|number\n  max_capacity_TB: integer|number\n  part_number: null|string\n  slot: string|integer\n  u_size: integer|number\n  width_mm: integer|number",
+    "type": "object",
+    "required": [
+        "bay_summary",
+        "chassis",
+        "included_nic",
+        "model",
+        "part_number",
+        "system_board",
+        "uuid",
+        "version_name"
+    ],
+    "properties": {
+        "bay_summary": {
+            "type": "string"
+        },
+        "chassis": {
+            "type": "object"
+        },
+        "included_nic": {
+            "type": "null"
+        },
+        "included_storage_controller": {
+            "type": "object",
+            "$comment": "present on 3 of 24 records"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 5 of 24 records"
+        },
+        "part_number": {
+            "type": [
+                "null",
+                "string"
+            ],
+            "$comment": "MIXED TYPE in the corpus (null, string) -- reconcile"
+        },
+        "system_board": {
+            "type": "object"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to serverplatforminventory."
+        },
+        "version_name": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": false
+}

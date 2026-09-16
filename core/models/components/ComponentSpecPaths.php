@@ -48,6 +48,21 @@ class ComponentSpecPaths {
         return self::getBasePath() . '/' . self::PATHS[$componentType];
     }
 
+    /**
+     * The type's spec file as a path RELATIVE to the ims-data root.
+     *
+     * For callers that need to name the file without naming the server -- the type manifest
+     * serves this to the browser, which fetches it from the web root. getPath() returns an
+     * absolute filesystem path and must never leave the backend.
+     */
+    public static function getRelativePath(string $componentType): string {
+        if (!isset(self::PATHS[$componentType])) {
+            throw new InvalidArgumentException("Unsupported component type: $componentType");
+        }
+
+        return self::PATHS[$componentType];
+    }
+
     public static function getAll(): array {
         $paths = [];
 

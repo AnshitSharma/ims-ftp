@@ -42,6 +42,17 @@ class ComponentDataService {
             $cached = $this->specCache->getAllSpecsForType($componentType);
             if ($cached !== null) {
                 $this->jsonCache[$componentType] = $cached;
+
+                // The uuid index is per-PROCESS state, not part of the cached payload, so it
+                // has to be rebuilt on this path too. Without this line a cache hit returned
+                // here before ever reaching buildUuidIndex() below, leaving the index empty
+                // and sending every findComponentByUuid() down the linear fallback -- which
+                // is both O(n) on the hot compatibility path and a DIFFERENT return shape
+                // (the fallback branches merge a different key set; motherboard lost
+                // `component_subtype`, chassis gained `manufacturer`). Measured 2026-09-16:
+                // cold cache built 26 motherboard entries, warm cache built 0.
+                $this->buildUuidIndex($componentType, $cached);
+
                 return $cached;
             }
         }

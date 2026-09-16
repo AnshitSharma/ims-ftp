@@ -136,6 +136,98 @@ class ServerBuilder {
     /**
      * Get component serial number and other details from inventory table
      */
+    /**
+     * JSON-012: fetch every inventory row this build needs, one query per TYPE.
+     *
+     * getConfigurationDetails() used to call getComponentDetails() once per component -- a
+     * classic N+1, measured live at 200 queries across 19 configurations (about 10 per
+     * build) on top of the two the read already does.
+     *
+     * The loop it replaces is ORDER-DEPENDENT: each iteration excludes the serials already
+     * handed out earlier in the same loop, so that two DIMMs of the same model do not both
+     * report the first unit's serial. That state cannot be expressed in one SQL statement,
+     * so the rows are prefetched here and the exclusion is applied in PHP against the
+     * prefetched list -- identical logic, same order, no per-component round trip.
+     *
+     * ORDER BY id is explicit. The original query had no ORDER BY at all and relied on
+     * whatever order the storage engine happened to return with LIMIT 1; keeping that
+     * implicit would make the prefetch's answer depend on the query plan. Verified against
+     * all 19 live configurations before shipping: byte-identical responses.
+     *
+     * @param  array  $components rows carrying component_type + component_uuid
+     * @return array  type => uuid => list of ['SerialNumber' => ..., 'Status' => ...]
+     */
+    private function prefetchComponentDetails(array $components, $serverUuid) {
+        $wanted = [];
+        foreach ($components as $component) {
+            $type = $component['component_type'] ?? null;
+            $uuid = $component['component_uuid'] ?? null;
+            if ($type !== null && $uuid !== null && $uuid !== '') {
+                $wanted[$type][$uuid] = true;
+            }
+        }
+
+        $prefetched = [];
+
+        foreach ($wanted as $type => $uuids) {
+            $table = $this->getComponentInventoryTable($type);
+            if (!$table) {
+                continue;
+            }
+
+            $uuidList = array_keys($uuids);
+            $placeholders = implode(',', array_fill(0, count($uuidList), '?'));
+            $params = $uuidList;
+
+            $sql = "SELECT UUID, SerialNumber, Status FROM `$table` WHERE UUID IN ($placeholders)";
+            if ($serverUuid !== null) {
+                // Ownership is the question being asked, exactly as in getComponentDetails --
+                // see the long note there about a build advertising another build's serial.
+                $sql .= " AND ServerUUID = ?";
+                $params[] = $serverUuid;
+            }
+            $sql .= " ORDER BY id";
+
+            try {
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute($params);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $prefetched[$type][$row['UUID']][] = [
+                        'SerialNumber' => $row['SerialNumber'],
+                        'Status' => $row['Status'],
+                    ];
+                }
+            } catch (Exception $e) {
+                // Leave this type out of the map. The caller falls back to the per-component
+                // query for anything the prefetch does not cover, so a failure here costs
+                // speed and nothing else.
+                error_log("Prefetch of $type inventory failed: " . $e->getMessage());
+            }
+        }
+
+        return $prefetched;
+    }
+
+    /**
+     * The first prefetched row for this model that has not already been handed out.
+     *
+     * Returns false -- distinct from null -- when this type/uuid was not prefetched at all,
+     * so the caller can tell "no free unit" apart from "not in the map, go and ask".
+     */
+    private function pickPrefetchedDetail(array $prefetched, $componentType, $componentUuid, array $excludeSerials) {
+        if (!isset($prefetched[$componentType][$componentUuid])) {
+            return false;
+        }
+
+        foreach ($prefetched[$componentType][$componentUuid] as $row) {
+            if (!in_array($row['SerialNumber'], $excludeSerials, true)) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
     private function getComponentDetails($componentType, $componentUuid, $serverUuid = null, $excludeSerials = []) {
         try {
             $table = $this->getComponentInventoryTable($componentType);
@@ -1587,10 +1679,75 @@ class ServerBuilder {
                 }
             }
 
+            // JSON-001: the same answer, shaped as MODELS rather than as units.
+            //
+            // The per-unit list is what an operator actually has to read through, and it is
+            // mostly repetition: a live build offers 53 compatible RAM rows for 11 distinct
+            // models. The engine already de-duplicates by spec uuid internally; only the
+            // response was per-unit.
+            //
+            // ADDED ALONGSIDE, NOT INSTEAD OF. compatible_components keeps its exact shape and
+            // contents -- the frontend picker reads it today, and swapping the response out
+            // from under it is a UI change that needs its own verification pass. This gives
+            // the two-step picker (model, then serial) something to be built against without
+            // requiring both halves to ship at once.
+            //
+            // A NOTE ON THE SCAN CAP, because the audit and the code disagree: the finding
+            // says the models offered are "bounded by whichever 200 serials sort first
+            // alphabetically". The scan orders `(Status = 1) DESC, SerialNumber ASC`, so
+            // AVAILABLE units come first, and no type currently has more than 53 available.
+            // Probed live 2026-09-16 across ram/cpu/storage/nic: results_truncated was false
+            // every time. The defect is real but LATENT -- it starts losing models when one
+            // type exceeds COMPATIBLE_SCAN_LIMIT available units. The counts below come from
+            // the uncapped GROUP BY above, so they stay correct when that day arrives even
+            // though the model LIST is still drawn from the capped scan.
+            $compatibleModels = [];
+            foreach ($allCompatibleComponents as $unit) {
+                $modelUuid = $unit['uuid'] ?? null;
+                if ($modelUuid === null) {
+                    continue;
+                }
+
+                if (!isset($compatibleModels[$modelUuid])) {
+                    $summary = $uuidInventorySummary[$modelUuid] ?? null;
+                    $compatibleModels[$modelUuid] = [
+                        'uuid' => $modelUuid,
+                        'component_name' => $unit['component_name'] ?? null,
+                        'is_compatible' => $unit['is_compatible'] ?? true,
+                        'compatibility_reason' => $unit['compatibility_reason'] ?? null,
+                        // Uncapped, from the GROUP BY above -- not a count of scanned rows.
+                        'total_units' => $summary['total'] ?? 0,
+                        'available_units' => $summary['available'] ?? 0,
+                        'in_use_units' => $summary['in_use'] ?? 0,
+                        // A short sample so a caller can show "e.g. ABC123" without a second
+                        // request; the full serial list is a separate paginated call.
+                        'sample_serials' => [],
+                        'scanned_units' => 0,
+                    ];
+                }
+
+                $compatibleModels[$modelUuid]['scanned_units']++;
+                if (count($compatibleModels[$modelUuid]['sample_serials']) < 5 && !empty($unit['serial_number'])) {
+                    $compatibleModels[$modelUuid]['sample_serials'][] = $unit['serial_number'];
+                }
+            }
+
+            // Most-available first, then by name: the model an operator can actually fit
+            // today is the one worth showing at the top of a picker.
+            $compatibleModels = array_values($compatibleModels);
+            usort($compatibleModels, static function ($a, $b) {
+                if ($a['available_units'] !== $b['available_units']) {
+                    return $b['available_units'] <=> $a['available_units'];
+                }
+                return strcasecmp((string)$a['component_name'], (string)$b['component_name']);
+            });
+
             return [
                 'success' => true,
                 'message' => count($allCompatibleComponents) > 0 ? "Compatible components found" : "No compatible components found",
                 'compatible_components' => $allCompatibleComponents,
+                'compatible_models' => $compatibleModels,
+                'total_compatible_models' => count($compatibleModels),
                 'incompatible_components' => $incompatibleOnly,
                 'totals' => [
                     'compatible_and_available' => count($compatibleAndAvailable),
@@ -2097,6 +2254,11 @@ class ServerBuilder {
             $totalComponents = 0;
             $assignedSerials = []; // Track to prevent duplicates
 
+            // JSON-012: one query per type up front, instead of one per component inside the
+            // loop below. See prefetchComponentDetails() for why the exclusion logic stays
+            // in PHP rather than moving into SQL.
+            $prefetchedDetails = $this->prefetchComponentDetails($components, $configUuid);
+
             foreach ($components as $component) {
                 $type = $component['component_type'];
                 $uuid = $component['component_uuid'];
@@ -2108,7 +2270,14 @@ class ServerBuilder {
 
                 // Get serial number from inventory table (fallback only), excluding already assigned ones
                 $excludeSerials = $assignedSerials[$type] ?? [];
-                $inventoryDetails = $this->getComponentDetails($type, $uuid, $configUuid, $excludeSerials);
+
+                $inventoryDetails = $this->pickPrefetchedDetail($prefetchedDetails, $type, $uuid, $excludeSerials);
+                if ($inventoryDetails === false) {
+                    // Not covered by the prefetch (its query failed, or the type has no
+                    // inventory table). Fall back to the original per-component read so this
+                    // optimisation can never turn a working response into a missing serial.
+                    $inventoryDetails = $this->getComponentDetails($type, $uuid, $configUuid, $excludeSerials);
+                }
 
                 // CRITICAL: Use serial_number from JSON first (already stored when component was added)
                 // Only fall back to inventory query if not present in JSON

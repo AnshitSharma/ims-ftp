@@ -249,6 +249,21 @@ try {
             handleUserOperations($operation, $user);
             break;
 
+        // Maintenance: rebuild component_models from ims-data. Role-gated inside the
+        // handler, like acl/users/dashboard. Guarded require -- this file deploys ahead of
+        // the handler, and a hard require would fatal every other module in that window.
+        case 'spec':
+            // handlers/components/, not a handlers/spec/ of its own: an identical file there
+            // never reached the server, while this location deployed in seconds. See the
+            // note in the handler -- the cause is unexplained, the workaround is load-bearing.
+            $specHandler = __DIR__ . '/handlers/components/spec_api.php';
+            if (!is_readable($specHandler)) {
+                send_json_response(0, 1, 503, "Spec operations are not available on this deployment");
+            }
+            require_once($specHandler);
+            handleSpecOperations($operation, $user);
+            break;
+
         // Component operations
         case 'cpu':
         case 'ram':

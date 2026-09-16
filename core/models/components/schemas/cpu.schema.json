@@ -1,0 +1,101 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "cpu model",
+    "$comment": "DERIVED from the 35 cpu records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNOTE: this type spells the identity key UUID; 8 of the 12 use lowercase uuid.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  max_memory_capacity_TB: integer|number",
+    "type": "object",
+    "required": [
+        "UUID",
+        "architecture",
+        "base_frequency_GHz",
+        "cores",
+        "dimensions_mm",
+        "l1_cache",
+        "l2_cache",
+        "l3_cache",
+        "max_frequency_GHz",
+        "max_memory_capacity_TB",
+        "memory_channels",
+        "memory_types",
+        "model",
+        "pcie_generation",
+        "pcie_lanes",
+        "socket",
+        "tdp_W",
+        "threads"
+    ],
+    "properties": {
+        "UUID": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to cpuinventory."
+        },
+        "all_core_turbo_GHz": {
+            "type": "number",
+            "$comment": "present on 34 of 35 records"
+        },
+        "architecture": {
+            "type": "string"
+        },
+        "base_frequency_GHz": {
+            "type": "number"
+        },
+        "cores": {
+            "type": "integer"
+        },
+        "dimensions_mm": {
+            "type": "object"
+        },
+        "l1_cache": {
+            "type": "string"
+        },
+        "l2_cache": {
+            "type": "string"
+        },
+        "l3_cache": {
+            "type": "string"
+        },
+        "max_frequency_GHz": {
+            "type": "number"
+        },
+        "max_memory_capacity_TB": {
+            "type": [
+                "integer",
+                "number"
+            ],
+            "$comment": "MIXED TYPE in the corpus (integer, number) -- reconcile"
+        },
+        "memory_channels": {
+            "type": "integer"
+        },
+        "memory_types": {
+            "type": "array"
+        },
+        "model": {
+            "type": "string"
+        },
+        "pcie_generation": {
+            "type": "integer"
+        },
+        "pcie_lanes": {
+            "type": "integer"
+        },
+        "power_efficiency": {
+            "type": "object",
+            "$comment": "present on 32 of 35 records"
+        },
+        "process_nm": {
+            "type": "integer",
+            "$comment": "present on 1 of 35 records"
+        },
+        "socket": {
+            "type": "string"
+        },
+        "tdp_W": {
+            "type": "integer"
+        },
+        "threads": {
+            "type": "integer"
+        }
+    },
+    "additionalProperties": false
+}

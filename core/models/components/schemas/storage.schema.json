@@ -1,0 +1,77 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "storage model",
+    "$comment": "DERIVED from the 67 storage records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNESTED FIELDS THAT VARY IN TYPE (the reconciliation backlog, audit JSON-006):\n  active: number|integer\n  endurance_dwpd: integer|number",
+    "type": "object",
+    "required": [
+        "capacity_GB",
+        "form_factor",
+        "interface",
+        "power_consumption_W",
+        "serial_numbers",
+        "specifications",
+        "storage_type",
+        "subtype",
+        "sys_score",
+        "uuid"
+    ],
+    "properties": {
+        "aka": {
+            "type": "string",
+            "$comment": "present on 2 of 67 records"
+        },
+        "capacity_GB": {
+            "type": "integer"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "interface": {
+            "type": "string"
+        },
+        "model": {
+            "type": "string",
+            "$comment": "present on 46 of 67 records"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 16 of 67 records"
+        },
+        "part_number": {
+            "type": "string",
+            "$comment": "present on 4 of 67 records"
+        },
+        "power_consumption_W": {
+            "type": [
+                "array",
+                "object"
+            ],
+            "$comment": "MIXED TYPE in the corpus (array, object) -- reconcile"
+        },
+        "serial_numbers": {
+            "type": "array"
+        },
+        "specifications": {
+            "type": [
+                "array",
+                "object"
+            ],
+            "$comment": "MIXED TYPE in the corpus (array, object) -- reconcile"
+        },
+        "storage_type": {
+            "type": "string"
+        },
+        "subtype": {
+            "type": "string"
+        },
+        "sys_score": {
+            "type": "string"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to storageinventory."
+        }
+    },
+    "additionalProperties": false
+}

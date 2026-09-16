@@ -1,0 +1,73 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "risercard model",
+    "$comment": "DERIVED from the 20 risercard records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nNOTE: this type spells the identity key UUID; 8 of the 12 use lowercase uuid.",
+    "type": "object",
+    "required": [
+        "UUID",
+        "cable_length",
+        "cable_type",
+        "clearance_height_mm",
+        "compatible_chassis",
+        "dimensions_mm",
+        "electrical_specs",
+        "form_factor",
+        "interface",
+        "low_profile_only",
+        "model",
+        "part_number",
+        "pcie_slots",
+        "slot_compatibility",
+        "slot_type"
+    ],
+    "properties": {
+        "UUID": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to risercardinventory."
+        },
+        "cable_length": {
+            "type": "string"
+        },
+        "cable_type": {
+            "type": "string"
+        },
+        "clearance_height_mm": {
+            "type": "number"
+        },
+        "compatible_chassis": {
+            "type": "array"
+        },
+        "dimensions_mm": {
+            "type": "object"
+        },
+        "electrical_specs": {
+            "type": "object"
+        },
+        "form_factor": {
+            "type": "string"
+        },
+        "interface": {
+            "type": "string"
+        },
+        "low_profile_only": {
+            "type": "boolean"
+        },
+        "model": {
+            "type": "string"
+        },
+        "part_number": {
+            "type": "string"
+        },
+        "pcie_slots": {
+            "type": "integer"
+        },
+        "slot_compatibility": {
+            "type": "object"
+        },
+        "slot_type": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": false
+}

@@ -25,6 +25,21 @@ function handleDashboardOperations($operation, $user) {
             send_json_response(1, 1, 200, "Dashboard data retrieved", $dashboardData);
             break;
 
+        case 'type-manifest':
+            // JSON-009: the one place both stacks can read the component-type vocabulary
+            // from, instead of each retyping it. Gated on the dashboard.view check already
+            // performed above -- it carries no inventory data, only the static vocabulary,
+            // so it needs no permission of its own and therefore no ACL seeder.
+            //
+            // Lives on the dashboard module because the vocabulary is not type-scoped: the
+            // 'component' module's actions are all {type}-{op}, and a manifest of all types
+            // has no single {type} to be addressed by.
+            send_json_response(1, 1, 200, "Component type manifest", [
+                'types' => getComponentTypeManifest(),
+                'count' => count(VALID_COMPONENT_TYPES),
+            ]);
+            break;
+
         case 'get-logs':
             // Admin/super admin only
             if (!hasPermission($pdo, 'acl.manage', $user['id']) && !hasPermission($pdo, 'users.view', $user['id'])) {

@@ -1,0 +1,65 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "sfp model",
+    "$comment": "DERIVED from the 35 sfp records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.",
+    "type": "object",
+    "required": [
+        "compatible_interfaces",
+        "connector",
+        "features",
+        "fiber_type",
+        "model",
+        "power_consumption",
+        "reach",
+        "speed",
+        "temperature_range",
+        "type",
+        "uuid",
+        "wavelength"
+    ],
+    "properties": {
+        "compatible_interfaces": {
+            "type": "array"
+        },
+        "connector": {
+            "type": "string"
+        },
+        "features": {
+            "type": "array"
+        },
+        "fiber_type": {
+            "type": "string"
+        },
+        "model": {
+            "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 2 of 35 records"
+        },
+        "power_consumption": {
+            "type": "string"
+        },
+        "reach": {
+            "type": "string"
+        },
+        "speed": {
+            "type": "string"
+        },
+        "temperature_range": {
+            "type": "string"
+        },
+        "type": {
+            "type": "string"
+        },
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "$comment": "The only identity a model has and the sole join key to sfpinventory."
+        },
+        "wavelength": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": false
+}

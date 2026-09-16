@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS component_models (
     series VARCHAR(120) DEFAULT NULL,
     part_number VARCHAR(100) DEFAULT NULL,
 
+    -- The rest of the group-tier context. These are NOT decoration: the resolvers merge
+    -- brand, series, family and component_subtype into every spec they return, so a row that
+    -- omits them cannot reproduce what ComponentDataService returns and SpecRepository would
+    -- answer differently depending on whether the table happened to be populated. Measured
+    -- before they were added: 142 specs differed on `family`, 57 on `component_subtype`.
+    family VARCHAR(120) DEFAULT NULL,
+    component_subtype VARCHAR(60) DEFAULT NULL COMMENT 'pciecard / risercard / hbacard group tier',
+
     -- Indexed projections. Every one of these is a copy of a value inside `specs`.
     capacity_gb INT DEFAULT NULL COMMENT 'ram capacity_GB, storage capacity_GB',
     socket VARCHAR(60) DEFAULT NULL COMMENT 'cpu, motherboard',
@@ -111,6 +119,14 @@ CREATE TABLE IF NOT EXISTS component_models (
 -- when CREATE TABLE above already built it. Verified on MariaDB 10.4 and 10.11.
 ALTER TABLE component_models
     ADD FULLTEXT KEY IF NOT EXISTS ft_model_search (model_name, display_name, brand, part_number);
+
+-- Reconcile a table created by an earlier run of this file, before the group-tier context
+-- columns were part of it. No-ops on a table that already has them.
+ALTER TABLE component_models
+    ADD COLUMN IF NOT EXISTS family VARCHAR(120) DEFAULT NULL AFTER part_number;
+
+ALTER TABLE component_models
+    ADD COLUMN IF NOT EXISTS component_subtype VARCHAR(60) DEFAULT NULL AFTER family;
 
 -- Verification (run by hand):
 --   SHOW COLUMNS FROM component_models;
