@@ -1079,6 +1079,47 @@ function getComponentTableName($type) {
 }
 
 /**
+ * The ELEVEN buildable component types, mapped to their inventory tables.
+ *
+ * This is a DELIBERATE SUBSET of VALID_COMPONENT_TYPES, not drift -- see the manifest
+ * docblock below on why subsets must not be replaced by the twelve-type list. A compute
+ * platform is a stocked unit with its own inventory table, but it is the box a server is
+ * built IN, not a part you may add-component into a slot. ServerBuilder::isValidComponentType()
+ * is the gate that enforces that, and it reads this map.
+ *
+ * Widening this to twelve would make 'serverplatform' an addable component in every build
+ * path at once. If you need all twelve tables -- releasing a whole server back to stock,
+ * or searching every shelf for a serial -- append 'serverplatforminventory' explicitly at
+ * the call site, the way releaseAllComponents() and searchBySerial() both do, so the
+ * widening stays visible where it happens.
+ *
+ * Consolidated 2026-09-16: this literal used to be written out three more times, in
+ * server_api.php, ServerBuilder.php and ComponentDataLoader.php.
+ *
+ * ORDER IS LOAD-BEARING, so chassis leads. ServerBuilder::summarizeInstalledComponents()
+ * renders its confirmation sentence by iterating this map, so the key order is the clause
+ * order the user reads ("1 chassis, 2 CPUs, ..."). That was ServerBuilder's order before
+ * the three literals were folded together and is kept exactly; the other two call sites
+ * only ever index by type and are indifferent to it. Membership is still derived from
+ * VALID_COMPONENT_TYPES so a thirteenth type cannot be forgotten here.
+ *
+ * @return array<string,string> type => table name
+ */
+function getBuildableComponentTables() {
+    static $map = null;
+    if ($map === null) {
+        $map = ['chassis' => 'chassisinventory'];
+        foreach (VALID_COMPONENT_TYPES as $type) {
+            if ($type === 'serverplatform' || $type === 'chassis') {
+                continue;
+            }
+            $map[$type] = $type . 'inventory';
+        }
+    }
+    return $map;
+}
+
+/**
  * The twelve component types, described once, for both stacks. (audit JSON-009)
  *
  * WHY

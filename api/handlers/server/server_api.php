@@ -31,20 +31,10 @@ try {
     send_json_response(0, 1, 500, "Server system unavailable");
 }
 
-// Shared component type to table name mapping
-$GLOBALS['_serverComponentTableMap'] = [
-    'cpu' => 'cpuinventory',
-    'motherboard' => 'motherboardinventory',
-    'ram' => 'raminventory',
-    'storage' => 'storageinventory',
-    'nic' => 'nicinventory',
-    'caddy' => 'caddyinventory',
-    'chassis' => 'chassisinventory',
-    'pciecard' => 'pciecardinventory',
-    'risercard' => 'risercardinventory',
-    'hbacard' => 'hbacardinventory',
-    'sfp' => 'sfpinventory'
-];
+// Shared component type to table name mapping -- the eleven buildable types, defined
+// once in BaseFunctions.php (required at the top of this file). The four helpers that
+// read it only ever index by type, so its key order does not matter here.
+$GLOBALS['_serverComponentTableMap'] = getBuildableComponentTables();
 
 // $action is ALWAYS the bare operation -- 'list-configs', never 'server-list-configs'.
 // api.php:185 is the only thing that includes this file, and it sets $operation from
@@ -2935,15 +2925,28 @@ function handleSearchBySerial($serverBuilder, $user) {
         send_json_response(0, 1, 400, "serial_number is required");
     }
 
+    // Every shelf, not just the buildable eleven. A compute platform is not an addable
+    // component, which is why it is absent from the shared map, but it IS a stocked unit
+    // bound to a server by ServerUUID -- so a search for the serial on a platform's own
+    // label used to come back empty. releaseAllComponents() widens the same way and says
+    // so; this is that widening made visible at the call site.
     $inventoryTables = $GLOBALS['_serverComponentTableMap'];
+    $inventoryTables['serverplatform'] = 'serverplatforminventory';
 
     try {
         $matchedConfigUuids = [];
 
         foreach ($inventoryTables as $type => $table) {
-            $stmt = $pdo->prepare("SELECT SerialNumber, ServerUUID FROM `$table` WHERE SerialNumber LIKE ? LIMIT 50");
-            $stmt->execute(['%' . $serial . '%']);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            try {
+                $stmt = $pdo->prepare("SELECT SerialNumber, ServerUUID FROM `$table` WHERE SerialNumber LIKE ? LIMIT 50");
+                $stmt->execute(['%' . $serial . '%']);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (PDOException $e) {
+                // A table that does not exist yet is skipped rather than fatal: code
+                // deploys ~20s after a save while seeders are run by hand.
+                error_log("search-by-serial: skipping table $table: " . $e->getMessage());
+                continue;
+            }
 
             foreach ($rows as $row) {
                 if (!empty($row['ServerUUID']) && $row['ServerUUID'] !== 'null') {

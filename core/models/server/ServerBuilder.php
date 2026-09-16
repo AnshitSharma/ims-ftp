@@ -39,19 +39,15 @@ class ServerBuilder {
 
     public function __construct($pdo) {
         $this->pdo = $pdo;
-        $this->componentTables = [
-            'chassis' => 'chassisinventory',
-            'cpu' => 'cpuinventory',
-            'ram' => 'raminventory',
-            'storage' => 'storageinventory',
-            'motherboard' => 'motherboardinventory',
-            'nic' => 'nicinventory',
-            'caddy' => 'caddyinventory',
-            'pciecard' => 'pciecardinventory',
-            'risercard' => 'risercardinventory',
-            'hbacard' => 'hbacardinventory',
-            'sfp' => 'sfpinventory'
-        ];
+        // The eleven buildable types, defined once in BaseFunctions.php. Key order is
+        // preserved there (chassis first) because summarizeInstalledComponents() renders
+        // its sentence by iterating this map. Guarded require: every path into this class
+        // arrives through api.php, which loads BaseFunctions first, so this normally does
+        // nothing -- it is here so a direct instantiation still resolves the function.
+        if (!function_exists('getBuildableComponentTables')) {
+            require_once __DIR__ . '/../../helpers/BaseFunctions.php';
+        }
+        $this->componentTables = getBuildableComponentTables();
 
         // Initialize DataExtractionUtilities for JSON spec lookups
         require_once __DIR__ . '/../shared/DataExtractionUtilities.php';

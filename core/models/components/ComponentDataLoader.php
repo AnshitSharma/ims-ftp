@@ -56,20 +56,13 @@ class ComponentDataLoader {
             return $this->jsonDataCache[$cacheKey];
         }
 
-        // Get from database
-        $tableMap = [
-            'cpu' => 'cpuinventory',
-            'motherboard' => 'motherboardinventory',
-            'ram' => 'raminventory',
-            'storage' => 'storageinventory',
-            'nic' => 'nicinventory',
-            'caddy' => 'caddyinventory',
-            'pciecard' => 'pciecardinventory',
-            'risercard' => 'risercardinventory',
-            'chassis' => 'chassisinventory',
-            'hbacard' => 'hbacardinventory',
-            'sfp' => 'sfpinventory'
-        ];
+        // Get from database. The eleven buildable types, defined once in BaseFunctions.php.
+        // This class is only ever reached from ComponentCompatibility's pairwise checks, so
+        // 'serverplatform' is correctly absent -- a platform is never one side of a pair.
+        if (!function_exists('getBuildableComponentTables')) {
+            require_once __DIR__ . '/../../helpers/BaseFunctions.php';
+        }
+        $tableMap = getBuildableComponentTables();
 
         $table = $tableMap[$type] ?? null;
         if (!$table) {
