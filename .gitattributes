@@ -1,4 +1,19 @@
 # The working copy of this repo IS what the SFTP watcher uploads to production.
-# Never let git rewrite line endings on checkout -- these files are pure CRLF and
-# a checkout that changed them would change the bytes running in production.
+# Never let git rewrite line endings on checkout -- a checkout that changed them
+# would change the bytes running in production.
+#
+# This repo is NOT uniformly CRLF, despite what this file used to claim. Endings
+# are mixed FILE BY FILE -- ServerBuilder.php is pure CRLF, server_api.php and
+# BaseFunctions.php are pure LF -- so any script that rewrites a file must detect
+# that file's own ending rather than assume the repo's.
+#
+# `-text` alone was not enough: core.autocrlf was still `true`, so 30 files had
+# been checked out converted to CRLF while their blobs stayed LF, and git's stat
+# cache reported the repo clean the whole time. autocrlf is now `false` locally in
+# all three repos and the index was renormalized to the working bytes on
+# 2026-09-16, so what is committed is finally what production runs. Do not set
+# autocrlf back to true here.
+#
+# Note that `git status` being clean does not by itself prove the index matches
+# the bytes on disk; `git hash-object <file>` against `git ls-files -s <file>` does.
 * -text
