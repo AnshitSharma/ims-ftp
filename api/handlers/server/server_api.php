@@ -46,123 +46,107 @@ $GLOBALS['_serverComponentTableMap'] = [
     'sfp' => 'sfpinventory'
 ];
 
-// Get action from global operation or POST data
+// $action is ALWAYS the bare operation -- 'list-configs', never 'server-list-configs'.
+// api.php:185 is the only thing that includes this file, and it sets $operation from
+// explode('-', $action, 2)[1] ?? '', which is never null, so the $_POST['action']
+// fallback below cannot be reached. Every case here therefore used to carry a second,
+// 'server-'-prefixed label that no request could ever match; all 22 were deleted
+// 2026-09-16 after proving it live: with only the prefixed label left in place,
+// server-list-configs fell through to the default and returned 400.
 global $operation;
 $action = $operation ?? $_POST['action'] ?? '';
 
 switch ($action) {
     case 'create-start':
-    case 'server-create-start':
         handleCreateStart($serverBuilder, $user);
         break;
     
     case 'add-component':
-    case 'server-add-component':
         handleAddComponent($serverBuilder, $user);
         break;
     
     case 'remove-component':
-    case 'server-remove-component':
         handleRemoveComponent($serverBuilder, $user);
         break;
 
     case 'replace-component':
-    case 'server-replace-component':
         handleReplaceComponent($serverBuilder, $user);
         break;
 
     case 'transition-status':
-    case 'server-transition-status':
         handleTransitionStatus($serverBuilder, $user);
         break;
 
     // Read-only companion to transition-status: the legal moves from where this
     // config actually stands, with this user's ACL verdict on each.
     case 'allowed-transitions':
-    case 'server-allowed-transitions':
         handleAllowedTransitions($user);
         break;
 
     case 'get-config':
-    case 'server-get-config':
         handleGetConfiguration($serverBuilder, $user);
         break;
     
     case 'list-configs':
-    case 'server-list-configs':
         handleListConfigurations($serverBuilder, $user);
         break;
 
     case 'import-virtual':
-    case 'server-import-virtual':
         handleImportVirtual($serverBuilder, $user);
         break;
 
     case 'finalize-config':
-    case 'server-finalize-config':
         handleFinalizeConfiguration($serverBuilder, $user);
         break;
     
     case 'delete-config':
-    case 'server-delete-config':
         handleDeleteConfiguration($serverBuilder, $user);
         break;
     
     case 'get-available-components':
-    case 'server-get-available-components':
         handleGetAvailableComponents($user);
         break;
     
     case 'validate-config':
-    case 'server-validate-config':
         handleValidateConfiguration($serverBuilder, $user);
         break;
     
     case 'get-compatible':
-    case 'server-get-compatible':
         handleGetCompatible($serverBuilder, $user);
         break;
 
     // Update configuration endpoint
     case 'update-config':
-    case 'server-update-config':
         handleUpdateConfiguration($serverBuilder, $user);
         break;
 
     // 2026-08-26: mapped since 2026-08-23 but never implemented. Sets the
     // location of an UNRACKED server and carries its components with it.
     case 'update-location':
-    case 'server-update-location':
         handleUpdateServerLocation($user);
         break;
 
     case 'movements':
-    case 'server-movements':
         handleServerMovements($user);
         break;
 
     case 'search-by-serial':
-    case 'server-search-by-serial':
         handleSearchBySerial($serverBuilder, $user);
         break;
 
     case 'get-logs':
-    case 'server-get-logs':
         handleGetServerLogs($serverBuilder, $user);
         break;
 
     case 'list-platforms':
-    case 'server-list-platforms':
         handleListPlatforms($user);
         break;
 
     case 'set-platform':
-    case 'server-set-platform':
         handleSetPlatform($serverBuilder, $user);
         break;
 
     case 'remove-platform':
-    case 'server-remove-platform':
         handleRemovePlatform($serverBuilder, $user);
         break;
 

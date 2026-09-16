@@ -220,5 +220,8 @@ same day), `prune_shadow_log` and `soak_status` (shadow-log maintenance and soak
 for soaks the owner waived). The three `server-debug-*` diagnostics and the orphan
 `debug-motherboard-nics` permission-map entry went with them. `reports/` keeps
 `perf-baseline.json`, `archive/` and the signoff documents; its ~425 generated run artifacts are
-gone. **None of these deletions reached production** — the deployment never deletes; see
-BACKLOG.md B-3.
+gone. **None of these deletions reached production** — but not for the reason BACKLOG.md B-3 gives.
+`watcher.autoDelete` is on and live (proven 2026-09-16), so a local delete does remove the
+remote file. These particular files survived because they are under `scripts/`, `reports/` and
+`tests/`, which the watcher never uploads in the first place. A deletion anywhere it *does*
+upload will be followed in production, so renames must be additive.
