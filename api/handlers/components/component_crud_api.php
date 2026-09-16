@@ -44,8 +44,15 @@ function handleComponentOperations($module, $operation, $user) {
             // Optional site filter — "show me everything at Jaipur". Ignored
             // (not rejected) while seeder 2026_08_26_003 has not been applied.
             $locationUuid = trim($_GET['location_uuid'] ?? $_POST['location_uuid'] ?? '');
+            // Optional inventory-status filter (0 failed, 1 available, 2 in_use).
+            // Server-side like search and location_uuid: the dashboard applied it
+            // in the browser over the loaded page only, so it both missed matching
+            // rows on every other page and reported a filtered count against an
+            // unfiltered total. An out-of-range value is ignored, not rejected.
+            $status = trim($_GET['status'] ?? $_POST['status'] ?? '');
+            $status = in_array($status, ['0', '1', '2'], true) ? $status : null;
 
-            $components = getComponentsByType($pdo, $module, $limit, $offset, $search, $locationUuid !== '' ? $locationUuid : null);
+            $components = getComponentsByType($pdo, $module, $limit, $offset, $search, $locationUuid !== '' ? $locationUuid : null, $status);
 
             // Resolve ModelName from JSON specs via UUID
             $componentService = null;
@@ -142,7 +149,7 @@ function handleComponentOperations($module, $operation, $user) {
             // total_count = all matching rows (not page size) so the dashboard's
             // pagination UI (built from total_count) reflects the real total
             $totalCount = ($limit !== null)
-                ? getComponentCountByType($pdo, $module, $search, $locationUuid !== '' ? $locationUuid : null)
+                ? getComponentCountByType($pdo, $module, $search, $locationUuid !== '' ? $locationUuid : null, $status)
                 : count($components);
 
             $responseData = [

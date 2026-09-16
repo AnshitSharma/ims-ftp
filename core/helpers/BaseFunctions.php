@@ -1358,7 +1358,7 @@ function getComponentFieldMap($type) {
  * Shared by getComponentsByType / getComponentCountByType so the row query
  * and the count query can never disagree on what matches.
  */
-function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo = null, $table = null) {
+function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo = null, $table = null, $status = null) {
     $clauses = [];
 
     if ($search !== '') {
@@ -1383,6 +1383,21 @@ function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo
         }
     }
 
+    // Filter by inventory status (0 failed, 1 available, 2 in_use). The
+    // dashboard used to apply this in the browser over the CURRENT PAGE ONLY,
+    // while search and location_uuid went server-side and pagination was
+    // server-side too. "Show Failed" on page 1 of 40 therefore searched 50 rows
+    // and the footer read "Showing 3 of 100" against a real total of 4,000.
+    // Applied here, it filters the whole table and the count query agrees with
+    // the row query by construction.
+    //
+    // Only the three defined values are honoured; anything else is IGNORED
+    // rather than matched, so a malformed param cannot silently empty the page.
+    if ($status !== null && $status !== '' && in_array((string)$status, ['0', '1', '2'], true)) {
+        $clauses[] = "Status = ?";
+        $params[] = (int)$status;
+    }
+
     return empty($clauses) ? '' : 'WHERE ' . implode(' AND ', $clauses);
 }
 
@@ -1390,12 +1405,12 @@ function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo
  * Get components by type.
  * $limit === null preserves the original return-everything behavior.
  */
-function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '', $locationUuid = null) {
+function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '', $locationUuid = null, $status = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status);
 
         $sql = "SELECT * FROM $tableName $where ORDER BY id DESC";
         if ($limit !== null) {
@@ -1416,12 +1431,12 @@ function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = 
 /**
  * Count components of a type matching an optional search term.
  */
-function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null) {
+function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null, $status = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status);
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM $tableName $where");
         $stmt->execute($params);
         return (int)$stmt->fetchColumn();

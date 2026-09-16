@@ -1337,205 +1337,25 @@ class ServerBuilder {
                 foreach ($allComponents as $component) {
                     $isCompatible = true;
                     $compatibilityReasons = [];
-                    $fullChassisResult = null;
                     $engineWarnings = [];
 
-                    if ($engineVerdicts !== null) {
-                        $verdictForSpec = $engineVerdicts[$component['UUID']] ?? null;
-                        if ($verdictForSpec === null) {
-                            $isCompatible = false;
-                            $compatibilityReasons = ['Compatibility could not be determined'];
-                        } else {
-                            $isCompatible = $verdictForSpec['compatible'];
-                            $compatibilityReasons = [$verdictForSpec['reason']];
-                            $engineWarnings = $verdictForSpec['warnings'];
-                        }
-                    }
-                    // If no existing components, all components are compatible
-                    elseif (empty($existingComponentsData)) {
-                        $isCompatible = true;
-                        $compatibilityReasons[] = "No existing components - all components available";
+                    // evaluateCandidatesWithEngine never returns null -- it has two
+                    // returns and both are arrays -- so this is the only branch that
+                    // ever ran. The legacy elseif/else chain that used to follow, and
+                    // the eight check*DecentralizedCompatibility() methods it called,
+                    // were a second compatibility implementation kept alive only by a
+                    // condition that could not be true. Deleted 2026-09-16 after
+                    // confirming verdict_source reads 'validation_engine' in production.
+                    $verdictForSpec = $engineVerdicts[$component['UUID']] ?? null;
+                    if ($verdictForSpec === null) {
+                        $isCompatible = false;
+                        $compatibilityReasons = ['Compatibility could not be determined'];
                     } else {
-                        // Component-type-specific compatibility checking
-                        if ($componentType === 'ram') {
-                            $ramCompatResult = $compatibility->checkRAMDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $ramCompatResult['compatible'];
-                            $compatibilityReasons = array_merge(
-                                $ramCompatResult['details'] ?? [],
-                                $ramCompatResult['warnings'] ?? [],
-                                $ramCompatResult['recommendations'] ?? []
-                            );
-                        } elseif ($componentType === 'cpu') {
-                            $cpuCompatResult = $compatibility->checkCPUDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $cpuCompatResult['compatible'];
-                            $compatibilityReasons = [$cpuCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                        } elseif ($componentType === 'motherboard') {
-                            $motherboardCompatResult = $compatibility->checkMotherboardDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $motherboardCompatResult['compatible'];
-                            $compatibilityReasons = [$motherboardCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                        } elseif ($componentType === 'storage') {
-                            $storageCompatResult = $compatibility->checkStorageDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $storageCompatResult['compatible'];
-                            $compatibilityReasons = [$storageCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                        } elseif ($componentType === 'chassis') {
-                            $chassisCompatResult = $compatibility->checkChassisDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $chassisCompatResult['compatible'];
-                            $compatibilityReasons = [$chassisCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                            $fullChassisResult = $chassisCompatResult;
-
-                            if (isset($chassisCompatResult['details'])) {
-                                $compatibilityReasons[] = 'DEBUG_DETAILS: ' . json_encode($chassisCompatResult['details']);
-                            }
-                        } elseif ($componentType === 'pciecard') {
-                            $pcieCompatResult = $compatibility->checkPCIeDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $pcieCompatResult['compatible'];
-                            $compatibilityReasons = [$pcieCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                        } elseif ($componentType === 'nic') {
-                            $nicCompatResult = $compatibility->checkPCIeDecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData, 'nic'
-                            );
-                            $isCompatible = $nicCompatResult['compatible'];
-                            $compatibilityReasons = [$nicCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-                        } elseif ($componentType === 'hbacard') {
-                            $hbaCompatResult = $compatibility->checkHBADecentralizedCompatibility(
-                                ['uuid' => $component['UUID']], $existingComponentsData
-                            );
-                            $isCompatible = $hbaCompatResult['compatible'];
-                            $compatibilityReasons = [$hbaCompatResult['compatibility_summary'] ?? 'Compatibility check completed'];
-
-                            // Add debug info for HBA samples
-                            // A-P2: full nested result arrays -- only retained on request.
-                            if ($includeDebug && !isset($debugInfo['hba_compat_samples'])) {
-                                $debugInfo['hba_compat_samples'] = [];
-                            }
-                            if ($includeDebug)
-                            if (count($debugInfo['hba_compat_samples']) < 3) {
-                                $debugInfo['hba_compat_samples'][] = [
-                                    'uuid' => $component['UUID'],
-                                    'serial' => $component['SerialNumber'],
-                                    'result' => $hbaCompatResult
-                                ];
-                            }
-                        } elseif ($componentType === 'sfp') {
-                            // SFP compatibility checking based on NIC port types
-                            $nicPortTypes = [];
-                            $nicDetails = [];
-                            foreach ($existingComponentsData as $existingComp) {
-                                if ($existingComp['type'] === 'nic') {
-                                    $nicSpecs = $componentDataService->getComponentSpecifications('nic', $existingComp['uuid']);
-                                    if ($nicSpecs && isset($nicSpecs['port_type'])) {
-                                        $portType = $nicSpecs['port_type'];
-                                        $nicPortTypes[] = $portType;
-                                        $nicDetails[] = [
-                                            'uuid' => $existingComp['uuid'],
-                                            'model' => $nicSpecs['model'] ?? 'Unknown',
-                                            'port_type' => $portType
-                                        ];
-                                    }
-                                }
-                            }
-
-                            if (empty($nicPortTypes)) {
-                                // No NICs in configuration - ALL SFPs are compatible
-                                $isCompatible = true;
-                                $compatibilityReasons = ['SFP can be added now - will be assigned when compatible NIC is added'];
-                            } else {
-                                // Get SFP type from specs
-                                $sfpSpecs = $componentDataService->getComponentSpecifications('sfp', $component['UUID']);
-                                $sfpType = $sfpSpecs['type'] ?? null;
-
-                                if (!$sfpType) {
-                                    $isCompatible = false;
-                                    $compatibilityReasons = ['SFP type information missing in specifications'];
-                                } else {
-                                    // Check if SFP type is compatible with at least one NIC port type
-                                    $isCompatible = false;
-                                    $compatibleWith = [];
-
-                                    foreach ($nicDetails as $nicDetail) {
-                                        if (NICPortTracker::isCompatible($nicDetail['port_type'], $sfpType)) {
-                                            $isCompatible = true;
-                                            $compatibleWith[] = "{$nicDetail['model']} ({$nicDetail['port_type']} port)";
-                                        }
-                                    }
-
-                                    if ($isCompatible) {
-                                        $compatibilityReasons = [
-                                            "SFP type '{$sfpType}' compatible with: " . implode(', ', $compatibleWith)
-                                        ];
-                                    } else {
-                                        $availablePortTypes = array_unique(array_column($nicDetails, 'port_type'));
-                                        $compatibilityReasons = [
-                                            "SFP type '{$sfpType}' incompatible with available NIC port types: " . implode(', ', $availablePortTypes)
-                                        ];
-                                    }
-                                }
-                            }
-                        } elseif ($componentType === 'caddy') {
-                            $newComponent = ['type' => 'caddy', 'uuid' => $component['UUID']];
-                            $compatResult = $compatibility->checkCaddyDecentralizedCompatibility($newComponent, $existingComponentsData);
-                            if (!$compatResult['compatible']) {
-                                $isCompatible = false;
-                                $compatibilityReasons = array_merge($compatibilityReasons, $compatResult['issues'] ?? []);
-                            } else {
-                                $compatibilityReasons[] = $compatResult['compatibility_summary'] ?? 'Compatible';
-                            }
-                        } else {
-                            // Check compatibility with each existing component for other types
-                            foreach ($existingComponentsData as $existingComp) {
-                                $newComponent = ['type' => $componentType, 'uuid' => $component['UUID']];
-                                $existingComponent = ['type' => $existingComp['type'], 'uuid' => $existingComp['uuid']];
-
-                                $compatResult = $compatibility->checkComponentPairCompatibility($newComponent, $existingComponent);
-
-                                if (!$compatResult['compatible']) {
-                                    $isCompatible = false;
-                                    $compatibilityReasons[] = "Incompatible with " . $existingComp['type'] . ": " .
-                                                             implode(', ', $compatResult['issues'] ?? []);
-                                    break;
-                                } else {
-                                    $compatibilityReasons[] = "Compatible with " . $existingComp['type'];
-                                }
-                            }
-                        }
+                        $isCompatible = $verdictForSpec['compatible'];
+                        $compatibilityReasons = [$verdictForSpec['reason']];
+                        $engineWarnings = $verdictForSpec['warnings'];
                     }
 
-                    // CPU-to-CPU SKU pairing. The generic pair check above resolves through
-                    // checkComponentPairCompatibility(), which has no cpu-cpu handler -- so an
-                    // unpairable second CPU would be offered here and only rejected later at
-                    // add-time. Decide it up front, using the same authority as the add path.
-                    // Skipped under the engine: CpuMixedModelsRule already decides pairing
-                    // there, and running this too would apply two authorities to one type.
-                    $cpuPairingWarnings = [];
-                    if ($engineVerdicts === null && $componentType === 'cpu' && $isCompatible) {
-                        $cpuMatcher = new CpuIdentityMatcher($this->dataUtils);
-                        foreach ($existingComponentsData as $existingComp) {
-                            if (($existingComp['type'] ?? '') !== 'cpu') {
-                                continue;
-                            }
-                            $pairing = $cpuMatcher->compareByUuid($existingComp['uuid'], $component['UUID']);
-                            if (!$pairing['compatible']) {
-                                $isCompatible = false;
-                                $compatibilityReasons[] = $pairing['error'];
-                                break;
-                            }
-                            if (!empty($pairing['warning'])) {
-                                $cpuPairingWarnings[] = $pairing['warning'];
-                            }
-                        }
-                    }
 
                     // Build component result
                     $componentStatus = (int)$component['Status'];
@@ -1555,13 +1375,6 @@ class ServerBuilder {
                         'is_compatible' => $isCompatible
                     ];
 
-                    // Add chassis-specific fields
-                    if ($componentType === 'chassis' && isset($fullChassisResult['score_breakdown'])) {
-                        $compatibleComponent['score_breakdown'] = $fullChassisResult['score_breakdown'];
-                    }
-                    if ($componentType === 'chassis' && isset($fullChassisResult['warnings']) && !empty($fullChassisResult['warnings'])) {
-                        $compatibleComponent['warnings'] = $fullChassisResult['warnings'];
-                    }
 
                     // Engine warnings (non-blocking failures new to this candidate) so the
                     // operator sees them before the add -- e.g. an uncaddied drive, which
@@ -1570,10 +1383,6 @@ class ServerBuilder {
                         $compatibleComponent['warnings'] = array_values(array_unique($engineWarnings));
                     }
 
-                    // SKU-variant pairing warnings, so the operator sees them before the add
-                    if ($componentType === 'cpu' && !empty($cpuPairingWarnings)) {
-                        $compatibleComponent['warnings'] = array_values(array_unique($cpuPairingWarnings));
-                    }
 
                     $compatibleComponents[] = $compatibleComponent;
                 }

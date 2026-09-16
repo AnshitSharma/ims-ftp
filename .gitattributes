@@ -1,0 +1,4 @@
+# The working copy of this repo IS what the SFTP watcher uploads to production.
+# Never let git rewrite line endings on checkout -- these files are pure CRLF and
+# a checkout that changed them would change the bytes running in production.
+* -text

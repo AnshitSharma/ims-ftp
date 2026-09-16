@@ -108,7 +108,43 @@ class BuildAffordances {
         $options['sfp'] = $this->sfpOption($networkConfig);
         $options['caddy'] = $this->caddyOption($components);
 
+        $this->stampRequired($options);
+
         return $options;
+    }
+
+    /**
+     * Stamp each option with whether finalize actually demands that type.
+     *
+     * The builder used to carry its own `required` literal in
+     * build-state.js's COMPONENT_CATALOG, and the two lists had drifted: the
+     * client marked `storage` and `nic` optional while SystemRequiredSetRule
+     * demands both. The visible consequence was a build the builder called
+     * complete and compatible that server-finalize-config then refused.
+     *
+     * The list is read from the rule itself rather than copied, so there is one
+     * owner. Loaded defensively and omitted entirely if the rule class cannot be
+     * reached: an absent `required` key means "no opinion", and BuildState then
+     * falls back to its own catalog exactly as it does for a backend that
+     * predates this field. Never guess here — a wrong `true` blocks a finalize
+     * the engine would have allowed.
+     */
+    private function stampRequired(array &$options) {
+        if (!class_exists('SystemRequiredSetRule')) {
+            $rulePath = __DIR__ . '/../validation/rules/SystemRequiredSetRule.php';
+            if (is_readable($rulePath)) {
+                require_once $rulePath;
+            }
+        }
+
+        if (!class_exists('SystemRequiredSetRule')) {
+            return;
+        }
+
+        $required = SystemRequiredSetRule::REQUIRED_TYPES;
+        foreach ($options as $type => $option) {
+            $options[$type]['required'] = in_array($type, $required, true);
+        }
     }
 
     /**
