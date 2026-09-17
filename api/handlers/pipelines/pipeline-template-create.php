@@ -22,11 +22,7 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    if (!$acl->hasPermission($user_id, 'pipeline.template_manage')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.template_manage required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.template_manage'], "Permission denied: pipeline.template_manage required");
 
     $stagesRaw = $_POST['stages'] ?? '[]';
     $stages = is_array($stagesRaw) ? $stagesRaw : json_decode($stagesRaw, true);

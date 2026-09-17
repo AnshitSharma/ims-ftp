@@ -8,14 +8,10 @@
  */
 
 require_once(__DIR__ . '/../../../core/models/pipelines/PipelineTemplateManager.php');
+require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 
 try {
-    if (!$acl->hasPermission($user_id, 'pipeline.template_view')
-        && !$acl->hasPermission($user_id, 'pipeline.create')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: cannot view pipeline types", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.template_view', 'pipeline.create'], "Permission denied: cannot view pipeline types");
 
     $truthy = ['1', 'true', 'yes'];
     $includeInactive = in_array(strtolower((string)($_POST['include_inactive'] ?? $_GET['include_inactive'] ?? '')), $truthy, true);

@@ -8,20 +8,12 @@
  */
 
 require_once(__DIR__ . '/../../../core/models/pipelines/PipelineTemplateManager.php');
+require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 
 try {
-    if (!$acl->hasPermission($user_id, 'pipeline.template_view')
-        && !$acl->hasPermission($user_id, 'pipeline.create')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: cannot view pipeline types", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.template_view', 'pipeline.create'], "Permission denied: cannot view pipeline types");
 
-    $templateId = $_POST['template_id'] ?? $_GET['template_id'] ?? null;
-    if (empty($templateId) || !is_numeric($templateId)) {
-        send_json_response(false, true, 400, "template_id is required and must be numeric", null);
-        exit;
-    }
+    $templateId = RequestHelper::requireNumeric('template_id', "template_id is required and must be numeric");
 
     $mgr = new PipelineTemplateManager($pdo);
     $template = $mgr->getTemplate((int)$templateId);

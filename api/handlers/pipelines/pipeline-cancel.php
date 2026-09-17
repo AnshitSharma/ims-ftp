@@ -15,16 +15,9 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    if (!$acl->hasPermission($user_id, 'pipeline.cancel') && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.cancel required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.cancel'], "Permission denied: pipeline.cancel required");
 
-    $pipelineId = $_POST['pipeline_id'] ?? $_POST['ticket_id'] ?? null;
-    if (empty($pipelineId) || !is_numeric($pipelineId)) {
-        send_json_response(false, true, 400, "pipeline_id is required and must be numeric", null);
-        exit;
-    }
+    $pipelineId = RequestHelper::pipelineId();
 
     $reason = $_POST['reason'] ?? null;
     if ($reason !== null && mb_strlen($reason) > 1000) {

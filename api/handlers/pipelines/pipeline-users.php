@@ -40,12 +40,10 @@
  * - limit  (optional): default 100, hard max 200
  */
 
+require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
+
 try {
-    if (!$acl->hasPermission($user_id, 'pipeline.create')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.create required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.create'], "Permission denied: pipeline.create required");
 
     $search = trim((string)($_POST['search'] ?? $_GET['search'] ?? ''));
     $limit  = (int)($_POST['limit'] ?? $_GET['limit'] ?? 100);

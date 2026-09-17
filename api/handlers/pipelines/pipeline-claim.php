@@ -15,18 +15,10 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    $canManage = $acl->hasPermission($user_id, 'pipeline.manage');
-    if (!$acl->hasPermission($user_id, 'pipeline.claim') && !$canManage) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.claim required", null);
-        exit;
-    }
+    $canManage = RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.claim'], "Permission denied: pipeline.claim required");
 
-    $pipelineId = $_POST['pipeline_id'] ?? $_POST['ticket_id'] ?? null;
-    $stageId = $_POST['stage_progress_id'] ?? null;
-    if (empty($pipelineId) || !is_numeric($pipelineId) || empty($stageId) || !is_numeric($stageId)) {
-        send_json_response(false, true, 400, "pipeline_id and stage_progress_id are required and must be numeric", null);
-        exit;
-    }
+    $pipelineId = RequestHelper::pipelineId("pipeline_id and stage_progress_id are required and must be numeric");
+    $stageId = RequestHelper::requireNumeric('stage_progress_id', "pipeline_id and stage_progress_id are required and must be numeric");
 
     $mgr = new PipelineManager($pdo);
     $result = $mgr->claimStage((int)$pipelineId, (int)$stageId, $user_id, $canManage);

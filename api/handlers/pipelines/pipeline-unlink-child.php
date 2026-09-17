@@ -27,16 +27,12 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    if (!$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.manage required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, [], "Permission denied: pipeline.manage required");
 
-    $childId = $_POST['child_id'] ?? $_POST['pipeline_id'] ?? $_POST['ticket_id'] ?? null;
-    if (empty($childId) || !is_numeric($childId)) {
-        send_json_response(false, true, 400, "child_id is required and must be numeric", null);
-        exit;
-    }
+    // child_id first, then the pipeline_id / ticket_id aliases.
+    $childId = isset($_POST['child_id'])
+        ? RequestHelper::requireNumeric('child_id', "child_id is required and must be numeric")
+        : RequestHelper::pipelineId("child_id is required and must be numeric");
 
     $mgr = new PipelineManager($pdo);
     $result = $mgr->unlinkChild((int)$childId, $user_id);

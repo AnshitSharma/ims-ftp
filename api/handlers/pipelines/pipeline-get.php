@@ -10,13 +10,10 @@
  */
 
 require_once(__DIR__ . '/../../../core/models/pipelines/PipelineManager.php');
+require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 
 try {
-    $pipelineId = $_POST['pipeline_id'] ?? $_GET['pipeline_id'] ?? $_POST['ticket_id'] ?? $_GET['ticket_id'] ?? null;
-    if (empty($pipelineId) || !is_numeric($pipelineId)) {
-        send_json_response(false, true, 400, "pipeline_id is required and must be numeric", null);
-        exit;
-    }
+    $pipelineId = RequestHelper::pipelineId();
 
     $canViewAll = $acl->hasPermission($user_id, 'pipeline.view_all');
     $canManage = $acl->hasPermission($user_id, 'pipeline.manage');

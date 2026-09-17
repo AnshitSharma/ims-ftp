@@ -57,13 +57,10 @@
  */
 
 require_once(__DIR__ . '/../../../core/models/location/LocationResolver.php');
+require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 
 try {
-    if (!$acl->hasPermission($user_id, 'pipeline.create')
-        && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.create required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.create'], "Permission denied: pipeline.create required");
 
     $configUuid    = trim((string)($_POST['config_uuid']    ?? $_GET['config_uuid']    ?? ''));
     $componentType = strtolower(trim((string)($_POST['component_type'] ?? $_GET['component_type'] ?? '')));

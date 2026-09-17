@@ -26,11 +26,7 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    $canManage = $acl->hasPermission($user_id, 'pipeline.manage');
-    if (!$acl->hasPermission($user_id, 'pipeline.create') && !$canManage) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.create required", null);
-        exit;
-    }
+    $canManage = RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.create'], "Permission denied: pipeline.create required");
 
     $templateId = $_POST['pipeline_template_id'] ?? null;
     if (empty($templateId) || !is_numeric($templateId)) {

@@ -16,20 +16,12 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    if (!$acl->hasPermission($user_id, 'pipeline.reassign') && !$acl->hasPermission($user_id, 'pipeline.manage')) {
-        send_json_response(false, true, 403, "Permission denied: pipeline.reassign required", null);
-        exit;
-    }
+    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.reassign'], "Permission denied: pipeline.reassign required");
 
-    $pipelineId = $_POST['pipeline_id'] ?? $_POST['ticket_id'] ?? null;
-    $stageId = $_POST['stage_progress_id'] ?? null;
+    $pipelineId = RequestHelper::pipelineId("pipeline_id and stage_progress_id are required and must be numeric");
+    $stageId = RequestHelper::requireNumeric('stage_progress_id', "pipeline_id and stage_progress_id are required and must be numeric");
     $assigneeType = $_POST['assignee_type'] ?? null;
     $assigneeId = $_POST['assignee_id'] ?? null;
-
-    if (empty($pipelineId) || !is_numeric($pipelineId) || empty($stageId) || !is_numeric($stageId)) {
-        send_json_response(false, true, 400, "pipeline_id and stage_progress_id are required and must be numeric", null);
-        exit;
-    }
 
     $mgr = new PipelineManager($pdo);
     $result = $mgr->reassignStage((int)$pipelineId, (int)$stageId, $assigneeType, $assigneeId, $user_id);
