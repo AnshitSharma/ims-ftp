@@ -1759,30 +1759,45 @@ function handleListConfigurations($serverBuilder, $user) {
         $stmt->execute();
         $configurations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // U-D.3b: the list view's per-card "N component types" counts rows, the
+        // same store server-get-config reads. It used to count the JSON columns,
+        // which is why a build could advertise more types on the card than its
+        // own detail page listed.
+        //
+        // PERF-N1: this used to call ConfigReadRouter::components() once PER
+        // configuration just to count distinct component_type -- one query per
+        // row to produce one integer, the same grouped-IN pattern the rack
+        // placement lookup right below already uses. Collapsed into a single
+        // grouped query over config_components, matching liveRows()'s own
+        // filter (removed_at IS NULL) and the minimalOutput filter
+        // ConfigReadRouter applies (a row needs a real spec_uuid to count).
+        $componentTypesByConfig = [];
+        if (!empty($configurations)) {
+            $configUuidsForTypes = array_column($configurations, 'config_uuid');
+            $inClause = implode(',', array_fill(0, count($configUuidsForTypes), '?'));
+            try {
+                $typesStmt = $pdo->prepare("
+                    SELECT DISTINCT config_uuid, component_type
+                    FROM config_components
+                    WHERE removed_at IS NULL
+                      AND spec_uuid IS NOT NULL AND spec_uuid <> ''
+                      AND config_uuid IN ($inClause)
+                ");
+                $typesStmt->execute($configUuidsForTypes);
+                foreach ($typesStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $componentTypesByConfig[$row['config_uuid']][$row['component_type']] = true;
+                }
+            } catch (Throwable $typesError) {
+                error_log("Component type count lookup for configuration list failed: " . $typesError->getMessage());
+            }
+        }
+
         // Add configuration status text and component count for each configuration
         foreach ($configurations as &$config) {
             $config['configuration_status_text'] = getConfigurationStatusText($config['configuration_status']);
             $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0);
             $config['is_sandbox'] = (bool)($config['is_sandbox'] ?? 0);
-
-            try {
-                // U-D.3b: the list view's per-card "N component types" now counts rows,
-                // the same store server-get-config reads. It used to count the JSON
-                // columns, which is why a build could advertise more types on the card
-                // than its own detail page listed.
-                $components = ConfigReadRouter::components($serverBuilder, $pdo, is_array($config) ? $config : [], true);
-            } catch (Throwable $parseError) {
-                error_log("Error parsing configuration components for list view ({$config['config_uuid']}): " . $parseError->getMessage());
-                $components = [];
-            }
-
-            $componentTypes = [];
-            foreach ($components as $component) {
-                if (!empty($component['component_type'])) {
-                    $componentTypes[$component['component_type']] = true;
-                }
-            }
-            $config['total_component_types'] = count($componentTypes);
+            $config['total_component_types'] = count($componentTypesByConfig[$config['config_uuid']] ?? []);
         }
         unset($config);
 

@@ -22,6 +22,14 @@ engine flags). Never print its values.
   both gates.
 - ACL reads the `permissions` table only. `acl_permissions` was dropped in seeder
   `2026_06_11_002` — never reference it.
+- **`GrantPolicy`** (`core/helpers/`) is the privilege-escalation gate on top of `hasPermission()`
+  — added 2026-09-13 because holding `users.edit`/`users.manage_roles` was enough to mint a
+  super_admin, take over an admin account by changing its email, or strip a user's last role.
+  `assertMayAssignRole()` and friends require the ACTOR to already hold what they are handing
+  out (super_admin grantable only by super_admin; admin only by admin/super_admin) — a no-op for
+  admin/super_admin themselves, since `hasPermission()` bypasses everything for them, so this
+  bites only the roles that could otherwise escalate. Every user-write endpoint that touches a
+  role or a security-sensitive field should call through it.
 
 ## Two ways in, one session
 
@@ -76,9 +84,29 @@ finalize-config (locks the config, marks components in_use). `ServerBuilder.php`
 having never had a single caller; the reverse lookup it was meant to provide now lives, in the
 one place that needed it, inside `deleteComponent()` — see below.
 
+**`ServerCreationService`** (`core/models/server/`) is the single path all three creation
+routes (direct Create Server, import-virtual, an approved `server.config.create` request) go
+through — decided 2026-09-13 after the three disagreed about serial number, location and
+placement. A physical build is refused without site, rack and U (a virtual build is exempt in
+full); creation, location and placement commit in one transaction, and the destination rack is
+locked `FOR UPDATE` before its occupancy is read.
+
+**`core/models/state/` — `StateGuard` / `StateMachine` / `StatusMap`.** `status_v2` is a real,
+deliberate state-machine lifecycle (`draft`/`building`/`validating`/`validated`/`finalized`/
+`deployed`/`maintenance`/`retired`), not a stalled migration off the legacy `configuration_status`
+int — `StatusMap::CONFIG_V2_TO_LEGACY` is an intentionally LOSSY many-to-one map back to that
+column (e.g. `building`/`validating` both read as legacy `2`; `deployed`/`maintenance`/`retired`
+all read as legacy `3`), kept for whatever still reads the legacy int. `StateGuard::checkMutation()`
+is the mutation gate: a config may be added-to/removed-from only while `status_v2` is one of
+`draft`/`building`/`maintenance`; NULL `status_v2` (not yet backfilled) falls back to the legacy
+rule (blocked only at `configuration_status === 3`). Do not treat the legacy column as dead code
+or a delete target without checking every reader first.
+
 **Deleting an inventory unit is guarded, and the guard is load-bearing.**
-`BaseFunctions::deleteComponent()` (the single choke point for both `{type}-delete` and
-`{type}-bulk-delete`) refuses with a 409 naming the configuration when a live
+`deleteComponent()` (`core/helpers/Inventory.php` since the 2026-09-17 `BaseFunctions.php`
+split — same global function, same call sites, just relocated) is the single choke point for
+both `{type}-delete` and `{type}-bulk-delete`; it refuses with a 409 naming the configuration
+when a live
 `config_components` row claims the unit, and fail-closed if that query cannot be answered.
 Before 2026-08-30 it was a bare `DELETE` — which is how configuration `1f61541b` came to
 display an SFP whose inventory row no longer exists (BACKLOG §B-16). The claim is matched on
@@ -133,8 +161,32 @@ Hardware specs are JSON in `ims-data/`; the DB holds inventory rows. Load them t
 `ComponentSpecPaths.php` resolves paths via `IMS_DATA_PATH`, else by walking relative paths to
 `../ims-data/`, so watch `../` depth if files move.
 
+**`database/spec_build.php`** projects every `ims-data/*.json` model into `component_models` —
+the table that gives the catalogue an index SQL can use. Its own header says **run it after
+every `ims-data` upload**; nothing else in the tree enforces that, so a spec change that isn't
+followed by this script leaves `component_models` stale (readers fall back to the files, which
+are still correct — see `SpecRepository` below — but any *SQL* consumer of `component_models`
+sees the old data until the script runs).
+
+**`SpecRepository`** (`core/models/components/`) is a landed-but-not-yet-wired single resolver
+meant to replace `ComponentDataService`, `DataExtractionUtilities`, `ComponentDataLoader` and
+`ChassisManager` (`PlatformSpecIndex` stays a first-class dependency of it, not something it
+replaces). `find()`/`allOfType()`/`exists()` read `component_models` when spec_build has run,
+falling back to the files otherwise — never hard-fails on the table's absence. Re-pointing an
+existing resolver at it is a **separate, single-purpose change per adapter**, gated on an
+equivalence test proving zero shape difference first (`tests/spec_repository_equivalence.php`
+for `ComponentDataService`; write the analogous test for whichever resolver is next) — the
+docblock is explicit that landing the repository and moving a live call site onto it must never
+be the same deploy, because there is no safe intermediate state once a resolver is repointed.
+
 ## Gotchas
 
+- `core/helpers/BaseFunctions.php` is a thin shim as of 2026-09-17 — it only runs the one-time
+  JWT/permission-cache/`VALID_COMPONENT_TYPES` init, then `require_once`s `Acl.php`,
+  `Response.php`, `Dashboard.php`, `Inventory.php`, `Users.php`, `ActivityLog.php` (same
+  directory). Every function that used to live in one 2,677-line file is unchanged and still
+  global — no call site anywhere needed to change — but if you're hunting for a function's
+  *definition*, it's in one of the six, not in `BaseFunctions.php` itself.
 - Types are lowercase (`cpu`); tables carry the suffix (`cpuinventory`).
 - `risercard` split out of `pciecard` on 2026-08-14 — risers occupy riser bays and *provide*
   pcie_slots; plain PCIe cards consume them.

@@ -9,6 +9,7 @@
 
 require_once __DIR__ . '/ComponentSpecPaths.php';
 require_once __DIR__ . '/PlatformSpecIndex.php';
+require_once __DIR__ . '/SpecRepository.php';
 
 class ComponentDataLoader {
     private $pdo;
@@ -251,112 +252,34 @@ class ComponentDataLoader {
     }
 
     /**
-     * Load JSON data for component with enhanced debugging
+     * Load JSON data for a component, by type and UUID.
+     *
+     * Delegates to SpecRepository as of 2026-09-17 (audit Phase 4 / roadmap item 17 -- the
+     * first of four planned adapters; ChassisManager, ComponentDataService and
+     * DataExtractionUtilities are unwired, separate changes). This replaces what used to be
+     * this class's own file walk (caddy's {"caddies":[...]}, chassis's manufacturers -> series
+     * -> models, standard brand -> models, series-based brand -> series -> models, and the
+     * legacy families -> port_configurations shape) plus its own PlatformSpecIndex check --
+     * SpecRepository checks PlatformSpecIndex first internally, so nothing here needs to.
+     *
+     * NOT a byte-identical swap: tests/component_data_loader_equivalence.php shows
+     * SpecRepository's shape is a SUPERSET (it adds uuid/brand/series/family/
+     * component_subtype -- manufacturer/series for chassis, component_type for caddy -- on
+     * top of the same spec body; enrichModel() used to add only component_subtype/brand, and
+     * only for the two "models" structures, never for chassis/caddy/legacy-NIC). Verified
+     * safe despite the non-zero diff by tracing every consumer of this method's return value:
+     * getComponentData() merges it into $componentData, which ComponentCompatibility hands
+     * only to ComponentDataExtractor's extractXxx() methods (extractSocketType, extractTDP,
+     * extractSupportedMemoryTypes, ...) -- each reads a fixed, unrelated key name (socket,
+     * tdp, memory_types, ...), never iterates the array generically, never compares it whole.
+     * None of the added keys can be read by anything downstream of this method.
+     *
      * @param string $type Component type
      * @param string $uuid Component UUID
      * @return array|null Component data from JSON
      */
     public function loadJSONData($type, $uuid) {
-        // Platform-owned board/chassis resolve through the shared index (see PlatformSpecIndex).
-        $platformSpec = PlatformSpecIndex::find($type, $uuid);
-        if ($platformSpec !== null) {
-            return $platformSpec;
-        }
-
-        $jsonPaths = $this->getJSONFilePaths();
-
-        if (!isset($jsonPaths[$type])) {
-            return null;
-        }
-
-        $filePath = $jsonPaths[$type];
-        if (!file_exists($filePath)) {
-            return null;
-        }
-
-        try {
-            $jsonContent = file_get_contents($filePath);
-            if ($jsonContent === false) {
-                return null;
-            }
-
-            $jsonData = json_decode($jsonContent, true);
-            if (!$jsonData) {
-                return null;
-            }
-        } catch (Exception $e) {
-            error_log("Error loading JSON for type $type: " . $e->getMessage());
-            return null;
-        }
-
-        // Caddy: {"caddies": [...]}
-        if ($type === 'caddy' && isset($jsonData['caddies']) && is_array($jsonData['caddies'])) {
-            foreach ($jsonData['caddies'] as $caddy) {
-                if (($caddy['UUID'] ?? $caddy['uuid'] ?? '') === $uuid) {
-                    return $caddy;
-                }
-            }
-            return null;
-        }
-
-        foreach ($jsonData as $brandData) {
-            // Chassis: manufacturers → series → models
-            if ($type === 'chassis' && isset($brandData['manufacturer'])) {
-                foreach ($brandData['series'] ?? [] as $series) {
-                    foreach ($series['models'] ?? [] as $model) {
-                        if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
-                            return $model;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // Standard: brand → models
-            if (isset($brandData['models']) && is_array($brandData['models'])) {
-                foreach ($brandData['models'] as $model) {
-                    if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
-                        return $this->enrichModel($model, $brandData);
-                    }
-                }
-            }
-            // Series-based: brand → series → models (NIC, etc.)
-            elseif (isset($brandData['series']) && is_array($brandData['series'])) {
-                foreach ($brandData['series'] as $series) {
-                    if (isset($series['models']) && is_array($series['models'])) {
-                        foreach ($series['models'] as $model) {
-                            if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
-                                return $this->enrichModel($model, $brandData);
-                            }
-                        }
-                    }
-                    // Legacy: families → port_configurations
-                    elseif (isset($series['families'])) {
-                        foreach ($series['families'] as $family) {
-                            foreach ($family['port_configurations'] ?? [] as $model) {
-                                if (($model['UUID'] ?? $model['uuid'] ?? '') === $uuid) {
-                                    return $model;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Merge parent-level fields (component_subtype, brand) into model data
-     */
-    private function enrichModel($model, $parentData) {
-        foreach (['component_subtype', 'brand'] as $field) {
-            if (isset($parentData[$field])) {
-                $model[$field] = $parentData[$field];
-            }
-        }
-        return $model;
+        return SpecRepository::getInstance()->find($type, $uuid);
     }
 
     /**
