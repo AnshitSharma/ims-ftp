@@ -1869,6 +1869,147 @@ function handleListConfigurations($serverBuilder, $user) {
             unset($config);
         }
 
+        // Storage and memory summaries for the server cards. The list rows themselves
+        // carry neither: a card that wants "2x 1.92TB NVMe" and "128/512GB" has to be
+        // told the numbers, and asking the detail endpoint once per row to get them is
+        // not an option. One grouped query over config_components -- the same
+        // removed_at IS NULL / non-empty spec_uuid filter the type count above uses --
+        // plus SpecRepository, whose uuid index parses each spec file ONCE for the whole
+        // page rather than once per server.
+        //
+        // NUMBERS ONLY. Every string the card prints ("1.92TB", "128/512GB", "NVMe") is
+        // formatted in the frontend, where the design lives.
+        //
+        // Guarded like the rack placement lookup above it: this is decoration, and an
+        // unreadable spec file must not take the Servers list down. Absent keys render
+        // as an em dash, which is also what the frontend shows during the ~20s the two
+        // watchers can be out of step.
+        if (!empty($configurations)) {
+            try {
+                $specRepoPath = __DIR__ . '/../../../core/models/components/SpecRepository.php';
+                if (!class_exists('SpecRepository') && is_readable($specRepoPath)) {
+                    require_once $specRepoPath;
+                }
+                if (!class_exists('SpecRepository')) {
+                    throw new RuntimeException('SpecRepository unavailable');
+                }
+                $specRepo = SpecRepository::getInstance();
+
+                // config_components stores one row per physical unit and has no quantity
+                // column (ConfigReadRouter synthesises quantity => 1), so COUNT(*) is the
+                // drive / module count.
+                $configUuidsForSpecs = array_column($configurations, 'config_uuid');
+                $inClause = implode(',', array_fill(0, count($configUuidsForSpecs), '?'));
+                $specStmt = $pdo->prepare("
+                    SELECT config_uuid, component_type, spec_uuid, COUNT(*) AS units
+                    FROM config_components
+                    WHERE removed_at IS NULL
+                      AND spec_uuid IS NOT NULL AND spec_uuid <> ''
+                      AND component_type IN ('storage', 'ram')
+                      AND config_uuid IN ($inClause)
+                    GROUP BY config_uuid, component_type, spec_uuid
+                ");
+                $specStmt->execute($configUuidsForSpecs);
+
+                $storageByConfig = [];
+                $memoryByConfig = [];
+                foreach ($specStmt->fetchAll(PDO::FETCH_ASSOC) as $specRow) {
+                    $configUuid = $specRow['config_uuid'];
+                    $units = max(1, (int)$specRow['units']);
+                    $spec = $specRepo->find($specRow['component_type'], (string)$specRow['spec_uuid']);
+                    if (!is_array($spec)) {
+                        continue;
+                    }
+
+                    if ($specRow['component_type'] === 'storage') {
+                        $capacityGb = (int)($spec['capacity_GB'] ?? 0);
+                        // On the backplane == not an M.2 stick. Every 2.5-inch,
+                        // 2.5-inch U.2/U.3 and 3.5-inch drive sits in a bay; M.2 is
+                        // internal. A spec-only test on purpose: the real connection
+                        // validator is far too heavy to run per drive in a list.
+                        $formFactor = (string)($spec['form_factor'] ?? '');
+                        $bay = stripos($formFactor, 'M.2') !== 0;
+                        $kind = storageKindFromSpec($spec);
+                        $groupKey = $capacityGb . '|' . $kind . '|' . ($bay ? '1' : '0');
+                        if (!isset($storageByConfig[$configUuid][$groupKey])) {
+                            $storageByConfig[$configUuid][$groupKey] = [
+                                'count' => 0,
+                                'capacity_gb' => $capacityGb,
+                                'kind' => $kind,
+                                'bay' => $bay,
+                            ];
+                        }
+                        $storageByConfig[$configUuid][$groupKey]['count'] += $units;
+                        continue;
+                    }
+
+                    $moduleGb = (int)($spec['capacity_GB'] ?? 0);
+                    if (!isset($memoryByConfig[$configUuid])) {
+                        $memoryByConfig[$configUuid] = ['installed_gb' => 0, 'modules' => 0, 'type' => null];
+                    }
+                    $memoryByConfig[$configUuid]['installed_gb'] += $moduleGb * $units;
+                    $memoryByConfig[$configUuid]['modules'] += $units;
+                    if ($memoryByConfig[$configUuid]['type'] === null && !empty($spec['memory_type'])) {
+                        $memoryByConfig[$configUuid]['type'] = (string)$spec['memory_type'];
+                    }
+                }
+
+                foreach ($configurations as &$config) {
+                    $configUuid = $config['config_uuid'];
+
+                    // The board names itself and states the memory ceiling. Three of the
+                    // 26 boards in ims-data carry no memory.max_capacity_TB -- those get
+                    // a null max and the card prints the installed figure alone.
+                    $boardSpec = !empty($config['motherboard_uuid'])
+                        ? $specRepo->find('motherboard', (string)$config['motherboard_uuid'])
+                        : null;
+                    $config['motherboard_name'] = is_array($boardSpec)
+                        ? specDisplayName($boardSpec)
+                        : null;
+
+                    $groups = array_values($storageByConfig[$configUuid] ?? []);
+                    if (!empty($groups)) {
+                        // Backplane first, then the biggest group, then the biggest
+                        // drive: the card prints the first group and appends a "+" when
+                        // there is more than one.
+                        usort($groups, function ($a, $b) {
+                            if ($a['bay'] !== $b['bay']) {
+                                return $a['bay'] ? -1 : 1;
+                            }
+                            if ($a['count'] !== $b['count']) {
+                                return $b['count'] <=> $a['count'];
+                            }
+                            return $b['capacity_gb'] <=> $a['capacity_gb'];
+                        });
+                        $config['storage_summary'] = [
+                            'groups' => $groups,
+                            'total_drives' => array_sum(array_column($groups, 'count')),
+                        ];
+                    } else {
+                        $config['storage_summary'] = null;
+                    }
+
+                    $memory = $memoryByConfig[$configUuid] ?? null;
+                    if ($memory !== null) {
+                        $maxTb = is_array($boardSpec)
+                            ? ($boardSpec['memory']['max_capacity_TB'] ?? null)
+                            : null;
+                        $config['memory_summary'] = [
+                            'installed_gb' => (int)$memory['installed_gb'],
+                            'max_gb' => is_numeric($maxTb) ? (int)round((float)$maxTb * 1024) : null,
+                            'modules' => (int)$memory['modules'],
+                            'type' => $memory['type'],
+                        ];
+                    } else {
+                        $config['memory_summary'] = null;
+                    }
+                }
+                unset($config);
+            } catch (Throwable $summaryError) {
+                error_log("Storage/memory summary for configuration list failed: " . $summaryError->getMessage());
+            }
+        }
+
         // Get total count
         $countStmt = $pdo->prepare("
             SELECT COUNT(*) as total
@@ -1896,6 +2037,52 @@ function handleListConfigurations($serverBuilder, $user) {
         error_log("Stack trace: " . $e->getTraceAsString());
         send_json_response(0, 1, 500, "Failed to list configurations");
     }
+}
+
+/**
+ * The bus a drive speaks, as one word: NVMe, SAS, SATA -- or null when the spec
+ * says neither.
+ *
+ * Read off subtype AND interface together because neither alone is enough: subtype
+ * "U.2 SSD" names no bus, and interface "PCIe NVMe 3.0" spells NVMe in the other
+ * order from "NVMe PCIe 4.0". NVMe is tested first, since "M.2 NVMe SSD" would
+ * otherwise never reach it past a SATA-looking sibling.
+ *
+ * Used by the Servers list card summary only -- nothing validates on this.
+ */
+function storageKindFromSpec(array $spec) {
+    $haystack = strtolower(trim(
+        (string)($spec['subtype'] ?? '') . ' ' . (string)($spec['interface'] ?? '')
+    ));
+    if ($haystack === '') {
+        return null;
+    }
+    if (strpos($haystack, 'nvme') !== false || strpos($haystack, 'pcie') !== false) {
+        return 'NVMe';
+    }
+    if (strpos($haystack, 'sas') !== false) {
+        return 'SAS';
+    }
+    if (strpos($haystack, 'sata') !== false) {
+        return 'SATA';
+    }
+    return null;
+}
+
+/**
+ * "MSI B550M PRO-VDH WIFI" -- the brand SpecRepository::enrich() attaches, plus the
+ * model, without repeating a brand the model already carries.
+ */
+function specDisplayName(array $spec) {
+    $brand = trim((string)($spec['brand'] ?? $spec['manufacturer'] ?? ''));
+    $model = trim((string)($spec['model'] ?? ''));
+    if ($model === '') {
+        return $brand !== '' ? $brand : null;
+    }
+    if ($brand === '' || stripos($model, $brand) === 0) {
+        return $model;
+    }
+    return $brand . ' ' . $model;
 }
 
 /**
