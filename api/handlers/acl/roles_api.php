@@ -23,7 +23,7 @@ $operation = $parts[1] ?? 'list';
 
 switch ($operation) {
     case 'list':
-    case 'get_all':
+    // E.3: the `get_all` alias of `list` is removed — the frontend calls roles-list.
         // Require permission to view roles
         if (!hasPermission($pdo, 'roles.view', $user['id'])) {
             send_json_response(0, 1, 403, "You don't have permission to view roles");
@@ -283,7 +283,7 @@ switch ($operation) {
         }
         break;
         
-    case 'assign_user':
+    // E.3: the `assign_user` alias of `assign` is removed — the frontend calls roles-assign.
     case 'assign':
         // Require permission to manage user roles
         if (!hasPermission($pdo, 'users.manage_roles', $user['id'])) {
@@ -316,7 +316,7 @@ switch ($operation) {
         break;
         
     case 'remove_user':
-    case 'remove':
+    // E.3: the `remove` alias of `remove_user` is removed — the frontend calls roles-remove_user.
         // Require permission to manage user roles
         if (!hasPermission($pdo, 'users.manage_roles', $user['id'])) {
             send_json_response(0, 1, 403, "You don't have permission to remove roles from users");

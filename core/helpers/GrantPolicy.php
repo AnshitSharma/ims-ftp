@@ -104,10 +104,15 @@ final class GrantPolicy
     /**
      * Refuse to remove a user's last role.
      *
-     * roles-remove_user already had this check; acl-revoke_role did not, and
-     * revokeRoleFromUser() deletes unconditionally. A user with no roles is not
-     * "restricted" — they hold no grants at all, cannot be repaired through the
-     * UI's role editor, and look identical to a misconfigured account.
+     * roles-remove_user already had this check; acl-revoke_role did not, which is
+     * why this guard was extracted here so both could share it. acl-revoke_role
+     * and the global revokeRoleFromUser() it called are both gone as of
+     * 2026-09-21 (E.3) — the live revoker is ACL::removeRole(), reached only
+     * through roles-remove_user, which calls this first.
+     *
+     * A user with no roles is not "restricted" — they hold no grants at all,
+     * cannot be repaired through the UI's role editor, and look identical to a
+     * misconfigured account.
      */
     public static function assertNotLastRole($pdo, $userId)
     {

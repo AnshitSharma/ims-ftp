@@ -5,8 +5,11 @@
  * Authentication, session, and permission/role functions. Mechanical split: function bodies
  * are unchanged, still global (no namespace, no class wrapping) — every call site anywhere in
  * the codebase keeps calling these by the same bare name. Loaded via BaseFunctions.php's
- * require_once chain, which also carries the JWTHelper/ACL/TemporaryAccessManager requires and
- * the request-scoped $GLOBALS['_permission_cache'] these functions read and write.
+ * require_once chain, which also carries the JWTHelper and ACL requires and the
+ * request-scoped $GLOBALS['_permission_cache'] these functions read and write.
+ *
+ * (That chain used to carry TemporaryAccessManager too. The temporary/scoped-access
+ * subsystem was retired 2026-09-21 — see Phase D of the backend audit.)
  */
 
 /**
@@ -319,33 +322,6 @@ function hasPermission($pdo, $permission, $userId) {
 }
 
 /**
- * Read the server configuration UUID this request is about, if any.
- *
- * Handlers accept it from POST or GET under a couple of spellings; this mirrors
- * what they do so the permission layer looks at the same value they will.
- * Returns null when the operation names no configuration (server-create-start,
- * server-list-configs, ...), which is exactly when a scoped grant must NOT help.
- */
-function requestedConfigUuid() {
-    $candidates = [
-        $_POST['config_uuid'] ?? null,
-        $_GET['config_uuid'] ?? null,
-        $_POST['configUuid'] ?? null,
-        $_GET['configUuid'] ?? null,
-        $_POST['server_uuid'] ?? null,
-        $_GET['server_uuid'] ?? null,
-    ];
-
-    foreach ($candidates as $value) {
-        if (is_string($value) && trim($value) !== '') {
-            return trim($value);
-        }
-    }
-
-    return null;
-}
-
-/**
  * Can this user act on THIS configuration?
  *
  * The idiom this replaces was copied ~10 times through server_api.php:
@@ -512,26 +488,6 @@ function assignPermissionToUser($pdo, $userId, $permission) {
 }
 
 /**
- * Revoke permission from user (direct grant only; role-based permissions
- * are unaffected). Same `permissions` table as assignPermissionToUser.
- */
-function revokePermissionFromUser($pdo, $userId, $permission) {
-    try {
-        $stmt = $pdo->prepare("
-            DELETE up FROM user_permissions up
-            JOIN permissions p ON up.permission_id = p.id
-            WHERE up.user_id = ? AND p.name = ?
-        ");
-        $result = $stmt->execute([$userId, $permission]);
-        clearPermissionCache($userId);
-        return $result;
-    } catch (Exception $e) {
-        error_log("Revoke permission error: " . $e->getMessage());
-        return false;
-    }
-}
-
-/**
  * Assign role to user
  */
 function assignRoleToUser($pdo, $userId, $roleId) {
@@ -552,21 +508,6 @@ function assignRoleToUser($pdo, $userId, $roleId) {
         return $result;
     } catch (Exception $e) {
         error_log("Assign role error: " . $e->getMessage());
-        return false;
-    }
-}
-
-/**
- * Revoke role from user
- */
-function revokeRoleFromUser($pdo, $userId, $roleId) {
-    try {
-        $stmt = $pdo->prepare("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?");
-        $result = $stmt->execute([$userId, $roleId]);
-        clearPermissionCache($userId);
-        return $result;
-    } catch (Exception $e) {
-        error_log("Revoke role error: " . $e->getMessage());
         return false;
     }
 }

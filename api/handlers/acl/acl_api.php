@@ -50,92 +50,21 @@ function handleACLOperations($operation, $user) {
             }
             break;
 
-        case 'revoke_permission':
-            $targetUserId = $_POST['user_id'] ?? '';
-            $permission = $_POST['permission'] ?? '';
-
-            if (empty($targetUserId) || empty($permission)) {
-                send_json_response(0, 1, 400, "User ID and permission are required");
-            }
-
-            $success = revokePermissionFromUser($pdo, $targetUserId, $permission);
-
-            if ($success) {
-                send_json_response(1, 1, 200, "Permission revoked successfully");
-            } else {
-                send_json_response(0, 1, 400, "Failed to revoke permission");
-            }
-            break;
-
-        case 'assign_role':
-            $targetUserId = $_POST['user_id'] ?? '';
-            $roleId = $_POST['role_id'] ?? '';
-
-            if (empty($targetUserId) || empty($roleId)) {
-                send_json_response(0, 1, 400, "User ID and role ID are required");
-            }
-
-            requireGrantPolicy();
-            GrantPolicy::assertMayAssignRole($pdo, $user, $roleId);
-
-            $success = assignRoleToUser($pdo, $targetUserId, $roleId);
-
-            if ($success) {
-                send_json_response(1, 1, 200, "Role assigned successfully");
-            } else {
-                send_json_response(0, 1, 400, "Failed to assign role");
-            }
-            break;
-
-        case 'revoke_role':
-            $targetUserId = $_POST['user_id'] ?? '';
-            $roleId = $_POST['role_id'] ?? '';
-
-            if (empty($targetUserId) || empty($roleId)) {
-                send_json_response(0, 1, 400, "User ID and role ID are required");
-            }
-
-            // Both guards were missing here while roles-remove_user had the second
-            // one (F-21): this endpoint could strip a super_admin's role, or a
-            // user's only role, leaving an account with no grants at all.
-            requireGrantPolicy();
-            GrantPolicy::assertMayAssignRole($pdo, $user, $roleId, 'revoke');
-            GrantPolicy::assertNotLastRole($pdo, $targetUserId);
-
-            $success = revokeRoleFromUser($pdo, $targetUserId, $roleId);
-
-            if ($success) {
-                send_json_response(1, 1, 200, "Role revoked successfully");
-            } else {
-                send_json_response(0, 1, 400, "Failed to revoke role");
-            }
-            break;
+        // E.3 (audit §4.1): five acl-* operations removed — revoke_permission,
+        // assign_role, revoke_role, check_permission, get_all_permissions. Zero
+        // occurrences across all IMS-Frontend JS and HTML, re-verified 2026-09-21, and
+        // every one of them duplicated something that IS called: roles-assign /
+        // roles-remove_user own role assignment (with the GrantPolicy guards),
+        // permissions-get_all owns the catalogue, and a permission check is not
+        // something a client should be asking the server to perform one at a time.
+        //
+        // KEPT deliberately: assign_permission above, because user_permissions is still
+        // read for non-admins and this is now the ONLY lever that can write a direct
+        // per-user grant; and get_user_permissions, which the frontend does call.
 
         case 'get_all_roles':
             $roles = getAllRoles($pdo);
             send_json_response(1, 1, 200, "Roles retrieved successfully", ['roles' => $roles]);
-            break;
-
-        case 'get_all_permissions':
-            $permissions = getAllPermissions($pdo);
-            send_json_response(1, 1, 200, "Permissions retrieved successfully", ['permissions' => $permissions]);
-            break;
-
-        case 'check_permission':
-            $targetUserId = $_GET['user_id'] ?? $_POST['user_id'] ?? $user['id'];
-            $permission = $_GET['permission'] ?? $_POST['permission'] ?? '';
-
-            if (empty($permission)) {
-                send_json_response(0, 1, 400, "Permission is required");
-            }
-
-            $hasPermission = hasPermission($pdo, $permission, $targetUserId);
-
-            send_json_response(1, 1, 200, "Permission check completed", [
-                'user_id' => (int)$targetUserId,
-                'permission' => $permission,
-                'has_permission' => $hasPermission
-            ]);
             break;
 
         // D.1 (audit §2.2/§10 of the 2026-09-21 backend audit) — READ ONLY.

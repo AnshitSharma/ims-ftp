@@ -37,9 +37,18 @@ function send_json_response($success, $authenticated, $code, $message, $data = n
         'code' => $code
     ];
 
-    if ($data !== null) {
-        $response['data'] = $data;
-    }
+    // E.1 (audit §5.1): `data` used to be OMITTED when null, so the envelope was
+    // not one shape but two, and every consumer had to know which it might get.
+    // The key is now always present, carrying null when there is nothing — a
+    // client can destructure the envelope unconditionally.
+    //
+    // null rather than []: an error response has no data, and saying so is not the
+    // same as claiming it has empty data. Checked before changing this — nothing in
+    // the frontend branches on the key's PRESENCE (no `'data' in`, no
+    // hasOwnProperty, no Object.keys over it) and every read is either a truthiness
+    // guard or a `?? {}`, all of which treat null and absent identically. So this
+    // widens the contract without breaking the existing one.
+    $response['data'] = $data;
 
     // JSON-013: JSON_PRETTY_PRINT added ~26% to every payload before compression and no
     // consumer parses on whitespace (the only .text() reads in the frontend are HTML
