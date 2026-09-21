@@ -11,7 +11,6 @@
  */
 
 require_once(__DIR__ . '/../../helpers/SchemaHelper.php');
-require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
 require_once(__DIR__ . '/RequestActionExecutor.php');
 require_once(__DIR__ . '/../../config/PipelineConfig.php');
 

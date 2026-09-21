@@ -19,7 +19,6 @@
 // Include JWT Helper and ACL classes
 require_once(__DIR__ . '/../auth/JWTHelper.php');
 require_once(__DIR__ . '/../auth/ACL.php');
-require_once(__DIR__ . '/../auth/TemporaryAccessManager.php');
 require_once(__DIR__ . '/SchemaHelper.php');
 
 // Initialize JWT secret

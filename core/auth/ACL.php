@@ -4,7 +4,6 @@
  * File: includes/ACL.php
  */
 
-require_once(__DIR__ . '/TemporaryAccessManager.php');
 
 class ACL {
     private $pdo;
@@ -347,19 +346,17 @@ class ACL {
      * direct grant. Temporary access is issued as a direct grant, so that gap
      * had to close for it to work at all.
      *
-     * activeGrantClause() drops expired/revoked grants, and yields an empty
-     * string on a database without the expiry columns.
+     * D.3 (audit §2.2): the expiry filter that used to wrap the direct half is
+     * gone with the rest of the temporary-access reading path. Nothing can issue
+     * a temporary or scoped grant — a live acl-list_scoped_grants on 2026-09-21
+     * found 0 rows in user_permissions — so every direct grant is permanent,
+     * which is what this query now says.
      *
      * Note this method still has NO admin bypass, unlike its BaseFunctions
      * counterpart — that difference is deliberate and unchanged.
      */
     private function loadUserPermissions($userId) {
         try {
-            // globalOnly: a grant scoped to one configuration must never satisfy a
-            // plain permission check. Scoped access is resolved by
-            // TemporaryAccessManager::hasScopedPermission() at the point of use.
-            $activeGrant = TemporaryAccessManager::activeGrantClause($this->pdo, 'up', true);
-
             $stmt = $this->pdo->prepare("
                 SELECT DISTINCT p.name
                 FROM permissions p
@@ -371,7 +368,7 @@ class ACL {
                     UNION
                     SELECT up.permission_id
                     FROM user_permissions up
-                    WHERE up.user_id = ?{$activeGrant}
+                    WHERE up.user_id = ?
                 )
             ");
             $stmt->execute([$userId, $userId]);

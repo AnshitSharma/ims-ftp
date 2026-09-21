@@ -32,7 +32,6 @@ require_once(__DIR__ . '/ActionComponentSpec.php');
 // asks it for the {type}inventory table name, and a require it does not own is a
 // fatal waiting for somebody to tidy an include list.
 require_once(__DIR__ . '/../server/ServerBuilder.php');
-require_once(__DIR__ . '/../../auth/TemporaryAccessManager.php');
 require_once(__DIR__ . '/../state/StatusMap.php');
 // locationGapActions() asks it whether the stock is at the server's own site.
 require_once(__DIR__ . '/../location/LocationResolver.php');

@@ -331,26 +331,23 @@ function requireModulePermission($module, $operation, $user) {
 
     $requiredPermission = str_replace('{module}', $module, $map[$moduleKey][$operation]);
 
+    // D.3 (audit §2.2): there were two more steps here, both serving the
+    // temporary/scoped-access subsystem — a second-chance lookup for a grant
+    // scoped to the configuration this request names, and a narrowing check that
+    // kept a Request-granted build permission as narrow as the Request. Both
+    // constructed a TemporaryAccessManager and ran a query on the denial path of
+    // EVERY request.
+    //
+    // Nothing can create a grant for them to find: the subsystem's only writers
+    // are TemporaryAccessManager::grant(), which has no caller, and
+    // acl-assign_permission, which no client calls. A live acl-list_scoped_grants
+    // on 2026-09-21 returned 0 rows in the whole of user_permissions. So both
+    // steps could only ever deny, which is what this now does directly.
+    //
+    // If targeted per-configuration access is ever rebuilt, it needs a writer and
+    // a UI first, and these two checks come back with them.
     if (!hasPermission($pdo, $requiredPermission, $user['id'])) {
-        // Second chance for per-configuration temporary access: the user may hold
-        // this permission scoped to the very configuration this request names.
-        // Scoped grants are kept out of the flat permission list on purpose, so
-        // this is the only path that sees them — and it needs a config_uuid in
-        // the request, which means server-create-start and the list endpoints can
-        // never be satisfied this way.
-        if (!hasScopedPermissionForRequest($pdo, $requiredPermission, $user['id'])) {
-            send_json_response(0, 1, 403, "Insufficient permissions: $requiredPermission required");
-        }
-    }
-
-    // A build permission granted by a Request is only as wide as the Request:
-    // server.create says nothing about WHICH hardware may be fitted, so the
-    // component type this call names must be one the requester actually asked
-    // for. Outside the fallback branch on purpose — an "Any server" grant is
-    // global and satisfies the check above outright, and needs narrowing too.
-    $narrowed = requestScopedComponentPermission($pdo, $user['id'], $module, $operation, $requiredPermission);
-    if ($narrowed !== null) {
-        send_json_response(0, 1, 403, "Insufficient permissions: $narrowed required");
+        send_json_response(0, 1, 403, "Insufficient permissions: $requiredPermission required");
     }
 }
 

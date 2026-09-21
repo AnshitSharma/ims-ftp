@@ -138,6 +138,85 @@ function handleACLOperations($operation, $user) {
             ]);
             break;
 
+        // D.1 (audit §2.2/§10 of the 2026-09-21 backend audit) — READ ONLY.
+        //
+        // The temporary/scoped-access subsystem has no writer left: the only
+        // three INSERTs into user_permissions are inside TemporaryAccessManager::
+        // grant(), which has no caller, and assignPermissionToUser(), reached
+        // only by acl-assign_permission, which no client calls. But the READING
+        // half is wired into the hot path of every request, and a previous
+        // session recorded that leftover GLOBAL grants from before the
+        // retirement silently satisfy permission checks and cannot be revoked
+        // through any UI.
+        //
+        // There is no shell on this host and the database is not reachable
+        // remotely, so this is the only way to see those rows before deciding
+        // what to do with them. It lists; it never writes. Revocation is a
+        // seeder, reviewed and run by hand.
+        case 'list_scoped_grants':
+            // Every column below is guarded: this handler deploys ~20s after
+            // save while a schema change is applied by hand whenever the
+            // operator gets to it, so a column may legitimately not be there.
+            if (!SchemaHelper::hasTable($pdo, 'user_permissions')) {
+                send_json_response(1, 1, 200, "No user_permissions table on this database", [
+                    'supported' => false, 'grants' => [], 'total' => 0,
+                ]);
+            }
+
+            $hasExpires = SchemaHelper::hasColumn($pdo, 'user_permissions', 'expires_at');
+            $hasScope   = SchemaHelper::hasColumn($pdo, 'user_permissions', 'scope_type');
+            $hasScopeId = SchemaHelper::hasColumn($pdo, 'user_permissions', 'scope_id');
+            $hasGranted = SchemaHelper::hasColumn($pdo, 'user_permissions', 'granted_at');
+
+            if (!$hasExpires && !$hasScope) {
+                send_json_response(1, 1, 200, "No temporary or scoped columns on this database", [
+                    'supported' => false, 'grants' => [], 'total' => 0,
+                ]);
+            }
+
+            $cols = ['up.id', 'up.user_id', 'u.username', 'p.name AS permission'];
+            $conds = [];
+            if ($hasExpires) {
+                $cols[] = 'up.expires_at';
+                $conds[] = 'up.expires_at IS NOT NULL';
+            }
+            if ($hasScope) {
+                $cols[] = 'up.scope_type';
+                $conds[] = 'up.scope_type IS NOT NULL';
+            }
+            if ($hasScopeId) { $cols[] = 'up.scope_id'; }
+            if ($hasGranted) { $cols[] = 'up.granted_at'; }
+
+            // A GLOBAL grant — one with no scope and no expiry — is the dangerous
+            // shape, so it is reported too rather than filtered out. The whole
+            // table is small enough that listing all of it is the honest answer.
+            $sql = 'SELECT ' . implode(', ', $cols) . '
+                      FROM user_permissions up
+                      LEFT JOIN users u ON u.id = up.user_id
+                      LEFT JOIN permissions p ON p.id = up.permission_id
+                  ORDER BY up.id';
+
+            $stmt = $pdo->query($sql);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $scoped = [];
+            foreach ($rows as $row) {
+                $isScoped = ($hasExpires && $row['expires_at'] !== null)
+                         || ($hasScope && $row['scope_type'] !== null);
+                if ($isScoped) {
+                    $scoped[] = $row;
+                }
+            }
+
+            send_json_response(1, 1, 200, "Scoped and temporary grants listed", [
+                'supported'           => true,
+                'grants'              => $scoped,
+                'total'               => count($scoped),
+                'all_rows'            => count($rows),
+                'global_direct_grants' => count($rows) - count($scoped),
+            ]);
+            break;
+
         default:
             send_json_response(0, 1, 400, "Invalid ACL operation: $operation");
     }

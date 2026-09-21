@@ -221,21 +221,28 @@ function loadUserPermissionData($pdo, $userId) {
         }
 
         // If not admin, load all permissions (direct + role-based) in single query.
-        // Direct grants in user_permissions may be TEMPORARY: activeGrantClause()
-        // drops the ones that have expired or been revoked, and returns an empty
-        // string on a database where the expiry migration hasn't been applied yet
-        // (in which case every direct grant is permanent, exactly as before).
+        //
+        // D.3 (audit §2.2): this used to append TemporaryAccessManager::
+        // activeGrantClause() — a SHOW COLUMNS probe plus expiry predicates — on
+        // EVERY request by a non-admin. The subsystem it served has no writer
+        // left: the only INSERTs into user_permissions are in
+        // TemporaryAccessManager::grant(), which has no caller, and
+        // assignPermissionToUser(), reached only by acl-assign_permission, which
+        // no client calls. A live acl-list_scoped_grants on 2026-09-21 returned
+        // 0 rows in user_permissions — no scoped grants, no expiring grants, and
+        // none of the leftover GLOBAL grants a previous session warned about.
+        //
+        // Direct grants are therefore all permanent, which is what this query now
+        // says. The COLUMNS stay (dropping them is a separate, riskier change);
+        // if a grant-issuing path is ever built, the expiry filter comes back
+        // with it.
         if (!$data['is_admin']) {
-            // globalOnly: grants scoped to a single server configuration are
-            // excluded here on purpose, so they can never widen a general
-            // permission check. server_api.php consults them per-configuration.
-            $activeGrant = TemporaryAccessManager::activeGrantClause($pdo, '', true);
             $stmt = $pdo->prepare("
                 SELECT DISTINCT ap.name
                 FROM permissions ap
                 WHERE ap.id IN (
                     SELECT permission_id FROM user_permissions
-                    WHERE user_id = ?{$activeGrant}
+                    WHERE user_id = ?
                     UNION
                     SELECT rp.permission_id
                     FROM user_roles ur
@@ -322,93 +329,6 @@ function requestedConfigUuid() {
 }
 
 /**
- * COARSE gate fallback for per-configuration temporary access.
- *
- * Grants scoped to a single configuration are deliberately excluded from the
- * flat permission list (see loadUserPermissionData), so hasPermission() cannot
- * see them — otherwise "edit server X" would satisfy every server.edit check in
- * the system. This is the one place that consults them, and only when the
- * request actually names a configuration.
- *
- * The FINE half — is this the right configuration — is enforced in
- * server_api.php via userCanActOnConfig().
- */
-function hasScopedPermissionForRequest($pdo, $permission, $userId) {
-    $configUuid = requestedConfigUuid();
-    if ($configUuid === null) {
-        return false;
-    }
-
-    static $manager = null;
-    if ($manager === null) {
-        $manager = new TemporaryAccessManager($pdo);
-    }
-
-    return $manager->hasScopedPermission($userId, $permission, $configUuid);
-}
-
-/**
- * Keep a build permission that came from a Request as narrow as the Request.
- *
- * `server-add-component` is gated on server.create, which says nothing about
- * WHICH hardware may be fitted — so an approval for "add an SFP to web-01"
- * would otherwise fit a CPU, a motherboard, anything, into that build. Same gap
- * on remove/replace (server.edit / server.replace). The request DID say which
- * hardware: its component permissions. So when the caller's build access is a
- * temporary grant, the component type this call names must be one they hold the
- * matching permission on — which, for a temporary grant, is exactly the set the
- * approver granted.
- *
- * Permanent access is untouched: step 3 returns early for anyone who already
- * holds the component permission, and every role that can build servers holds
- * all eleven (super_admin, admin, manager, technician). `viewer` is the only
- * role without them, and it has no server.create/.edit to begin with.
- *
- * @param  string $serverPermission the permission that gated this operation
- * @return string|null the component permission the caller is missing, meaning
- *                     the call must be refused; null when nothing needs
- *                     narrowing
- */
-function requestScopedComponentPermission($pdo, $userId, $module, $operation, $serverPermission) {
-    // The build operations that name a component type. Add asks for `.create`
-    // because that is what the Add Hardware ceiling grants; remove and replace
-    // ask for `.edit`, matching Edit/Remove Hardware.
-    static $implies = [
-        'add-component'     => 'create',
-        'remove-component'  => 'edit',
-        'replace-component' => 'edit',
-    ];
-
-    if ($module !== 'server' || !isset($implies[$operation])) {
-        return null;
-    }
-
-    $type = strtolower(trim((string)($_POST['component_type'] ?? $_GET['component_type'] ?? '')));
-    if (!in_array($type, VALID_COMPONENT_TYPES, true)) {
-        // Not our business to report — the handler's own 400 says "Invalid
-        // component type", which is the useful answer.
-        return null;
-    }
-
-    $needed = $type . '.' . $implies[$operation];
-    if (hasPermission($pdo, $needed, $userId)) {
-        return null;
-    }
-
-    // They lack it, so this only matters if their build access is temporary.
-    // listActive() reports live temporary grants only; on a database without the
-    // expiry columns it returns [] and this gate stays inert.
-    $manager = new TemporaryAccessManager($pdo);
-    foreach ($manager->listActive($userId) as $grant) {
-        if (($grant['permission'] ?? '') === $serverPermission) {
-            return $needed;
-        }
-    }
-
-    return null;
-}
-
-/**
  * Can this user act on THIS configuration?
  *
  * The idiom this replaces was copied ~10 times through server_api.php:
@@ -437,17 +357,15 @@ function userCanActOnConfig($pdo, $config, $userId, $escalation, $allowScoped = 
         return true;
     }
 
-    if (!$allowScoped) {
-        return false;
-    }
-
-    $configUuid = $config->get('config_uuid');
-    if (!$configUuid) {
-        return false;
-    }
-
-    $manager = new TemporaryAccessManager($pdo);
-    return $manager->hasAnyScopedGrant($userId, $configUuid);
+    // D.3 (audit §2.2): the third branch asked TemporaryAccessManager whether the
+    // caller held any grant scoped to THIS configuration. Nothing can issue such
+    // a grant — user_permissions held 0 rows on 2026-09-21 — so the branch could
+    // only ever return false after a query. $allowScoped is kept in the signature
+    // because every call site names it deliberately and those call sites document
+    // which operations a targeted grant was never meant to reach (finalize,
+    // delete); it is the record of the policy, and what a rebuilt subsystem would
+    // read.
+    return false;
 }
 
 /**

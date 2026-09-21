@@ -360,7 +360,14 @@ function handleTokenVerification() {
         $roleStmt->execute([$user['id']]);
         $userRoleNames = $roleStmt->fetchAll(PDO::FETCH_COLUMN);
 
-        $temporaryAccess = (new TemporaryAccessManager($pdo))->listActive($user['id']);
+        // D.3 (audit §2.2): this ran TemporaryAccessManager::listActive() on every
+        // dashboard page load. Nothing can issue a temporary grant — user_permissions
+        // held 0 rows on 2026-09-21 — so the query could only ever return [].
+        //
+        // The KEY stays in the response. IMS-Frontend/assets/js/dashboard/api.js caches
+        // it on the stored user and nothing reads it, so dropping the key would be a
+        // contract change for no gain; dropping the query is the whole saving.
+        $temporaryAccess = [];
 
         send_json_response(1, 1, 200, "Token is valid", [
             'user' => [
