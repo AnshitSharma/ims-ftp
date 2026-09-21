@@ -35,13 +35,15 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
  *    Enrichment parity is therefore automatic, not something =on must re-derive.
  *    (Consistent with U-X.1-PLAN-20260712.md, which already found this pack's
  *    line citations stale by +99 and +256 lines.)
- * 3. The pack says to reuse equivalence_report.php's canonicalization consts.
- *    That file is a CLI report with its own bootstrap and top-level exit() calls
- *    -- it cannot be required from core/ without running it. The tuple rules are
- *    reimplemented in canonicalTuple() below, deliberately field-for-field
- *    identical to equivalence_report.php:97-131. THIS IS A DUPLICATE and the two
- *    must be changed together; extracting a shared canonicalizer class is left to
- *    U-D.3, which retires the JSON side of that report anyway.
+ * 3. The tuple rules in canonicalTuple() below were written field-for-field
+ *    against equivalence_report.php's canonicalization consts, because that file
+ *    was a CLI report with its own bootstrap and top-level exit() calls and could
+ *    not be required from core/ without running it.
+ *
+ *    L.2 (audit §4.5): equivalence_report.php NO LONGER EXISTS — it went with the
+ *    JSON side it compared. So canonicalTuple() is not half of a
+ *    change-both-or-neither pair any more; it is the only copy, and the sole
+ *    authority. Nothing needs to be kept in step with it.
  *
  * ── What =on structurally CANNOT reproduce (must be signed off before flipping) ──
  *
@@ -66,7 +68,10 @@ require_once __DIR__ . '/../components/ComponentSpecPaths.php';
  * IDENTITY (who is in the config) and was deliberately silent about these. They
  * are documented here because they describe what the rows path returns TODAY,
  * which is now the only thing it returns.
- * tests/regression/read_router_test.php pins all of it.
+ * L.2 (audit §4.5): a line here claimed "tests/regression/read_router_test.php
+ * pins all of it". That file does not exist, and neither does the directory —
+ * tests/ holds three hand-run CLI gates and nothing else. None of the behaviour
+ * described above is pinned by anything. Treat it as unguarded when you change it.
  */
 final class ConfigReadRouter
 {
@@ -132,8 +137,9 @@ final class ConfigReadRouter
 
 
     // ------------------------------------------------------------------
-    // Canonicalization. DUPLICATE of equivalence_report.php:97-131 -- see the
-    // class docblock, correction 3. Change both or neither.
+    // Canonicalization. Once a deliberate duplicate of
+    // equivalence_report.php:97-131; that file is gone, so this is now the only
+    // copy and the authority. See the class docblock, correction 3.
     // ------------------------------------------------------------------
 
 

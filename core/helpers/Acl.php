@@ -441,10 +441,21 @@ function getUserRoles($pdo, $userId) {
 /**
  * Check whether a user holds a specific role (by role name).
  *
- * Use this for role-gated modules where hasPermission() is unsuitable —
- * hasPermission() grants admin and super_admin an identical blanket bypass,
- * so it cannot distinguish the two. Rack View, for example, must be limited
- * to super_admin only, which requires an actual role check.
+ * Use this where hasPermission() genuinely cannot answer the question:
+ * hasPermission() grants admin and super_admin an identical blanket bypass, so
+ * it cannot distinguish the two.
+ *
+ * L.1 (audit §4.5): this docblock used to cite Rack View as the example — "must
+ * be limited to super_admin only, which requires an actual role check". That
+ * gate was REMOVED on 2026-09-13, precisely because hard-coding the role made
+ * every rack.* grant unreachable: rack.view / rack.assign decide now. The
+ * comment had outlived its subject and was arguing for the bug that was fixed,
+ * which is worse than no comment.
+ *
+ * Live callers are users-reset-password and the Requests/pipeline admin gate,
+ * both of which need "admin or super_admin, not merely permitted". If you reach
+ * for this, check first that an ACL permission would not do — a hard-coded role
+ * is invisible in the role editor and cannot be revoked.
  */
 function userHasRole($pdo, $userId, $roleName) {
     try {

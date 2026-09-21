@@ -20,15 +20,27 @@
  * pre-echo of INV-3 — commands will be the only transaction owners).
  *
  * NOTE on insert()'s ON DUPLICATE KEY UPDATE: config_components.uq_inventory_once
- * became (inventory_table, inventory_id, component_type) in seeder 2026_08_25_005 so a
- * compute-platform box can back both its board and its chassis row; that file explains
- * why this is a no-op for the 11 types whose table already implies their type.
- * is (inventory_table, inventory_id) with NO removed_at column (see
- * database/seeders/2026_07_06_001_create-config-components.sql and
- * migration/handoffs/U-1.1-20260706.md for the full reasoning — MySQL/MariaDB
- * treat NULL as distinct in unique keys, so a 3-column key including
- * removed_at would not actually stop two simultaneously-live rows for the
- * same physical unit, which is what INV-1's mechanical check requires).
+ * is (inventory_table, inventory_id, component_type), and carries NO removed_at
+ * column.
+ *
+ * L.2 (audit §4.5): this paragraph used to say both things at once. An edit added
+ * the three-column fact on top and left the old two-column sentence dangling
+ * mid-clause underneath it, so the docblock contradicted itself twice over and
+ * cited two files that do not exist (a 2026_07_06_001 seeder and a
+ * migration/handoffs note — migration/ was deleted 2026-08-31 and the seeders
+ * directory holds only the most recent six, not the history). Both readings are
+ * now one, and the reasoning is restated here rather than pointed at:
+ *
+ *   - component_type joined the key in seeder 2026_08_25_005, so a compute-platform
+ *     box can back BOTH its motherboard row and its chassis row. It is a no-op for
+ *     the eleven types whose table already implies their type.
+ *   - removed_at is deliberately absent. MariaDB treats NULLs as distinct in a
+ *     unique key, and every LIVE row has removed_at NULL — so including it would
+ *     constrain only tombstones sharing a timestamp and would NOT stop two
+ *     simultaneously-live rows for one physical unit, which is exactly what INV-1's
+ *     mechanical check requires. (uq_slot_occupancy has the same shape and the same
+ *     limitation; see the backend CLAUDE.md.)
+ *
  * That means a physical unit placed, then removed, already HAS a row
  * (tombstoned: removed_at NOT NULL) — insert() must reactivate that row
  * rather than attempt a second INSERT for the same (inventory_table,

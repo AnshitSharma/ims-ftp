@@ -1,8 +1,14 @@
 <?php
 /**
- * Component CRUD handler — list/get/add/update/delete for all 10 inventory
- * component types (cpu, ram, storage, motherboard, nic, caddy, chassis,
- * pciecard, risercard, hbacard, sfp).
+ * Component CRUD handler — list/get/add/update/delete for all TWELVE inventory
+ * component types: cpu, ram, storage, motherboard, nic, caddy, chassis,
+ * pciecard, risercard, hbacard, sfp, serverplatform.
+ *
+ * L.2 (audit §4.5): this said "all 10" and then listed 11, omitting
+ * serverplatform, which became the 12th type on 2026-08-25 and is served by
+ * this handler (serverplatform-list answers 200). The canonical list is
+ * VALID_COMPONENT_TYPES — see core/helpers/BaseFunctions.php — and this comment
+ * should never be the place anyone counts from.
  *
  * Included by api/api.php, which has already verified the ACL permission for
  * the operation via the central permission map (api/permission_map.php).
