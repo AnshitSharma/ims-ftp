@@ -378,14 +378,43 @@ class JWTHelper {
     /**
      * Clean up expired tokens
      */
+    /**
+     * Opportunistic prune of the three session tables. Called on a successful
+     * login, which is the only regular event this host has — there is no cron.
+     *
+     * I.3 (audit §12.3). Nothing pruned any of these. auth_tokens gained a row
+     * per login and lost one only on logout or password change; revoked_tokens
+     * kept every logout row forever, past expires_at; password_resets never
+     * deleted a USED row. This method existed for auth_tokens alone and had no
+     * caller at all.
+     *
+     * Modelled on auth-microsoft_start's sweep of oauth_login_states, which is
+     * the one table that already did this correctly: bounded with LIMIT so a
+     * large backlog can never turn a login into a long-running delete, and
+     * best-effort so a housekeeping failure never costs anyone their session.
+     */
     public static function cleanupExpiredTokens($pdo) {
         try {
-            $stmt = $pdo->prepare("DELETE FROM auth_tokens WHERE expires_at <= NOW()");
-            return $stmt->execute();
-        } catch (PDOException $e) {
-            error_log("Error cleaning up expired tokens: " . $e->getMessage());
-            return false;
+            $pdo->exec("DELETE FROM auth_tokens WHERE expires_at <= NOW() LIMIT 200");
+        } catch (Throwable $e) {
+            error_log("Session sweep (auth_tokens) skipped: " . $e->getMessage());
         }
+
+        try {
+            $pdo->exec("DELETE FROM revoked_tokens WHERE expires_at <= NOW() LIMIT 200");
+        } catch (Throwable $e) {
+            error_log("Session sweep (revoked_tokens) skipped: " . $e->getMessage());
+        }
+
+        // Used reset tokens only. An UNUSED one is still live until it expires,
+        // and handleResetPassword()'s single-use arbitration reads it.
+        try {
+            $pdo->exec("DELETE FROM password_resets WHERE used_at IS NOT NULL AND used_at < NOW() - INTERVAL 7 DAY LIMIT 200");
+        } catch (Throwable $e) {
+            error_log("Session sweep (password_resets) skipped: " . $e->getMessage());
+        }
+
+        return true;
     }
 }
 ?>

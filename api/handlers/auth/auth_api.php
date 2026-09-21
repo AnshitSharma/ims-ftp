@@ -160,6 +160,13 @@ function handleLogin() {
         // Successful login resets the failure counter
         $loginLimiter->clear($failKey);
 
+        // I.3 (audit §12.3): nothing pruned auth_tokens, revoked_tokens or used
+        // password_resets, so all three only ever grew. There is no cron on this
+        // host, so the sweep hangs off the one regular event there is — the same
+        // pattern auth-microsoft_start already uses for oauth_login_states.
+        // Bounded and best-effort: housekeeping must never cost someone a login.
+        JWTHelper::cleanupExpiredTokens($pdo);
+
         error_log("Login successful for user: $username (ID: " . $user['id'] . ")");
 
         send_json_response(1, 1, 200, "Login successful", buildUserSession($pdo, $user, $rememberMe));

@@ -311,6 +311,62 @@ function handleComponentOperations($module, $operation, $user) {
                 send_json_response(0, 1, 400, "Bulk add is limited to 100 components per request");
             }
 
+            // I.4 (audit §9.5): each item commits in its own transaction with no
+            // rollback, so a retry after a timeout creates a SECOND set of rows —
+            // and nothing can tell, because every unit gets its own auto-increment
+            // AssetTag and serial-less units are normal here. Only a duplicate
+            // SerialNumber would be caught. That hazard has been managed by
+            // remembering not to retry ("192 rows loaded 2026-09-06 … nothing
+            // dedupes"); this replaces remembering with a claim.
+            //
+            // The claim is an atomic INSERT IGNORE, not a SELECT-then-INSERT, so
+            // two concurrent retries cannot both win it.
+            //
+            // Sending NO key preserves today's behaviour exactly, and so does a
+            // database where seeder 2026_09_21_004 has not been applied yet —
+            // code reaches production before a hand-run seeder does, so the table's
+            // absence must mean "as before", never a 500.
+            $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
+            $keyClaimed = false;
+
+            if ($idempotencyKey !== '' && SchemaHelper::hasTable($pdo, 'bulk_operation_keys')) {
+                if (strlen($idempotencyKey) > 100) {
+                    send_json_response(0, 1, 400, "idempotency_key must be 100 characters or fewer");
+                }
+
+                $claim = $pdo->prepare(
+                    "INSERT IGNORE INTO bulk_operation_keys
+                         (idempotency_key, user_id, module, operation)
+                     VALUES (?, ?, ?, 'bulk-add')"
+                );
+                $claim->execute([$idempotencyKey, $user['id'], $module]);
+
+                if ($claim->rowCount() === 0) {
+                    // Someone already owns this key.
+                    $prior = $pdo->prepare(
+                        "SELECT http_code, response_json FROM bulk_operation_keys
+                          WHERE idempotency_key = ?"
+                    );
+                    $prior->execute([$idempotencyKey]);
+                    $row = $prior->fetch(PDO::FETCH_ASSOC);
+
+                    if ($row && $row['response_json'] !== null) {
+                        $replay = json_decode($row['response_json'], true);
+                        send_json_response(1, 1, (int)$row['http_code'],
+                            ucfirst($module) . " bulk add: replayed, this request was already processed",
+                            is_array($replay) ? $replay : []);
+                    }
+
+                    // Claimed but not finished: the first attempt may still be in
+                    // flight. Running again is exactly what the key exists to
+                    // prevent, so refuse rather than guess.
+                    send_json_response(0, 1, 409,
+                        "A bulk add with this idempotency_key is already in progress");
+                }
+
+                $keyClaimed = true;
+            }
+
             $results = [];
             $succeeded = 0;
             foreach (array_values($items) as $i => $itemData) {
@@ -344,13 +400,33 @@ function handleComponentOperations($module, $operation, $user) {
             $total = count($results);
             $failed = $total - $succeeded;
             $code = $failed === 0 ? 201 : ($succeeded > 0 ? 200 : 400);
+            $payload = [
+                'total' => $total,
+                'succeeded' => $succeeded,
+                'failed' => $failed,
+                'results' => $results
+            ];
+
+            // I.4: record the outcome against the claim, so a retry replays this
+            // answer instead of adding the rows again. Best-effort — the rows are
+            // already committed, and failing to write the receipt must not turn a
+            // successful bulk add into an error. The worst case is the key stays
+            // unfinished and a retry gets the 409, which is still safe.
+            if ($keyClaimed) {
+                try {
+                    $done = $pdo->prepare(
+                        "UPDATE bulk_operation_keys
+                            SET http_code = ?, response_json = ?, completed_at = NOW()
+                          WHERE idempotency_key = ?"
+                    );
+                    $done->execute([$code, json_encode($payload), $idempotencyKey]);
+                } catch (Throwable $e) {
+                    error_log("bulk-add: could not record idempotency result: " . $e->getMessage());
+                }
+            }
+
             send_json_response($succeeded > 0 ? 1 : 0, 1, $code,
-                ucfirst($module) . " bulk add: $succeeded of $total added", [
-                    'total' => $total,
-                    'succeeded' => $succeeded,
-                    'failed' => $failed,
-                    'results' => $results
-                ]);
+                ucfirst($module) . " bulk add: $succeeded of $total added", $payload);
             break;
 
         case 'bulk-delete':

@@ -761,22 +761,49 @@ class RackEnclosure
             return 0;
         }
 
-        $stmt = $pdo->prepare("UPDATE rack_servers
-                                  SET rack_uuid = ?, start_u = ?, u_height = ?, updated_at = NOW()
-                                WHERE enclosure_uuid = ?");
-        $stmt->execute([
-            $enclosure['rack_uuid'], (int)$enclosure['start_u'], (int)$enclosure['u_height'], $enclosureUuid,
-        ]);
-
-        $sleds = $pdo->prepare("SELECT config_uuid FROM rack_servers WHERE enclosure_uuid = ?");
-        $sleds->execute([$enclosureUuid]);
-
-        $n = 0;
-        foreach ($sleds->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            RackPlacement::syncPositionText($pdo, $row['config_uuid']);
-            LocationResolver::syncConfig($pdo, $row['config_uuid']);
-            $n++;
+        // I.2 (audit §7.6): moving an FX2s with four sleds is ~60 statements —
+        // one UPDATE, then per sled syncPositionText() (1 query) plus
+        // LocationResolver::syncConfig() (1 + 12). Half-applied, the sleds and the
+        // box they are bolted into disagree about where they are, which is the
+        // exact drift the header of ServerRelocation was written about.
+        //
+        // update() — the only caller today — already holds a transaction, so this
+        // nests rather than replaces. The guard is here because the method is
+        // public: a future second caller inherits atomicity instead of having to
+        // remember it.
+        $ownTx = !$pdo->inTransaction();
+        if ($ownTx) {
+            $pdo->beginTransaction();
         }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE rack_servers
+                                      SET rack_uuid = ?, start_u = ?, u_height = ?, updated_at = NOW()
+                                    WHERE enclosure_uuid = ?");
+            $stmt->execute([
+                $enclosure['rack_uuid'], (int)$enclosure['start_u'], (int)$enclosure['u_height'], $enclosureUuid,
+            ]);
+
+            $sleds = $pdo->prepare("SELECT config_uuid FROM rack_servers WHERE enclosure_uuid = ?");
+            $sleds->execute([$enclosureUuid]);
+
+            $n = 0;
+            foreach ($sleds->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                RackPlacement::syncPositionText($pdo, $row['config_uuid']);
+                LocationResolver::syncConfig($pdo, $row['config_uuid']);
+                $n++;
+            }
+
+            if ($ownTx) {
+                $pdo->commit();
+            }
+        } catch (Throwable $e) {
+            if ($ownTx && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
         return $n;
     }
 
