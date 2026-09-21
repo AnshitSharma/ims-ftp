@@ -9,7 +9,6 @@ require_once __DIR__ . '/ServerConfiguration.php';
 require_once __DIR__ . '/../config/ConfigReadRouter.php';
 
 class ServerBuilder {
-
     private $pdo;
     private $componentTables;
     private $dataUtils;
@@ -27,7 +26,6 @@ class ServerBuilder {
      * read/display paths keep the graceful degradation.
      */
     private $strictJsonDecode = false;
-
 
     const MAX_ADD_QUANTITY = 128;
 
@@ -406,7 +404,6 @@ class ServerBuilder {
         return $row ?: null;
     }
 
-    
     /**
      * Remove component from server configuration
      * UPDATED: Now reads from JSON columns and updates JSON instead of relational table
@@ -1352,7 +1349,6 @@ class ServerBuilder {
                         $engineWarnings = $verdictForSpec['warnings'];
                     }
 
-
                     // Build component result
                     $componentStatus = (int)$component['Status'];
                     $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
@@ -1371,14 +1367,12 @@ class ServerBuilder {
                         'is_compatible' => $isCompatible
                     ];
 
-
                     // Engine warnings (non-blocking failures new to this candidate) so the
                     // operator sees them before the add -- e.g. an uncaddied drive, which
                     // is addable now and blocks only at finalize.
                     if (!empty($engineWarnings)) {
                         $compatibleComponent['warnings'] = array_values(array_unique($engineWarnings));
                     }
-
 
                     $compatibleComponents[] = $compatibleComponent;
                 }
@@ -1925,7 +1919,6 @@ class ServerBuilder {
         }
     }
 
-
     /**
      * Auto-assign an available SFP port on a NIC
      * Determines port count from NIC specs and returns first unoccupied port
@@ -2372,10 +2365,6 @@ class ServerBuilder {
         ];
     }
     
-
-
-
-
     /**
      * Finalize configuration
      */
@@ -2793,15 +2782,10 @@ class ServerBuilder {
      * @return bool True if duplicate found, false otherwise
      */
     
-
-    
     /**
      * Comprehensive component validation before adding - consolidates all validation logic
      * Phase 2 Consolidation: Moves SFP, riser, singleton, and compatibility validation from handler
      */
-
-
-
 
     /**
      * Generate UUID for configuration
@@ -2824,69 +2808,6 @@ class ServerBuilder {
         return isset($this->componentTables[$componentType]);
     }
     
-    /**
-     * Check if component can only have single instance in configuration
-     */
-    private function isSingleInstanceComponent($componentType) {
-        return in_array($componentType, ['chassis', 'motherboard']);
-    }
-
-    
-    /**
-     * Get component by UUID with improved error handling
-     */
-    private function getComponentByUuid($componentType, $componentUuid) {
-        if (!isset($this->componentTables[$componentType])) {
-            error_log("Invalid component type: $componentType");
-            return null;
-        }
-
-        try {
-            $table = $this->componentTables[$componentType];
-
-            // CRITICAL FIX: Prioritize available components (Status=1) when multiple components share same UUID
-            // This ensures we select an available component instead of a random one
-
-            // Step 1: Try to get an available component (Status=1) first
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? AND Status = 1 LIMIT 1");
-            $stmt->execute([$componentUuid]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($result) {
-                return $result;
-            }
-
-            // Step 2: If no available component, try case-insensitive match with Status=1
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE TRIM(UPPER(UUID)) = UPPER(TRIM(?)) AND Status = 1 LIMIT 1");
-            $stmt->execute([$componentUuid]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($result) {
-                return $result;
-            }
-
-            // Step 3: Fallback - get any component with this UUID for validation/error messages
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE UUID = ? LIMIT 1");
-            $stmt->execute([$componentUuid]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($result) {
-                return $result;
-            }
-
-            // Step 4: Final fallback - case-insensitive any status
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE TRIM(UPPER(UUID)) = UPPER(TRIM(?)) LIMIT 1");
-            $stmt->execute([$componentUuid]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            return $result;
-
-        } catch (Exception $e) {
-            error_log("Error getting component by UUID from {$this->componentTables[$componentType]}: " . $e->getMessage());
-            return null;
-        }
-    }
-
     /**
      * Does server_configurations.is_sandbox exist yet?
      *
@@ -3106,34 +3027,6 @@ class ServerBuilder {
         }
         
         return $result;
-    }
-    
-    /**
-     * Get configuration component by type from JSON columns
-     */
-    private function getConfigurationComponent($configUuid, $componentType) {
-        try {
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-            $stmt->execute([$configUuid]);
-            $configData = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$configData) {
-                return null;
-            }
-
-            // Extract components and find the one matching the type
-            $components = $this->componentsFromRows($configData);
-            foreach ($components as $component) {
-                if ($component['component_type'] === $componentType) {
-                    return $component;
-                }
-            }
-
-            return null;
-        } catch (Exception $e) {
-            error_log("Error getting configuration component: " . $e->getMessage());
-            return null;
-        }
     }
     
     /**
@@ -3531,12 +3424,6 @@ class ServerBuilder {
         return $defaultPower[$componentType] ?? 50;
     }
 
-    
-    
-    
-    
-
-    
     /**
      * Extract socket type from component notes with enhanced component knowledge base
      */
@@ -3725,40 +3612,6 @@ class ServerBuilder {
         }
     }
 
-
-
-    /**
-     * Resolve a motherboard's maximum memory capacity in GB from its JSON spec.
-     *
-     * Handles the real key names used across ims-data/motherboard:
-     *   - max_capacity_TB (server boards, e.g. 8 -> 8192 GB)
-     *   - max_capacity_GB (desktop boards, e.g. 64)
-     * Uses float math so fractional TB values (1.5 TB) become 1536 GB instead of
-     * truncating to 1 TB. Returns null when the board declares no capacity limit,
-     * so callers skip the ceiling check rather than inventing a 128 GB default.
-     * [Fixes TP-2A: lowercase max_capacity_gb never matched -> universal 128 GB cap]
-     *
-     * @param array $mbSpecs Raw motherboard JSON spec
-     * @return int|null Maximum capacity in GB, or null if undeclared
-     */
-    private function getMotherboardMaxMemoryGb($mbSpecs) {
-        $memory = (is_array($mbSpecs) && isset($mbSpecs['memory']) && is_array($mbSpecs['memory']))
-            ? $mbSpecs['memory'] : [];
-
-        if (isset($memory['max_capacity_TB']) && is_numeric($memory['max_capacity_TB'])) {
-            return (int)round(((float)$memory['max_capacity_TB']) * 1024);
-        }
-        if (isset($memory['max_capacity_GB']) && is_numeric($memory['max_capacity_GB'])) {
-            return (int)$memory['max_capacity_GB'];
-        }
-        // Legacy/lowercase fallback (rare); kept for forward compatibility.
-        if (isset($memory['max_capacity_gb']) && is_numeric($memory['max_capacity_gb'])) {
-            return (int)$memory['max_capacity_gb'];
-        }
-        return null;
-    }
-
-
     /**
      * Get existing components formatted for validation
      */
@@ -3915,7 +3768,6 @@ class ServerBuilder {
         return $total;
     }
 
-
     // NOTE (2026-07-21): fixOrphanedServerUUIDs() was removed here. It was dead
     // code -- zero callers fleet-wide -- and carried the same model-vs-unit defect
     // fixed in deleteConfiguration() this session: it cleared ServerUUID with
@@ -3923,19 +3775,6 @@ class ServerBuilder {
     // the config it was called for, so a single "autofix" would have detached every
     // physical unit of that model across the whole fleet. Deleted rather than fixed;
     // scripts/verify/orphan_report.php is the supported way to detect orphans.
-
-    /**
-     * P4.1: Get deterministic lock order for multiple resources
-     * Prevents deadlocks by always locking in same order (alphabetical)
-     *
-     * @param array $resourceIds Resource identifiers to lock
-     * @return array Sorted resource IDs
-     */
-    private function getDeterministicLockOrder($resourceIds) {
-        // P4.1: Always sort to ensure consistent lock order
-        sort($resourceIds);
-        return $resourceIds;
-    }
 
     /**
      * P3.4: Recalculate form factor lock when chassis or storage is removed

@@ -13,8 +13,6 @@
  * Handle authentication operations (no login required)
  */
 function handleAuthOperations($operation) {
-    error_log("Auth operation: $operation");
-
     global $pdo;
 
     // Rate limit the password-bearing operations, plus the two Microsoft
@@ -128,7 +126,10 @@ function handleLogin() {
     $password = $_POST['password'] ?? '';
     $rememberMe = filter_var($_POST['remember_me'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-    error_log("Login attempt - Username: '$username'");
+    // A-P6 applied here too: this wrote a username to disk on every login attempt,
+    // successful or not — exactly the indefinite retention api.php removed from its
+    // own per-request log. The rate limiter below is what actually needs to see the
+    // username, and it keeps it in the database with a TTL rather than in the log.
 
     if (empty($username) || empty($password)) {
         send_json_response(0, 0, 400, "Username and password are required");

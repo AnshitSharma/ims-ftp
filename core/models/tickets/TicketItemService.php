@@ -98,14 +98,4 @@ class TicketItemService
         }
     }
     
-    /**
-     * Delete items for a ticket
-     * 
-     * @param int $ticketId
-     */
-    public function deleteTicketItems($ticketId)
-    {
-        $stmt = $this->pdo->prepare("DELETE FROM ticket_items WHERE ticket_id = ?");
-        $stmt->execute([$ticketId]);
-    }
 }

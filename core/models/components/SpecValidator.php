@@ -73,16 +73,6 @@ class SpecValidator
         return $violations;
     }
 
-    /** Validate a single model object against its type's schema. Returns messages, [] if clean. */
-    public static function validateOne(string $type, array $specs): array
-    {
-        $schemas = self::schemas();
-        if (!isset($schemas[$type])) {
-            return [];
-        }
-        return self::check($specs, $schemas[$type], '');
-    }
-
     /** @return array<string,array> type => decoded schema */
     private static function schemas(): array
     {

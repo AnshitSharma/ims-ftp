@@ -327,21 +327,6 @@ class RackPlacement
     }
 
     /**
-     * Height of the largest single opening in a rack — the tallest server that
-     * could actually be placed in it right now.
-     */
-    public static function largestFreeU($pdo, $rackUuid, $totalU)
-    {
-        $largest = 0;
-        foreach (self::freeIntervals($pdo, $rackUuid, $totalU) as $gap) {
-            if ($gap['u'] > $largest) {
-                $largest = $gap['u'];
-            }
-        }
-        return $largest;
-    }
-
-    /**
      * Re-derive a racked server's u_height after its chassis changed.
      *
      * A server is usually placed in a rack before the chassis exists, so the

@@ -231,29 +231,6 @@ class ComponentDataService {
     }
 
     /**
-     * Index the board and chassis specs that server compute platforms own.
-     *
-     * A platform is a physical box; the board and chassis inside it are described in
-     * serverplatform/server-platform-level-3.json and are NOT the loose motherboard /
-     * chassis spares of the same model. They still have to resolve under types
-     * 'motherboard' and 'chassis', because that is what server_configurations stamps
-     * and what the whole compatibility engine reads.
-     *
-     * Deliberately a SEPARATE index rather than a merge into $jsonCache[$type]:
-     * loadJsonData() round-trips that array through ComponentSpecCache, so merging
-     * would persist platform data into the motherboard/chassis file cache and leak it
-     * into every later reader of those files.
-     *
-     * The index itself lives in PlatformSpecIndex (2026-08-25) because the validation
-     * engine resolves specs through DataExtractionUtilities, not through this class.
-     *
-     * @return array{motherboard: array<string,array>, chassis: array<string,array>}
-     */
-    private function loadPlatformSpecIndex() {
-        return PlatformSpecIndex::load();
-    }
-
-    /**
      * The platform-owned board/chassis spec for this UUID, or null.
      *
      * Delegates to PlatformSpecIndex, which DataExtractionUtilities resolves through too.
@@ -599,29 +576,6 @@ class ComponentDataService {
         }
     }
 
-    public function findComponentByModel($componentType, $brand, $model) {
-        $jsonData = $this->loadJsonData($componentType);
-        
-        foreach ($jsonData as $brandData) {
-            if (strcasecmp($brandData['brand'] ?? '', $brand) === 0) {
-                if (isset($brandData['models'])) {
-                    foreach ($brandData['models'] as $modelData) {
-                        if (strcasecmp($modelData['model'] ?? '', $model) === 0) {
-                            return array_merge($modelData, [
-                                'uuid' => $this->getOrGenerateUuid($modelData, $componentType),
-                                'brand' => $brandData['brand'] ?? null,
-                                'series' => $brandData['series'] ?? null,
-                                'family' => $brandData['family'] ?? null
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-        
-        return null;
-    }
-
     private function getOrGenerateUuid($model, $componentType) {
         // Check both 'uuid' and 'UUID' (JSON may have either)
         if (isset($model['uuid'])) {
@@ -813,33 +767,6 @@ class ComponentDataService {
                         'series' => $brand['series'] ?? null,
                         'family' => $brand['family'] ?? null
                     ]);
-                }
-            }
-        }
-        
-        return $components;
-    }
-
-    public function searchComponents($componentType, $searchTerm) {
-        $jsonData = $this->loadJsonData($componentType);
-        $components = [];
-        $searchTerm = strtolower($searchTerm);
-        
-        foreach ($jsonData as $brand) {
-            if (isset($brand['models'])) {
-                foreach ($brand['models'] as $model) {
-                    $modelName = strtolower($model['model'] ?? '');
-                    $brandName = strtolower($brand['brand'] ?? '');
-                    
-                    if (strpos($modelName, $searchTerm) !== false || 
-                        strpos($brandName, $searchTerm) !== false) {
-                        $components[] = array_merge($model, [
-                            'uuid' => $this->getOrGenerateUuid($model, $componentType),
-                            'brand' => $brand['brand'] ?? null,
-                            'series' => $brand['series'] ?? null,
-                            'family' => $brand['family'] ?? null
-                        ]);
-                    }
                 }
             }
         }
@@ -1156,53 +1083,6 @@ class ComponentDataService {
     }
     
     /**
-     * Cache component specifications with size management
-     */
-    private function cacheComponentSpecs($cacheKey, $specs) {
-        // Implement LRU cache with size limit
-        if (count($this->componentSpecsCache) >= $this->maxCacheSize) {
-            // Remove oldest entries (simple FIFO for now)
-            $keysToRemove = array_slice(array_keys($this->componentSpecsCache), 0, 100);
-            foreach ($keysToRemove as $key) {
-                unset($this->componentSpecsCache[$key]);
-            }
-        }
-        
-        $this->componentSpecsCache[$cacheKey] = $specs;
-    }
-    
-    /**
-     * Cache search results with size management
-     */
-    private function cacheSearchResults($cacheKey, $results) {
-        // Limit search cache size
-        if (count($this->componentSearchCache) >= 200) {
-            // Remove oldest search results
-            $keysToRemove = array_slice(array_keys($this->componentSearchCache), 0, 50);
-            foreach ($keysToRemove as $key) {
-                unset($this->componentSearchCache[$key]);
-            }
-        }
-        
-        $this->componentSearchCache[$cacheKey] = $results;
-    }
-    
-    /**
-     * Update cache statistics
-     */
-    private function updateCacheStats($operation, $componentType) {
-        if (!isset($this->cacheStats[$operation])) {
-            $this->cacheStats[$operation] = [];
-        }
-        
-        if (!isset($this->cacheStats[$operation][$componentType])) {
-            $this->cacheStats[$operation][$componentType] = 0;
-        }
-        
-        $this->cacheStats[$operation][$componentType]++;
-    }
-    
-    /**
      * Get cache statistics
      */
     public function getCacheStats() {
@@ -1220,34 +1100,6 @@ class ComponentDataService {
         ];
     }
     
-    /**
-     * Preload frequently used components for better performance
-     */
-    public function preloadPopularComponents($componentTypes = ['cpu', 'motherboard', 'ram']) {
-        foreach ($componentTypes as $componentType) {
-            try {
-                // Load JSON data into cache
-                $this->loadJsonData($componentType);
-
-                // Preload first few components of each type
-                $components = $this->getAllAvailableComponents($componentType);
-                $popularComponents = array_slice($components, 0, 50); // First 50 components
-
-                foreach ($popularComponents as $component) {
-                    $uuid = $component['uuid'] ?? null;
-                    if ($uuid) {
-                        $this->getComponentSpecifications($componentType, $uuid);
-                    }
-                }
-
-                $this->updateCacheStats('preload', $componentType);
-
-            } catch (Exception $e) {
-                error_log("Error preloading $componentType components: " . $e->getMessage());
-            }
-        }
-    }
-
     /**
      * Get caddy specifications by UUID
      * Caddies have a special JSON structure: {"caddies": [...]}
@@ -1317,47 +1169,6 @@ class ComponentDataService {
         return $nvmeAdapters;
     }
 
-    /**
-     * Warm up cache by loading all component specs
-     *
-     * Call this on application startup for optimal performance
-     *
-     * @return array Statistics [types => int, specs => int, time => float]
-     */
-    public function warmupCache(): array {
-        $startTime = microtime(true);
-        $typeCount = 0;
-        $specCount = 0;
-
-        $componentTypes = ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'pciecard', 'risercard', 'hbacard'];
-
-        foreach ($componentTypes as $type) {
-            try {
-                $specs = $this->loadJsonData($type);
-
-                if (!empty($specs)) {
-                    if ($this->specCache !== null) {
-                        $this->specCache->setAllSpecsForType($type, $specs);
-                    }
-                    $typeCount++;
-                    // Count specs based on structure
-                    if (is_array($specs)) {
-                        $specCount += count($specs);
-                    }
-                }
-            } catch (Exception $e) {
-                error_log("Warning: Failed to warmup cache for type $type: " . $e->getMessage());
-            }
-        }
-
-        $elapsedTime = microtime(true) - $startTime;
-
-        return [
-            'types' => $typeCount,
-            'specs' => $specCount,
-            'time' => round($elapsedTime, 3)
-        ];
-    }
 }
 
 ?>

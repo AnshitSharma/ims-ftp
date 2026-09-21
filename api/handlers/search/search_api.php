@@ -13,24 +13,11 @@ function handleSearchOperations($operation, $user) {
     }
 
     switch ($operation) {
-        case 'global':
-            $query = $_GET['q'] ?? $_POST['q'] ?? '';
-            $limit = (int)($_GET['limit'] ?? $_POST['limit'] ?? 20);
-
-            if (empty($query)) {
-                send_json_response(0, 1, 400, "Search query is required");
-            }
-
-            try {
-                $results = performGlobalSearch($pdo, $query, $limit, $user);
-            } catch (Exception $e) {
-                // performGlobalSearch throws on DB failure so an outage is a
-                // 500, not a 200 with zero results.
-                error_log("Error performing global search: " . $e->getMessage());
-                send_json_response(0, 1, 500, "Search failed");
-            }
-            send_json_response(1, 1, 200, "Search completed", $results);
-            break;
+        // `global` lived here: a 12-table × 4-column leading-wildcard scan, merged
+        // and sorted in PHP. Removed 2026-09-21 with performGlobalSearch() — the
+        // client half was retired earlier and no caller remained in either stack.
+        // `models` below is what the UI actually uses, and it resolves through the
+        // indexed catalogue instead of scanning every inventory table.
 
         // JSON-010: type-ahead over MODELS, so the browser stops downloading and parsing the
         // whole 536 KB spec catalogue to populate a picker. Gated on the same search.use

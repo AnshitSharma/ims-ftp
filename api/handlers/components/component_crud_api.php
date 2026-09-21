@@ -207,8 +207,6 @@ function handleComponentOperations($module, $operation, $user) {
                 $result = addComponent($pdo, $module, $componentData, $user['id']);
 
                 if ($result) {
-                    error_log("Successfully added $module component with ID: " . $result['id']
-                        . " (asset tag " . $result['asset_tag'] . ")");
                     send_json_response(1, 1, 201, ucfirst($module) . " component added successfully", [
                         'component_id' => $result['id'],
                         'uuid' => $result['uuid'],

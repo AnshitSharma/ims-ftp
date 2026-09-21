@@ -14,22 +14,7 @@
 
 class PipelineConfig
 {
-    /**
-     * Per-stage statuses (ticket_stage_progress.status)
-     */
-    public static function getStageStatuses()
-    {
-        return ['pending', 'active', 'completed', 'skipped', 'rejected'];
-    }
 
-    /**
-     * Pipeline lifecycle statuses (reuse a subset of the tickets.status enum).
-     * The active stage tells you "where" the pipeline is; this is the overall state.
-     */
-    public static function getLifecycleStatuses()
-    {
-        return ['draft', 'in_progress', 'completed', 'rejected', 'cancelled'];
-    }
 
     /**
      * Terminal lifecycle statuses — no further stage actions allowed.

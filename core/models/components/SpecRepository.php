@@ -72,20 +72,6 @@ class SpecRepository
     }
 
     /**
-     * Offer a PDO so the repository can read component_models instead of the files.
-     *
-     * Optional by design. The table ships as a seeder and seeders are hand-run AFTER the code
-     * that references them has deployed, so "the table is not there yet" is an ordinary state,
-     * not an error -- the repository simply stays on the files until it appears. Never
-     * hard-fail on its absence.
-     */
-    public function useDatabase(?PDO $pdo): void
-    {
-        $this->pdo = $pdo;
-        $this->tableUsable = null; // re-probe
-    }
-
-    /**
      * The spec for one uuid, or null.
      *
      * Platform-owned boards and chassis are checked FIRST, exactly as ComponentDataService
@@ -119,24 +105,6 @@ class SpecRepository
     public function exists(string $componentType, string $uuid): bool
     {
         return $this->find($componentType, $uuid) !== null;
-    }
-
-    /**
-     * Resolve a uuid without knowing its type.
-     *
-     * The catalogue is one namespace -- enforced by component_models.spec_uuid being UNIQUE
-     * and by tests/catalogue_uuid_gate.php -- so this is unambiguous. Returns
-     * ['component_type' => ..., 'spec' => ...] or null.
-     */
-    public function findAnyType(string $uuid): ?array
-    {
-        foreach (array_keys(ComponentSpecPaths::getAll()) as $type) {
-            $spec = $this->find($type, $uuid);
-            if ($spec !== null) {
-                return ['component_type' => $type, 'spec' => $spec];
-            }
-        }
-        return null;
     }
 
     /** Drop the in-memory index. For tests and for after a spec_build. */

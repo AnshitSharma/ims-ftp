@@ -9,14 +9,6 @@
 class WorkflowConfig
 {
     /**
-     * Valid ticket statuses
-     */
-    public static function getValidStatuses()
-    {
-        return ['draft', 'pending', 'approved', 'in_progress', 'deployed', 'completed', 'rejected', 'cancelled'];
-    }
-
-    /**
      * Valid priorities
      */
     public static function getValidPriorities()
@@ -58,21 +50,4 @@ class WorkflowConfig
         return ['add', 'remove', 'replace'];
     }
 
-    /**
-     * Status transition rules
-     * Format: current_status => [allowed_next_statuses]
-     */
-    public static function getStatusTransitions()
-    {
-        return [
-            'draft' => ['pending', 'cancelled'],
-            'pending' => ['approved', 'rejected', 'cancelled'],
-            'approved' => ['in_progress', 'cancelled'],
-            'in_progress' => ['deployed', 'cancelled'],
-            'deployed' => ['completed', 'cancelled'], // Deployed tickets should be verified then completed
-            'completed' => [], // Terminal status
-            'rejected' => ['draft'], // Can be reopened/edited
-            'cancelled' => ['draft'] // Can be reopened/edited
-        ];
-    }
 }

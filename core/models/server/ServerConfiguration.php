@@ -92,7 +92,6 @@ class ServerConfiguration {
         return null;
     }
 
-
     /**
      * Create new server configuration
      */
@@ -144,27 +143,6 @@ class ServerConfiguration {
 
         } catch (Exception $e) {
             error_log("Error loading server configuration: " . $e->getMessage());
-            return null;
-        }
-    }
-    
-    /**
-     * Load configuration by ID
-     */
-    public static function loadById($pdo, $id) {
-        try {
-            $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE id = ?");
-            $stmt->execute([$id]);
-            $data = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($data) {
-                return new self($pdo, $data);
-            }
-            
-            return null;
-            
-        } catch (Exception $e) {
-            error_log("Error loading server configuration by ID: " . $e->getMessage());
             return null;
         }
     }
@@ -303,19 +281,6 @@ class ServerConfiguration {
     }
     
     /**
-     * Check if configuration has specific component type
-     */
-    public function hasComponentType($componentType) {
-        $components = $this->getComponents();
-        foreach ($components as $component) {
-            if ($component['component_type'] === $componentType) {
-                return true;
-            }
-        }
-        return false;
-    }
-    
-    /**
      * Get component count for specific type
      */
     public function getComponentCount($componentType = null) {
@@ -332,93 +297,6 @@ class ServerConfiguration {
     }
     
     /**
-     * Get configuration status text
-     */
-    public function getStatusText() {
-        $statusMap = [
-            0 => 'Draft',
-            1 => 'Validated',
-            2 => 'Built',
-            3 => 'Finalized'
-        ];
-
-        $status = $this->data['configuration_status'] ?? 0;
-        $statusText = $statusMap[$status] ?? 'Unknown';
-
-        return $statusText;
-    }
-    
-    /**
-     * Check if user can edit this configuration
-     */
-    public function canEdit($userId, $pdo = null) {
-        if ($this->data['created_by'] == $userId) {
-            return true;
-        }
-        
-        if ($pdo && function_exists('hasPermission')) {
-            return hasPermission($pdo, 'server.edit_all', $userId);
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Check if user can view this configuration
-     */
-    public function canView($userId, $pdo = null) {
-        if ($this->data['created_by'] == $userId) {
-            return true;
-        }
-        
-        if ($pdo && function_exists('hasPermission')) {
-            return hasPermission($pdo, 'server.view_all', $userId);
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Get configuration summary for display
-     */
-    public function getSummary() {
-        $components = $this->getComponentsByType();
-        
-        return [
-            'config_uuid' => $this->data['config_uuid'],
-            'server_name' => $this->data['server_name'],
-            'description' => $this->data['description'],
-            'status' => $this->getStatusText(),
-            'status_code' => $this->data['configuration_status'],
-            'created_at' => $this->data['created_at'],
-            'updated_at' => $this->data['updated_at'],
-            'component_counts' => [
-                'cpu' => count($components['cpu'] ?? []),
-                'motherboard' => count($components['motherboard'] ?? []),
-                'ram' => count($components['ram'] ?? []),
-                'storage' => count($components['storage'] ?? []),
-                'nic' => count($components['nic'] ?? []),
-                'caddy' => count($components['caddy'] ?? [])
-            ],
-            'total_components' => $this->getComponentCount(),
-            'power_consumption' => $this->data['power_consumption'] ?? null,
-        ];
-    }
-    
-    /**
-     * Export configuration to array
-     */
-    public function toArray($includeComponents = true) {
-        $data = $this->data;
-        
-        if ($includeComponents) {
-            $data['components'] = $this->getComponentsByType();
-        }
-        
-        return $data;
-    }
-    
-    /**
      * Generate UUID for configuration
      */
     private static function generateUuid() {
@@ -430,52 +308,6 @@ class ServerConfiguration {
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
-    }
-    
-    /**
-     * Get all configurations for a user
-     */
-    public static function getAllForUser($pdo, $userId, $options = []) {
-        try {
-            $limit = $options['limit'] ?? 50;
-            $offset = $options['offset'] ?? 0;
-            $status = $options['status'] ?? null;
-            $search = $options['search'] ?? '';
-            
-            $conditions = ["created_by = ?"];
-            $params = [$userId];
-            
-            if ($status !== null) {
-                $conditions[] = "configuration_status = ?";
-                $params[] = $status;
-            }
-            
-            if (!empty($search)) {
-                $conditions[] = "(server_name LIKE ? OR description LIKE ?)";
-                $params[] = "%$search%";
-                $params[] = "%$search%";
-            }
-            
-            $whereClause = "WHERE " . implode(" AND ", $conditions);
-            
-            $sql = "SELECT * FROM server_configurations $whereClause ORDER BY updated_at DESC LIMIT ? OFFSET ?";
-            $params[] = $limit;
-            $params[] = $offset;
-            
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($params);
-            
-            $configurations = [];
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $configurations[] = new self($pdo, $row);
-            }
-            
-            return $configurations;
-            
-        } catch (Exception $e) {
-            error_log("Error getting configurations for user: " . $e->getMessage());
-            return [];
-        }
     }
     
     /**

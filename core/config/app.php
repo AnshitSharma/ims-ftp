@@ -115,9 +115,6 @@ date_default_timezone_set($timezone);
 // =============================================================================
 
 define('APP_ENV', getenv('APP_ENV') ?: 'development');
-define('APP_DEBUG', filter_var(getenv('APP_DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN));
-define('APP_NAME', getenv('APP_NAME') ?: 'BDC Inventory Management System');
-define('MAIN_SITE_URL', getenv('MAIN_SITE_URL') ?: 'https://localhost');
 
 // =============================================================================
 // JWT CONFIGURATION
@@ -151,39 +148,11 @@ define('MS_CLIENT_SECRET', getenv('MS_CLIENT_SECRET') ?: '');
 define('MS_REDIRECT_URI', getenv('MS_REDIRECT_URI') ?: '');
 
 // =============================================================================
-// SECURITY CONFIGURATION
-// =============================================================================
-
-define('FORCE_HTTPS', filter_var(getenv('FORCE_HTTPS') ?: 'false', FILTER_VALIDATE_BOOLEAN));
-define('SESSION_SECURE', filter_var(getenv('SESSION_SECURE') ?: 'false', FILTER_VALIDATE_BOOLEAN));
-
-// =============================================================================
-// API RATE LIMITING
-// =============================================================================
-
-define('API_RATE_LIMIT_ENABLED', filter_var(getenv('API_RATE_LIMIT_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN));
-define('API_RATE_LIMIT_REQUESTS', (int)(getenv('API_RATE_LIMIT_REQUESTS') ?: 1000));
-
-// =============================================================================
 // CORS CONFIGURATION
 // =============================================================================
 
 $corsOrigins = getenv('CORS_ALLOWED_ORIGINS') ?: '';
 define('CORS_ALLOWED_ORIGINS', $corsOrigins ? array_map('trim', explode(',', $corsOrigins)) : []);
-
-// =============================================================================
-// LOGGING CONFIGURATION
-// =============================================================================
-
-define('LOG_LEVEL', getenv('LOG_LEVEL') ?: 'info');
-define('ERROR_LOG_ENABLED', filter_var(getenv('ERROR_LOG_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN));
-
-// =============================================================================
-// COMPONENT SETTINGS
-// =============================================================================
-
-define('DEFAULT_COMPONENT_STATUS', (int)(getenv('DEFAULT_COMPONENT_STATUS') ?: 1));
-define('AUTO_GENERATE_UUIDS', filter_var(getenv('AUTO_GENERATE_UUIDS') ?: 'true', FILTER_VALIDATE_BOOLEAN));
 
 // =============================================================================
 // DATABASE CONFIGURATION & CONNECTION
@@ -217,8 +186,6 @@ try {
     $lockWaitTimeout = getenv('DB_LOCK_WAIT_TIMEOUT') ?: 50;
     $pdo->exec("SET innodb_lock_wait_timeout = " . (int)$lockWaitTimeout);
 
-    error_log("P4.2: Transaction timeout configured: lock_wait=$lockWaitTimeout sec");
-
 } catch (PDOException $e) {
     http_response_code(500);
     error_log("Database connection failed: " . $e->getMessage());
@@ -243,30 +210,6 @@ try {
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
-
-/**
- * Get environment variable with default fallback
- */
-if (!function_exists('getEnv')) {
-    function getEnv($key, $default = null) {
-        $value = getenv($key);
-        return $value !== false ? $value : $default;
-    }
-}
-
-/**
- * Check if running in production environment
- */
-function isProduction() {
-    return getenv('APP_ENV') === 'production';
-}
-
-/**
- * Check if running in development environment
- */
-function isDevelopment() {
-    return getenv('APP_ENV') === 'development';
-}
 
 /**
  * Get database connection (for backwards compatibility)

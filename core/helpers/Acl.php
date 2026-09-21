@@ -10,15 +10,6 @@
  */
 
 /**
- * Safe session start (kept for backward compatibility)
- */
-function safeSessionStart() {
-    if (session_status() === PHP_SESSION_NONE) {
-        session_start();
-    }
-}
-
-/**
  * JWT Authentication - Get authenticated user from JWT token
  */
 function authenticateWithJWT($pdo) {
@@ -680,22 +671,6 @@ function createRole($pdo, $name, $description = '') {
         return false;
     } catch (Exception $e) {
         error_log("Create role error: " . $e->getMessage());
-        return false;
-    }
-}
-
-/**
- * Update role
- */
-function updateRole($pdo, $roleId, $name, $description = '') {
-    try {
-        // Generate display name from role name
-        $displayName = ucwords(str_replace('_', ' ', $name));
-
-        $stmt = $pdo->prepare("UPDATE roles SET name = ?, display_name = ?, description = ?, updated_at = NOW() WHERE id = ?");
-        return $stmt->execute([$name, $displayName, $description, $roleId]);
-    } catch (Exception $e) {
-        error_log("Update role error: " . $e->getMessage());
         return false;
     }
 }

@@ -13,7 +13,6 @@ require_once __DIR__ . '/../components/ComponentDataService.php';
 require_once __DIR__ . '/../server/ServerConfiguration.php';
 
 class UnifiedSlotTracker {
-
     private $pdo;
     private $dataExtractor;
     private $componentDataService;
@@ -279,23 +278,6 @@ class UnifiedSlotTracker {
     }
 
     /**
-     * Check if a riser can fit in available riser slots
-     *
-     * @param string $configUuid Server configuration UUID
-     * @return bool True if riser can fit
-     */
-    public function canFitRiser($configUuid) {
-        $availability = $this->getRiserSlotAvailability($configUuid);
-
-        if (!$availability['success']) {
-            return false;
-        }
-
-        // Check if any riser slot is available
-        return !empty($availability['available_slots']);
-    }
-
-    /**
      * Assign optimal PCIe slot to a new component
      * Uses smallest compatible slot first (x4 card prefers x4 over x16)
      *
@@ -324,30 +306,6 @@ class UnifiedSlotTracker {
         }
 
         return null; // No compatible slots available
-    }
-
-    /**
-     * Assign riser slot to a new riser card (legacy method - uses first available)
-     *
-     * @param string $configUuid Server configuration UUID
-     * @return string|null Assigned riser slot ID or null if no slots available
-     */
-    public function assignRiserSlot($configUuid) {
-        $availability = $this->getRiserSlotAvailability($configUuid);
-
-        if (!$availability['success']) {
-            return null;
-        }
-
-        // available_slots is grouped by type: ['x16' => [...], 'x8' => [...]]
-        // Return first available slot from any type
-        foreach ($availability['available_slots'] as $slotType => $slotIds) {
-            if (!empty($slotIds)) {
-                return $slotIds[0]; // Return first available slot ID
-            }
-        }
-
-        return null; // No riser slots available
     }
 
     /**
@@ -393,37 +351,6 @@ class UnifiedSlotTracker {
         }
 
         return null; // No compatible slots available
-    }
-
-    /**
-     * Check if riser card can fit in available riser slots by size
-     *
-     * @param string $configUuid Server configuration UUID
-     * @param string $riserSlotSize Required slot size (x8, x16)
-     * @return bool True if compatible riser slot available
-     */
-    public function canFitRiserBySize($configUuid, $riserSlotSize) {
-        return $this->assignRiserSlotBySize($configUuid, $riserSlotSize) !== null;
-    }
-
-    /**
-     * Get all PCIe slot assignments for a configuration
-     *
-     * @param string $configUuid Server configuration UUID
-     * @return array Mapping of slot_id => component_uuid
-     */
-    public function getAllSlotAssignments($configUuid) {
-        return $this->getUsedPCIeSlots($configUuid);
-    }
-
-    /**
-     * Get all riser slot assignments for a configuration
-     *
-     * @param string $configUuid Server configuration UUID
-     * @return array Mapping of slot_id => component_uuid
-     */
-    public function getAllRiserSlotAssignments($configUuid) {
-        return $this->getUsedRiserSlots($configUuid);
     }
 
     /**
@@ -1604,7 +1531,6 @@ class UnifiedSlotTracker {
                         // keeps the same output and drops those lookups.
                         if (!empty($pcie['slot_position']) &&
                             self::isRiserBaySlot($pcie['slot_position'])) {
-
                             // Verify this is actually a riser card by checking JSON specs.
                             // 'risercard' FIRST (2026-09-01): risers became their own
                             // component type on 2026-08-14, and this lookup only kept
@@ -2120,55 +2046,6 @@ class UnifiedSlotTracker {
                 'can_remove' => false,
                 'dependent_components' => [],
                 'message' => 'Validation error: ' . $e->getMessage()
-            ];
-        }
-    }
-
-    /**
-     * P2.3: Get cascade removal plan for a riser
-     * Returns list of components that must be removed if riser is removed
-     *
-     * @param string $configUuid Server configuration UUID
-     * @param string $riserUuid Riser card UUID to remove
-     * @return array Cascade removal plan with dependencies
-     */
-    public function getCascadeRemovalPlan($configUuid, $riserUuid) {
-        try {
-            $removalPlan = [
-                'riser_uuid' => $riserUuid,
-                'dependent_pciecard' => [],
-                'total_affected' => 0,
-                'warning' => null
-            ];
-
-            // Get direct dependents (PCIe cards on riser slots)
-            $directDependents = $this->getPCIeCardsOnRiser($configUuid, $riserUuid);
-
-            foreach ($directDependents as $card) {
-                $specs = $this->componentDataService->getComponentSpecifications('pciecard', $card['uuid']);
-                $removalPlan['dependent_pciecard'][] = [
-                    'uuid' => $card['uuid'],
-                    'model' => $specs['model'] ?? 'Unknown',
-                    'subtype' => $specs['component_subtype'] ?? 'PCIe Card',
-                    'reason' => 'Installed in riser-provided PCIe slot'
-                ];
-            }
-
-            $removalPlan['total_affected'] = count($removalPlan['dependent_pciecard']);
-
-            if ($removalPlan['total_affected'] > 0) {
-                $removalPlan['warning'] = "Removing this riser will cascade-remove {$removalPlan['total_affected']} dependent PCIe card(s)";
-            }
-
-            return $removalPlan;
-
-        } catch (Exception $e) {
-            error_log("Error getting cascade removal plan: " . $e->getMessage());
-            return [
-                'riser_uuid' => $riserUuid,
-                'dependent_pciecard' => [],
-                'total_affected' => 0,
-                'error' => 'Failed to generate cascade plan: ' . $e->getMessage()
             ];
         }
     }

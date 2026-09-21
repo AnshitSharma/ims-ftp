@@ -171,23 +171,6 @@ class CpuIdentityMatcher
     }
 
     /**
-     * Convenience wrapper: compare two CPUs by their ims-data spec UUIDs.
-     */
-    public function compareByUuid($existingUuid, $incomingUuid)
-    {
-        $existing = $this->dataUtils->getCPUByUUID($existingUuid);
-        $incoming = $this->dataUtils->getCPUByUUID($incomingUuid);
-
-        if (!is_array($existing) || !is_array($incoming)) {
-            return $this->result(self::VERDICT_MISMATCH, false, null,
-                'Cannot verify CPU pairing: one of the CPUs was not found in the component specifications.',
-                ['existing_uuid' => $existingUuid, 'incoming_uuid' => $incomingUuid]);
-        }
-
-        return $this->compare($existing, $incoming);
-    }
-
-    /**
      * Product line a CPU belongs to. Note findInBrandModels() merges brand/series/family
      * from the group into the model but NOT generation, so architecture (a model-level
      * field) carries the generation signal here.

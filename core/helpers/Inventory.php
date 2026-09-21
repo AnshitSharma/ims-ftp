@@ -241,7 +241,6 @@ function formatAssetTag($type, $inventoryId) {
     return sprintf('BDC-%s-%06d', getComponentAssetTagCode($type), (int)$inventoryId);
 }
 
-
 /**
  * Turn a duplicate-key PDOException into an operator-readable message.
  *
@@ -299,13 +298,6 @@ function describeDuplicateComponentKey(PDO $pdo, $tableName, $type, array $safeD
 }
 
 /**
- * Convert CamelCase to snake_case
- */
-function convertCamelToSnake($input) {
-    return strtolower(preg_replace('/([a-z])([A-Z])/', '$1_$2', $input));
-}
-
-/**
  * Get field mapping for component type (snake_case to CamelCase)
  */
 function getComponentFieldMap($type) {
@@ -326,20 +318,13 @@ function getComponentFieldMap($type) {
         'vendor_id' => 'VendorID'
     ];
 
-    // Component-specific fields
-    $specificFields = [
-        'nic' => [
-            'mac_address' => 'MacAddress',
-            'ip_address' => 'IPAddress',
-            'network_name' => 'NetworkName'
-        ],
-        'pciecard' => [
-            'card_type' => 'CardType',
-            'attachables' => 'Attachables'
-        ]
-    ];
-
-    return array_merge($commonFields, $specificFields[$type] ?? []);
+    // There were per-type entries here (nic: MacAddress/IPAddress/NetworkName,
+    // pciecard: CardType/Attachables). None of those columns exist: a live
+    // nic-list and pciecard-list on 2026-09-21 returned neither set, so the
+    // mappings could only ever be dropped again by addComponent()'s
+    // INFORMATION_SCHEMA allowlist. Removed rather than left to imply a schema
+    // that isn't there. Add a branch back the day a type really does diverge.
+    return $commonFields;
 }
 
 /**
@@ -832,8 +817,6 @@ function addComponent($pdo, $type, $data, $userId) {
         $values = array_values($safeData);
 
         $sql = "INSERT INTO $tableName (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
-
-        error_log("Inserting $type data into $tableName: " . json_encode(array_keys($safeData)));
 
         // The row and its asset tag must land together: a row that committed
         // without a tag would be a unit the system cannot name. The tag is

@@ -54,21 +54,6 @@ class ServerState
     }
 
     /**
-     * Load a configuration by UUID, reading `server_configurations` exactly once.
-     * Returns null when the configuration does not exist.
-     */
-    public static function fromConfigUuid(PDO $pdo, string $configUuid): ?ServerState
-    {
-        $stmt = $pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ?");
-        $stmt->execute([$configUuid]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$row) {
-            return null;
-        }
-        return new self($row, [], $pdo);
-    }
-
-    /**
      * Build a state from an already-loaded config row / in-flight `$configData` array
      * (the add-time path already holds the locked row, so no re-query is needed).
      */
@@ -98,18 +83,6 @@ class ServerState
         return new self($this->configData, array_merge($this->candidates, [$candidate]), $this->pdo);
     }
 
-    // -- Identity / scalar config -------------------------------------------------
-
-    public function getConfigUuid(): ?string
-    {
-        return $this->configData['config_uuid'] ?? null;
-    }
-
-    public function getRawConfigData(): array
-    {
-        return $this->configData;
-    }
-
     public function getMotherboardUuid(): ?string
     {
         $uuid = $this->configData['motherboard_uuid'] ?? null;
@@ -124,27 +97,11 @@ class ServerState
 
     // -- Typed, quantity-aware accessors -----------------------------------------
 
-    /** @return array|null the motherboard component entry, or null if none */
-    public function getMotherboard(): ?array
-    {
-        return $this->firstOfType('motherboard');
-    }
-
-    /** @return array|null the chassis component entry, or null if none */
-    public function getChassis(): ?array
-    {
-        return $this->firstOfType('chassis');
-    }
-
     public function getCpus(): array        { return $this->ofType('cpu'); }
-    public function getRam(): array         { return $this->ofType('ram'); }
     public function getStorage(): array     { return $this->ofType('storage'); }
-    public function getCaddies(): array     { return $this->ofType('caddy'); }
     public function getNics(): array        { return $this->ofType('nic'); }
     public function getHbas(): array        { return $this->ofType('hbacard'); }
     public function getPcieCards(): array   { return $this->ofType('pciecard'); }
-    public function getRiserCards(): array  { return $this->ofType('risercard'); }
-    public function getSfps(): array        { return $this->ofType('sfp'); }
 
     /**
      * The canonical flat component list — identity-equivalent to
@@ -172,16 +129,6 @@ class ServerState
             }
         }
         return $out;
-    }
-
-    private function firstOfType(string $type): ?array
-    {
-        foreach ($this->getComponents() as $c) {
-            if (($c['component_type'] ?? null) === $type) {
-                return $c;
-            }
-        }
-        return null;
     }
 
     /**

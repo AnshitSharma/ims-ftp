@@ -10,7 +10,6 @@ require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
 require_once __DIR__ . '/../../../core/models/rack/ServerRelocation.php';
 
-
 header('Content-Type: application/json');
 
 // Use authentication already performed by api.php
@@ -59,9 +58,10 @@ switch ($action) {
         handleRemoveComponent($serverBuilder, $user);
         break;
 
-    case 'replace-component':
-        handleReplaceComponent($serverBuilder, $user);
-        break;
+    // `replace-component` was removed 2026-09-21: no caller in either stack.
+    // ReplaceComponentCommand itself STAYS — RequestActionExecutor runs it for a
+    // `server.component.replace` Request step, which is the live path. Restore
+    // this case if a builder UI ever wants to drive a replace directly.
 
     case 'transition-status':
         handleTransitionStatus($serverBuilder, $user);
@@ -582,7 +582,6 @@ function handleUpdateConfiguration($serverBuilder, $user) {
                         }
                         break;
 
-
                     default:
                         $newValue = trim($newValue);
                         break;
@@ -751,8 +750,6 @@ function handleCreateStart($serverBuilder, $user) {
         'is_sandbox'    => $data['is_sandbox'],
     ]);
 }
-
-
 
 /**
  * FIXED: Add component to server configuration with proper ServerUUID handling
@@ -1246,96 +1243,6 @@ function handleRemoveComponent($serverBuilder, $user) {
 }
 
 /**
- * U-A.2 — replace one physical component with another via the command
- * layer's ReplaceComponentCommand (a NEW capability, no legacy counterpart:
- * RULE_MAP.md documents this as zero-diffs-by-construction). Additive action
- * -- does not touch add-component/remove-component's own dispatch.
- *
- * Ungated since P9: COMMAND_LAYER_ENABLED is gone, so the off-mode 403 that
- * used to front this handler has nothing left to test.
- */
-function handleReplaceComponent($serverBuilder, $user) {
-    global $pdo;
-
-    header('X-IMS-Deprecation: new v2-only action, see docs/API-DEPRECATION.md');
-
-    require_once __DIR__ . '/../../../core/models/commands/ReplaceComponentCommand.php';
-
-    $configUuid = $_POST['config_uuid'] ?? '';
-    $componentType = $_POST['component_type'] ?? '';
-    $oldComponentUuid = $_POST['old_component_uuid'] ?? '';
-    $oldSerial = $_POST['old_serial'] ?? null;
-    $newComponentUuid = $_POST['new_component_uuid'] ?? '';
-    $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
-
-    // parent_nic_uuid re-parents an sfp. serial_number / new_inventory_id name
-    // WHICH unit of the replacement model goes in [M-11] — they used not to be
-    // forwarded, and the command picked by model, so a technician holding a
-    // specific card got whichever unit sorted first. A replace still does not
-    // cascade-remove children; it re-anchors them.
-    $options = [];
-    if ($componentType === 'sfp' && !empty($_POST['parent_nic_uuid'])) {
-        $options['parent_nic_uuid'] = $_POST['parent_nic_uuid'];
-    }
-    if (!empty($_POST['new_serial'])) {
-        $options['serial_number'] = $_POST['new_serial'];
-    }
-    if (!empty($_POST['new_inventory_id'])) {
-        $options['new_inventory_id'] = (int)$_POST['new_inventory_id'];
-    }
-
-    if (empty($configUuid) || empty($componentType) || empty($oldComponentUuid) || empty($newComponentUuid)) {
-        send_json_response(0, 1, 400, "config_uuid, component_type, old_component_uuid, and new_component_uuid are required");
-    }
-
-    try {
-        $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
-        if (!$config) {
-            send_json_response(0, 1, 404, "Server configuration not found");
-        }
-        if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
-            send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
-        }
-
-        // Swapping a platform-owned board or chassis for a loose spare would leave a
-        // build that no longer matches the product it was installed from.
-        assertNotPlatformOwned($pdo, $config, $componentType, $oldComponentUuid, $oldSerial);
-
-        $cmd = new ReplaceComponentCommand(
-            $pdo, $configUuid, $componentType, $oldComponentUuid, $oldSerial, $newComponentUuid,
-            $options, (int)$user['id'], $expectedRevision
-        );
-        $result = $cmd->execute();
-
-        send_json_response(1, 1, 200, "Component replaced successfully", [
-            'config_uuid' => $configUuid,
-            'revision' => $result->revision,
-            'component_type' => $componentType,
-            'old_component_uuid' => $oldComponentUuid,
-            'new_component_uuid' => $newComponentUuid,
-        ]);
-    } catch (CommandFailed $e) {
-        if ($e->errorType === 'revision_mismatch') {
-            $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
-            $stmt->execute([$configUuid]);
-            send_json_response(0, 1, 409, $e->getMessage(), ['current_revision' => (int)$stmt->fetchColumn()]);
-        }
-        if ($e->errorType === 'validation_blocked' && $e->verdict !== null) {
-            require_once __DIR__ . '/VerdictShim.php';
-            $shimmed = VerdictShim::fromVerdict($e->verdict);
-            send_json_response(0, 1, $e->httpStatus, $shimmed['message'], [
-                'component_type' => $componentType, 'error_type' => $shimmed['error_type'],
-                'details' => $shimmed['details'], 'recommendations' => $shimmed['recommendations'],
-            ]);
-        }
-        send_json_response(0, 1, $e->httpStatus, $e->getMessage());
-    } catch (\Throwable $e) {
-        error_log("Error replacing component: " . $e->getMessage());
-        send_json_response(0, 1, 500, "Failed to replace component");
-    }
-}
-
-/**
  * U-A.2 — move a server configuration's status_v2 forward via the command
  * layer's TransitionStatusCommand. Additive action; the existing
  * finalize-config action is UNCHANGED by this unit (it still calls
@@ -1545,7 +1452,6 @@ function handleGetConfiguration($serverBuilder, $user) {
         $validationResults = $configuration['validation_results'] ?? [];
         // $individualComponentChecks and $configurationValid were computed here and
         // never read by anything. Removed 2026-09-01.
-
 
         // Simplified configuration data - use stored values from database
         $configuration['power_consumption'] = $details['power_consumption']['total_with_overhead_watts'] ?? 0;
@@ -2503,7 +2409,6 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
 
         $result = $serverBuilder->finalizeConfiguration($configUuid, $finalNotes, $user['id']);
 
-
         if ($result['success']) {
             $configId = $config->get('id');
             $serverName = $config->get('server_name');
@@ -2682,7 +2587,6 @@ function handleGetAvailableComponents($user) {
         $availableOnly = filter_var($_GET['available_only'] ?? $_POST['available_only'] ?? true, FILTER_VALIDATE_BOOLEAN);
     }
     $limit = (int)($_GET['limit'] ?? 50);
-
 
     if (empty($componentType)) {
         send_json_response(0, 1, 400, "Component type is required");
@@ -2888,14 +2792,6 @@ function handleGetCompatible($serverBuilder, $user) {
 // Helper Functions
 
 /**
- * NEW: Helper function to validate DateTime format
- */
-function validateDateTime($dateTime) {
-    $d = DateTime::createFromFormat('Y-m-d H:i:s', $dateTime);
-    return $d && $d->format('Y-m-d H:i:s') === $dateTime;
-}
-
-/**
  * NEW: Helper function to log configuration updates
  */
 function logConfigurationUpdate($pdo, $configUuid, $changes, $userId) {
@@ -2979,19 +2875,6 @@ function getComponentDetails($pdo, $componentType, $componentUuid) {
 }
 
 /**
- * Helper function to get status text
- */
-function getStatusText($statusCode) {
-    $statusMap = [
-        0 => 'Failed/Defective',
-        1 => 'Available',
-        2 => 'In Use'
-    ];
-    
-    return $statusMap[$statusCode] ?? 'Unknown';
-}
-
-/**
  * Helper function to get configuration status text
  */
 function getConfigurationStatusText($statusCode) {
@@ -3003,34 +2886,6 @@ function getConfigurationStatusText($statusCode) {
     ];
 
     return $statusMap[$statusCode] ?? 'Unknown';
-}
-
-/**
- * Helper function to get suggested alternatives
- */
-function getSuggestedAlternatives($pdo, $componentType, $excludeUuid, $limit = 5) {
-    $tableMap = $GLOBALS['_serverComponentTableMap'];
-    
-    if (!isset($tableMap[$componentType])) {
-        return [];
-    }
-    
-    $table = $tableMap[$componentType];
-    
-    try {
-        $stmt = $pdo->prepare("
-            SELECT UUID, SerialNumber, Status, ServerUUID 
-            FROM $table 
-            WHERE UUID != ? AND Status = 1 
-            ORDER BY SerialNumber 
-            LIMIT ?
-        ");
-        $stmt->execute([$excludeUuid, $limit]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {
-        error_log("Error getting suggested alternatives: " . $e->getMessage());
-        return [];
-    }
 }
 
 /**
@@ -3088,132 +2943,6 @@ function getComponentCount($pdo, $componentType) {
         error_log("Error getting component count for $componentType: " . $e->getMessage());
         return ['total' => 0, 'available' => 0, 'in_use' => 0, 'failed' => 0];
     }
-}
-
-
-
-
-/**
- * Validate component exists and get details
- */
-function validateComponentExists($componentType, $componentUuid) {
-    global $pdo;
-
-    $tableName = getComponentTableName($componentType);
-    if (!$tableName) {
-        return [
-            'exists' => false,
-            'message' => 'Invalid component type',
-            'component_type' => $componentType
-        ];
-    }
-
-    // CRITICAL FIX: When multiple components share same UUID, prioritize Status=1 (available)
-    // Query for Status=1 first, then fall back to any status if none available
-
-    // Step 1: Try to get an available component (Status=1)
-    $stmt = $pdo->prepare("SELECT Status, UUID, SerialNumber, Notes, ServerUUID, ID FROM $tableName WHERE UUID = ? AND Status = 1 LIMIT 1");
-    $stmt->execute([$componentUuid]);
-    $component = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    // Step 2: If no available component, get any component with this UUID for validation
-    if (!$component) {
-        $stmt = $pdo->prepare("SELECT Status, UUID, SerialNumber, Notes, ServerUUID, ID FROM $tableName WHERE UUID = ? LIMIT 1");
-        $stmt->execute([$componentUuid]);
-        $component = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-
-    if (!$component) {
-        return [
-            'exists' => false,
-            'message' => 'Component not found in inventory',
-            'component_type' => $componentType,
-            'component_uuid' => $componentUuid
-        ];
-    }
-
-    // Step 3: Count available components with this UUID
-    $stmt = $pdo->prepare("SELECT COUNT(*) as available_count FROM $tableName WHERE UUID = ? AND Status = 1");
-    $stmt->execute([$componentUuid]);
-    $availabilityCheck = $stmt->fetch(PDO::FETCH_ASSOC);
-    $hasAvailableComponent = $availabilityCheck['available_count'] > 0;
-
-    return [
-        'exists' => true,
-        'component' => $component,
-        'available' => $hasAvailableComponent,
-        'available_count' => $availabilityCheck['available_count']
-    ];
-}
-
-
-/**
- * Analyze common compatibility issues from incompatible components
- */
-function analyzeCommonCompatibilityIssues($incompatibleComponents) {
-    $issues = [];
-    $memoryTypeIssues = 0;
-    $formFactorIssues = 0;
-
-    foreach ($incompatibleComponents as $comp) {
-        $reason = $comp['compatibility_reason'];
-        if (strpos($reason, 'DDR') !== false) {
-            $memoryTypeIssues++;
-        }
-        if (strpos($reason, 'form factor') !== false) {
-            $formFactorIssues++;
-        }
-    }
-
-    if ($memoryTypeIssues > 0) {
-        $issues[] = "Memory type mismatch ({$memoryTypeIssues} components)";
-    }
-    if ($formFactorIssues > 0) {
-        $issues[] = "Form factor incompatibility ({$formFactorIssues} components)";
-    }
-
-    return $issues;
-}
-
-/**
- * Generate compatibility suggestions based on existing components
- */
-function generateCompatibilitySuggestions($componentType, $existingComponents) {
-    $suggestions = [];
-
-    if ($componentType === 'ram') {
-        // Analyze existing components to suggest compatible RAM
-        $cpuTypes = [];
-        $mbTypes = [];
-
-        foreach ($existingComponents as $comp) {
-            if ($comp['type'] === 'cpu') {
-                $notes = strtoupper($comp['data']['Notes'] ?? '');
-                if (strpos($notes, 'DDR5') !== false) {
-                    $cpuTypes[] = 'DDR5';
-                } elseif (strpos($notes, 'DDR4') !== false) {
-                    $cpuTypes[] = 'DDR4';
-                }
-            } elseif ($comp['type'] === 'motherboard') {
-                $notes = strtoupper($comp['data']['Notes'] ?? '');
-                if (strpos($notes, 'DDR5') !== false) {
-                    $mbTypes[] = 'DDR5';
-                } elseif (strpos($notes, 'DDR4') !== false) {
-                    $mbTypes[] = 'DDR4';
-                }
-            }
-        }
-
-        $commonTypes = array_intersect($cpuTypes, $mbTypes);
-        if (!empty($commonTypes)) {
-            $suggestions[] = "Use " . implode(' or ', array_unique($commonTypes)) . " RAM modules";
-            $suggestions[] = "Ensure RAM form factor matches motherboard (DIMM/SO-DIMM)";
-        } else {
-            $suggestions[] = "Check CPU and motherboard memory type compatibility";
-        }
-    }
-
-    return $suggestions;
 }
 
 /**
@@ -3347,7 +3076,6 @@ function handleListPlatforms($user) {
         send_json_response(0, 1, 500, "Failed to retrieve server platforms");
     }
 }
-
 
 /**
  * Which parts of a configuration the installed compute platform owns.

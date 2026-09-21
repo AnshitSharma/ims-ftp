@@ -142,12 +142,6 @@ class ServerPlatformCatalog
         return $version['system_board'] ?? null;
     }
 
-    /** The chassis spec a version carries. */
-    public function chassisSpec(array $version)
-    {
-        return $version['chassis'] ?? null;
-    }
-
     /**
      * Does this included part come mounted in the box?
      *

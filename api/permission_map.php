@@ -37,7 +37,8 @@ return [
         'create-start' => 'server.create',
         'add-component' => 'server.create',
         'remove-component' => 'server.edit',
-        'replace-component' => 'server.replace', // U-A.2 -- mirrors add/remove's own edit-family gating
+        // 'replace-component' removed 2026-09-21 with its handler (no caller in
+        // either stack). The command it drove still runs from a Request step.
         'transition-status' => 'server.transition', // U-A.2 -- mirrors finalize-config's create-family gating
         // Read-only: which lifecycle moves this user could make on one config.
         // Gated on view, not transition -- it ANSWERS whether they may transition.
@@ -121,8 +122,10 @@ return [
         'add' => '{module}.create',
         'update' => '{module}.edit',
         'delete' => '{module}.delete',
-        'bulk_update' => '{module}.edit',
-        'bulk_delete' => '{module}.delete',
+        // bulk_update / bulk_delete (underscored) were mapped here but
+        // component_crud_api.php only ever dispatched the hyphenated pair, so
+        // they passed the ACL gate and fell through to "Invalid cpu operation".
+        // Same class as the seven server-module entries removed 2026-08-31.
         'bulk-add' => '{module}.create',
         'bulk-delete' => '{module}.delete',
     ],
