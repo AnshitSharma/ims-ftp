@@ -62,10 +62,16 @@ function handleACLOperations($operation, $user) {
         // read for non-admins and this is now the ONLY lever that can write a direct
         // per-user grant; and get_user_permissions, which the frontend does call.
 
-        case 'get_all_roles':
-            $roles = getAllRoles($pdo);
-            send_json_response(1, 1, 200, "Roles retrieved successfully", ['roles' => $roles]);
-            break;
+        // E.2 (audit §3.5): acl-get_all_roles is gone. It was one of two API
+        // surfaces answering "what roles exist", and the narrower one: roles-list
+        // returns the same seven roles with the same display_name and
+        // description, plus user_count and permission_count, and names the slug
+        // `name` where this said `role_name` — the third distinct shape for two
+        // entities that §3.5 counted.
+        //
+        // The frontend was moved to roles-list FIRST and that was confirmed live
+        // before this was removed, because the two watchers deploy independently
+        // and the reverse order would have broken the ACL page for the gap.
 
         // D.1 (audit §2.2/§10 of the 2026-09-21 backend audit) — READ ONLY.
         //

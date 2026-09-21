@@ -513,21 +513,6 @@ function assignRoleToUser($pdo, $userId, $roleId) {
 }
 
 /**
- * Get all roles
- */
-function getAllRoles($pdo) {
-    try {
-        $stmt = $pdo->prepare("SELECT id, name as role_name, display_name, description, is_system, is_default, created_at FROM roles ORDER BY name");
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {
-        error_log("Get all roles error: " . $e->getMessage());
-        // B.4 — see getUserRoles().
-        throw $e;
-    }
-}
-
-/**
  * Get all permissions.
  *
  * Reads the `permissions` table (single source of truth). `name` is aliased
