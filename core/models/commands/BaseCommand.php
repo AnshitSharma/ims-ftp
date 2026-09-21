@@ -394,7 +394,16 @@ abstract class BaseCommand
             if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-            throw new CommandFailed('command_exception', $e->getMessage(), 500, null, $e);
+            // B.3 (audit §12.2): this used to hand $e->getMessage() to the client,
+            // and server_api.php sends a CommandFailed's message straight through.
+            // A PDOException's message carries the SQLSTATE, the driver error and
+            // often the failing statement — precisely what api.php's own hard rule
+            // #8 says never to leak. The distinction already exists in the type:
+            // a CommandFailed raised DELIBERATELY above keeps its operator-readable
+            // text (it is rethrown unchanged), and only this generic catch — where
+            // the message was never written for a reader — is flattened.
+            error_log('Command failed (' . get_class($this) . '): ' . $e->getMessage());
+            throw new CommandFailed('command_exception', 'Internal server error', 500, null, $e);
         }
 
         $this->afterCommit();

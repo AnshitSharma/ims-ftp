@@ -398,7 +398,10 @@ function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Error getting $type components from table $tableName: " . $e->getMessage());
-        return [];
+        // B.4 (audit §9.6): a database error used to be indistinguishable from an
+        // empty inventory. api/api.php's top-level catch turns this into a 500
+        // without leaking the message, which is what a fault should look like.
+        throw $e;
     }
 }
 
@@ -416,7 +419,9 @@ function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null
         return (int)$stmt->fetchColumn();
     } catch (Exception $e) {
         error_log("Error counting $type components in table $tableName: " . $e->getMessage());
-        return 0;
+        // B.4 — see getComponentsByType(); a count of 0 on a fault made the
+        // pagination total lie as well as the list.
+        throw $e;
     }
 }
 

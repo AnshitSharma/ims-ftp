@@ -93,31 +93,55 @@ function handleUserOperations($operation, $user) {
                 $resolvedRoleId = $defaultRole ? (int)$defaultRole['id'] : null;
             }
 
-            $userId = createUser($pdo, $username, $email, $password, $firstname, $lastname);
+            // B.1 (audit §9.3): the row and its role are ONE fact. These used to be
+            // two unrelated statements, and the handler's own success text admitted
+            // it — "User created, but role assignment failed — assign a role
+            // manually". A user with no role has no permissions and cannot be
+            // recovered by whoever created them without a second, separate action.
+            //
+            // Refusing up front when no role resolves is the other half: the default
+            // role is the fallback, so reaching here with none means the roles table
+            // has no default at all, and creating an unusable account would be worse
+            // than saying so.
+            if ($resolvedRoleId === null) {
+                send_json_response(0, 1, 409,
+                    "No role could be assigned: supply a valid role_id, or set a default role.");
+            }
+
+            // send_json_response() exits, so nothing inside the transaction may call
+            // it (audit §11.2) — the outcome is decided first, committed or rolled
+            // back, and only then answered.
+            $userId = false;
+            $createError = null;
+            $pdo->beginTransaction();
+            try {
+                $userId = createUser($pdo, $username, $email, $password, $firstname, $lastname);
+                if (!$userId) {
+                    throw new RuntimeException('create_failed');
+                }
+                if (!assignRoleToUser($pdo, $userId, $resolvedRoleId)) {
+                    throw new RuntimeException('role_failed');
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $userId = false;
+                $createError = $e->getMessage();
+            }
 
             if ($userId) {
-                $roleAssigned = false;
-                if ($resolvedRoleId !== null) {
-                    $roleAssigned = assignRoleToUser($pdo, $userId, $resolvedRoleId);
-                    if (!$roleAssigned) {
-                        error_log("User $userId created but role assignment to role $resolvedRoleId failed");
-                    }
-                }
-
-                if ($roleAssigned) {
-                    send_json_response(1, 1, 201, "User created successfully", [
-                        'user_id' => (int)$userId,
-                        'role_id' => $resolvedRoleId
-                    ]);
-                } else {
-                    send_json_response(1, 1, 201, "User created, but role assignment failed — assign a role manually", [
-                        'user_id' => (int)$userId,
-                        'role_id' => null
-                    ]);
-                }
-            } else {
-                send_json_response(0, 1, 400, "Failed to create user. Username or email may already exist.");
+                send_json_response(1, 1, 201, "User created successfully", [
+                    'user_id' => (int)$userId,
+                    'role_id' => $resolvedRoleId
+                ]);
             }
+            if ($createError === 'role_failed') {
+                error_log("users-create: role $resolvedRoleId could not be assigned; user row rolled back");
+                send_json_response(0, 1, 500, "Failed to create user: the role could not be assigned.");
+            }
+            send_json_response(0, 1, 400, "Failed to create user. Username or email may already exist.");
             break;
 
         case 'update':
@@ -242,15 +266,33 @@ function handleUserOperations($operation, $user) {
                 send_json_response(0, 1, 404, "User not found");
             }
 
+            // B.5 (audit §12.7): every other password-bearing operation is throttled
+            // in auth_api.php; this one was not, so an attacker holding a stolen
+            // admin session could brute-force the actor's OWN password through the
+            // re-authentication below without limit.
+            //
+            // Only FAILURES count. An admin legitimately resetting several accounts
+            // in a row gets their counter cleared on each success, so the limit bites
+            // guessing and nothing else. Keyed on the actor, not the IP — the session
+            // is what is being abused here.
+            require_once(__DIR__ . '/../../../core/helpers/RateLimiter.php');
+            $resetLimiter = new RateLimiter();
+            $resetKey = 'users-reset-password:' . $user['id'];
+            if ($resetLimiter->tooManyAttempts($resetKey, 5, 900)) {
+                send_json_response(0, 1, 429, "Too many failed confirmations. Please try again later.");
+            }
+
             // Re-authenticate the ACTOR against their stored hash.
             $actorStmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
             $actorStmt->execute([$user['id']]);
             $actorHash = $actorStmt->fetchColumn();
 
             if ($actorHash === false || !password_verify($adminPassword, $actorHash)) {
+                $resetLimiter->hit($resetKey, 900);
                 error_log("[users-reset-password] Re-authentication failed for user_id {$user['id']}");
                 send_json_response(0, 1, 400, "Your password is incorrect");
             }
+            $resetLimiter->clear($resetKey);
 
             assertUserPasswordPolicy($newPassword);
 

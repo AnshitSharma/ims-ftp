@@ -203,7 +203,7 @@ class StorageConnectionValidator {
             return [
                 'valid' => false,
                 'connection_paths' => [],
-                'errors' => [['type' => 'validation_error', 'message' => 'Internal validation error: ' . $e->getMessage()]],
+                'errors' => [['type' => 'validation_error', 'message' => 'Internal validation error']],
                 'warnings' => [],
                 'info' => []
             ];

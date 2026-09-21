@@ -503,18 +503,38 @@ class RackEnclosure
                 . '(such as the PowerEdge FX2s) can hold servers.');
         }
 
-        $fit = self::validateRackFit($pdo, $rack, $startU, $geo['u_height'], null);
-        if (!$fit['success']) {
-            return $fit;
+        // B.2 (audit §9.4): the U-range check and the INSERT are one decision, and
+        // they used to straddle nothing at all — two concurrent rack-enclosure-add
+        // calls for the same U range both passed validateRackFit() and both
+        // inserted, overlapping in the elevation. The rack row is the occupancy
+        // map's mutex, exactly as ServerRelocation::move() holds it, so take it
+        // before validating and hold it through the write.
+        $ownTx = !$pdo->inTransaction();
+        if ($ownTx) {
+            $pdo->beginTransaction();
         }
-
-        if (self::nameTaken($pdo, $rackUuid, $name, null)) {
-            return self::fail(409, "\"{$rack['name']}\" already has an enclosure called \"{$name}\"");
-        }
-
-        $enclosureUuid = self::newUuid();
 
         try {
+            $lock = $pdo->prepare("SELECT rack_uuid FROM racks WHERE rack_uuid = ? FOR UPDATE");
+            $lock->execute([$rackUuid]);
+            if ($lock->fetchColumn() === false) {
+                if ($ownTx) { $pdo->rollBack(); }
+                return self::fail(404, 'Rack not found');
+            }
+
+            $fit = self::validateRackFit($pdo, $rack, $startU, $geo['u_height'], null);
+            if (!$fit['success']) {
+                if ($ownTx) { $pdo->rollBack(); }
+                return $fit;
+            }
+
+            if (self::nameTaken($pdo, $rackUuid, $name, null)) {
+                if ($ownTx) { $pdo->rollBack(); }
+                return self::fail(409, "\"{$rack['name']}\" already has an enclosure called \"{$name}\"");
+            }
+
+            $enclosureUuid = self::newUuid();
+
             $stmt = $pdo->prepare("INSERT INTO rack_enclosures
                     (enclosure_uuid, rack_uuid, name, chassis_uuid, model, serial_number,
                      start_u, u_height, slot_rows, slot_cols, notes, created_by, created_at, updated_at)
@@ -525,7 +545,14 @@ class RackEnclosure
                 $startU, $geo['u_height'], $geo['slot_rows'], $geo['slot_cols'],
                 $notes !== '' ? $notes : null, $userId,
             ]);
+
+            if ($ownTx) {
+                $pdo->commit();
+            }
         } catch (Throwable $e) {
+            if ($ownTx && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("RackEnclosure::create error: " . $e->getMessage());
             return self::fail(500, 'The enclosure could not be created');
         }
@@ -674,17 +701,38 @@ class RackEnclosure
             return self::fail(404, 'Enclosure not found');
         }
 
-        $used = self::occupiedSlots($pdo, $enclosureUuid);
-        if (!empty($used)) {
-            $n = count($used);
-            return self::fail(400, "Cannot remove \"{$enclosure['name']}\" — it still holds {$n} server"
-                . ($n === 1 ? '' : 's') . '. Move them out of its bays first.');
+        // B.2 (audit §9.4): the emptiness check and the DELETE are one decision.
+        // Unlocked, a sled slotted in between the two left a rack_servers row
+        // pointing at an enclosure_uuid that no longer exists. Same rack-row mutex
+        // as create() and ServerRelocation::move().
+        $ownTx = !$pdo->inTransaction();
+        if ($ownTx) {
+            $pdo->beginTransaction();
         }
 
         try {
+            $lock = $pdo->prepare("SELECT rack_uuid FROM racks WHERE rack_uuid = ? FOR UPDATE");
+            $lock->execute([$enclosure['rack_uuid']]);
+            $lock->fetchColumn();
+
+            $used = self::occupiedSlots($pdo, $enclosureUuid);
+            if (!empty($used)) {
+                if ($ownTx) { $pdo->rollBack(); }
+                $n = count($used);
+                return self::fail(400, "Cannot remove \"{$enclosure['name']}\" — it still holds {$n} server"
+                    . ($n === 1 ? '' : 's') . '. Move them out of its bays first.');
+            }
+
             $stmt = $pdo->prepare("DELETE FROM rack_enclosures WHERE enclosure_uuid = ?");
             $stmt->execute([$enclosureUuid]);
+
+            if ($ownTx) {
+                $pdo->commit();
+            }
         } catch (Throwable $e) {
+            if ($ownTx && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("RackEnclosure::remove error: " . $e->getMessage());
             return self::fail(500, 'The enclosure could not be removed');
         }

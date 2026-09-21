@@ -496,7 +496,10 @@ function getUserRoles($pdo, $userId) {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Get user roles error: " . $e->getMessage());
-        return [];
+        // B.4 (audit §9.6): an empty array on a database error is
+        // indistinguishable from "none", and for roles that silently
+        // narrows what a user can see. api/api.php turns this into a 500.
+        throw $e;
     }
 }
 
@@ -632,7 +635,8 @@ function getAllRoles($pdo) {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Get all roles error: " . $e->getMessage());
-        return [];
+        // B.4 — see getUserRoles().
+        throw $e;
     }
 }
 
@@ -650,7 +654,8 @@ function getAllPermissions($pdo) {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         error_log("Get all permissions error: " . $e->getMessage());
-        return [];
+        // B.4 — see getUserRoles().
+        throw $e;
     }
 }
 

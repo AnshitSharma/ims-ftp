@@ -111,7 +111,11 @@ class ChassisManager {
 
             return $result ?? ['found' => false, 'error' => "Chassis UUID not found: $uuid"];
         } catch (Exception $e) {
-            return ['found' => false, 'error' => $e->getMessage()];
+            // B.3 (audit §12.2): the exception message used to be the 'error' value
+            // and reached the client through the compatibility responses. It goes to
+            // the log instead — this catch had no log line at all before.
+            error_log("ChassisManager::loadChassisSpecsByUUID error: " . $e->getMessage());
+            return ['found' => false, 'error' => 'Chassis specification could not be loaded'];
         }
     }
     

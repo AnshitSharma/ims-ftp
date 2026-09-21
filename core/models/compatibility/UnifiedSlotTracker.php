@@ -182,7 +182,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::getSlotAvailability error: " . $e->getMessage());
             return [
                 'success' => false,
-                'error' => 'Failed to get slot availability: ' . $e->getMessage(),
+                'error' => 'Failed to get slot availability',
                 'total_slots' => [],
                 'used_slots' => [],
                 'available_slots' => []
@@ -242,7 +242,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::getRiserSlotAvailability error: " . $e->getMessage());
             return [
                 'success' => false,
-                'error' => 'Failed to get riser slot availability: ' . $e->getMessage(),
+                'error' => 'Failed to get riser slot availability',
                 'total_slots' => [],
                 'used_slots' => [],
                 'available_slots' => []
@@ -486,7 +486,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::validateAllSlots error: " . $e->getMessage());
             return [
                 'valid' => false,
-                'errors' => ['Validation error: ' . $e->getMessage()],
+                'errors' => ['Validation error'],
                 'warnings' => [],
                 'assignments' => []
             ];
@@ -636,7 +636,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::validateAllRiserSlots error: " . $e->getMessage());
             return [
                 'valid' => false,
-                'errors' => ['Validation error: ' . $e->getMessage()],
+                'errors' => ['Validation error'],
                 'warnings' => [],
                 'assignments' => []
             ];
@@ -714,7 +714,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::getM2SlotAvailability error: " . $e->getMessage());
             return [
                 'success' => false,
-                'error' => 'Failed to get M.2 slot availability: ' . $e->getMessage(),
+                'error' => 'Failed to get M.2 slot availability',
                 'motherboard_slots' => [
                     'total' => 0,
                     'used' => 0,
@@ -802,7 +802,7 @@ class UnifiedSlotTracker {
             error_log("UnifiedSlotTracker::validateM2Slots error: " . $e->getMessage());
             return [
                 'valid' => false,
-                'errors' => ['Validation error: ' . $e->getMessage()],
+                'errors' => ['Validation error'],
                 'warnings' => [],
                 'motherboard_slots' => ['total' => 0, 'used' => 0, 'available' => 0],
                 'expansion_slots' => ['total' => 0, 'used' => 0, 'available' => 0]
@@ -1090,7 +1090,7 @@ class UnifiedSlotTracker {
             error_log("Error loading motherboard PCIe slots: " . $e->getMessage());
             return [
                 'success' => false,
-                'error' => 'Failed to load motherboard PCIe slots: ' . $e->getMessage(),
+                'error' => 'Failed to load motherboard PCIe slots',
                 'slots' => []
             ];
         }
@@ -1191,7 +1191,7 @@ class UnifiedSlotTracker {
             error_log("Error loading motherboard riser slots: " . $e->getMessage());
             return [
                 'success' => false,
-                'error' => 'Failed to load motherboard riser slots: ' . $e->getMessage(),
+                'error' => 'Failed to load motherboard riser slots',
                 'slots' => []
             ];
         }
@@ -1431,7 +1431,7 @@ class UnifiedSlotTracker {
             error_log("Error validating slot assignment: " . $e->getMessage());
             return [
                 'valid' => false,
-                'error' => "Validation error for slot $slotId: " . $e->getMessage()
+                'error' => "Validation error for slot $slotId"
             ];
         }
     }
@@ -2045,7 +2045,7 @@ class UnifiedSlotTracker {
             return [
                 'can_remove' => false,
                 'dependent_components' => [],
-                'message' => 'Validation error: ' . $e->getMessage()
+                'message' => 'Validation error'
             ];
         }
     }
@@ -2139,7 +2139,7 @@ class UnifiedSlotTracker {
             error_log("Error validating riser slot integrity: " . $e->getMessage());
             return [
                 'valid' => false,
-                'errors' => ['Validation error: ' . $e->getMessage()],
+                'errors' => ['Validation error'],
                 'warnings' => []
             ];
         }

@@ -658,8 +658,11 @@ class PipelineManager
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
+            // B.3 (audit §12.2): the exception text used to be appended here and
+            // travelled to the client. It is logged above, which is where a
+            // SQLSTATE and a failing statement belong.
             error_log("PipelineManager::completeStage error: " . $e->getMessage());
-            return ['success' => false, 'errors' => ['Failed to complete stage: ' . $e->getMessage()]];
+            return ['success' => false, 'errors' => ['Failed to complete stage.']];
         }
     }
 
@@ -1335,8 +1338,14 @@ class PipelineManager
                 'total_pages' => (int)ceil($total / max(1, (int)$limit))
             ];
         } catch (Exception $e) {
+            // B.4 (audit §9.6): this returned an EMPTY LIST on a database error,
+            // which a client cannot tell apart from "you have no Requests" — a
+            // transient fault made the Requests tab look empty and a reload
+            // "fixed" it. getDashboardData() and the global search were changed to
+            // throw for exactly this reason; this is the same treatment.
+            // pipeline-list.php's own catch turns it into a 500.
             error_log("PipelineManager::listPipelines error: " . $e->getMessage());
-            return ['pipelines' => [], 'total' => 0, 'page' => 1, 'limit' => $limit, 'total_pages' => 0];
+            throw $e;
         }
     }
 
