@@ -1256,6 +1256,7 @@ class PipelineManager
                     cur.id AS current_stage_id, cur.name AS current_stage_name,
                     cur.assigned_to_user_id AS cur_user_id, su.username AS cur_user_name,
                     cur.assigned_to_role_id AS cur_role_id, sr.display_name AS cur_role_name,
+                    sr.name AS cur_role_slug,
                     cur.claimed_by_user_id AS cur_claimed_by, cu.username AS cur_claimed_name,
                     (SELECT COUNT(*) FROM ticket_stage_progress sp WHERE sp.ticket_id = t.id) AS stage_total,
                     (SELECT COUNT(*) FROM ticket_stage_progress sp WHERE sp.ticket_id = t.id AND sp.status = 'completed') AS stage_done,
@@ -1277,7 +1278,14 @@ class PipelineManager
                 LEFT JOIN users cu ON cur.claimed_by_user_id = cu.id
                 {$parentJoin}
                 $whereClause
-                ORDER BY t.updated_at DESC
+                -- Open before finished, then most recently moved. Ordering by
+                -- updated_at alone sorted a closed request above an open one
+                -- purely because someone completed it last, and since the sort
+                -- happens BEFORE the page is cut, page 1 of the All view could
+                -- be twenty completed rows with every actionable request pushed
+                -- off it -- the list grouping then had nothing to group.
+                ORDER BY (t.status IN ('completed', 'cancelled', 'rejected')) ASC,
+                         t.updated_at DESC
                 LIMIT ? OFFSET ?
             ");
             $stmt->execute(array_merge($params, [(int)$limit, (int)$offset]));
@@ -1304,7 +1312,7 @@ class PipelineManager
                     'current_stage' => $row['current_stage_id'] ? [
                         'id' => (int)$row['current_stage_id'],
                         'name' => $row['current_stage_name'],
-                        'owner' => $this->formatOwner($row['cur_user_id'], $row['cur_user_name'], $row['cur_role_id'], $row['cur_role_name']),
+                        'owner' => $this->formatOwner($row['cur_user_id'], $row['cur_user_name'], $row['cur_role_id'], $row['cur_role_name'], $row['cur_role_slug']),
                         'claimed_by' => $row['cur_claimed_by'] ? [
                             'id' => (int)$row['cur_claimed_by'],
                             'username' => $row['cur_claimed_name']
@@ -2412,7 +2420,7 @@ class PipelineManager
             SELECT
                 sp.id, sp.name, sp.position, sp.status,
                 sp.assigned_to_user_id, su.username AS user_name,
-                sp.assigned_to_role_id, sr.display_name AS role_name,
+                sp.assigned_to_role_id, sr.display_name AS role_name, sr.name AS role_slug,
                 sp.claimed_by_user_id, cu.username AS claimed_name, sp.claimed_at,
                 sp.started_at, sp.completed_at,
                 sp.completed_by_user_id, compu.username AS completed_by_name,
@@ -2436,7 +2444,7 @@ class PipelineManager
                 'position' => (int)$row['position'],
                 'status' => $row['status'],
                 'instructions' => $row['instructions'],
-                'owner' => $this->formatOwner($row['assigned_to_user_id'], $row['user_name'], $row['assigned_to_role_id'], $row['role_name']),
+                'owner' => $this->formatOwner($row['assigned_to_user_id'], $row['user_name'], $row['assigned_to_role_id'], $row['role_name'], $row['role_slug']),
                 'claimed_by' => $row['claimed_by_user_id'] ? [
                     'id' => (int)$row['claimed_by_user_id'],
                     'username' => $row['claimed_name']
@@ -2532,13 +2540,20 @@ class PipelineManager
         return $stmt->fetchColumn() > 0;
     }
 
-    private function formatOwner($userId, $username, $roleId, $roleName)
+    private function formatOwner($userId, $username, $roleId, $roleName, $roleSlug = null)
     {
         if ($userId) {
             return ['type' => 'user', 'id' => (int)$userId, 'name' => $username];
         }
         if ($roleId) {
-            return ['type' => 'role', 'id' => (int)$roleId, 'name' => $roleName];
+            // `name` is the role's DISPLAY name, which is what the UI prints.
+            // `slug` is roles.name -- the spelling a session actually carries
+            // (auth-login ships roles as slugs, with no ids), so without it a
+            // client holding a step by role can only match on the id, and any
+            // user who cannot read the roles catalogue -- hardware_carrier and
+            // developer both lack roles.view -- has no way to recognise its own
+            // step at all.
+            return ['type' => 'role', 'id' => (int)$roleId, 'name' => $roleName, 'slug' => $roleSlug];
         }
         return null;
     }

@@ -1824,14 +1824,32 @@ function handleListConfigurations($serverBuilder, $user) {
                 $locJoin = ($rackHasLocation && $hasLocations)
                     ? 'LEFT JOIN locations l ON l.location_uuid = r.location_uuid' : '';
 
+                // 2026-09-20: a BLADE SLED mirrors its enclosure's start_u and
+                // u_height, so four sleds in one FX2s read as four machines
+                // stacked in the same two U and nothing says which chassis holds
+                // them. These four columns are what lets the card group. All null
+                // on a direct server, and probed for the same deploy-order reason
+                // as the location columns above -- seeder 2026_09_03_003 is run by
+                // hand.
+                $hasEnclosures = SchemaHelper::hasTable($pdo, 'rack_enclosures')
+                    && SchemaHelper::hasColumn($pdo, 'rack_servers', 'enclosure_uuid');
+
+                $enclSelect = $hasEnclosures
+                    ? 'rs.enclosure_uuid, rs.slot_index, e.name AS enclosure_name, e.model AS enclosure_model'
+                    : 'NULL AS enclosure_uuid, NULL AS slot_index, NULL AS enclosure_name, NULL AS enclosure_model';
+                $enclJoin = $hasEnclosures
+                    ? 'LEFT JOIN rack_enclosures e ON e.enclosure_uuid = rs.enclosure_uuid' : '';
+
                 $configUuids = array_column($configurations, 'config_uuid');
                 $inClause = implode(',', array_fill(0, count($configUuids), '?'));
                 $rackStmt = $pdo->prepare("
                     SELECT rs.config_uuid, rs.rack_uuid, rs.start_u, rs.u_height, r.name AS rack_name,
-                           $locSelect, $floorSelect, $nameSelect
+                           $locSelect, $floorSelect, $nameSelect,
+                           $enclSelect
                     FROM rack_servers rs
                     LEFT JOIN racks r ON r.rack_uuid = rs.rack_uuid
                     $locJoin
+                    $enclJoin
                     WHERE rs.config_uuid IN ($inClause)
                 ");
                 $rackStmt->execute($configUuids);
@@ -1849,6 +1867,15 @@ function handleListConfigurations($serverBuilder, $user) {
                 $config['rack_start_u'] = isset($placement['start_u']) ? (int)$placement['start_u'] : null;
                 $config['rack_u_height'] = isset($placement['u_height']) ? max(1, (int)$placement['u_height']) : null;
                 $config['floor'] = $placement['floor'] ?? null;
+
+                // Blade identity. A sled carries all four; a direct server all nulls,
+                // which is what keeps its card byte-identical to what it renders today.
+                $config['enclosure_uuid'] = $placement['enclosure_uuid'] ?? null;
+                $config['enclosure_name'] = $placement['enclosure_name'] ?? null;
+                $config['enclosure_model'] = $placement['enclosure_model'] ?? null;
+                $config['slot_index'] = isset($placement['slot_index']) && $placement['slot_index'] !== null
+                    ? (int)$placement['slot_index']
+                    : null;
 
                 // A RACKED server's location comes from its rack; an unracked one
                 // keeps its own. Never both, so the card can never show two
@@ -2010,6 +2037,84 @@ function handleListConfigurations($serverBuilder, $user) {
             }
         }
 
+        // The enclosure roster for the Servers list -- EVERY racked enclosure, not
+        // only those with a sled on this page, because a blade chassis holding
+        // nothing has no server_configurations row at all and would otherwise be
+        // invisible on the page whose whole job is showing what is racked.
+        //
+        // Deliberately not RackEnclosure::listForRack(): that is per-rack and
+        // resolves a component count and a chassis name for every bay, none of
+        // which is printed here. Two flat queries for the whole page instead.
+        //
+        // Numbers and identifiers only -- every string the section prints is
+        // formatted in the frontend, like storage_summary above.
+        //
+        // Guarded like the two lookups above it, and for the same reason: an
+        // unreadable rack table must not take the Servers list down. An absent
+        // key renders as zero sections, which is exactly today's flat grid.
+        $enclosures = [];
+        try {
+            if (SchemaHelper::hasTable($pdo, 'rack_enclosures')) {
+                $rackHasLocation = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
+                $rackHasFloor    = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
+                $hasLocations    = SchemaHelper::hasTable($pdo, 'locations');
+
+                $eFloorSelect = $rackHasFloor ? 'r.floor' : 'NULL AS floor';
+                $eNameSelect = ($rackHasLocation && $hasLocations) ? 'l.name AS location_name' : 'NULL AS location_name';
+                $eLocJoin = ($rackHasLocation && $hasLocations)
+                    ? 'LEFT JOIN locations l ON l.location_uuid = r.location_uuid' : '';
+
+                $enclStmt = $pdo->query("
+                    SELECT e.enclosure_uuid, e.name, e.model, e.serial_number, e.rack_uuid,
+                           e.start_u, e.u_height, e.slot_rows, e.slot_cols,
+                           r.name AS rack_name, $eFloorSelect, $eNameSelect
+                    FROM rack_enclosures e
+                    LEFT JOIN racks r ON r.rack_uuid = e.rack_uuid
+                    $eLocJoin
+                    ORDER BY e.rack_uuid, e.start_u
+                ");
+
+                $usedStmt = $pdo->query("
+                    SELECT enclosure_uuid, COUNT(*) AS slots_used
+                    FROM rack_servers
+                    WHERE enclosure_uuid IS NOT NULL
+                    GROUP BY enclosure_uuid
+                ");
+                $usedByEnclosure = [];
+                foreach ($usedStmt->fetchAll(PDO::FETCH_ASSOC) as $usedRow) {
+                    $usedByEnclosure[$usedRow['enclosure_uuid']] = (int)$usedRow['slots_used'];
+                }
+
+                foreach ($enclStmt->fetchAll(PDO::FETCH_ASSOC) as $enclRow) {
+                    // slot_count comes from the geometry SNAPSHOT taken when the
+                    // enclosure was racked, never from re-reading the chassis spec:
+                    // a spec edit must not silently change how many bays an already
+                    // racked chassis claims to have.
+                    $startU = (int)$enclRow['start_u'];
+                    $uHeight = max(1, (int)$enclRow['u_height']);
+                    $slotCount = max(1, (int)$enclRow['slot_rows']) * max(1, (int)$enclRow['slot_cols']);
+                    $enclosures[] = [
+                        'enclosure_uuid' => $enclRow['enclosure_uuid'],
+                        'name' => $enclRow['name'],
+                        'model' => $enclRow['model'],
+                        'serial_number' => $enclRow['serial_number'],
+                        'rack_uuid' => $enclRow['rack_uuid'],
+                        'rack_name' => $enclRow['rack_name'],
+                        'location_name' => $enclRow['location_name'] ?? null,
+                        'floor' => $enclRow['floor'] ?? null,
+                        'start_u' => $startU,
+                        'u_height' => $uHeight,
+                        'end_u' => $startU + $uHeight - 1,
+                        'slot_count' => $slotCount,
+                        'slots_used' => $usedByEnclosure[$enclRow['enclosure_uuid']] ?? 0,
+                    ];
+                }
+            }
+        } catch (Throwable $enclosureError) {
+            error_log("Enclosure roster for configuration list failed: " . $enclosureError->getMessage());
+            $enclosures = [];
+        }
+
         // Get total count
         $countStmt = $pdo->prepare("
             SELECT COUNT(*) as total
@@ -2024,6 +2129,7 @@ function handleListConfigurations($serverBuilder, $user) {
 
         send_json_response(1, 1, 200, "Configurations retrieved successfully", [
             'configurations' => $configurations,
+            'enclosures' => $enclosures,
             'pagination' => [
                 'total' => $totalCount,
                 'limit' => $limit,
@@ -2377,7 +2483,10 @@ function handleFinalizeConfiguration($serverBuilder, $user) {
 
         // Block finalization of virtual configs
         if ($config->get('is_virtual')) {
-            send_json_response(0, 1, 400, "Cannot finalize virtual/test configurations. Use server-import-virtual to convert to a real configuration first.");
+            // Names the outcome, not the API action: `server-import-virtual` exists and is
+            // permission-mapped, but no screen in the UI sends it, so telling an operator to
+            // "use" it pointed them at something they cannot reach. (Audit 2026-09-21.)
+            send_json_response(0, 1, 400, "This is a virtual/test configuration and cannot be finalized. It has to be converted into a real configuration first — ask an administrator to import it.");
         }
 
         // Check permissions
@@ -3541,7 +3650,8 @@ function handleSetPlatform($serverBuilder, $user) {
         if (!empty($configRow['is_virtual'])) {
             $pdo->rollBack();
             send_json_response(0, 1, 409, "This is a virtual configuration, so it cannot be given a physical "
-                . "compute platform. Convert it with server-import-virtual first.");
+                . "compute platform. It has to be converted into a real configuration first — ask an "
+                . "administrator to import it.");
         }
 
         $guardVerdict = StateGuard::checkMutation($pdo, $configRow);

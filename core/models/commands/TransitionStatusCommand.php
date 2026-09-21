@@ -142,7 +142,8 @@ final class TransitionStatusCommand extends BaseCommand
             throw new CommandFailed(
                 'virtual_config_prohibited',
                 "A virtual configuration cannot become '{$this->toStatus}' — that state means real hardware is "
-                . 'installed, and this build reserves none. Convert it with server-import-virtual first.',
+                . 'installed, and this build reserves none. It has to be converted into a real configuration '
+                . 'first — ask an administrator to import it.',
                 409
             );
         }
