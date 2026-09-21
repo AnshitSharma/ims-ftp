@@ -340,20 +340,27 @@ function handleComponentOperations($module, $operation, $user) {
                     send_json_response(0, 1, 400, "idempotency_key must be 100 characters or fewer");
                 }
 
+                // SCOPED PER USER AND MODULE. An idempotency_key is a string the
+                // CLIENT picks, so two clients can pick the same one. Keyed on the
+                // string alone, the second caller would lose this race and be
+                // replayed the FIRST caller's response — another user's component
+                // ids, uuids and asset tags. The claim, the lookup and the receipt
+                // below therefore all name (user_id, module, key), which is also the
+                // table's PRIMARY KEY, so a cross-user collision is not a collision.
                 $claim = $pdo->prepare(
                     "INSERT IGNORE INTO bulk_operation_keys
-                         (idempotency_key, user_id, module, operation)
+                         (user_id, module, idempotency_key, operation)
                      VALUES (?, ?, ?, 'bulk-add')"
                 );
-                $claim->execute([$idempotencyKey, $user['id'], $module]);
+                $claim->execute([$user['id'], $module, $idempotencyKey]);
 
                 if ($claim->rowCount() === 0) {
-                    // Someone already owns this key.
+                    // THIS caller already owns this key on this module.
                     $prior = $pdo->prepare(
                         "SELECT http_code, response_json FROM bulk_operation_keys
-                          WHERE idempotency_key = ?"
+                          WHERE user_id = ? AND module = ? AND idempotency_key = ?"
                     );
-                    $prior->execute([$idempotencyKey]);
+                    $prior->execute([$user['id'], $module, $idempotencyKey]);
                     $row = $prior->fetch(PDO::FETCH_ASSOC);
 
                     if ($row && $row['response_json'] !== null) {
@@ -423,9 +430,10 @@ function handleComponentOperations($module, $operation, $user) {
                     $done = $pdo->prepare(
                         "UPDATE bulk_operation_keys
                             SET http_code = ?, response_json = ?, completed_at = NOW()
-                          WHERE idempotency_key = ?"
+                          WHERE user_id = ? AND module = ? AND idempotency_key = ?"
                     );
-                    $done->execute([$code, json_encode($payload), $idempotencyKey]);
+                    $done->execute([$code, json_encode($payload),
+                                    $user['id'], $module, $idempotencyKey]);
                 } catch (Throwable $e) {
                     error_log("bulk-add: could not record idempotency result: " . $e->getMessage());
                 }
