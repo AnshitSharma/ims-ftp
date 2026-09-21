@@ -215,10 +215,16 @@ function loadUserPermissionData($pdo, $userId) {
         // and an admin must not be locked out of a new action for the length of
         // that window. This list is the effective set for PUBLICATION and for
         // every non-admin check.
-        if ($data['is_admin']) {
-            $all = $pdo->query("SELECT name FROM permissions");
-            $data['permissions'] = $all ? $all->fetchAll(PDO::FETCH_COLUMN) : [];
-        }
+        //
+        // H.5 (audit §7.7): the `SELECT name FROM permissions` that built it used
+        // to run HERE, on every request by an admin. The audit called the result
+        // discarded; that is half right. Nothing on the CHECKING path reads it —
+        // hasPermission() and ACL::hasPermission() short-circuit on is_admin, and
+        // getUserPermissions() returns ['*'] — but effectiveCapabilities() does
+        // publish it, through permissions-get_user_permissions. So it is not dead,
+        // it was just eager: one whole-table read per admin request to serve one
+        // endpoint. It is loaded on demand now, in effectiveCapabilities(), and an
+        // admin's `permissions` stays [] until something actually asks.
 
         // If not admin, load all permissions (direct + role-based) in single query.
         //
@@ -275,7 +281,18 @@ function effectiveCapabilities($pdo, $userId) {
     if (!isset($GLOBALS['_permission_cache'][$cacheKey])) {
         $GLOBALS['_permission_cache'][$cacheKey] = loadUserPermissionData($pdo, $userId);
     }
-    return $GLOBALS['_permission_cache'][$cacheKey];
+
+    // H.5: an admin's effective set is every permission there is, and THIS is the
+    // only caller that needs it spelled out — so this is where it is read, once
+    // per request, instead of on every admin request whether or not anyone asks.
+    // Cached back onto the same entry, so a second call in one request is free.
+    $entry = &$GLOBALS['_permission_cache'][$cacheKey];
+    if ($entry['is_admin'] && empty($entry['permissions'])) {
+        $all = $pdo->query("SELECT name FROM permissions");
+        $entry['permissions'] = $all ? $all->fetchAll(PDO::FETCH_COLUMN) : [];
+    }
+
+    return $entry;
 }
 
 /**

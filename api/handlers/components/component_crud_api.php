@@ -117,19 +117,35 @@ function handleComponentOperations($module, $operation, $user) {
             }
             unset($comp);
 
-            // Resolve VendorName from VendorID
-            $vendorCache = [];
-            foreach ($components as &$comp) {
-                $comp['VendorName'] = null;
+            // Resolve VendorName from VendorID.
+            //
+            // H.6 (audit §7.6): this was one `SELECT name FROM vendors WHERE id = ?`
+            // per DISTINCT vendor, cached per request. Cheap, but it is a query in a
+            // loop, and the loop is on the list path. One IN() over the distinct ids
+            // answers the whole page instead — the same collapse PERF-N1 and A-P2
+            // already applied to handleListConfigurations and getCompatibleComponents.
+            $vendorIds = [];
+            foreach ($components as $comp) {
                 if (!empty($comp['VendorID'])) {
-                    $vid = (int)$comp['VendorID'];
-                    if (!isset($vendorCache[$vid])) {
-                        $vstmt = $pdo->prepare("SELECT name FROM vendors WHERE id = ?");
-                        $vstmt->execute([$vid]);
-                        $vendorCache[$vid] = $vstmt->fetchColumn() ?: null;
-                    }
-                    $comp['VendorName'] = $vendorCache[$vid];
+                    $vendorIds[(int)$comp['VendorID']] = true;
                 }
+            }
+
+            $vendorNames = [];
+            if (!empty($vendorIds)) {
+                $ids = array_keys($vendorIds);
+                $ph = implode(',', array_fill(0, count($ids), '?'));
+                $vstmt = $pdo->prepare("SELECT id, name FROM vendors WHERE id IN ($ph)");
+                $vstmt->execute($ids);
+                foreach ($vstmt->fetchAll(PDO::FETCH_ASSOC) as $v) {
+                    $vendorNames[(int)$v['id']] = $v['name'];
+                }
+            }
+
+            foreach ($components as &$comp) {
+                $comp['VendorName'] = !empty($comp['VendorID'])
+                    ? ($vendorNames[(int)$comp['VendorID']] ?? null)
+                    : null;
             }
             unset($comp);
 

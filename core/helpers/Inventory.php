@@ -338,7 +338,55 @@ function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo
     if ($search !== '') {
         $term = '%' . addcslashes($search, '%_\\') . '%';
         $params = array_merge($params, [$term, $term, $term, $term, $term, $term]);
-        $clauses[] = "(AssetTag LIKE ? OR SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? OR Location LIKE ? OR RackPosition LIKE ?)";
+        $branch = "AssetTag LIKE ? OR SerialNumber LIKE ? OR UUID LIKE ? OR Notes LIKE ? "
+                . "OR Location LIKE ? OR RackPosition LIKE ?";
+
+        // H.4 (audit §7.2): searching an inventory list used to see only what is
+        // written ON the row, so "Samsung" found a drive whose Notes happened to
+        // mention Samsung and missed the identical drive next to it whose Notes
+        // did not. What a unit IS lives in ims-data, not in the row. Resolving the
+        // term against the catalogue and matching those model UUIDs closes that.
+        //
+        // ADDITIVE, on purpose. The audit proposed REPLACING the LIKE with this,
+        // which would make the query indexable — but it would also change what a
+        // saved search finds, and seeder 2026_09_17_001 already argued, correctly,
+        // that changing search semantics is a correctness change and not a
+        // performance one. So the scan stays and this is a strict superset:
+        // nothing findable today stops being findable.
+        //
+        // Guarded require: ModelSearch deploys independently of this file, and a
+        // hard require would fatal every component list for the window in between.
+        // Failure is silent — a search that finds slightly less is not a 500.
+        if ($pdo !== null && $table !== null) {
+            try {
+                if (!class_exists('ModelSearch', false)) {
+                    $modelSearchFile = __DIR__ . '/../models/components/ModelSearch.php';
+                    if (is_readable($modelSearchFile)) {
+                        require_once $modelSearchFile;
+                    }
+                }
+
+                if (class_exists('ModelSearch', false)) {
+                    $type = preg_replace('/inventory$/', '', $table);
+                    $hits = ModelSearch::search($pdo, $search, $type, 50, false);
+                    $uuids = [];
+                    foreach ($hits['models'] as $model) {
+                        if (!empty($model['spec_uuid'])) {
+                            $uuids[] = $model['spec_uuid'];
+                        }
+                    }
+                    if (!empty($uuids)) {
+                        $ph = implode(',', array_fill(0, count($uuids), '?'));
+                        $branch .= " OR UUID IN ($ph)";
+                        $params = array_merge($params, $uuids);
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log("buildComponentSearchWhere: model resolution skipped: " . $e->getMessage());
+            }
+        }
+
+        $clauses[] = '(' . $branch . ')';
     }
 
     // Filter by physical site. Reads the denormalised location_uuid rather than

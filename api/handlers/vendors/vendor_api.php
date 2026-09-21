@@ -190,21 +190,52 @@ function handleVendorOperations($operation, $user) {
             if (empty($vendorId)) {
                 send_json_response(0, 1, 400, "Vendor ID is required");
             }
+            // H.2 (audit §7.4): this ran twelve `SELECT *` with NO LIMIT at all.
+            // Today that is bounded only by the 1,030 rows in stock. The component
+            // list endpoint documents the same failure mode for itself — "ram-list
+            // measured 625 KB for 463 rows, which is ~135 MB at 100K DIMMs, over
+            // memory_limit during json_encode" — and caps itself at 100. This had
+            // no such cap, and VendorID is very likely unindexed.
+            //
+            // Capped, and told the truth about it: total_count is the real number,
+            // `truncated` says whether the array is all of it. Named columns rather
+            // than SELECT *, matching the projection performGlobalSearch used.
+            $limit = (int)($_GET['limit'] ?? $_POST['limit'] ?? 200);
+            $limit = max(1, min(500, $limit));
+
             try {
                 $allComponents = [];
+                $totalCount = 0;
+                $cols = 'ID, UUID, SerialNumber, AssetTag, Status, ServerUUID, Location,
+                         RackPosition, Notes, VendorID, CreatedAt, UpdatedAt';
                 foreach (VALID_COMPONENT_TYPES as $type) {
                     if (!inventoryTableExists($pdo, $type)) {
                         continue; // not migrated yet -- see inventoryTableExists()
                     }
                     $table = getComponentTableName($type);
-                    $stmt = $pdo->prepare("SELECT *, ? AS component_type FROM $table WHERE VendorID = ?");
+
+                    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM $table WHERE VendorID = ?");
+                    $countStmt->execute([(int)$vendorId]);
+                    $totalCount += (int)$countStmt->fetchColumn();
+
+                    $remaining = $limit - count($allComponents);
+                    if ($remaining <= 0) {
+                        continue;
+                    }
+
+                    $stmt = $pdo->prepare(
+                        "SELECT $cols, ? AS component_type FROM $table
+                          WHERE VendorID = ? ORDER BY ID LIMIT " . (int)$remaining
+                    );
                     $stmt->execute([$type, (int)$vendorId]);
-                    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    $allComponents = array_merge($allComponents, $results);
+                    $allComponents = array_merge($allComponents, $stmt->fetchAll(PDO::FETCH_ASSOC));
                 }
                 send_json_response(1, 1, 200, "Vendor components retrieved", [
-                    'components' => $allComponents,
-                    'total_count' => count($allComponents)
+                    'components'  => $allComponents,
+                    'total_count' => $totalCount,
+                    'returned'    => count($allComponents),
+                    'limit'       => $limit,
+                    'truncated'   => count($allComponents) < $totalCount,
                 ]);
             } catch (Exception $e) {
                 error_log("Error getting vendor components: " . $e->getMessage());
