@@ -29,18 +29,11 @@ function normalizeVendorSells($raw) {
 function handleVendorOperations($operation, $user) {
     global $pdo;
 
-    // Vendor management is restricted to admin and superadmin only.
-    // A role check is used instead of a permission check because the ACL wildcard
-    // pattern '*.view' would otherwise grant vendor.view to manager/viewer roles too.
-    $roleStmt = $pdo->prepare("
-        SELECT COUNT(*) FROM user_roles ur
-        JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = ? AND r.name IN ('admin', 'super_admin')
-    ");
-    $roleStmt->execute([$user['id']]);
-    if ($roleStmt->fetchColumn() == 0) {
-        send_json_response(0, 1, 403, "Vendor management requires administrator access");
-    }
+    // E.5 (audit §12.5): the admin/super_admin role gate that used to stand here
+    // is gone. api.php now resolves this module through permission_map.php like
+    // every other CRUD module, so the four vendor.* permissions finally decide
+    // access instead of merely appearing in the role editor. See the map for the
+    // wildcard claim this gate rested on, and why it was false.
 
     switch ($operation) {
         case 'list':

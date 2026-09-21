@@ -11,11 +11,18 @@
  * The '{module}' placeholder is replaced with the concrete component type
  * (cpu, ram, ...) for the shared 'component' template.
  *
- * Modules NOT listed here (acl, dashboard, search, users, vendor, pipeline,
- * roles, permissions, auth) perform operation-specific checks inside their
- * handlers because the logic isn't a flat name lookup (admin-role gates,
- * self-delete guards, public auth endpoints). The legacy 'ticket' module was
- * retired — its work items now run on the 'pipeline' (Requests) engine.
+ * Modules NOT listed here (acl, dashboard, search, users, pipeline, roles,
+ * permissions, auth) perform operation-specific checks inside their handlers
+ * because the logic isn't a flat name lookup (admin-role gates, self-delete
+ * guards, public auth endpoints).
+ *
+ * The legacy 'ticket' module was retired — its work items now run on the
+ * 'pipeline' (Requests) engine.
+ *
+ * `vendor` JOINED THIS MAP on 2026-09-21 (E.5). It was on the excluded list only
+ * because it carried a hard-coded admin-role gate; removing that gate made it a
+ * flat name lookup like every other CRUD module, which is the whole reason the
+ * map exists.
  *
  * server.edit vs server.edit_details (2026-08-23)
  * -----------------------------------------------
@@ -113,6 +120,32 @@ return [
         'create' => 'location.create',
         'update' => 'location.edit',
         'delete' => 'location.delete',
+    ],
+
+    // E.5 (audit §12.5): these four permissions existed in the catalogue and
+    // were grantable in the role editor, but the vendor module consulted NONE of
+    // them — it required the admin or super_admin role instead. Granting
+    // vendor.edit to a manager did nothing, which is a permission system that
+    // lies about itself.
+    //
+    // The code's stated reason ("the ACL wildcard pattern '*.view' would
+    // otherwise grant vendor.view to manager/viewer too") does not hold: there
+    // are ZERO permission rows containing a wildcard, checked live 2026-09-21
+    // across all 130. hasPermission() matches exact names, and its only bypass
+    // is the is_admin short-circuit.
+    //
+    // CONSEQUENCE, decided with the owner: manager and technician already hold
+    // all four grants, so they gain real vendor access — including delete. That
+    // is now visible and revocable in the role editor, which it was not before.
+    // viewer, developer and hardware_carrier hold none and are unaffected;
+    // admin and super_admin are unaffected because hasPermission() bypasses.
+    'vendor' => [
+        'list'       => 'vendor.view',
+        'get'        => 'vendor.view',
+        'components' => 'vendor.view',
+        'add'        => 'vendor.create',
+        'update'     => 'vendor.edit',
+        'delete'     => 'vendor.delete',
     ],
 
     // Shared template for the 10 component-type modules.

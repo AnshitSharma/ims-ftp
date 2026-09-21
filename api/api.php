@@ -291,6 +291,12 @@ try {
             break;
 
         case 'vendor':
+            // E.5 (audit §12.5): vendor used to gate on a hard-coded admin /
+            // super_admin role check inside its handler, so the four vendor.*
+            // permissions the role editor offers did nothing at all. Now it goes
+            // through the same central map as server, rack, location and the
+            // twelve component modules — one fewer authorization idiom (§1.3).
+            requireModulePermission('vendor', $operation, $user);
             require_once(__DIR__ . '/handlers/vendors/vendor_api.php');
             handleVendorOperations($operation, $user);
             break;
