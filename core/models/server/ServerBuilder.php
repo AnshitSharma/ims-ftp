@@ -824,8 +824,12 @@ class ServerBuilder {
             // Update calculated fields (after the side effect, so NIC changes are counted)
             $this->updateConfigurationMetrics($configUuid);
 
-            // Log the action
-            $this->logConfigurationAction($configUuid, 'remove_component', $componentType, $componentUuid);
+            // G.1 (audit §4.2/§6.5): this logged to server_configuration_history,
+            // which NOTHING reads — exhaustive grep found INSERT, CREATE, ALTER and
+            // DELETE and no SELECT anywhere. Worse, the logger ran DDL on a request
+            // path: SHOW TABLES, then either CREATE TABLE or two SHOW COLUMNS plus a
+            // possible ALTER, three metadata queries before each insert. config_events
+            // is the record that is kept, and it has the placement history.
 
             if ($ownTransaction) {
                 $this->pdo->commit();
@@ -3529,89 +3533,6 @@ class ServerBuilder {
         return null;
     }
     
-    /**
-     * Log configuration action
-     */
-    private function logConfigurationAction($configUuid, $action, $componentType = null, $componentUuid = null, $metadata = null) {
-        try {
-            // Check if history table exists
-            $stmt = $this->pdo->prepare("SHOW TABLES LIKE 'server_configuration_history'");
-            $stmt->execute();
-            if (!$stmt->fetch()) {
-                // Create history table if it doesn't exist
-                $this->createHistoryTable();
-            } else {
-                // Table exists, ensure it has all required columns
-                $this->ensureHistoryTableColumns();
-            }
-            
-            $stmt = $this->pdo->prepare("
-                INSERT INTO server_configuration_history 
-                (config_uuid, action, component_type, component_uuid, metadata, created_at) 
-                VALUES (?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([
-                $configUuid, 
-                $action, 
-                $componentType, 
-                $componentUuid, 
-                json_encode($metadata)
-            ]);
-        } catch (Exception $e) {
-            error_log("Error logging configuration action: " . $e->getMessage());
-        }
-    }
-    
-    /**
-     * Create history table if it doesn't exist
-     */
-    private function createHistoryTable() {
-        try {
-            $sql = "
-                CREATE TABLE IF NOT EXISTS server_configuration_history (
-                    id int(11) NOT NULL AUTO_INCREMENT,
-                    config_uuid varchar(36) NOT NULL,
-                    action varchar(50) NOT NULL COMMENT 'created, updated, component_added, component_removed, validated, etc.',
-                    component_type varchar(20) DEFAULT NULL,
-                    component_uuid varchar(36) DEFAULT NULL,
-                    metadata text DEFAULT NULL COMMENT 'JSON metadata for the action',
-                    created_at timestamp NOT NULL DEFAULT current_timestamp(),
-                    PRIMARY KEY (id),
-                    KEY idx_config_uuid (config_uuid),
-                    KEY idx_component_uuid (component_uuid),
-                    KEY idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            ";
-            $this->pdo->exec($sql);
-            error_log("Created server_configuration_history table");
-        } catch (Exception $e) {
-            error_log("Error creating history table: " . $e->getMessage());
-        }
-    }
-
-    /**
-     * Ensure server_configuration_history table has all required columns
-     */
-    private function ensureHistoryTableColumns() {
-        try {
-            // Check if component_type column exists
-            $stmt = $this->pdo->query("SHOW COLUMNS FROM server_configuration_history LIKE 'component_type'");
-            if (!$stmt->fetch()) {
-                $this->pdo->exec("ALTER TABLE server_configuration_history ADD COLUMN component_type varchar(20) DEFAULT NULL AFTER action");
-                error_log("Added component_type column to server_configuration_history");
-            }
-
-            // Check if component_uuid column exists
-            $stmt = $this->pdo->query("SHOW COLUMNS FROM server_configuration_history LIKE 'component_uuid'");
-            if (!$stmt->fetch()) {
-                $this->pdo->exec("ALTER TABLE server_configuration_history ADD COLUMN component_uuid varchar(36) DEFAULT NULL AFTER component_type");
-                error_log("Added component_uuid column to server_configuration_history");
-            }
-        } catch (Exception $e) {
-            error_log("Error ensuring history table columns: " . $e->getMessage());
-        }
-    }
-
     /**
      * Get existing components formatted for validation
      */

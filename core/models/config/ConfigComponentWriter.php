@@ -151,7 +151,14 @@ class ConfigComponentWriter
             'slot_ref'        => $slotRef,
         ], $actor);
 
-        self::writeLedgerForAdd($pdo, $configUuid, $type, $specUuid, $componentId);
+        // G.2 (audit §4.2): the config_resources ledger was written here and
+        // read NOWHERE — exhaustive grep finds INSERT, SELECT-for-attachment and
+        // DELETE inside this class and nothing else. TargetState says so itself:
+        // "Resource rows are ALWAYS recomputed from components() via
+        // ResourceCatalog", in memory, never from the table. So every add paid
+        // one INSERT per provided and consumed resource to maintain a structure
+        // the validation engine declines to trust. ResourceCatalog stays — it is
+        // what TargetState recomputes from.
     }
 
     /**
@@ -162,7 +169,6 @@ class ConfigComponentWriter
      */
     public static function afterLegacyRemove(PDO $pdo, $configUuid, $type, $specUuid, $serial, $actor)
     {
-
         require_once __DIR__ . '/ConfigComponentRepository.php';
         $repo = new ConfigComponentRepository($pdo);
 
@@ -171,115 +177,7 @@ class ConfigComponentWriter
             return;
         }
         $repo->tombstone($live['id'], $actor);
-        self::cleanupLedgerForRemove($pdo, $live['id']);
-    }
-
-    /**
-     * Insert config_resources provider rows (from ResourceCatalog::provides())
-     * and scalar consumption rows (from ResourceCatalog::consumes()) for a
-     * newly-inserted config_components row. See class docblock for RV-1/RV-2.
-     */
-    private static function writeLedgerForAdd(PDO $pdo, $configUuid, $type, $specUuid, $componentId)
-    {
-        require_once __DIR__ . '/ResourceCatalog.php';
-        $catalog = new ResourceCatalog();
-
-        $providerStmt = $pdo->prepare(
-            'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
-             VALUES (?, ?, ?, ?, ?, NULL)'
-        );
-        $providedResources = [];
-        foreach ($catalog->provides($type, $specUuid, $componentId) as $row) {
-            $providerStmt->execute([$configUuid, $row['resource'], $componentId, $row['slot_ref'], $row['capacity']]);
-            $providedResources[$row['resource']] = true;
-        }
-
-        foreach ($catalog->consumes($type, $specUuid) as $consumed) {
-            self::attachConsumption($pdo, $configUuid, $componentId, $consumed);
-        }
-
-        if (!empty($providedResources)) {
-            self::attachDeferredConsumers($pdo, $catalog, $configUuid, array_keys($providedResources), $componentId);
-        }
-    }
-
-    /**
-     * Insert one consumption row, attached to any live provider of the
-     * resource. Provider absence is a deferred state, not an error (see the
-     * class docblock's DEFERRED CONSUMPTION note): the row is skipped and
-     * attachDeferredConsumers() creates it when a provider is added.
-     */
-    private static function attachConsumption(PDO $pdo, $configUuid, $componentId, array $consumed)
-    {
-        $findProvider = $pdo->prepare(
-            'SELECT provider_id FROM config_resources
-             WHERE config_uuid = ? AND resource = ? AND consumer_id IS NULL
-             LIMIT 1'
-        );
-        $findProvider->execute([$configUuid, $consumed['resource']]);
-        $providerId = $findProvider->fetchColumn();
-        if ($providerId === false) {
-            error_log(
-                "ConfigComponentWriter: deferred consumption of '{$consumed['resource']}' by component " .
-                "id $componentId in config $configUuid — no provider present yet; will attach when one is added"
-            );
-            return;
-        }
-
-        $pdo->prepare(
-            'INSERT INTO config_resources (config_uuid, resource, provider_id, slot_ref, capacity, consumer_id)
-             VALUES (?, ?, ?, NULL, ?, ?)'
-        )->execute([$configUuid, $consumed['resource'], $providerId, $consumed['amount'], $componentId]);
-    }
-
-    /**
-     * After a component providing $resources is inserted, attach every live
-     * component in the config whose catalog consumption of one of those
-     * resources was previously deferred (has no consumption row yet).
-     *
-     * The old 'riser' -> 'pciecard' normalization is GONE (2026-08-14): risers are
-     * their own component type now and ResourceCatalog answers for 'risercard'
-     * directly, so component_type is passed through unchanged. The legacy 'riser'
-     * ENUM value is migrated to 'risercard' by seeder 2026_08_14_001.
-     */
-    private static function attachDeferredConsumers(PDO $pdo, ResourceCatalog $catalog, $configUuid, array $resources, $newComponentId)
-    {
-        $stmt = $pdo->prepare(
-            'SELECT id, component_type, spec_uuid FROM config_components
-             WHERE config_uuid = ? AND removed_at IS NULL AND id <> ?'
-        );
-        $stmt->execute([$configUuid, $newComponentId]);
-
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $cc) {
-            foreach ($catalog->consumes($cc['component_type'], $cc['spec_uuid']) as $consumed) {
-                if (!in_array($consumed['resource'], $resources, true)) {
-                    continue;
-                }
-                $exists = $pdo->prepare(
-                    'SELECT 1 FROM config_resources WHERE config_uuid = ? AND resource = ? AND consumer_id = ? LIMIT 1'
-                );
-                $exists->execute([$configUuid, $consumed['resource'], (int)$cc['id']]);
-                if ($exists->fetchColumn()) {
-                    continue;
-                }
-                self::attachConsumption($pdo, $configUuid, (int)$cc['id'], $consumed);
-            }
-        }
-    }
-
-    /**
-     * Remove all ledger rows tied to a tombstoned component: rows where it
-     * was the CONSUMER (its own resource consumption), and rows where it was
-     * the PROVIDER (its own advertised capacity, and any consumption rows
-     * attached to it as provider) — ON DELETE CASCADE only fires on a hard
-     * delete of config_components, never on the soft tombstone (removed_at
-     * UPDATE) ConfigComponentRepository::tombstone() performs, so this must
-     * be done explicitly during the tombstone window.
-     */
-    private static function cleanupLedgerForRemove(PDO $pdo, $componentId)
-    {
-        $pdo->prepare('DELETE FROM config_resources WHERE consumer_id = ?')->execute([$componentId]);
-        $pdo->prepare('DELETE FROM config_resources WHERE provider_id = ?')->execute([$componentId]);
+        // G.2 — nothing left to clean up; see afterLegacyAdd().
     }
 
     private static function resolveParentId(PDO $pdo, ConfigComponentRepository $repo, $configUuid, $type, $specUuid, $parentSpecUuid)

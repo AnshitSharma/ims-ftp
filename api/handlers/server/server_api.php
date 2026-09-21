@@ -624,7 +624,10 @@ function handleUpdateConfiguration($serverBuilder, $user) {
         }
         
         // Log the update action
-        logConfigurationUpdate($pdo, $configUuid, $changes, $user['id']);
+        // G.1 — see ServerBuilder. This wrote the second copy of
+        // server_configuration_history (its own CREATE TABLE, with a created_by
+        // column the other creator omits, so which shape the table has depended on
+        // which code path reached it first). Nothing reads the table.
 
         // A changed location text has to reach the components too, or the server
         // says Jaipur while everything inside it still says Noida. Resolving the
@@ -2790,67 +2793,6 @@ function handleGetCompatible($serverBuilder, $user) {
 }
 
 // Helper Functions
-
-/**
- * NEW: Helper function to log configuration updates
- */
-function logConfigurationUpdate($pdo, $configUuid, $changes, $userId) {
-    try {
-        // Check if history table exists
-        $stmt = $pdo->prepare("SHOW TABLES LIKE 'server_configuration_history'");
-        $stmt->execute();
-        if (!$stmt->fetch()) {
-            createConfigurationHistoryTable($pdo);
-        }
-        
-        $stmt = $pdo->prepare("
-            INSERT INTO server_configuration_history 
-            (config_uuid, action, component_type, component_uuid, metadata, created_by, created_at) 
-            VALUES (?, 'configuration_updated', NULL, NULL, ?, ?, NOW())
-        ");
-        $stmt->execute([
-            $configUuid,
-            json_encode([
-                'changes' => $changes,
-                'total_fields_changed' => count($changes),
-                'updated_at' => date('Y-m-d H:i:s')
-            ]),
-            $userId
-        ]);
-    } catch (Exception $e) {
-        error_log("Error logging configuration update: " . $e->getMessage());
-        // Don't throw exception as this shouldn't break the main operation
-    }
-}
-
-/**
- * NEW: Helper function to create configuration history table if it doesn't exist
- */
-function createConfigurationHistoryTable($pdo) {
-    try {
-        $sql = "
-            CREATE TABLE IF NOT EXISTS server_configuration_history (
-                id int(11) NOT NULL AUTO_INCREMENT,
-                config_uuid varchar(36) NOT NULL,
-                action varchar(50) NOT NULL COMMENT 'created, updated, component_added, component_removed, validated, configuration_updated, etc.',
-                component_type varchar(20) DEFAULT NULL,
-                component_uuid varchar(36) DEFAULT NULL,
-                metadata text DEFAULT NULL COMMENT 'JSON metadata for the action',
-                created_by int(11) DEFAULT NULL,
-                created_at timestamp NOT NULL DEFAULT current_timestamp(),
-                PRIMARY KEY (id),
-                KEY idx_config_uuid (config_uuid),
-                KEY idx_component_uuid (component_uuid),
-                KEY idx_created_at (created_at),
-                KEY idx_action (action)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        ";
-        $pdo->exec($sql);
-        error_log("Created server_configuration_history table");
-    } catch (Exception $e) {
-        error_log("Error creating history table: " . $e->getMessage());
-    }
-}
 
 /**
  * Helper function to get component details
