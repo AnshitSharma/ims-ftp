@@ -1174,6 +1174,32 @@ class PipelineManager
                 if ($scope === 'mine') {
                     $clause .= ' OR t.created_by = ?';
                     $params[] = $userId;
+
+                    // C.1 (audit §10.1): 'mine' answered a NARROWER question than
+                    // pipeline-get did. Both tested involvement, but this one looked
+                    // only at `cur.` — the CURRENT step — while pipeline-get loops
+                    // over every stage. So someone who owned step 3 of a five-step
+                    // Request could open it if handed the id and yet find it in no
+                    // list at all, because a non-privileged caller is clamped to
+                    // exactly this scope. That is the "there from one entry point,
+                    // not from another" shape in the Requests tab.
+                    //
+                    // my_queue is deliberately NOT widened: it means "what is waiting
+                    // on me right now", and any-stage involvement would fill an action
+                    // queue with rows needing no action.
+                    $involved = 'EXISTS (SELECT 1 FROM ticket_stage_progress sp
+                                          WHERE sp.ticket_id = t.id
+                                            AND (sp.assigned_to_user_id = ?
+                                                 OR sp.claimed_by_user_id = ?';
+                    $params[] = $userId;
+                    $params[] = $userId;
+                    if (!empty($roleIds)) {
+                        $ph = implode(',', array_fill(0, count($roleIds), '?'));
+                        $involved .= " OR sp.assigned_to_role_id IN ($ph)";
+                        $params = array_merge($params, $roleIds);
+                    }
+                    $involved .= '))';
+                    $clause .= ' OR ' . $involved;
                 }
                 $clause .= ')';
                 $where[] = $clause;
