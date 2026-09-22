@@ -264,19 +264,6 @@ try {
             handleSpecOperations($operation, $user);
             break;
 
-        // Phase F diagnostic (2026-09-21 audit): replays the legacy and the new
-        // compatibility engine over existing request items. Read-only, role-gated in
-        // the handler, guarded require for the same reason as spec above. Goes away
-        // with the legacy engine in F.3.
-        case 'engine':
-            $engineHandler = __DIR__ . '/handlers/components/engine_compare_api.php';
-            if (!is_readable($engineHandler)) {
-                send_json_response(0, 1, 503, "Engine comparison is not available on this deployment");
-            }
-            require_once($engineHandler);
-            handleEngineCompareOperations($operation, $user);
-            break;
-
         // Component operations
         case 'cpu':
         case 'ram':
