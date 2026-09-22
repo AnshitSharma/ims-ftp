@@ -111,15 +111,12 @@ function handleComponentOperations($module, $operation, $user) {
                         // Silent fail per component -- a name is decoration, never a 500.
                     }
                 }
-                // Notes fallback (JSON-018): kept ONLY for rows the namer cannot resolve.
-                // Parsing free text as structured data is the thing this fallback exists to
-                // apologise for; with onboard NICs handled above it should now fire for
-                // nothing, and it can be deleted once a run confirms that.
-                if ($comp['ModelName'] === null && !empty($comp['Notes'])) {
-                    if (preg_match('/Brand:\s*([^,]+).*Model:\s*(.+?)(\r|\n|$)/i', $comp['Notes'], $matches)) {
-                        $comp['ModelName'] = trim($matches[1]) . ' ' . trim($matches[2]);
-                    }
-                }
+                // F.5 (2026-09-21 audit): the Notes-regex fallback (JSON-018) that stood here
+                // parsed "Brand: X, Model: Y" out of free text for rows the namer could not
+                // resolve. Confirmed 2026-09-22 that it fired for nothing: all 1,030 rows came
+                // back named, the namer resolves all 118 stocked non-onboard models itself, and
+                // none of the 75 onboard NIC rows carries Brand/Model notes. A row the namer
+                // cannot name now shows no model rather than a guess from free text.
             }
             unset($comp);
 
