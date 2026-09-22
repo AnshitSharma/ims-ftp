@@ -47,17 +47,24 @@ must already match an active `users` row by `azure_oid`, or once by email, which
 `MS_CLIENT_ID`, `MS_CLIENT_SECRET` and `MS_REDIRECT_URI` are all set in `.env`;
 `auth-microsoft_status` is what the login page asks before showing its button.
 
-## Compatibility validation — two generations, both live
+## Compatibility validation — one engine
 
-The newer one is `core/models/validation/`: `ValidationEngine` dispatching ~20 rules from
-`rules/`, with `TargetStateBuilder`, `ValidateConfigService` and `SlotPlanner`. (`ShadowRunner`
-is gone — P9 deleted it with the shadow-mode machinery.) Editing a rule is a live behavioural
-change on deploy, unconditionally; see the flag note below.
+`core/models/validation/`: `ValidationEngine` dispatching ~20 rules from `rules/`, with
+`TargetStateBuilder`, `ValidateConfigService` and `SlotPlanner`. (`ShadowRunner` is gone — P9
+deleted it with the shadow-mode machinery.) Editing a rule is a live behavioural change on
+deploy, unconditionally; see the flag note below. It judges the add, the compatible-parts
+listing and — since 2026-09-22 — Request items, which `TicketValidator` asks through
+`ServerBuilder::evaluateSpecCompatibility()` (add items only; remove/replace are judged by
+their command when the step runs, serverplatform by set-platform, because the rules throw on
+that type).
 
-The older one is `core/models/compatibility/`: `ComponentCompatibility` orchestrating pair
-checks, plus `UnifiedSlotTracker`, `PcieLaneBudgetValidator`, `NICPortTracker`,
-`SFPCompatibilityResolver`, `OnboardNICHandler`, `StorageConnectionValidator`,
-`CpuIdentityMatcher` and the shared `ServerState`. That is the whole directory.
+The legacy pairwise engine — `ComponentCompatibility`, `ComponentValidator`,
+`ComponentDataExtractor`, `ComponentDataLoader` — was deleted 2026-09-22 (audit Phase F), after
+a replay of both over 74 configs × 193 stocked models. Rule docblocks still cite its old line
+numbers as provenance; those are history, not live code. What remains in
+`core/models/compatibility/` are helpers the engine and commands still use: `UnifiedSlotTracker`,
+`PcieLaneBudgetValidator`, `NICPortTracker`, `SFPCompatibilityResolver`, `OnboardNICHandler`,
+`StorageConnectionValidator`, `CpuIdentityMatcher`, `CpuGenerationResolver`, `ServerState`.
 
 This paragraph used to name three "authority classes" — `SlotAuthority`,
 `StorageConnectionAuthority`, `MemoryAuthority`. **None of them exists anywhere under `core/`**
@@ -169,9 +176,14 @@ are still correct — see `SpecRepository` below — but any *SQL* consumer of `
 sees the old data until the script runs).
 
 **`SpecRepository`** (`core/models/components/`) is a landed-but-not-yet-wired single resolver
-meant to replace `ComponentDataService`, `DataExtractionUtilities`, `ComponentDataLoader` and
-`ChassisManager` (`PlatformSpecIndex` stays a first-class dependency of it, not something it
-replaces). `find()`/`allOfType()`/`exists()` read `component_models` when spec_build has run,
+meant to replace `ComponentDataService`, `DataExtractionUtilities` and `ChassisManager`
+(`ComponentDataLoader` was its one wired adapter, deleted with the legacy engine 2026-09-22;
+`PlatformSpecIndex` stays a first-class dependency of it, not something it replaces).
+**Not repointing `ComponentDataService` was a deliberate call on 2026-09-22 (audit F.4):** the
+equivalence test passes against the files, but production's `spec-check` reported the table
+STALE — 7 models missing, 2 changed — because nobody had run spec_build after an `ims-data`
+upload. `ComponentDataService` feeds every validation rule and reads the files, which are
+always current; repointing it would make every rule's answer depend on that unenforced step. `find()`/`allOfType()`/`exists()` read `component_models` when spec_build has run,
 falling back to the files otherwise — never hard-fails on the table's absence. Re-pointing an
 existing resolver at it is a **separate, single-purpose change per adapter**, gated on an
 equivalence test proving zero shape difference first (`tests/spec_repository_equivalence.php`
