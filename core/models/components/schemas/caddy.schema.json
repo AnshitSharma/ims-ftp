@@ -1,33 +1,52 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "caddy model",
-    "$comment": "DERIVED from the 16 caddy records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.",
+    "$comment": "DERIVED from the 16 caddy records in ims-data on 2026-09-16, not hand-authored.\nIt describes what the catalogue actually contains so that a NEW record cannot quietly\nomit a field every existing record has -- the failure that let cpu.memory_types read a\nkey no record had, silently disabling that rule on every CPU for months.\nRegenerate rather than hand-edit when the corpus legitimately changes shape.\nWIDENED 2026-09-22 when the corpus grew to 20 records: dimensions/weight made optional (unverifiable for the\nfour CtrlS trays, and nothing reads weight; dimensions is read with a [] default), and six\nprovenance keys admitted. Nothing in the rules reads any of the six.",
     "type": "object",
     "required": [
         "compatibility",
         "connector",
-        "dimensions",
         "material",
         "model",
         "type",
-        "uuid",
-        "weight"
+        "uuid"
     ],
     "properties": {
+        "alternate_part_numbers": {
+            "type": "array",
+            "$comment": "present on 2 of 20 records"
+        },
+        "brand": {
+            "type": "string",
+            "$comment": "present on 4 of 20 records"
+        },
         "compatibility": {
             "type": "object"
+        },
+        "compatible_servers": {
+            "type": "array",
+            "$comment": "present on 3 of 20 records"
         },
         "connector": {
             "type": "string"
         },
         "dimensions": {
-            "type": "object"
+            "type": "object",
+            "$comment": "present on 16 of 20 records -- the four CtrlS-sheet trays record no dimensions because no verified source exists; do not invent one"
         },
         "material": {
             "type": "string"
         },
         "model": {
             "type": "string"
+        },
+        "notes": {
+            "type": "string",
+            "$comment": "present on 4 of 20 records"
+        },
+        "part_number": {
+            "type": "string",
+            "$comment": "present on 4 of 20 records"
         },
         "type": {
             "type": "string"
@@ -37,8 +56,13 @@
             "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "$comment": "The only identity a model has and the sole join key to caddyinventory."
         },
+        "verification_status": {
+            "type": "string",
+            "$comment": "present on 2 of 20 records"
+        },
         "weight": {
-            "type": "string"
+            "type": "string",
+            "$comment": "present on 16 of 20 records -- same four trays, same reason"
         }
     },
     "additionalProperties": false
