@@ -860,6 +860,23 @@ class ServerBuilder {
     }
 
     /**
+     * One spec against one configuration, answered exactly as the compatible-parts listing
+     * and the add answer it. Public for TicketValidator (F.1, 2026-09-21 audit), so a
+     * Request item is judged by the same rules as the add it asks for, instead of by the
+     * legacy pairwise engine that could not count sockets, slots or lanes.
+     *
+     * @return array{compatible:bool,reason:string,warnings:string[]}
+     */
+    public function evaluateSpecCompatibility($configUuid, $componentType, $specUuid) {
+        $verdicts = $this->evaluateCandidatesWithEngine($configUuid, $componentType, [['UUID' => $specUuid]]);
+        return $verdicts[$specUuid] ?? [
+            'compatible' => false,
+            'reason' => 'Compatibility could not be determined',
+            'warnings' => []
+        ];
+    }
+
+    /**
      * Decide, for each candidate spec, whether adding it to $configUuid would be allowed --
      * using the SAME authority the add button uses (ValidationEngine at Trigger::ADD).
      *
@@ -1264,146 +1281,124 @@ class ServerBuilder {
             // Step 4: Run compatibility checks
             $compatibleComponents = [];
 
-            require_once __DIR__ . '/../compatibility/ComponentCompatibility.php';
             require_once __DIR__ . '/../components/ComponentDataService.php';
-            require_once __DIR__ . '/../compatibility/NICPortTracker.php';
 
-            if (class_exists('ComponentCompatibility')) {
-                $compatibility = new ComponentCompatibility($this->pdo);
-                $componentDataService = ComponentDataService::getInstance();
+            // F.2 (2026-09-21 audit): the scan used to be pre-filtered through the legacy
+            // ComponentCompatibility::validateComponentExistsInJSON(), and the whole block
+            // sat inside class_exists('ComponentCompatibility') with an else branch that
+            // marked EVERY part compatible -- fail-open, if the class ever failed to load.
+            // It now asks the canonical validateComponentUuid(), proven to agree with the
+            // legacy check on all 193 stocked (type, UUID) pairs live on 2026-09-22
+            // (engine-compare source=uuids, 0 disagreements), and the fail-open branch is gone.
+            $componentDataService = ComponentDataService::getInstance();
 
-                // Pre-filter: Only include components that exist in JSON
-                $componentsWithJSON = [];
-                $componentsWithoutJSON = [];
-                $jsonValidationDetails = [];
+            // Pre-filter: Only include components that exist in JSON
+            $componentsWithJSON = [];
+            $componentsWithoutJSON = [];
+            $jsonValidationDetails = [];
 
-                foreach ($allComponents as $component) {
-                    $hasJSON = $compatibility->validateComponentExistsInJSON($componentType, $component['UUID']);
+            foreach ($allComponents as $component) {
+                $hasJSON = $componentDataService->validateComponentUuid($componentType, $component['UUID']);
 
-                    if ($hasJSON) {
-                        $componentsWithJSON[] = $component;
-                    } else {
-                        $componentsWithoutJSON[] = $component['UUID'];
-                    }
-
-                    if ($includeDebug) {
-                        $jsonValidationDetails[] = [
-                            'uuid' => $component['UUID'],
-                            'serial_number' => $component['SerialNumber'],
-                            'has_json' => $hasJSON,
-                            'status' => $component['Status'],
-                            'result' => $hasJSON ? 'included' : 'excluded - no JSON spec found'
-                        ];
-                    }
+                if ($hasJSON) {
+                    $componentsWithJSON[] = $component;
+                } else {
+                    $componentsWithoutJSON[] = $component['UUID'];
                 }
 
-                // Replace allComponents with filtered list
-                $totalBeforeFiltering = count($allComponents);
-                $allComponents = $componentsWithJSON;
-
-                // Add to debug info
                 if ($includeDebug) {
-                $debugInfo['total_before_json_filter'] = $totalBeforeFiltering;
-                $debugInfo['total_with_json'] = count($allComponents);
-                $debugInfo['components_without_json'] = $componentsWithoutJSON;
-                $debugInfo['json_validation_details'] = $jsonValidationDetails;
-
-                // Add detailed component listing to debug
-                $debugInfo['components_to_check'] = array_map(function($c) {
-                    return [
-                        'uuid' => $c['UUID'],
-                        'serial' => $c['SerialNumber'],
-                        'status' => $c['Status']
-                    ];
-                }, $allComponents);
-                } // end if ($includeDebug)
-
-                // The engine answers the listing exactly as it answers the add, so the
-                // two cannot disagree. Since 2026-09-13 this never returns null: there
-                // is no engine-off state (U-D.4) and an unusable engine now reports
-                // undetermined per candidate. The legacy branches below are retained
-                // for the historical shapes they still serve, not as a fallback.
-                $engineVerdicts = $this->evaluateCandidatesWithEngine(
-                    $configUuid, $componentType, $allComponents, $options['parent_nic_uuid'] ?? null
-                );
-                if ($includeDebug) {
-                    $debugInfo['verdict_source'] = $engineVerdicts === null ? 'legacy' : 'validation_engine';
-                }
-
-                // Run compatibility checks for each component
-                foreach ($allComponents as $component) {
-                    $isCompatible = true;
-                    $compatibilityReasons = [];
-                    $engineWarnings = [];
-
-                    // evaluateCandidatesWithEngine never returns null -- it has two
-                    // returns and both are arrays -- so this is the only branch that
-                    // ever ran. The legacy elseif/else chain that used to follow, and
-                    // the eight check*DecentralizedCompatibility() methods it called,
-                    // were a second compatibility implementation kept alive only by a
-                    // condition that could not be true. Deleted 2026-09-16 after
-                    // confirming verdict_source reads 'validation_engine' in production.
-                    $verdictForSpec = $engineVerdicts[$component['UUID']] ?? null;
-                    if ($verdictForSpec === null) {
-                        $isCompatible = false;
-                        $compatibilityReasons = ['Compatibility could not be determined'];
-                    } else {
-                        $isCompatible = $verdictForSpec['compatible'];
-                        $compatibilityReasons = [$verdictForSpec['reason']];
-                        $engineWarnings = $verdictForSpec['warnings'];
-                    }
-
-                    // Build component result
-                    $componentStatus = (int)$component['Status'];
-                    $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
-
-                    $compatibleComponent = [
+                    $jsonValidationDetails[] = [
                         'uuid' => $component['UUID'],
-                        'component_name' => $this->getComponentNameFromSpec($componentType, $component['UUID']),
                         'serial_number' => $component['SerialNumber'],
-                        'status' => $componentStatus,
-                        'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
-                        'available_for_use' => ($componentStatus === 1),
-                        'server_uuid' => $component['ServerUUID'] ?? null,
-                        'location' => $component['Location'],
-                        'notes' => $component['Notes'],
-                        'compatibility_reason' => implode('; ', $compatibilityReasons),
-                        'is_compatible' => $isCompatible
+                        'has_json' => $hasJSON,
+                        'status' => $component['Status'],
+                        'result' => $hasJSON ? 'included' : 'excluded - no JSON spec found'
                     ];
-
-                    // Engine warnings (non-blocking failures new to this candidate) so the
-                    // operator sees them before the add -- e.g. an uncaddied drive, which
-                    // is addable now and blocks only at finalize.
-                    if (!empty($engineWarnings)) {
-                        $compatibleComponent['warnings'] = array_values(array_unique($engineWarnings));
-                    }
-
-                    $compatibleComponents[] = $compatibleComponent;
                 }
-            } else {
-                // Fallback if ComponentCompatibility not available
-                error_log("WARNING: ComponentCompatibility class not available, using simplified fallback");
+            }
 
-                foreach ($allComponents as $component) {
-                    $componentStatus = (int)$component['Status'];
-                    $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
+            // Replace allComponents with filtered list
+            $totalBeforeFiltering = count($allComponents);
+            $allComponents = $componentsWithJSON;
 
-                    $compatibleComponent = [
-                        'uuid' => $component['UUID'],
-                        'component_name' => $this->getComponentNameFromSpec($componentType, $component['UUID']),
-                        'serial_number' => $component['SerialNumber'],
-                        'status' => $componentStatus,
-                        'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
-                        'available_for_use' => ($componentStatus === 1),
-                        'server_uuid' => $component['ServerUUID'] ?? null,
-                        'location' => $component['Location'],
-                        'notes' => $component['Notes'],
-                        'compatibility_reason' => empty($existingComponentsData) ? "No existing components - all components available" : "Basic compatibility check passed",
-                        'is_compatible' => true
-                    ];
+            // Add to debug info
+            if ($includeDebug) {
+            $debugInfo['total_before_json_filter'] = $totalBeforeFiltering;
+            $debugInfo['total_with_json'] = count($allComponents);
+            $debugInfo['components_without_json'] = $componentsWithoutJSON;
+            $debugInfo['json_validation_details'] = $jsonValidationDetails;
 
-                    $compatibleComponents[] = $compatibleComponent;
+            // Add detailed component listing to debug
+            $debugInfo['components_to_check'] = array_map(function($c) {
+                return [
+                    'uuid' => $c['UUID'],
+                    'serial' => $c['SerialNumber'],
+                    'status' => $c['Status']
+                ];
+            }, $allComponents);
+            } // end if ($includeDebug)
+
+            // The engine answers the listing exactly as it answers the add, so the
+            // two cannot disagree. Since 2026-09-13 this never returns null: there
+            // is no engine-off state (U-D.4) and an unusable engine now reports
+            // undetermined per candidate. The legacy branches below are retained
+            // for the historical shapes they still serve, not as a fallback.
+            $engineVerdicts = $this->evaluateCandidatesWithEngine(
+                $configUuid, $componentType, $allComponents, $options['parent_nic_uuid'] ?? null
+            );
+            if ($includeDebug) {
+                $debugInfo['verdict_source'] = $engineVerdicts === null ? 'legacy' : 'validation_engine';
+            }
+
+            // Run compatibility checks for each component
+            foreach ($allComponents as $component) {
+                $isCompatible = true;
+                $compatibilityReasons = [];
+                $engineWarnings = [];
+
+                // evaluateCandidatesWithEngine never returns null -- it has two
+                // returns and both are arrays -- so this is the only branch that
+                // ever ran. The legacy elseif/else chain that used to follow, and
+                // the eight check*DecentralizedCompatibility() methods it called,
+                // were a second compatibility implementation kept alive only by a
+                // condition that could not be true. Deleted 2026-09-16 after
+                // confirming verdict_source reads 'validation_engine' in production.
+                $verdictForSpec = $engineVerdicts[$component['UUID']] ?? null;
+                if ($verdictForSpec === null) {
+                    $isCompatible = false;
+                    $compatibilityReasons = ['Compatibility could not be determined'];
+                } else {
+                    $isCompatible = $verdictForSpec['compatible'];
+                    $compatibilityReasons = [$verdictForSpec['reason']];
+                    $engineWarnings = $verdictForSpec['warnings'];
                 }
+
+                // Build component result
+                $componentStatus = (int)$component['Status'];
+                $statusLabels = [0 => 'failed', 1 => 'available', 2 => 'in_use'];
+
+                $compatibleComponent = [
+                    'uuid' => $component['UUID'],
+                    'component_name' => $this->getComponentNameFromSpec($componentType, $component['UUID']),
+                    'serial_number' => $component['SerialNumber'],
+                    'status' => $componentStatus,
+                    'status_label' => $statusLabels[$componentStatus] ?? 'unknown',
+                    'available_for_use' => ($componentStatus === 1),
+                    'server_uuid' => $component['ServerUUID'] ?? null,
+                    'location' => $component['Location'],
+                    'notes' => $component['Notes'],
+                    'compatibility_reason' => implode('; ', $compatibilityReasons),
+                    'is_compatible' => $isCompatible
+                ];
+
+                // Engine warnings (non-blocking failures new to this candidate) so the
+                // operator sees them before the add -- e.g. an uncaddied drive, which
+                // is addable now and blocks only at finalize.
+                if (!empty($engineWarnings)) {
+                    $compatibleComponent['warnings'] = array_values(array_unique($engineWarnings));
+                }
+
+                $compatibleComponents[] = $compatibleComponent;
             }
 
             // Step 5: Build response

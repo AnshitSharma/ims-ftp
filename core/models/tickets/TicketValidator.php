@@ -15,20 +15,17 @@
  */
 
 require_once(__DIR__ . '/../components/ComponentDataService.php');
-require_once(__DIR__ . '/../compatibility/ComponentCompatibility.php');
 require_once(__DIR__ . '/../../config/WorkflowConfig.php');
 
 class TicketValidator
 {
     private $pdo;
     private $componentDataService;
-    private $compatibilityValidator;
 
     public function __construct($pdo)
     {
         $this->pdo = $pdo;
         $this->componentDataService = ComponentDataService::getInstance();
-        $this->compatibilityValidator = new ComponentCompatibility($pdo);
     }
 
     /**
@@ -96,14 +93,15 @@ class TicketValidator
             ];
         }
 
-        // Pre-load server config once for all items (fixes N+1)
-        $serverComponents = null;
+        // Resolve the target once for all items. A uuid naming no configuration gets no
+        // compatibility check -- validateTargetServer() is what reports that.
+        $targetServer = null;
         if ($serverUuid) {
-            $serverComponents = $this->loadServerComponents($serverUuid);
+            $targetServer = $this->loadTargetServer($serverUuid);
         }
 
         foreach ($items as $index => $item) {
-            $itemErrors = $this->validateSingleItem($item, $index, $serverUuid, $serverComponents);
+            $itemErrors = $this->validateSingleItem($item, $index, $serverUuid, $targetServer);
             if (!empty($itemErrors['errors'])) {
                 $errors = array_merge($errors, $itemErrors['errors']);
             } else {
@@ -126,7 +124,7 @@ class TicketValidator
      * @param string|null $serverUuid Server UUID for compatibility
      * @return array
      */
-    private function validateSingleItem($item, $index, $serverUuid = null, $serverComponents = null)
+    private function validateSingleItem($item, $index, $serverUuid = null, $targetServer = null)
     {
         $errors = [];
         $validatedItem = $item;
@@ -226,11 +224,8 @@ class TicketValidator
         }
 
         // Compatibility checking (if server UUID provided and item is validated)
-        if ($serverUuid && $serverComponents !== null && $validatedItem['is_validated'] == 1) {
-            $compatibilityResult = $this->checkItemCompatibilityWithComponents(
-                $validatedItem,
-                $serverComponents
-            );
+        if ($serverUuid && $targetServer !== null && $validatedItem['is_validated'] == 1) {
+            $compatibilityResult = $this->checkItemCompatibility($validatedItem, $targetServer);
             $validatedItem['is_compatible'] = $compatibilityResult['compatible'] ? 1 : 0;
             $validatedItem['compatibility_notes'] = $compatibilityResult['notes'];
 
@@ -246,119 +241,73 @@ class TicketValidator
     }
 
     /**
-     * Load server components once for reuse across multiple item checks
+     * The target configuration's uuid if it exists, else null.
      *
      * @param string $serverUuid Server UUID
-     * @return array|null List of components or null if not found
+     * @return string|null
      */
-    private function loadServerComponents($serverUuid)
+    private function loadTargetServer($serverUuid)
     {
         try {
-            $stmt = $this->pdo->prepare("SELECT * FROM server_configurations WHERE config_uuid = ? LIMIT 1");
+            $stmt = $this->pdo->prepare("SELECT config_uuid FROM server_configurations WHERE config_uuid = ? LIMIT 1");
             $stmt->execute([$serverUuid]);
-            $server = $stmt->fetch(PDO::FETCH_ASSOC);
-            return $server ? $this->getServerComponents($server) : null;
+            $uuid = $stmt->fetchColumn();
+            return $uuid === false ? null : (string)$uuid;
         } catch (Exception $e) {
-            error_log("Server components load error: " . $e->getMessage());
+            error_log("Target server load error: " . $e->getMessage());
             return null;
         }
     }
 
     /**
-     * Check if item is compatible with pre-loaded server components
+     * Would this item be accepted on the target configuration?
      *
-     * @param array $item Validated item
-     * @param array $existingComponents Pre-loaded server components
+     * F.1 (2026-09-21 audit): asked of ValidationEngine through ServerBuilder::
+     * evaluateSpecCompatibility() -- the same answer the compatible-parts listing and the
+     * add itself give, so a Request cannot promise a part the step will then refuse. It
+     * used to be the legacy pairwise engine (ComponentCompatibility), which checked each
+     * existing component against the item two at a time and so could never count: it
+     * passed a third CPU on a two-socket board, a 17th DIMM in 16 slots, and a card with
+     * no free slot. Replayed over all 74 configurations x 193 stocked models before the
+     * switch (engine-compare, recorded in tasks/audit-2026-09-21-implementation.md).
+     *
+     * Only an ADD is judged here. A remove takes nothing new in, and a replace is judged
+     * by ReplaceComponentCommand against the unit it replaces when the step runs --
+     * evaluating either as an add would refuse, say, a like-for-like CPU swap in a full
+     * two-socket build. A serverplatform item is judged by set-platform, which replaces
+     * the board and chassis wholesale; ValidationEngine's rules do not take that type.
+     *
+     * @param array  $item       Validated item
+     * @param string $serverUuid Target configuration
      * @return array ['compatible' => bool, 'notes' => string]
      */
-    private function checkItemCompatibilityWithComponents($item, $existingComponents)
+    private function checkItemCompatibility($item, $serverUuid)
     {
+        $action = $item['action'] ?? 'add';
+        if ($action !== 'add') {
+            return ['compatible' => true, 'notes' => "Not checked at request time: a $action is validated when its step runs"];
+        }
+        if ($item['component_type'] === 'serverplatform') {
+            return ['compatible' => true, 'notes' => 'Not checked at request time: a platform is validated when it is set'];
+        }
+
         try {
-            $newComponent = [
-                'type' => $item['component_type'],
-                'uuid' => $item['component_uuid']
-            ];
-
-            $issues = [];
-            $warnings = [];
-
-            foreach ($existingComponents as $existingComponent) {
-                if ($existingComponent['type'] === $newComponent['type'] &&
-                    $existingComponent['uuid'] === $newComponent['uuid']) {
-                    continue;
-                }
-
-                if ($this->compatibilityValidator->canComponentTypesBeCompatible($newComponent['type'], $existingComponent['type'])) {
-                    $result = $this->compatibilityValidator->checkComponentPairCompatibility($newComponent, $existingComponent);
-
-                    if (!$result['compatible']) {
-                        foreach ($result['issues'] as $issue) {
-                            $issues[] = "Conflict with {$existingComponent['type']}: $issue";
-                        }
-                    }
-                    if (!empty($result['warnings'])) {
-                        foreach ($result['warnings'] as $warning) {
-                            $warnings[] = "Warning with {$existingComponent['type']}: $warning";
-                        }
-                    }
-                }
-            }
-
-            if (empty($issues)) {
-                $notes = "Compatible";
-                if (!empty($warnings)) {
-                    $notes .= " (Warnings: " . implode('; ', $warnings) . ")";
-                }
-                return ['compatible' => true, 'notes' => $notes];
-            }
-
-            return ['compatible' => false, 'notes' => implode('; ', $issues)];
-        } catch (Exception $e) {
+            require_once __DIR__ . '/../server/ServerBuilder.php';
+            $builder = new ServerBuilder($this->pdo);
+            $verdict = $builder->evaluateSpecCompatibility($serverUuid, $item['component_type'], $item['component_uuid']);
+        } catch (Throwable $e) {
             error_log("Compatibility check error: " . $e->getMessage());
-            return ['compatible' => false, 'notes' => 'Compatibility check failed: ' . $e->getMessage()];
-        }
-    }
-
-    /**
-     * Extract all components from a server configuration.
-     *
-     * U-D.3b: reads config_components rows through ConfigReadRouter instead of decoding
-     * the nine JSON columns. The output shape (['type' => …, 'uuid' => …]) is unchanged,
-     * so every caller is untouched.
-     *
-     * The risercard/pciecard disambiguation the old body did by catalog membership is no
-     * longer needed for rows: the split landed 2026-08-14 and config_components carries
-     * 'risercard' as its own component_type. The catalog test is kept ONLY for entries
-     * that still arrive typed 'pciecard', so a row written before the split is still
-     * classified the way it always was.
-     *
-     * @param array $server Server configuration row
-     * @return array List of ['type' => string, 'uuid' => string]
-     */
-    private function getServerComponents($server)
-    {
-        require_once __DIR__ . '/../config/ConfigReadRouter.php';
-        require_once __DIR__ . '/../server/ServerBuilder.php';
-
-        $components = [];
-        $routed = ConfigReadRouter::components(
-            new ServerBuilder($this->pdo), $this->pdo, is_array($server) ? $server : []
-        );
-
-        foreach ($routed as $entry) {
-            $type = $entry['component_type'] ?? null;
-            $uuid = $entry['component_uuid'] ?? null;
-            if ($type === null || empty($uuid)) {
-                continue;
-            }
-            if ($type === 'pciecard'
-                && $this->componentDataService->validateComponentUuid('risercard', $uuid)) {
-                $type = 'risercard';
-            }
-            $components[] = ['type' => $type, 'uuid' => $uuid];
+            return ['compatible' => false, 'notes' => 'Compatibility could not be determined'];
         }
 
-        return $components;
+        if (empty($verdict['compatible'])) {
+            return ['compatible' => false, 'notes' => $verdict['reason'] ?? 'Incompatible'];
+        }
+        $notes = 'Compatible';
+        if (!empty($verdict['warnings'])) {
+            $notes .= ' (Warnings: ' . implode('; ', array_unique($verdict['warnings'])) . ')';
+        }
+        return ['compatible' => true, 'notes' => $notes];
     }
 
     /**

@@ -61,8 +61,16 @@ function handleEngineCompareOperations($operation, $user) {
     }
 
     $source = (string)($_POST['source'] ?? $_GET['source'] ?? 'items');
-    if (!in_array($source, ['items', 'configs'], true)) {
-        send_json_response(0, 1, 400, "source must be items or configs");
+    if (!in_array($source, ['items', 'configs', 'uuids'], true)) {
+        send_json_response(0, 1, 400, "source must be items, configs or uuids");
+    }
+
+    // F.2's gate: the compatible-parts listing pre-filters its scan through the legacy
+    // ComponentCompatibility::validateComponentExistsInJSON(). F.2 swaps that for the
+    // canonical ComponentDataService::validateComponentUuid(). This proves the two agree
+    // on every stocked (type, UUID) before the swap.
+    if ($source === 'uuids') {
+        engineCompareUuidExistence($pdo);
     }
     $limit = (int)($_POST['limit'] ?? $_GET['limit'] ?? 500);
     $limit = max(1, min(2000, $limit));
@@ -74,11 +82,12 @@ function handleEngineCompareOperations($operation, $user) {
             ? engineCompareItemCases($pdo, $limit, (int)($_POST['ticket_id'] ?? $_GET['ticket_id'] ?? 0))
             : engineCompareConfigCases($pdo, $limit, trim((string)($_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '')));
 
+        // The Request side is asked through its PUBLIC entry point, validateTicketItems(),
+        // which is what PipelineManager::createPipeline() calls. Before F.1 that answered
+        // with the legacy pairwise engine; after F.1 this harness is the live proof that it
+        // now agrees with the add path.
         $validator = new TicketValidator($pdo);
-        $loadLegacy = new ReflectionMethod($validator, 'loadServerComponents');
-        $loadLegacy->setAccessible(true);
-        $checkLegacy = new ReflectionMethod($validator, 'checkItemCompatibilityWithComponents');
-        $checkLegacy->setAccessible(true);
+        $serverExists = $pdo->prepare("SELECT 1 FROM server_configurations WHERE config_uuid = ?");
 
         $builder = new ServerBuilder($pdo);
         $checkNew = new ReflectionMethod($builder, 'evaluateCandidatesWithEngine');
@@ -125,9 +134,10 @@ function handleEngineCompareOperations($operation, $user) {
 
         try {
             if (!array_key_exists($server, $legacyCache)) {
-                $legacyCache[$server] = $loadLegacy->invoke($validator, $server);
+                $serverExists->execute([$server]);
+                $legacyCache[$server] = $serverExists->fetchColumn() !== false;
             }
-            if ($legacyCache[$server] === null) {
+            if (!$legacyCache[$server]) {
                 $out['outcome'] = 'skipped';
                 $out['reason'] = 'target server no longer exists';
                 $counts['skipped']++;
@@ -135,8 +145,16 @@ function handleEngineCompareOperations($operation, $user) {
                 continue;
             }
 
-            $legacy = $checkLegacy->invoke($validator,
-                ['component_type' => $type, 'component_uuid' => $uuid], $legacyCache[$server]);
+            $request = $validator->validateTicketItems([[
+                'component_type' => $type, 'component_uuid' => $uuid,
+                'action' => $case['action'] ?? 'add',
+            ]], $server);
+            $legacy = [
+                'compatible' => $request['valid'],
+                'notes' => $request['valid']
+                    ? ($request['validated_items'][0]['compatibility_notes'] ?? '')
+                    : implode('; ', $request['errors']),
+            ];
 
             $key = $server . '|' . $type;
             if (!isset($newCache[$key])) {
@@ -204,6 +222,44 @@ function handleEngineCompareOperations($operation, $user) {
         'summary'  => $counts + $cases['meta'],
         'patterns' => $patterns,
         'items'    => $rows,
+    ]);
+}
+
+/** Legacy vs canonical "is this uuid in ims-data", over every stocked (type, UUID). Exits. */
+function engineCompareUuidExistence(PDO $pdo): void {
+    try {
+        require_once __DIR__ . '/../../../core/models/compatibility/ComponentCompatibility.php';
+        $legacy = new ComponentCompatibility($pdo);
+        $cds = ComponentDataService::getInstance();
+
+        $checked = 0;
+        $found = 0;
+        $diffs = [];
+        foreach (VALID_COMPONENT_TYPES as $type) {
+            if (!inventoryTableExists($pdo, $type)) {
+                continue;
+            }
+            $table = getComponentTableName($type);
+            $uuids = $pdo->query("SELECT DISTINCT UUID FROM $table WHERE UUID IS NOT NULL AND UUID <> ''")
+                         ->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($uuids as $uuid) {
+                $old = (bool)$legacy->validateComponentExistsInJSON($type, $uuid);
+                $new = (bool)$cds->validateComponentUuid($type, $uuid);
+                $checked++;
+                $found += $new ? 1 : 0;
+                if ($old !== $new) {
+                    $diffs[] = ['component_type' => $type, 'uuid' => $uuid, 'legacy' => $old, 'canonical' => $new];
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log("engine-compare uuids failed: " . $e->getMessage());
+        send_json_response(0, 1, 500, "UUID comparison failed");
+    }
+
+    send_json_response(1, 1, 200, "UUID existence comparison complete", [
+        'source' => 'uuids', 'checked' => $checked, 'found' => $found,
+        'disagreements' => count($diffs), 'items' => $diffs,
     ]);
 }
 
