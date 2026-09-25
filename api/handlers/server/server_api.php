@@ -120,6 +120,11 @@ switch ($action) {
         handleServerMovements($user);
         break;
 
+    // 2026-09-24: record-only public/private IPs on a server.
+    case 'update-ips':
+        handleUpdateServerIps($user);
+        break;
+
     case 'search-by-serial':
         handleSearchBySerial($serverBuilder, $user);
         break;
@@ -1535,6 +1540,7 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'platform_version_uuid' => $platformVersionUuid,
                 'platform_name' => $platformName,
                 'platform_locked' => $platformLocked,
+                'ip_addresses' => serverIpAddressesByConfig($pdo, [$configUuid])[$configUuid] ?? [],
                 'created_at' => $configuration['created_at'],
                 'updated_at' => $configuration['updated_at'] ?? $configuration['created_at']
             ],
@@ -1707,6 +1713,14 @@ function handleListConfigurations($serverBuilder, $user) {
             $config['is_virtual'] = (bool)($config['is_virtual'] ?? 0);
             $config['is_sandbox'] = (bool)($config['is_sandbox'] ?? 0);
             $config['total_component_types'] = count($componentTypesByConfig[$config['config_uuid']] ?? []);
+        }
+        unset($config);
+
+        // Recorded IPs for the cards and the list's local search. One grouped
+        // query; [] per server until seeder 2026_09_24_001 has run.
+        $ipsByConfig = serverIpAddressesByConfig($pdo, array_column($configurations, 'config_uuid'));
+        foreach ($configurations as &$config) {
+            $config['ip_addresses'] = $ipsByConfig[$config['config_uuid']] ?? [];
         }
         unset($config);
 
@@ -2474,6 +2488,16 @@ function handleDeleteConfiguration($serverBuilder, $user) {
 
         if ($result['success']) {
             $releasedCount = $result['components_released'] ?? 0;
+
+            // Its recorded IPs go with it (no FK -- see seeder 2026_09_24_001).
+            if (SchemaHelper::hasTable($pdo, 'server_ip_addresses')) {
+                try {
+                    $pdo->prepare("DELETE FROM server_ip_addresses WHERE config_uuid = ?")->execute([$configUuid]);
+                } catch (Throwable $ipError) {
+                    error_log("Deleting IPs of server $configUuid failed: " . $ipError->getMessage());
+                }
+            }
+
             logActivity($pdo, $user['id'], 'Server deleted', 'server', $config->get('id'),
                 "Deleted server config $configUuid, released $releasedCount components");
 
@@ -2960,6 +2984,23 @@ function handleSearchBySerial($serverBuilder, $user) {
                 if (!empty($configUuid)) {
                     $matchedConfigUuids[$configUuid] = true;
                 }
+            }
+        }
+
+        // A recorded IP address, so searching "10.0.4.12" (or part of it) finds
+        // the server. Guarded: the table arrives with seeder 2026_09_24_001.
+        if (SchemaHelper::hasTable($pdo, 'server_ip_addresses')) {
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT DISTINCT config_uuid FROM server_ip_addresses
+                    WHERE ip_address LIKE ? LIMIT 50
+                ");
+                $stmt->execute(['%' . $serial . '%']);
+                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $configUuid) {
+                    $matchedConfigUuids[$configUuid] = true;
+                }
+            } catch (PDOException $e) {
+                error_log("search-by-serial: IP lookup skipped: " . $e->getMessage());
             }
         }
 
@@ -3681,6 +3722,157 @@ function handleRemovePlatform($serverBuilder, $user) {
         }
         error_log("Error removing server platform: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to remove the compute platform");
+    }
+}
+
+/**
+ * Recorded IP addresses for a set of servers, keyed by config_uuid.
+ *
+ * Records only -- see seeder 2026_09_24_001. Every caller treats this as
+ * decoration: the table arrives by hand after this file deploys, and an
+ * unreadable table must not take a server read down, so any failure is [].
+ *
+ * @return array<string, array<int, array{ip_address:string, ip_type:string, label:?string}>>
+ */
+function serverIpAddressesByConfig($pdo, array $configUuids) {
+    $configUuids = array_values(array_filter(array_unique($configUuids)));
+    if (empty($configUuids) || !SchemaHelper::hasTable($pdo, 'server_ip_addresses')) {
+        return [];
+    }
+
+    $byConfig = [];
+    try {
+        $inClause = implode(',', array_fill(0, count($configUuids), '?'));
+        $stmt = $pdo->prepare("
+            SELECT config_uuid, ip_address, ip_type, label
+            FROM server_ip_addresses
+            WHERE config_uuid IN ($inClause)
+            ORDER BY FIELD(ip_type, 'public', 'private'), id
+        ");
+        $stmt->execute($configUuids);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $byConfig[$row['config_uuid']][] = [
+                'ip_address' => $row['ip_address'],
+                'ip_type' => $row['ip_type'],
+                'label' => $row['label'] !== null && $row['label'] !== '' ? $row['label'] : null,
+            ];
+        }
+    } catch (Throwable $e) {
+        error_log("Server IP address lookup failed: " . $e->getMessage());
+        return [];
+    }
+    return $byConfig;
+}
+
+/**
+ * Replace the whole set of IP addresses recorded against one server.
+ *
+ * POST config_uuid + ip_addresses (a JSON array of {ip_address, ip_type, label});
+ * an empty array clears them. IPs are optional, so a server with none is normal.
+ *
+ * Deliberately NOT blocked on a finalized server, unlike server-update-config:
+ * these are records about where a machine is reachable, and a deployed server is
+ * exactly the one that has addresses to record. The same address on two servers
+ * is allowed -- private ranges repeat across sites, and nothing here routes.
+ */
+function handleUpdateServerIps($user) {
+    global $pdo;
+
+    $configUuid = trim((string)($_POST['config_uuid'] ?? ''));
+    if ($configUuid === '') {
+        send_json_response(0, 1, 400, "Configuration UUID is required");
+    }
+
+    if (!SchemaHelper::hasTable($pdo, 'server_ip_addresses')) {
+        send_json_response(0, 1, 503,
+            "IP addresses cannot be saved yet -- seeder 2026_09_24_001 has not been run.");
+    }
+
+    $config = ServerConfiguration::loadByUuid($pdo, $configUuid);
+    if (!$config) {
+        send_json_response(0, 1, 404, "Server configuration not found");
+    }
+    if (!userCanActOnConfig($pdo, $config, $user['id'], 'server.edit_all')) {
+        send_json_response(0, 1, 403, "Insufficient permissions to modify this configuration");
+    }
+
+    $raw = $_POST['ip_addresses'] ?? '[]';
+    $entries = is_array($raw) ? $raw : json_decode((string)$raw, true);
+    if (!is_array($entries)) {
+        send_json_response(0, 1, 400, "ip_addresses must be a JSON array");
+    }
+    if (count($entries) > 50) {
+        send_json_response(0, 1, 400, "A server can record at most 50 IP addresses");
+    }
+
+    $clean = [];
+    foreach (array_values($entries) as $i => $entry) {
+        if (!is_array($entry)) {
+            send_json_response(0, 1, 400, "IP address entry " . ($i + 1) . " is not an object");
+        }
+
+        $ip = trim((string)($entry['ip_address'] ?? ''));
+        if ($ip === '') {
+            continue; // a blank row in the form is "not entered", not an error
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            send_json_response(0, 1, 400, "'{$ip}' is not a valid IPv4 or IPv6 address");
+        }
+        // Canonical form, so 2001:DB8::1 and 2001:db8:0::1 are one address.
+        $ip = inet_ntop(inet_pton($ip));
+
+        $type = strtolower(trim((string)($entry['ip_type'] ?? '')));
+        if ($type === '') {
+            $type = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false
+                ? 'private' : 'public';
+        }
+        if (!in_array($type, ['public', 'private'], true)) {
+            send_json_response(0, 1, 400, "IP type for {$ip} must be 'public' or 'private'");
+        }
+
+        $label = trim((string)($entry['label'] ?? ''));
+        if (mb_strlen($label) > 100) {
+            send_json_response(0, 1, 400, "The label for {$ip} is longer than 100 characters");
+        }
+
+        if (isset($clean[$ip])) {
+            send_json_response(0, 1, 400, "{$ip} is listed twice");
+        }
+        $clean[$ip] = ['ip_address' => $ip, 'ip_type' => $type, 'label' => $label === '' ? null : $label];
+    }
+
+    try {
+        $before = serverIpAddressesByConfig($pdo, [$configUuid])[$configUuid] ?? [];
+
+        $pdo->beginTransaction();
+        $pdo->prepare("DELETE FROM server_ip_addresses WHERE config_uuid = ?")->execute([$configUuid]);
+        $insert = $pdo->prepare("
+            INSERT INTO server_ip_addresses (config_uuid, ip_address, ip_type, label, created_by)
+            VALUES (?, ?, ?, ?, ?)
+        ");
+        foreach ($clean as $row) {
+            $insert->execute([$configUuid, $row['ip_address'], $row['ip_type'], $row['label'], (int)$user['id']]);
+        }
+        $pdo->commit();
+
+        $describe = function (array $rows) {
+            return empty($rows) ? 'none' : implode(', ', array_map(function ($r) {
+                return $r['ip_address'] . ' (' . $r['ip_type'] . ')';
+            }, $rows));
+        };
+        logActivity($pdo, $user['id'], 'Server IPs updated', 'server', $config->get('id'),
+            "IP addresses on $configUuid: " . $describe($before) . " -> " . $describe(array_values($clean)));
+
+        send_json_response(1, 1, 200, "IP addresses saved", [
+            'config_uuid' => $configUuid,
+            'ip_addresses' => array_values($clean),
+        ]);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("Error saving server IP addresses: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to save IP addresses");
     }
 }
 

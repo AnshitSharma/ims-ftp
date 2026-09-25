@@ -74,6 +74,7 @@ return [
         // rack, so the handler refuses one -- moving it is rack-assign-server.
         'update-location' => 'server.edit_details',
         'movements' => 'server.view', // 2026-08-26 -- relocation history for one config
+        'update-ips' => 'server.edit_details', // 2026-09-24 -- record-only public/private IPs
         // Removed 2026-08-31: the three TEMPORARY debug-* diagnostics
         // (config-dualwrite, shadow-log, deadcode) went with the migration
         // scaffolding they served -- see the note at their old dispatch site in
