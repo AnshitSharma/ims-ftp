@@ -47,6 +47,14 @@ require_once(__DIR__ . '/../location/LocationResolver.php');
 require_once(__DIR__ . '/../location/ComponentRelocation.php');
 // isCataloguedModel() asks it whether a model exists in ims-data at all.
 require_once(__DIR__ . '/../components/ComponentDataService.php');
+// RackNetworkDevice is a NEWER file than this one, so it reaches production after it.
+// Never a hard require: until it arrives the two device actions fail closed with a
+// message, and every other action here is unaffected.
+$rackNetworkDeviceFile = __DIR__ . '/../rack/RackNetworkDevice.php';
+if (is_readable($rackNetworkDeviceFile)) {
+    require_once($rackNetworkDeviceFile);
+}
+unset($rackNetworkDeviceFile);
 
 class RequestActionExecutor
 {
@@ -190,6 +198,33 @@ class RequestActionExecutor
                            'component_name', 'serial_number',
                            'from_location_name', 'to_location_name'],
         ],
+        // 2026-09-29. Network devices (routers, switches, MUXes) are racked beside
+        // servers, and rack.assign is not something every requester holds -- so,
+        // like server.relocate, these are the route for everyone else. The
+        // requester never gains rack.assign; the approval performs the placement.
+        //
+        // Scope is 'inventory' because the unit is stock, not a build, and the
+        // Request Types editor renders only the 'server' and 'inventory' groups.
+        //
+        // inventory_id, NOT a model uuid: two units of one model are two different
+        // boxes, and only the row says which one somebody is racking. Placing an
+        // already-racked device is a MOVE (to another U, rack or site).
+        //
+        // device_name / serial_number / location_name / rack_name are DISPLAY-ONLY
+        // snapshots so the request list reads a device and its destination without
+        // a join. They are never read when the placement is performed -- the ids are.
+        'inventory.device.rack' => [
+            'label'    => 'Rack a network device (or move it)',
+            'scope'    => 'inventory',
+            'required' => ['inventory_id', 'rack_uuid', 'start_u'],
+            'optional' => ['reason', 'device_name', 'serial_number', 'location_name', 'rack_name'],
+        ],
+        'inventory.device.unrack' => [
+            'label'    => 'Remove a network device from its rack',
+            'scope'    => 'inventory',
+            'required' => ['inventory_id'],
+            'optional' => ['store_location', 'reason', 'device_name', 'serial_number', 'rack_name'],
+        ],
     ];
 
     /**
@@ -277,8 +312,30 @@ class RequestActionExecutor
                 // approver reading "Noida Yotta -> Jaipur Office" can sanity-check
                 // it; a pair of short uuids tells them nothing.
                 return self::handoverLabel($type, $payload);
+            case 'inventory.device.rack':
+                return 'Rack ' . self::deviceLabel($payload) . ' at ' . self::relocateTargetLabel($payload);
+            case 'inventory.device.unrack':
+                return 'Remove ' . self::deviceLabel($payload) . ' from '
+                    . (!empty($payload['rack_name']) ? $payload['rack_name'] : 'its rack');
         }
         return $spec['label'];
+    }
+
+    /**
+     * A readable name for the network device a rack/unrack action is about. The
+     * model name is only present when the client sent it (this is static and has
+     * no PDO), so it falls back to the serial, then the inventory id -- the things
+     * that identify the physical box.
+     */
+    private static function deviceLabel(array $payload)
+    {
+        $what = !empty($payload['device_name']) ? $payload['device_name'] : 'network device';
+        if (!empty($payload['serial_number'])) {
+            $what .= ' SN ' . $payload['serial_number'];
+        } elseif (!empty($payload['inventory_id'])) {
+            $what .= ' #' . (int)$payload['inventory_id'];
+        }
+        return $what;
     }
 
     /**
@@ -389,6 +446,15 @@ class RequestActionExecutor
         if ($actionType === 'inventory.component.edit'
             && !$this->inventoryRecordExists($payload['component_type'], $payload['inventory_id'])) {
             return ['valid' => false, 'errors' => ['That inventory record no longer exists']];
+        }
+
+        // Same courtesy for a device: refuse now, while the requester is looking at
+        // the form, rather than after an approval has been spent on a deleted unit.
+        // The U range itself is checked against the rack at approval time, when it
+        // is the state that matters -- a slot that fills up in between is a refusal.
+        if (in_array($actionType, ['inventory.device.rack', 'inventory.device.unrack'], true)
+            && !$this->inventoryRecordExists('networkdevice', $payload['inventory_id'])) {
+            return ['valid' => false, 'errors' => ['That network device no longer exists']];
         }
 
         // A dry run needs the configuration to exist already, so it applies to
@@ -631,6 +697,12 @@ class RequestActionExecutor
 
                 case 'inventory.component.relocate':
                     return $this->relocateComponent($payload, $subjectUserId, $ticketId);
+
+                case 'inventory.device.rack':
+                    return $this->rackDevice($payload, $subjectUserId, $ticketId);
+
+                case 'inventory.device.unrack':
+                    return $this->unrackDevice($payload, $subjectUserId, $ticketId);
             }
 
             // Unreachable: validateShape() rejects anything unknown.
@@ -739,6 +811,20 @@ class RequestActionExecutor
             && isset($payload['old_inventory_id']) && $payload['old_inventory_id'] !== ''
             && !ctype_digit((string)$payload['old_inventory_id'])) {
             $errors[] = 'old_inventory_id must be numeric -- it names one physical unit, not a model';
+        }
+
+        if ($actionType === 'inventory.device.rack' || $actionType === 'inventory.device.unrack') {
+            if (!ctype_digit((string)$payload['inventory_id'])) {
+                $errors[] = 'inventory_id must be numeric -- a device request names one physical unit, not a model';
+            }
+        }
+        if ($actionType === 'inventory.device.rack') {
+            if (!preg_match('/^[0-9a-fA-F-]{32,36}$/', (string)$payload['rack_uuid'])) {
+                $errors[] = 'rack_uuid does not look like a UUID';
+            }
+            if (!ctype_digit((string)$payload['start_u']) || (int)$payload['start_u'] < 1) {
+                $errors[] = 'start_u must be a whole number, 1 or greater';
+            }
         }
 
         if ($actionType === 'inventory.component.relocate') {
@@ -1178,6 +1264,107 @@ class RequestActionExecutor
                 'from'           => isset($result['data']['from']) ? $result['data']['from'] : null,
                 'to'             => isset($result['data']['to'])   ? $result['data']['to']   : null,
                 'message'        => $result['message'],
+            ],
+        ];
+    }
+
+    /**
+     * Rack (or move) a network device. Delegates to RackNetworkDevice::place(), the
+     * single door for a placement, for the same reason relocateServer() delegates
+     * to ServerRelocation: a second implementation would let an approved request do
+     * something the direct path would have refused.
+     *
+     * Runs inside completeStage()'s open transaction. place() notices that and does
+     * not open its own, so a refusal (the U filled up since this was raised) returns
+     * success=false and the approval rolls back with it. $subjectUserId -- the
+     * REQUESTER -- becomes created_by / moved_by, like every other action here.
+     */
+    private function rackDevice(array $payload, $subjectUserId, $ticketId = null)
+    {
+        if (!class_exists('RackNetworkDevice', false)) {
+            return [
+                'success' => false,
+                'errors'  => ['Network device placement is not available yet.'],
+                'result'  => ['error_code' => 'device_placement_unavailable', 'message' => 'Network device placement is not available yet.'],
+            ];
+        }
+
+        $result = RackNetworkDevice::place(
+            $this->pdo,
+            (int)$payload['inventory_id'],
+            $payload['rack_uuid'],
+            (int)$payload['start_u'],
+            [
+                'user_id'   => $subjectUserId,
+                'reason'    => isset($payload['reason']) ? $payload['reason'] : null,
+                'ticket_id' => $ticketId,
+            ]
+        );
+
+        if (!$result['success']) {
+            return [
+                'success' => false,
+                'errors'  => [$result['message']],
+                'result'  => ['error_code' => 'device_rack_refused', 'message' => $result['message']],
+            ];
+        }
+
+        return [
+            'success' => true,
+            'errors'  => [],
+            'result'  => [
+                'action'       => 'inventory.device.rack',
+                'inventory_id' => (int)$payload['inventory_id'],
+                'moved'        => !empty($result['data']['moved']),
+                'from'         => isset($result['data']['from']) ? $result['data']['from'] : null,
+                'to'           => isset($result['data']['to'])   ? $result['data']['to']   : null,
+                'message'      => $result['message'],
+            ],
+        ];
+    }
+
+    /**
+     * Take a network device out of its rack, via RackNetworkDevice::unrack().
+     */
+    private function unrackDevice(array $payload, $subjectUserId, $ticketId = null)
+    {
+        if (!class_exists('RackNetworkDevice', false)) {
+            return [
+                'success' => false,
+                'errors'  => ['Network device placement is not available yet.'],
+                'result'  => ['error_code' => 'device_placement_unavailable', 'message' => 'Network device placement is not available yet.'],
+            ];
+        }
+
+        $ctx = [
+            'user_id'   => $subjectUserId,
+            'reason'    => isset($payload['reason']) ? $payload['reason'] : null,
+            'ticket_id' => $ticketId,
+        ];
+        // Only forwarded when the request said something about the shelf, so an
+        // omitted field never blanks the note saying where the unit is kept.
+        if (array_key_exists('store_location', $payload)) {
+            $ctx['store_location'] = $payload['store_location'];
+        }
+
+        $result = RackNetworkDevice::unrack($this->pdo, (int)$payload['inventory_id'], $ctx);
+
+        if (!$result['success']) {
+            return [
+                'success' => false,
+                'errors'  => [$result['message']],
+                'result'  => ['error_code' => 'device_unrack_refused', 'message' => $result['message']],
+            ];
+        }
+
+        return [
+            'success' => true,
+            'errors'  => [],
+            'result'  => [
+                'action'       => 'inventory.device.unrack',
+                'inventory_id' => (int)$payload['inventory_id'],
+                'from'         => isset($result['data']['from']) ? $result['data']['from'] : null,
+                'message'      => $result['message'],
             ],
         ];
     }

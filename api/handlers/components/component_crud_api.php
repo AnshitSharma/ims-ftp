@@ -19,6 +19,15 @@
 function handleComponentOperations($module, $operation, $user) {
     global $pdo;
 
+    // networkdevice arrives with a hand-run seeder (2026_09_29_001) while its code
+    // deploys ~20s after save. Say so, rather than the bare 500 a missing table
+    // would produce. Only for this type: every other table has always existed, and
+    // the probe would be a wasted query on every component request.
+    if ($module === 'networkdevice' && !SchemaHelper::hasTable($pdo, 'networkdeviceinventory')) {
+        send_json_response(0, 1, 503,
+            "Network devices are not available yet — the database migration for this feature has not been applied.");
+    }
+
     switch ($operation) {
         case 'list':
             // Pagination is CAPPED BY DEFAULT (audit JSON-004, 2026-09-16).
@@ -159,7 +168,7 @@ function handleComponentOperations($module, $operation, $user) {
             // for the whole page.
             try {
                 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
-                LocationResolver::enrichComponentRows($pdo, $components);
+                LocationResolver::enrichComponentRows($pdo, $components, $module);
             } catch (Throwable $locError) {
                 // Decoration only. An inventory page must still render.
                 error_log("[location] component list enrichment failed: " . $locError->getMessage());
@@ -198,7 +207,7 @@ function handleComponentOperations($module, $operation, $user) {
                 try {
                     require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
                     $one = [$component];
-                    LocationResolver::enrichComponentRows($pdo, $one);
+                    LocationResolver::enrichComponentRows($pdo, $one, $module);
                     $component = $one[0];
                 } catch (Throwable $locError) {
                     error_log("[location] component get enrichment failed: " . $locError->getMessage());

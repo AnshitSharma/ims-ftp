@@ -162,6 +162,51 @@ class ConfigComponentWriter
     }
 
     /**
+     * Record a board's onboard ports on a build that holds MODELS, not units.
+     *
+     * A real board mints nicinventory rows for its ports (OnboardNICHandler), and a
+     * Compatibility Bench build must not create stock, so this writes only the
+     * config_components rows: NULL inventory identity, parented to the board's row, spec
+     * uuid from ResourceCatalog::virtualOnboardNicUuid(). Everything that reads a port
+     * off a row -- the network view, the SFP port tracker, the slot ledger -- already
+     * treats an "onboard-" uuid as a port that consumes no slot.
+     *
+     * Inside the caller's transaction; the repository refuses to run outside one.
+     *
+     * @param int $boardRowId config_components.id of the board's own row
+     * @return int number of port rows written
+     */
+    public static function attachVirtualOnboardNics(PDO $pdo, $configUuid, $boardSpecUuid, $boardRowId, $actor)
+    {
+        require_once __DIR__ . '/../components/ComponentDataService.php';
+        require_once __DIR__ . '/ResourceCatalog.php';
+        require_once __DIR__ . '/ConfigComponentRepository.php';
+
+        $board = ComponentDataService::getInstance()->findComponentByUuid('motherboard', $boardSpecUuid);
+        $ports = is_array($board) ? ($board['networking']['onboard_nics'] ?? []) : [];
+        if (!is_array($ports) || !$ports) {
+            return 0;
+        }
+
+        $repo = new ConfigComponentRepository($pdo);
+        $written = 0;
+        foreach (array_keys(array_values($ports)) as $position) {
+            $repo->insert($configUuid, [
+                'component_type'  => 'nic',
+                'inventory_table' => null,
+                'inventory_id'    => null,
+                'spec_uuid'       => ResourceCatalog::virtualOnboardNicUuid((string)$boardSpecUuid, $position + 1),
+                'serial_number'   => null,
+                'parent_id'       => $boardRowId ?: null,
+                'slot_ref'        => null,
+            ], $actor);
+            $written++;
+        }
+
+        return $written;
+    }
+
+    /**
      * Call after ServerBuilder's legacy remove write succeeds, still inside
      * the same transaction. No-op when the flag is off, or when there is no
      * live config_components row to tombstone (e.g. the row predates the

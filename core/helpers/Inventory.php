@@ -58,7 +58,9 @@ function getBuildableComponentTables() {
     if ($map === null) {
         $map = ['chassis' => 'chassisinventory'];
         foreach (VALID_COMPONENT_TYPES as $type) {
-            if ($type === 'serverplatform' || $type === 'chassis') {
+            // networkdevice is racked beside servers, never built into one, so it
+            // is excluded here on the same grounds as serverplatform.
+            if ($type === 'serverplatform' || $type === 'chassis' || $type === 'networkdevice') {
                 continue;
             }
             $map[$type] = $type . 'inventory';
@@ -108,6 +110,7 @@ function getComponentTypeManifest() {
         'hbacard'        => ['label' => 'HBA Card',        'nesting' => 'brand[].models[]'],
         'sfp'            => ['label' => 'SFP Module',      'nesting' => 'brand[].series[].models[]'],
         'serverplatform' => ['label' => 'Server Platform', 'nesting' => 'brand[].models[]'],
+        'networkdevice'  => ['label' => 'Network Device',  'nesting' => 'brand[].models[]'],
     ];
 
     $manifest = [];
@@ -217,6 +220,7 @@ function getComponentAssetTagCode($type) {
         'hbacard'     => 'HBA',
         'sfp'         => 'SFP',
         'serverplatform' => 'SPF',
+        'networkdevice'  => 'NET',
     ];
 
     if (!isset($codes[$type])) {
@@ -1007,6 +1011,17 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
                 throw new InvalidArgumentException("Component not found");
             }
 
+            if ($type === 'networkdevice') {
+                guardRackedNetworkDeviceEdit($pdo, $id, $safeData, $existing);
+                if (empty($safeData)) {
+                    // Everything sent was a derived value restated unchanged.
+                    if ($ownsTransaction) {
+                        $pdo->commit();
+                    }
+                    return true;
+                }
+            }
+
             applyComponentStatusPair($safeData, $allowedCols, $existing);
 
             $columns = array_keys($safeData);
@@ -1045,6 +1060,80 @@ function updateComponent($pdo, $type, $id, $data, $userId) {
     } catch (Exception $e) {
         error_log("Error updating $type component: " . $e->getMessage());
         throw $e;
+    }
+}
+
+/**
+ * Where a network device is racked, or null when it is loose stock.
+ *
+ * Reads rack_network_devices, the only record of a placement. THROWS when the
+ * table exists but cannot be read, so a caller deciding whether a destructive
+ * step is safe fails closed. A missing table is "nothing is racked yet" -- code
+ * deploys before the seeder that creates it.
+ *
+ * @return array{rack_uuid:string,start_u:int,u_height:int,rack_name:?string}|null
+ */
+function networkDevicePlacementRow(PDO $pdo, $inventoryId) {
+    if (!SchemaHelper::hasTable($pdo, 'rack_network_devices')) {
+        return null;
+    }
+    $stmt = $pdo->prepare(
+        "SELECT rn.rack_uuid, rn.start_u, rn.u_height, r.name AS rack_name
+           FROM rack_network_devices rn
+           LEFT JOIN racks r ON r.rack_uuid = rn.rack_uuid
+          WHERE rn.inventory_id = ? LIMIT 1"
+    );
+    $stmt->execute([(int)$inventoryId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+/**
+ * A racked network device's Status and address are DERIVED from its placement,
+ * so an edit may not change them.
+ *
+ * Status 2 here means "racked", and the ServerUUID test in
+ * applyComponentStatusPair() cannot see that: a device never has a ServerUUID.
+ * Without this, one edit could mark a racked switch available (the next rack
+ * placement then double-books it) or move its site while the rack it is bolted
+ * into stays where it was.
+ *
+ * The edit form posts the whole record back, so a derived field restated
+ * UNCHANGED is dropped quietly; only a real change is refused.
+ *
+ * @param array $safeData by reference; derived fields sent unchanged are removed
+ * @throws InvalidArgumentException when a derived field would change
+ */
+function guardRackedNetworkDeviceEdit(PDO $pdo, $inventoryId, array &$safeData, array $existing) {
+    try {
+        $placement = networkDevicePlacementRow($pdo, $inventoryId);
+    } catch (PDOException $e) {
+        error_log("guardRackedNetworkDeviceEdit read failed: " . $e->getMessage());
+        throw new InvalidArgumentException("Cannot verify whether this device is racked. Edit refused.");
+    }
+    if ($placement === null) {
+        return;
+    }
+
+    $derived = ['Status', 'Location', 'location_uuid', 'StoreLocation'];
+    foreach ($derived as $col) {
+        if (!array_key_exists($col, $safeData)) {
+            continue;
+        }
+        $sent = $safeData[$col];
+        $have = $existing[$col] ?? null;
+        $same = $col === 'Status'
+            ? ((int)$sent === (int)$have)
+            : (trim((string)$sent) === trim((string)$have));
+        if (!$same) {
+            $where = ($placement['rack_name'] !== null ? $placement['rack_name'] : 'a rack')
+                . ' at U' . (int)$placement['start_u'];
+            throw new InvalidArgumentException(
+                "This device is racked in $where, so its status and location follow the rack. "
+                . "Unrack it to change them."
+            );
+        }
+        unset($safeData[$col]);
     }
 }
 
@@ -1137,6 +1226,27 @@ function deleteComponent($pdo, $type, $id, $userId) {
                 "This $type is installed in server $noun " . implode(', ', $claimedBy)
                 . ". Remove it from the $noun before deleting it."
             );
+        }
+
+        // A racked network device is claimed by rack_network_devices, not by a
+        // configuration. Deleting the inventory row would leave a placement
+        // holding U space for a unit that no longer exists. Fail closed.
+        if ($type === 'networkdevice') {
+            try {
+                $placement = networkDevicePlacementRow($pdo, $id);
+            } catch (PDOException $e) {
+                error_log("Error reading rack placement before deleting $type #$id: " . $e->getMessage());
+                throw new ComponentInUseException(
+                    "Cannot verify whether this $type is racked. Delete refused."
+                );
+            }
+            if ($placement !== null) {
+                $where = ($placement['rack_name'] !== null ? $placement['rack_name'] : 'a rack')
+                    . ' at U' . (int)$placement['start_u'];
+                throw new ComponentInUseException(
+                    "This $type is racked in $where. Unrack it before deleting it."
+                );
+            }
         }
 
         $stmt = $pdo->prepare("DELETE FROM $tableName WHERE ID = ?");

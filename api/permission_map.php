@@ -109,6 +109,12 @@ return [
         'enclosure-add' => 'rack.edit',
         'enclosure-update' => 'rack.edit',
         'enclosure-remove' => 'rack.edit',
+        // Network devices (seeder 2026_09_29_001). Racking one is the same
+        // authority as racking a server, so no new permission: placing, moving
+        // and removing are rack.assign, and the placeable list is a read.
+        'device-assign' => 'rack.assign',
+        'device-unassign' => 'rack.assign',
+        'placeable-devices' => 'rack.view',
     ],
 
     // Locations — the physical sites racks stand in. Reads are deliberately

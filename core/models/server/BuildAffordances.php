@@ -207,9 +207,13 @@ class BuildAffordances {
      *
      * Delegating rather than pattern-matching the connector string keeps this
      * gate consistent with what the engine will actually allow at add time. It
-     * inherits the matrix's exact-match behaviour, including its treatment of
-     * combo connectors like "SFP28 / RJ45" (see the note in the task file) —
-     * which is the point: the UI must never be more permissive than the engine.
+     * inherits the matrix's exact-match behaviour, which is the point: the UI must
+     * never be more permissive than the engine.
+     *
+     * A card with mixed ports (an rNDC with 2x SFP+ and 2x RJ45) states them in
+     * `port_groups`, and NICPortTracker::portLayout() resolves the cage of each
+     * port, so only the SFP ports count here. A combo string like "SFP28 / RJ45"
+     * with no `port_groups` is still not a cage, and offers nothing.
      *
      * Onboard NICs carry the cage in `connector` (sourced from the motherboard
      * spec); add-in NICs carry it in `port_type`.
@@ -223,26 +227,25 @@ class BuildAffordances {
 
         foreach ($nics as $nic) {
             $specs = $nic['specifications'] ?? [];
-            $cage = $specs['port_type'] ?? $specs['connector'] ?? '';
+            $sfpPorts = NICPortTracker::sfpPortIndexes($specs);
 
-            if (empty(NICPortTracker::getCompatibleSfpTypes($cage))) {
+            if (empty($sfpPorts)) {
                 continue;
             }
 
             $cageCount++;
-            $ports = (int)($specs['ports'] ?? 0);
-            $totalPorts += $ports;
+            $totalPorts += count($sfpPorts);
 
             // port_mapping is added by getNetworkConfiguration(); absent means
             // nothing is assigned yet, so every port is free.
             $mapping = $nic['port_mapping'] ?? [];
             $occupied = 0;
-            foreach ($mapping as $port) {
-                if (($port['status'] ?? '') === 'occupied') {
+            foreach ($mapping as $index => $port) {
+                if (($port['status'] ?? '') === 'occupied' && in_array((int)$index, $sfpPorts, true)) {
                     $occupied++;
                 }
             }
-            $freePorts += max(0, $ports - $occupied);
+            $freePorts += max(0, count($sfpPorts) - $occupied);
         }
 
         if ($cageCount === 0) {

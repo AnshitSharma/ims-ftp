@@ -299,8 +299,11 @@ final class AddComponentCommand extends BaseCommand
      * Same probe-and-degrade shape as platformRowsSupported() in server_api.php.
      * Never queries the catalog schema — the app DB user is denied it and the guard
      * would fail open.
+     *
+     * Public because handleSetPlatform() asks the same question before installing a
+     * platform on a Compatibility Bench build: one probe, one answer.
      */
-    private static function unitlessPlacementSupported(PDO $pdo): bool
+    public static function unitlessPlacementSupported(PDO $pdo): bool
     {
         static $supported = null;
         if ($supported !== null) {
@@ -336,7 +339,7 @@ final class AddComponentCommand extends BaseCommand
             : ($inventoryData['SerialNumber'] ?? ($this->options['serial_number'] ?? null));
 
         $repo = new ConfigComponentRepository($pdo);
-        $repo->insert($this->configUuid, [
+        $componentRowId = $repo->insert($this->configUuid, [
             'component_type' => $this->componentType,
             'inventory_table' => $table,
             'inventory_id' => $inventoryId,
@@ -439,6 +442,20 @@ final class AddComponentCommand extends BaseCommand
                     $onboardNic['inventory_id'],
                     $this->actor,
                     null
+                );
+            }
+        }
+
+        // A virtual board's onboard ports are rows only, because a real board's ports are
+        // nicinventory stock and a what-if build must not create any. Without them a
+        // bench build reports no network ports at all, and an SFP could not be tested
+        // against an onboard cage. The method may not exist for a moment on a deploy that
+        // lands this file first; the ports are then simply absent, as before.
+        if ($this->componentType === 'motherboard' && $this->isVirtual) {
+            require_once __DIR__ . '/../config/ConfigComponentWriter.php';
+            if (method_exists('ConfigComponentWriter', 'attachVirtualOnboardNics')) {
+                ConfigComponentWriter::attachVirtualOnboardNics(
+                    $pdo, $this->configUuid, $this->componentUuid, $componentRowId, $this->actor
                 );
             }
         }

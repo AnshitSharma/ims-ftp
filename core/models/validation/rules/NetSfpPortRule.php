@@ -113,6 +113,36 @@ final class NetSfpPortRule implements RuleInterface
                 continue; // spec incomplete -- not this rule's concern, matches legacy's fail-open-to-error-elsewhere posture
             }
 
+            // A NIC that states `port_groups` (rNDC: 2x SFP+, 2x RJ45) has a cage per
+            // port, so the port the module sits in decides. With no port named, any
+            // SFP-capable port that accepts the module will do (the staged case).
+            if (!empty($nicSpec['port_groups'])) {
+                $layout = NICPortTracker::portLayout($nicSpec);
+                $slotIndex = ($sfp['slot_ref'] !== null && preg_match('/^(?:port_)?(\d+)$/i', (string)$sfp['slot_ref'], $m))
+                    ? (int)$m[1] : null;
+                $cages = ($slotIndex !== null && isset($layout[$slotIndex]))
+                    ? [$layout[$slotIndex]]
+                    : array_values(array_unique($layout));
+
+                $accepted = false;
+                foreach ($cages as $cage) {
+                    if (NICPortTracker::isCompatible($cage, $sfpType)) {
+                        $accepted = true;
+                        break;
+                    }
+                }
+                if (!$accepted) {
+                    $where = $slotIndex !== null && isset($layout[$slotIndex])
+                        ? "port $slotIndex ({$layout[$slotIndex]}) on NIC {$parentNic['id']}"
+                        : "any port on NIC {$parentNic['id']}";
+                    return new RuleResult($this->id(), $this->severity(), false,
+                        "SFP module type '$sfpType' is incompatible with $where",
+                        ['sfp_id' => $sfp['id'], 'nic_id' => $parentNic['id'], 'sfp_type' => $sfpType,
+                            'port' => $sfp['slot_ref'], 'nic_port_layout' => array_values($layout)]);
+                }
+                continue;
+            }
+
             if (!NICPortTracker::isCompatible($nicPortType, $sfpType)) {
                 return new RuleResult($this->id(), $this->severity(), false,
                     "SFP module type '$sfpType' is incompatible with NIC port type '$nicPortType'",

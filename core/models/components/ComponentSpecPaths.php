@@ -15,6 +15,7 @@ class ComponentSpecPaths {
         'sfp' => 'sfp/sfp-level-3.json',
         'chassis' => 'chassis/chasis-level-3.json',
         'serverplatform' => 'serverplatform/server-platform-level-3.json',
+        'networkdevice' => 'networkdevice/network-device-level-3.json',
     ];
 
     public static function getBasePath(): string {

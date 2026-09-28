@@ -291,6 +291,12 @@ class TicketValidator
             return ['compatible' => true, 'notes' => 'Not checked at request time: a platform is validated when it is set'];
         }
 
+        // A network device is racked, never installed in a server, so there is no
+        // compatibility to judge against the target build.
+        if ($item['component_type'] === 'networkdevice') {
+            return ['compatible' => true, 'notes' => 'Not checked at request time: a network device is racked, not installed in a server'];
+        }
+
         try {
             require_once __DIR__ . '/../server/ServerBuilder.php';
             $builder = new ServerBuilder($this->pdo);

@@ -123,6 +123,84 @@ class ResourceCatalog
     }
 
     /**
+     * Onboard-port uuid for a board on a build that holds MODELS, not units.
+     *
+     * A Compatibility Bench build has no nicinventory row to key a port on, so the unit
+     * segment of the unit-scoped format is 0 -- "onboard-{mb8}-0-{n}" -- which
+     * parseOnboardNicUuid() already reads. It has to stay this short:
+     * config_components.spec_uuid is CHAR(36), and a full board uuid plus the prefix
+     * would not fit.
+     */
+    public static function virtualOnboardNicUuid(string $boardSpecUuid, int $index): string
+    {
+        return 'onboard-' . substr($boardSpecUuid, 0, 8) . '-0-' . $index;
+    }
+
+    /**
+     * The board spec uuid a unit-less onboard uuid ("onboard-{mb8}-0-{n}") belongs to.
+     *
+     * Resolved by the 8-character prefix over the loose-board catalog and the boards that
+     * ship inside a compute platform. It is only ever answered when exactly ONE board
+     * carries that prefix -- an ambiguous prefix returns null rather than a guess, so no
+     * caller can be handed a different board's ports. (Today no two of the 41 board uuids
+     * share a prefix.)
+     *
+     * @return string|null null for a real unit-scoped uuid (unit id > 0), a legacy format,
+     *                     or a prefix that matches no board or several
+     */
+    public static function virtualOnboardBoardUuid(string $onboardUuid): ?string
+    {
+        $parsed = self::parseOnboardNicUuid($onboardUuid);
+        if ($parsed === null || $parsed['inventory_id'] !== 0 || strlen($parsed['board_prefix']) !== 8) {
+            return null;
+        }
+
+        require_once __DIR__ . '/../components/ComponentDataService.php';
+        require_once __DIR__ . '/../components/PlatformSpecIndex.php';
+
+        $candidates = [];
+        foreach (ComponentDataService::getInstance()->allSpecUuids('motherboard') as $uuid) {
+            $candidates[$uuid] = true;
+        }
+        $platform = PlatformSpecIndex::load();
+        foreach (array_keys($platform['motherboard'] ?? []) as $uuid) {
+            $candidates[(string)$uuid] = true;
+        }
+
+        $matches = [];
+        foreach (array_keys($candidates) as $uuid) {
+            if (strpos((string)$uuid, $parsed['board_prefix']) === 0) {
+                $matches[] = (string)$uuid;
+            }
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /**
+     * The board-spec entry ("networking.onboard_nics[n-1]") a unit-less onboard uuid
+     * stands for -- what OnboardNICHandler / NICPortTracker fall back to when there is no
+     * nicinventory row to read the parent board from.
+     *
+     * @return array|null
+     */
+    public static function virtualOnboardNicSpec(string $onboardUuid): ?array
+    {
+        $boardUuid = self::virtualOnboardBoardUuid($onboardUuid);
+        if ($boardUuid === null) {
+            return null;
+        }
+        $parsed = self::parseOnboardNicUuid($onboardUuid);
+
+        require_once __DIR__ . '/../components/ComponentDataService.php';
+        $board = ComponentDataService::getInstance()->findComponentByUuid('motherboard', $boardUuid);
+        $entries = is_array($board) ? ($board['networking']['onboard_nics'] ?? null) : null;
+        $entry = is_array($entries) ? ($entries[$parsed['index'] - 1] ?? null) : null;
+
+        return is_array($entry) ? $entry : null;
+    }
+
+    /**
      * sfp_port provision for a synthetic onboard NIC, resolved via its parent
      * motherboard's networking.onboard_nics[index-1].ports — mirrors
      * NICPortTracker::resolveOnboardNicSpecs()'s resolution (and its

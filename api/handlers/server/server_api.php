@@ -1540,6 +1540,11 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'platform_version_uuid' => $platformVersionUuid,
                 'platform_name' => $platformName,
                 'platform_locked' => $platformLocked,
+                // The builder switches its whole test-build mode on these (banner, Tested
+                // parts, no Finish button, return to Server Compatibility). This projection
+                // never carried them, so a bench build opened as if it were a real server.
+                'is_virtual' => !empty($config->get('is_virtual')),
+                'is_sandbox' => !empty($config->get('is_sandbox')),
                 'ip_addresses' => serverIpAddressesByConfig($pdo, [$configUuid])[$configUuid] ?? [],
                 'created_at' => $configuration['created_at'],
                 'updated_at' => $configuration['updated_at'] ?? $configuration['created_at']
@@ -3047,11 +3052,27 @@ function handleListPlatforms($user) {
     try {
         require_once __DIR__ . '/../../../core/models/server/ServerPlatformCatalog.php';
         $catalog = new ServerPlatformCatalog($pdo);
-        $platforms = $catalog->listPlatforms();
+
+        // A Compatibility Bench build reserves no box, so for it every catalogued version is
+        // offered whatever is on the shelf. The build is named by the caller and is only
+        // believed if it really is a bench build this user may see; anything else -- no
+        // build, an unknown one, a real one -- gets the stock-gated list exactly as before.
+        $ignoreStock = false;
+        $benchUuid = $_POST['config_uuid'] ?? $_GET['config_uuid'] ?? '';
+        if ($benchUuid !== '') {
+            $benchConfig = ServerConfiguration::loadByUuid($pdo, $benchUuid);
+            $ignoreStock = $benchConfig
+                && !empty($benchConfig->get('is_sandbox'))
+                && !empty($benchConfig->get('is_virtual'))
+                && userCanActOnConfig($pdo, $benchConfig, $user['id'], 'server.view_all');
+        }
+
+        $platforms = $catalog->listPlatforms($ignoreStock);
 
         send_json_response(1, 1, 200, "Server platforms retrieved successfully", [
             'platforms' => $platforms,
-            'total_platforms' => count($platforms)
+            'total_platforms' => count($platforms),
+            'stock_ignored' => (bool)$ignoreStock
         ]);
 
     } catch (Exception $e) {
@@ -3307,10 +3328,16 @@ function handleSetPlatform($serverBuilder, $user) {
         $platform = $found['platform'];
         $version  = $found['version'];
 
+        // A Compatibility Bench build installs the catalog entry, not a box: no unit is
+        // claimed and stock is not asked about. This first reading only picks which
+        // selectability rule to apply; the locked row below is what decides, and it is
+        // what gates the install.
+        $benchBuild = !empty($config->get('is_sandbox')) && !empty($config->get('is_virtual'));
+
         // Selectability is computed by the catalog, the same way the picker computed it.
         // A second rule here is how a greyed-out version becomes installable through a
         // hand-crafted request.
-        $described = $catalog->describeVersionByUuid($versionUuid);
+        $described = $catalog->describeVersionByUuid($versionUuid, $benchBuild);
         if (!$described['selectable']) {
             send_json_response(0, 1, 409, $described['unavailable_reason'] ?: "This platform version cannot be installed", [
                 'version_uuid'    => $versionUuid,
@@ -3358,11 +3385,27 @@ function handleSetPlatform($serverBuilder, $user) {
         // build reserves nothing by definition; letting it through here was the
         // one route by which a design could consume hardware. Every component
         // command refuses this; so does this one now.
-        if (!empty($configRow['is_virtual'])) {
+        //
+        // The one virtual build that IS given a platform is a Compatibility Bench build:
+        // it takes the catalog entry with no unit behind it (config_components rows with
+        // no inventory identity, the same shape a virtual add writes), so nothing is
+        // reserved. It needs the same relaxed columns a virtual add does, and is refused
+        // 503 until they exist rather than falling back to claiming real stock.
+        $benchBuild = !empty($configRow['is_virtual']) && !empty($configRow['is_sandbox']);
+        if (!empty($configRow['is_virtual']) && !$benchBuild) {
             $pdo->rollBack();
             send_json_response(0, 1, 409, "This is a virtual configuration, so it cannot be given a physical "
                 . "compute platform. It has to be converted into a real configuration first — ask an "
                 . "administrator to import it.");
+        }
+        if ($benchBuild) {
+            require_once __DIR__ . '/../../../core/models/commands/AddComponentCommand.php';
+            if (!is_callable(['AddComponentCommand', 'unitlessPlacementSupported'])
+                || !AddComponentCommand::unitlessPlacementSupported($pdo)) {
+                $pdo->rollBack();
+                send_json_response(0, 1, 503, "Test builds cannot hold a platform until seeder "
+                    . "2026_09_01_001_nullable-config-components-inventory.sql has been run.");
+            }
         }
 
         $guardVerdict = StateGuard::checkMutation($pdo, $configRow);
@@ -3404,32 +3447,38 @@ function handleSetPlatform($serverBuilder, $user) {
             $releasedCount = $serverBuilder->clearConfigurationComponents($configUuid);
         }
 
-        // Claim one physical box. FOR UPDATE so two concurrent installs cannot take the
-        // same unit; ORDER BY ID so the oldest stock goes out first.
-        $unitStmt = $pdo->prepare("
-            SELECT ID, SerialNumber, AssetTag
-              FROM serverplatforminventory
-             WHERE UUID = ? AND Status = 1
-          ORDER BY ID
-             LIMIT 1
-            FOR UPDATE
-        ");
-        $unitStmt->execute([$versionUuid]);
-        $unit = $unitStmt->fetch(PDO::FETCH_ASSOC);
+        if ($benchBuild) {
+            // Nothing to claim: a bench build holds the catalog entry, not a box. The
+            // null identity is what the rows below are written with.
+            $unit = ['ID' => null, 'SerialNumber' => null, 'AssetTag' => null];
+        } else {
+            // Claim one physical box. FOR UPDATE so two concurrent installs cannot take the
+            // same unit; ORDER BY ID so the oldest stock goes out first.
+            $unitStmt = $pdo->prepare("
+                SELECT ID, SerialNumber, AssetTag
+                  FROM serverplatforminventory
+                 WHERE UUID = ? AND Status = 1
+              ORDER BY ID
+                 LIMIT 1
+                FOR UPDATE
+            ");
+            $unitStmt->execute([$versionUuid]);
+            $unit = $unitStmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$unit) {
-            $pdo->rollBack();
-            send_json_response(0, 1, 409, "No available unit of this platform version remains in stock", [
-                'version_uuid' => $versionUuid
-            ]);
+            if (!$unit) {
+                $pdo->rollBack();
+                send_json_response(0, 1, 409, "No available unit of this platform version remains in stock", [
+                    'version_uuid' => $versionUuid
+                ]);
+            }
+
+            $claim = $pdo->prepare("
+                UPDATE serverplatforminventory
+                   SET Status = 2, status_v2 = 'installed', ServerUUID = ?, InstallationDate = NOW(), UpdatedAt = NOW()
+                 WHERE ID = ?
+            ");
+            $claim->execute([$configUuid, (int)$unit['ID']]);
         }
-
-        $claim = $pdo->prepare("
-            UPDATE serverplatforminventory
-               SET Status = 2, status_v2 = 'installed', ServerUUID = ?, InstallationDate = NOW(), UpdatedAt = NOW()
-             WHERE ID = ?
-        ");
-        $claim->execute([$configUuid, (int)$unit['ID']]);
 
         $platformName = $catalog->displayName($platform, $version);
 
@@ -3477,7 +3526,53 @@ function handleSetPlatform($serverBuilder, $user) {
         // the same box is exactly as legal as the second.
         $rowsMirrored = false;
         $embeddedRows = [];
-        if (platformRowsSupported($pdo)) {
+        $benchOnboardCount = 0;
+        if ($benchBuild) {
+            // A bench build has no box, so its board, chassis and embedded parts are rows
+            // naming the platform table with NO unit id -- "part of the platform, nothing
+            // behind it". That keeps every reader of the platform lock working
+            // (configHasStockedUnitOf, RemoveComponentCommand, SystemInventoryStateRule all
+            // key on the table name) while uq_inventory_once cannot fire on a NULL id, so
+            // the widened key of seeder 2026_08_25_005 is not needed here.
+            require_once __DIR__ . '/../../../core/models/config/ConfigComponentRepository.php';
+            require_once __DIR__ . '/../../../core/models/config/ConfigComponentWriter.php';
+            $benchRepo = new ConfigComponentRepository($pdo);
+
+            $benchRows = [['motherboard', $board], ['chassis', $chassis]];
+            foreach ($includedParts as $defaultType => $partSpec) {
+                if (!ServerPlatformCatalog::isEmbedded($partSpec) || empty($partSpec['uuid'])) {
+                    continue;
+                }
+                $benchRows[] = [$partSpec['component_type'] ?? $defaultType, $partSpec];
+                $embeddedRows[$defaultType] = true;
+            }
+
+            // Board first: board-hosted parts (an embedded controller) parent to its row.
+            $boardRowId = null;
+            foreach ($benchRows as list($rowType, $rowSpec)) {
+                $rowId = $benchRepo->insert($configUuid, [
+                    'component_type'  => $rowType,
+                    'inventory_table' => 'serverplatforminventory',
+                    'inventory_id'    => null,
+                    'spec_uuid'       => $rowSpec['uuid'],
+                    'serial_number'   => null,
+                    'parent_id'       => in_array($rowType, ConfigComponentWriter::BOARD_HOSTED_TYPES, true) ? $boardRowId : null,
+                    'slot_ref'        => null,
+                ], (int)$user['id']);
+                if ($rowType === 'motherboard') {
+                    $boardRowId = $rowId;
+                }
+            }
+
+            // The board's onboard ports are rows too: a real board mints nicinventory stock
+            // for them, which a what-if build must not. Absent only for the instant a
+            // deploy lands this file before ConfigComponentWriter.
+            if (method_exists('ConfigComponentWriter', 'attachVirtualOnboardNics')) {
+                $benchOnboardCount = ConfigComponentWriter::attachVirtualOnboardNics(
+                    $pdo, $configUuid, $board['uuid'], $boardRowId, (int)$user['id']
+                );
+            }
+        } elseif (platformRowsSupported($pdo)) {
             require_once __DIR__ . '/../../../core/models/config/ConfigComponentWriter.php';
             // A list, not a map: two entries could name the same component type only
             // through a malformed spec, and one silently overwriting the other is a
@@ -3512,7 +3607,13 @@ function handleSetPlatform($serverBuilder, $user) {
 
         // The ports on this physical box. Identity is keyed on the platform unit, which
         // is what those ports are physically attached to.
-        $onboard = (new OnboardNICHandler($pdo))->autoAddOnboardNICs($configUuid, $board['uuid'], (int)$unit['ID']);
+        //
+        // Not for a bench build: autoAddOnboardNICs() would mint real nicinventory rows
+        // (and, handed a unit id of 0, key them to a unit that does not exist). Its ports
+        // were written as rows above.
+        $onboard = $benchBuild
+            ? ['count' => $benchOnboardCount, 'nics' => []]
+            : (new OnboardNICHandler($pdo))->autoAddOnboardNICs($configUuid, $board['uuid'], (int)$unit['ID']);
         if (isset($onboard['error'])) {
             $pdo->rollBack();
             error_log("handleSetPlatform: onboard NIC attach failed for $configUuid: " . $onboard['error']);
@@ -3588,7 +3689,8 @@ function handleSetPlatform($serverBuilder, $user) {
         $controllerResult = $includedResults['hbacard'];
 
         logActivity($pdo, $user['id'], 'Compute platform installed', 'server', $config->get('id'),
-            "Installed $platformName (unit {$unit['ID']}) on server config $configUuid");
+            "Installed $platformName (" . ($benchBuild ? 'test build, no stock used' : "unit {$unit['ID']}")
+            . ") on server config $configUuid");
 
         send_json_response(1, 1, 200, "$platformName installed", [
             'config_uuid'           => $configUuid,

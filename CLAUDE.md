@@ -11,7 +11,7 @@ engine flags). Never print its values.
 
 `api/api.php` (single entrypoint) -> JWT auth -> ACL gate -> `api/handlers/{module}/` ->
 `send_json_response()`. Modules: `auth`, `server`, `compatibility`, `rack`, `pipelines`,
-`location`, the 12 component types, `dashboard`, `search`, `users`, `vendors`, `acl`.
+`location`, the 13 component types, `dashboard`, `search`, `users`, `vendors`, `acl`.
 
 - `api/permission_map.php` is strict for `server`, `compatibility`, `rack` and every component
   action (components share one `component` template with `{module}` substitution). An unmapped
@@ -204,6 +204,14 @@ be the same deploy, because there is no safe intermediate state once a resolver 
   pcie_slots; plain PCIe cards consume them.
 - `serverplatform` became the 12th type on 2026-08-25. The version UUID, not the platform UUID,
   is the stocked SKU — see `ims-data/CLAUDE.md`.
+- `networkdevice` (routers, switches, MUXes) became the 13th on 2026-09-29. It is stocked like any
+  component but **racked, never built into a server**: `getBuildableComponentTables()` excludes it, so
+  `AddComponentCommand` and the `server.component.add` Request action refuse it. Its placement lives in
+  `rack_network_devices`, written only by `RackNetworkDevice::place()` / `unrack()` (`core/models/rack/`),
+  which is the one door for `rack-device-assign`, `rack-device-unassign` and the Request actions
+  `inventory.device.rack` / `.unrack`. Racked = Status 2 with the rack's site stamped on the unit;
+  `updateComponent()` and `deleteComponent()` refuse to change or destroy a racked one, and
+  `RackPlacement::occupancy()` counts devices, so a switch and a server cannot share a U.
 - Tickets are retired as an engine: `core/models/tickets/*` (`TicketValidator`, `TicketItemService`,
   `TicketHistoryService`) now serve `PipelineManager`. There is no `TicketManager.php`.
 - Errors: `error_log()` the exception, return a proper HTTP code, leak no paths or secrets.

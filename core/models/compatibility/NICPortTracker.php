@@ -100,6 +100,66 @@ class NICPortTracker {
     }
 
     /**
+     * Cage type of every physical port on a NIC, keyed by 1-based port index.
+     *
+     * A spec has one `port_type` for the whole card, which cannot describe an
+     * rNDC with 2x SFP+ and 2x RJ45. The optional `port_groups` field can:
+     * [{"type":"SFP+","count":2},{"type":"RJ45","count":2}], in physical port
+     * order. Without it every port takes the card's `port_type` (else
+     * `connector`, which is where onboard NICs keep it), so a spec that has not
+     * been given `port_groups` gets exactly the answer it always did.
+     *
+     * Fails closed: groups whose counts do not add up to `ports` are logged and
+     * every port is left typeless, so no port is offered to an SFP.
+     *
+     * @param array $spec NIC specification (`ports`, `port_type`, `port_groups`)
+     * @return array<int,string> port index => upper-cased cage type ('' if unknown)
+     */
+    public static function portLayout(array $spec) {
+        $ports = is_numeric($spec['ports'] ?? null) ? (int)$spec['ports'] : 0;
+        if ($ports < 1) {
+            return [];
+        }
+
+        $groups = $spec['port_groups'] ?? null;
+        if (is_array($groups) && !empty($groups)) {
+            $layout = [];
+            foreach ($groups as $group) {
+                $type = strtoupper(trim((string)($group['type'] ?? '')));
+                $count = is_numeric($group['count'] ?? null) ? (int)$group['count'] : 0;
+                for ($i = 0; $i < $count; $i++) {
+                    $layout[] = $type;
+                }
+            }
+            if (count($layout) === $ports) {
+                return array_combine(range(1, $ports), $layout);
+            }
+            error_log("NICPortTracker::portLayout: port_groups total " . count($layout) . " != ports $ports; treating every port as non-SFP");
+            return array_fill_keys(range(1, $ports), '');
+        }
+
+        $cage = strtoupper(trim((string)($spec['port_type'] ?? $spec['connector'] ?? '')));
+        return array_fill_keys(range(1, $ports), $cage);
+    }
+
+    /**
+     * Port indexes of a NIC that can hold an SFP module (an RJ45 or KR port
+     * cannot).
+     *
+     * @param array $spec NIC specification
+     * @return int[]
+     */
+    public static function sfpPortIndexes(array $spec) {
+        $indexes = [];
+        foreach (self::portLayout($spec) as $index => $cage) {
+            if (!empty(self::getCompatibleSfpTypes($cage))) {
+                $indexes[] = $index;
+            }
+        }
+        return $indexes;
+    }
+
+    /**
      * Reverse of getCompatibleSfpTypes(): for a given SFP module type, the NIC
      * port (cage) types that physically accept it.
      *
@@ -196,6 +256,19 @@ class NICPortTracker {
             $nicRow = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$nicRow) {
+                // No nicinventory record: a Compatibility Bench build's onboard port,
+                // which is a config row only. Its cage comes straight off the board spec.
+                require_once __DIR__ . '/../config/ResourceCatalog.php';
+                $virtualSpec = method_exists('ResourceCatalog', 'virtualOnboardNicSpec')
+                    ? ResourceCatalog::virtualOnboardNicSpec((string)$nicUuid)
+                    : null;
+                if (is_array($virtualSpec) && isset($virtualSpec['ports'])) {
+                    return [
+                        'ports'     => (int)$virtualSpec['ports'],
+                        'port_type' => $virtualSpec['connector'] ?? $virtualSpec['port_type'] ?? 'SFP+',
+                    ];
+                }
+
                 error_log("NICPortTracker::resolveOnboardNicSpecs: No nicinventory record found for $nicUuid");
                 return null;
             }

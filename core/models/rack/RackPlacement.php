@@ -105,6 +105,16 @@ class RackPlacement
     }
 
     /**
+     * Are network devices installable yet? Both tables come from seeder
+     * 2026_09_29_001, run by hand after the code that reads them deploys.
+     */
+    public static function networkDevicesAvailable($pdo)
+    {
+        return SchemaHelper::hasTable($pdo, 'rack_network_devices')
+            && SchemaHelper::hasTable($pdo, 'networkdeviceinventory');
+    }
+
+    /**
      * Current placement row for a config, or null when the server isn't racked.
      * Carries enclosure_uuid / slot_index once the seeder has run; both are NULL
      * for a direct placement, and absent entirely before it.
@@ -184,7 +194,7 @@ class RackPlacement
      * Slotted servers are deliberately absent: the enclosure they sit in is
      * already listed, and its U range is theirs.
      *
-     * @param array $exclude ['config_uuid' => ?string, 'enclosure_uuid' => ?string]
+     * @param array $exclude ['config_uuid' => ?string, 'enclosure_uuid' => ?string, 'network_device_id' => ?int]
      *                       — the thing being moved, which must not block itself.
      */
     public static function occupancy($pdo, $rackUuid, array $exclude = [])
@@ -220,6 +230,37 @@ class RackPlacement
                 'start_u' => $start,
                 'end_u'   => $start + $height - 1,
             ];
+        }
+
+        // ---- network devices ----
+        // Routers, switches and MUXes take U space exactly as a server does, so
+        // a switch at U40 blocks a server at U40 and the other way round.
+        // Guarded on the table: it arrives with a hand-run seeder.
+        if (self::networkDevicesAvailable($pdo)) {
+            $sql = "SELECT rn.inventory_id, rn.start_u, rn.u_height, d.AssetTag, d.SerialNumber
+                      FROM rack_network_devices rn
+                      LEFT JOIN networkdeviceinventory d ON d.ID = rn.inventory_id
+                     WHERE rn.rack_uuid = ?";
+            $params = [$rackUuid];
+            if (isset($exclude['network_device_id']) && $exclude['network_device_id'] !== null) {
+                $sql .= " AND rn.inventory_id <> ?";
+                $params[] = (int)$exclude['network_device_id'];
+            }
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $start  = (int)$row['start_u'];
+                $height = max(1, (int)$row['u_height']);
+                $tag = !empty($row['SerialNumber']) ? $row['SerialNumber']
+                     : (!empty($row['AssetTag']) ? $row['AssetTag'] : '#' . (int)$row['inventory_id']);
+                $out[] = [
+                    'kind'    => 'network_device',
+                    'ref'     => (int)$row['inventory_id'],
+                    'label'   => 'network device ' . $tag,
+                    'start_u' => $start,
+                    'end_u'   => $start + $height - 1,
+                ];
+            }
         }
 
         if (!$hasEnclosures) {

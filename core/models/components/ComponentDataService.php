@@ -719,6 +719,7 @@ class ComponentDataService {
             'form_factor' => $component['form_factor'] ?? '',
             'ports' => $component['ports'] ?? 0,
             'port_type' => $component['port_type'] ?? '',
+            'port_groups' => $component['port_groups'] ?? [],
             'speeds' => $component['speeds'] ?? [],
             'power_consumption' => is_string($component['power'] ?? null) ? (float)rtrim($component['power'] ?? '0', 'W') : 0.0,
             'features' => $component['features'] ?? [],
@@ -772,6 +773,32 @@ class ComponentDataService {
         }
         
         return $components;
+    }
+
+    /**
+     * Every model UUID in one type's spec file, in file order.
+     *
+     * Read off the same uuid index findComponentByUuid() resolves through, so a UUID
+     * listed here is by construction one validateComponentUuid() accepts. That is what a
+     * Compatibility Bench build needs to offer: it holds models, not stocked units, so
+     * its picker is the catalog rather than the inventory table.
+     *
+     * A model that names no uuid is not listed. The spec files carry one on every model;
+     * validateComponentUuid() would accept a synthesised 'generated-...' id for one that
+     * did not, but nothing could add it to inventory either, so it is not a candidate.
+     *
+     * @param string $componentType
+     * @return string[] empty when the spec file cannot be read
+     */
+    public function allSpecUuids($componentType) {
+        try {
+            $this->loadJsonData($componentType);
+        } catch (Throwable $e) {
+            error_log("ComponentDataService::allSpecUuids($componentType): " . $e->getMessage());
+            return [];
+        }
+
+        return array_map('strval', array_keys($this->uuidIndex[$componentType] ?? []));
     }
 
     public function getCompatibleComponents($componentType, $constraints = []) {

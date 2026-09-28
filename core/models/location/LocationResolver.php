@@ -64,7 +64,22 @@ class LocationResolver
     const COMPONENT_TYPES = [
         'cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy',
         'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform',
+        // Racked beside servers rather than installed in one. Its rows never carry
+        // a ServerUUID, so the per-config loops that walk this list touch nothing
+        // for it; its site is derived from rack_network_devices instead.
+        'networkdevice',
     ];
+
+    /**
+     * Do the network-device tables exist yet? Probed here rather than through
+     * RackPlacement so this file never depends on a method of a file that may
+     * still be the previous version while the two deploy.
+     */
+    private static function deviceTablesExist($pdo)
+    {
+        return SchemaHelper::hasTable($pdo, 'rack_network_devices')
+            && SchemaHelper::hasTable($pdo, 'networkdeviceinventory');
+    }
 
     /* ============================================================
      * Reading
@@ -274,10 +289,63 @@ class LocationResolver
      *
      * @param array $rows passed by reference; keys are added, none are removed.
      */
-    public static function enrichComponentRows($pdo, array &$rows)
+    public static function enrichComponentRows($pdo, array &$rows, $componentType = null)
     {
         if (empty($rows)) {
             return;
+        }
+
+        // --- racked network devices -------------------------------------------
+        // A device is not installed in a server, so it has no ServerUUID to join
+        // through; its rack comes from rack_network_devices, keyed on its own ID.
+        // Shaped like a server record so the fill-in loop below treats both alike.
+        $byDevice = [];
+        if ($componentType === 'networkdevice' && self::deviceTablesExist($pdo)) {
+            $ids = [];
+            foreach ($rows as $row) {
+                if (isset($row['ID'])) {
+                    $ids[(int)$row['ID']] = true;
+                }
+            }
+            if (!empty($ids)) {
+                $idList = array_keys($ids);
+                $in = implode(',', array_fill(0, count($idList), '?'));
+
+                $rackHasFloor = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
+                $rackHasLoc   = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
+                $hasLocations = SchemaHelper::hasTable($pdo, 'locations');
+                $floorSel = $rackHasFloor ? 'r.floor' : 'NULL AS floor';
+                $nameSel  = ($rackHasLoc && $hasLocations) ? 'l.name AS location_name' : 'NULL AS location_name';
+                $locJoin  = ($rackHasLoc && $hasLocations)
+                    ? 'LEFT JOIN locations l ON l.location_uuid = r.location_uuid' : '';
+
+                try {
+                    $stmt = $pdo->prepare("
+                        SELECT rn.inventory_id, rn.start_u, rn.u_height,
+                               r.name AS rack_name, {$floorSel}, {$nameSel}
+                          FROM rack_network_devices rn
+                          LEFT JOIN racks r ON r.rack_uuid = rn.rack_uuid
+                          {$locJoin}
+                         WHERE rn.inventory_id IN ({$in})
+                    ");
+                    $stmt->execute($idList);
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                        $byDevice[(int)$r['inventory_id']] = [
+                            'server_name'    => null,
+                            'start_u'        => $r['start_u'],
+                            'u_height'       => $r['u_height'],
+                            'rack_name'      => $r['rack_name'],
+                            'floor'          => $r['floor'],
+                            'location_name'  => $r['location_name'],
+                            'enclosure_name' => null,
+                            'slot_index'     => null,
+                        ];
+                    }
+                } catch (Throwable $e) {
+                    // Decoration; the rows still render with their own synced text.
+                    error_log("LocationResolver::enrichComponentRows devices error: " . $e->getMessage());
+                }
+            }
         }
 
         // --- where each server is, in one query -----------------------------
@@ -337,6 +405,9 @@ class LocationResolver
             $server = (!empty($row['ServerUUID']) && isset($byServer[$row['ServerUUID']]))
                 ? $byServer[$row['ServerUUID']]
                 : null;
+            if ($server === null && isset($row['ID']) && isset($byDevice[(int)$row['ID']])) {
+                $server = $byDevice[(int)$row['ID']];
+            }
 
             $row['server_name'] = $server ? $server['server_name'] : null;
             $row['rack_name']   = $server ? $server['rack_name']   : null;
@@ -517,6 +588,44 @@ class LocationResolver
             }
         } catch (Throwable $e) {
             error_log("LocationResolver::syncRack error: " . $e->getMessage());
+        }
+
+        // Network devices racked here move with the rack too. Their site is
+        // derived from it exactly like a server's, so a re-sited rack must not
+        // leave its switches describing the old one. Never blanks a location the
+        // rack cannot supply.
+        try {
+            if (self::deviceTablesExist($pdo)) {
+                $rack = $pdo->prepare("SELECT name, location"
+                    . (SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid') ? ", location_uuid" : ", NULL AS location_uuid")
+                    . " FROM racks WHERE rack_uuid = ? LIMIT 1");
+                $rack->execute([$rackUuid]);
+                $r = $rack->fetch(PDO::FETCH_ASSOC);
+                if ($r) {
+                    $name = self::locationName($pdo, $r['location_uuid']) ?: (!empty($r['location']) ? $r['location'] : null);
+                    $fields = [];
+                    $values = [];
+                    if (!empty($r['location_uuid']) && SchemaHelper::hasColumn($pdo, 'networkdeviceinventory', 'location_uuid')) {
+                        $fields[] = 'd.location_uuid = ?';
+                        $values[] = $r['location_uuid'];
+                    }
+                    if ($name !== null && $name !== '') {
+                        $fields[] = 'd.Location = ?';
+                        $values[] = $name;
+                    }
+                    if (!empty($fields)) {
+                        $values[] = $rackUuid;
+                        $upd = $pdo->prepare("UPDATE networkdeviceinventory d
+                                JOIN rack_network_devices rn ON rn.inventory_id = d.ID
+                                 SET " . implode(', ', $fields) . ", d.UpdatedAt = NOW()
+                               WHERE rn.rack_uuid = ?");
+                        $upd->execute($values);
+                        $components += $upd->rowCount();
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            error_log("LocationResolver::syncRack devices error: " . $e->getMessage());
         }
 
         return ['configs' => $configs, 'components' => $components];

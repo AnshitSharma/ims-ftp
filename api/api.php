@@ -277,6 +277,7 @@ try {
         case 'hbacard':
         case 'sfp':
         case 'serverplatform':
+        case 'networkdevice':
             requireModulePermission($module, $operation, $user);
             require_once(__DIR__ . '/handlers/components/component_crud_api.php');
             handleComponentOperations($module, $operation, $user);

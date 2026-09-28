@@ -45,9 +45,13 @@ class ServerPlatformCatalog
     /**
      * Every platform with its versions, each annotated with stock and selectability.
      *
+     * $ignoreStock is for a Compatibility Bench build, which holds MODELS and reserves no
+     * box: every version the catalog fully describes is selectable, whatever is on the
+     * shelf. Stock is still reported, as information.
+     *
      * @return array
      */
-    public function listPlatforms()
+    public function listPlatforms($ignoreStock = false)
     {
         $platforms = $this->loadPlatforms();
         $platformUnits = $this->availableUnits('serverplatform');
@@ -58,7 +62,7 @@ class ServerPlatformCatalog
         foreach ($platforms as $platform) {
             $versions = [];
             foreach ($platform['models'] ?? [] as $version) {
-                $versions[] = $this->describeVersion($version, $platformUnits, $nicUnits, $hbaUnits);
+                $versions[] = $this->describeVersion($version, $platformUnits, $nicUnits, $hbaUnits, $ignoreStock);
             }
 
             $out[] = [
@@ -108,7 +112,7 @@ class ServerPlatformCatalog
      *
      * @return array|null
      */
-    public function describeVersionByUuid($versionUuid)
+    public function describeVersionByUuid($versionUuid, $ignoreStock = false)
     {
         $found = $this->getVersion($versionUuid);
         if ($found === null) {
@@ -119,7 +123,8 @@ class ServerPlatformCatalog
             $found['version'],
             $this->availableUnits('serverplatform'),
             $this->availableUnits('nic'),
-            $this->availableUnits('hbacard')
+            $this->availableUnits('hbacard'),
+            $ignoreStock
         );
     }
 
@@ -192,7 +197,7 @@ class ServerPlatformCatalog
     /**
      * Flatten one version for the API: what it is, what it installs, whether it can be.
      */
-    private function describeVersion(array $version, array $platformUnits, array $nicUnits, array $hbaUnits = [])
+    private function describeVersion(array $version, array $platformUnits, array $nicUnits, array $hbaUnits = [], $ignoreStock = false)
     {
         $versionUuid = $version['uuid'] ?? null;
         $board = $version['system_board'] ?? [];
@@ -219,6 +224,13 @@ class ServerPlatformCatalog
         if ($versionUuid === null) {
             $selectable = false;
             $reason = 'This version has no UUID in the catalog';
+        } elseif ($ignoreStock) {
+            // A bench build installs the catalog entry, not a box, so stock is not
+            // asked about -- but the entry must still carry what gets installed.
+            if (empty($board['uuid']) || empty($chassis['uuid'])) {
+                $selectable = false;
+                $reason = 'This version is missing its system board or chassis specification';
+            }
         } elseif ($availableUnits < 1) {
             $selectable = false;
             $reason = 'Out of stock';

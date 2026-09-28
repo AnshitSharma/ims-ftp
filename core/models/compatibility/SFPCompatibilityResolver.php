@@ -139,13 +139,22 @@ class SFPCompatibilityResolver {
         $nicPortType = strtoupper(trim($nicSpecs['port_type'] ?? ''));
         $nicMaxSpeed = $this->extractMaxSpeed($nicSpecs['speeds'] ?? []);
 
+        // A card with mixed ports (rNDC: 2x SFP+, 2x RJ45) states them in port_groups:
+        // only its SFP ports take a module, and each is checked against its own cage.
+        // Without port_groups every port is a candidate, as before.
+        $layout = !empty($nicSpecs['port_groups']) ? NICPortTracker::portLayout($nicSpecs) : [];
+        $sfpPortList = !empty($layout)
+            ? NICPortTracker::sfpPortIndexes($nicSpecs)
+            : ($nicPortCount > 0 ? range(1, $nicPortCount) : []);
+        $sfpPortCount = count($sfpPortList);
+
         // Check if NIC has enough ports
-        if (count($unassignedSfps) > $nicPortCount) {
+        if (count($unassignedSfps) > $sfpPortCount) {
             $compatibleNICs = $this->getCompatibleNICsForSFPs($unassignedSfps);
             return [
                 'success' => false,
                 'errors' => [
-                    "NIC has {$nicPortCount} ports but " . count($unassignedSfps) . " SFPs need assignment"
+                    "NIC has {$sfpPortCount} " . (!empty($layout) ? 'SFP ' : '') . "ports but " . count($unassignedSfps) . " SFPs need assignment"
                 ],
                 'suggestions' => $compatibleNICs
             ];
@@ -153,7 +162,7 @@ class SFPCompatibilityResolver {
 
         // Validate type and speed compatibility for each SFP
         $assignments = [];
-        $portIndex = 1;
+        $slot = 0;
         $errors = [];
 
         foreach ($unassignedSfps as $sfpUuid) {
@@ -167,10 +176,14 @@ class SFPCompatibilityResolver {
             $sfpType = strtoupper(trim($sfpSpecs['type'] ?? ''));
             $sfpSpeed = $this->normalizeSpeed($sfpSpecs['speed'] ?? '');
 
+            // The port this module would take, and the cage type that port has.
+            $portIndex = $sfpPortList[$slot] ?? ($slot + 1);
+            $cageType = !empty($layout) ? ($layout[$portIndex] ?? '') : $nicPortType;
+
             // Check type compatibility
-            if (!NICPortTracker::isCompatible($nicPortType, $sfpType)) {
-                $compatibleTypes = NICPortTracker::getCompatibleSfpTypes($nicPortType);
-                $errors[] = "SFP type {$sfpType} incompatible with NIC port type {$nicPortType}. Compatible types: " . implode(', ', $compatibleTypes);
+            if (!NICPortTracker::isCompatible($cageType, $sfpType)) {
+                $compatibleTypes = NICPortTracker::getCompatibleSfpTypes($cageType);
+                $errors[] = "SFP type {$sfpType} incompatible with NIC port type {$cageType}. Compatible types: " . implode(', ', $compatibleTypes);
                 continue;
             }
 
@@ -189,7 +202,7 @@ class SFPCompatibilityResolver {
                 'sfp_type' => $sfpType,
                 'sfp_speed' => $sfpSpeed
             ];
-            $portIndex++;
+            $slot++;
         }
 
         if (!empty($errors)) {
@@ -249,9 +262,23 @@ class SFPCompatibilityResolver {
                     $speeds = $model['speeds'] ?? [];
                     $maxSpeed = $this->extractMaxSpeed($speeds);
 
+                    // A card with port_groups is judged on the ports whose own cage takes
+                    // this module, not on its total port count and one shared port_type.
+                    $typeMatches = in_array($portType, $compatiblePortTypes);
+                    $usablePorts = $portCount;
+                    if (!empty($model['port_groups'])) {
+                        $usablePorts = count(array_filter(
+                            NICPortTracker::portLayout($model),
+                            function ($cage) use ($compatiblePortTypes) {
+                                return in_array($cage, $compatiblePortTypes);
+                            }
+                        ));
+                        $typeMatches = $usablePorts > 0;
+                    }
+
                     // Check if NIC meets requirements
-                    if (in_array($portType, $compatiblePortTypes) &&
-                        $portCount >= $requiredPortCount &&
+                    if ($typeMatches &&
+                        $usablePorts >= $requiredPortCount &&
                         $this->validateSpeedCompatibility($maxSpeed, $requiredSpeed)) {
                         $suggestions[] = [
                             'brand' => $brandData['brand'] ?? '',

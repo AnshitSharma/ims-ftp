@@ -35,7 +35,9 @@ $GLOBALS['_permission_cache'] = [];
 // 'serverplatform' (2026-08-25) is the shipped server product itself -- a physical box
 // we stock, whose system board and chassis live INSIDE it and are never stocked on
 // their own. It is a full component type: {type}inventory, ACL module, asset tags.
-define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform']);
+// 'networkdevice' (2026-09-29) is a router, switch or MUX: stocked and racked beside
+// servers, never installed in one -- getBuildableComponentTables() excludes it.
+define('VALID_COMPONENT_TYPES', ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform', 'networkdevice']);
 
 require_once __DIR__ . '/Response.php';
 require_once __DIR__ . '/Acl.php';

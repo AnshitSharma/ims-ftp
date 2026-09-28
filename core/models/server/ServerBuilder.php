@@ -1110,6 +1110,51 @@ class ServerBuilder {
     }
 
     /**
+     * The picker's candidates for a Compatibility Bench build: one per catalogued model.
+     *
+     * Rows are shaped like the inventory scan's -- UUID, SerialNumber, Status, Location,
+     * Notes, ServerUUID -- so everything after it (the engine verdicts, the response) is
+     * shared with the real-build path untouched. There is no unit behind any of them, so
+     * no serial, no location and no server; Status is 1 because "available" is the only
+     * honest reading of a model nobody has to own.
+     *
+     * A blade enclosure is left out of the chassis list: it is the box that HOLDS servers,
+     * and AddComponentCommand refuses to build one, so offering it would only lead to a
+     * refused add. If that check cannot run, the list is kept whole -- the add still refuses.
+     *
+     * @return array[]
+     */
+    private function benchCatalogCandidates($componentType) {
+        require_once __DIR__ . '/../components/ComponentDataService.php';
+        $uuids = ComponentDataService::getInstance()->allSpecUuids($componentType);
+
+        if ($componentType === 'chassis') {
+            try {
+                require_once __DIR__ . '/../rack/RackEnclosure.php';
+                $uuids = array_values(array_filter($uuids, function ($uuid) {
+                    return !RackEnclosure::isEnclosureChassis($uuid);
+                }));
+            } catch (\Throwable $e) {
+                error_log('benchCatalogCandidates: enclosure filter skipped: ' . $e->getMessage());
+            }
+        }
+
+        $rows = [];
+        foreach ($uuids as $uuid) {
+            $rows[] = [
+                'UUID' => $uuid,
+                'SerialNumber' => null,
+                'Status' => 1,
+                'Location' => null,
+                'Notes' => null,
+                'ServerUUID' => null,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
      * Phase 4: Get compatible components for a given component type
      * Consolidated from handleGetCompatible() in server_api.php
      * Enables all code paths (HTTP, batch, CLI) to query compatible components
@@ -1133,6 +1178,13 @@ class ServerBuilder {
             if ($config->get('is_virtual')) {
                 $availableOnly = false;
             }
+
+            // A Compatibility Bench build holds MODELS, not units, so what it can be offered
+            // is the spec catalog -- not whatever happens to be on the shelf. Everything
+            // below that reads the inventory table is skipped for it. Keyed on is_sandbox,
+            // not is_virtual: a saved template is virtual too, is imported into a real
+            // server later, and needs stock at that point.
+            $isSandbox = !empty($config->get('is_sandbox')) && !empty($config->get('is_virtual'));
 
             // Step 2: Get existing components in configuration.
             //
@@ -1244,23 +1296,31 @@ class ServerBuilder {
                 $whereClause = "WHERE Status IN (0, 1, 2)"; // All statuses
             }
 
-            // Get components (limit to 200 for performance)
-            $stmt = $this->pdo->prepare("
-                SELECT UUID, SerialNumber, Status, Location, Notes, ServerUUID
-                FROM $table
-                $whereClause
-                ORDER BY (Status = 1) DESC, SerialNumber ASC
-                LIMIT " . (self::COMPATIBLE_SCAN_LIMIT + 1) . "
-            ");
-            $stmt->execute();
-            $allComponents = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if ($isSandbox) {
+                // One candidate per catalogued model. No stock is read, so there is no
+                // scan cap either: the catalog is at most a few dozen models per type.
+                $whereClause = 'none (bench build: spec catalog, not inventory)';
+                $allComponents = $this->benchCatalogCandidates($componentType);
+                $resultsTruncated = false;
+            } else {
+                // Get components (limit to 200 for performance)
+                $stmt = $this->pdo->prepare("
+                    SELECT UUID, SerialNumber, Status, Location, Notes, ServerUUID
+                    FROM $table
+                    $whereClause
+                    ORDER BY (Status = 1) DESC, SerialNumber ASC
+                    LIMIT " . (self::COMPATIBLE_SCAN_LIMIT + 1) . "
+                ");
+                $stmt->execute();
+                $allComponents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // A-P2: the scan is capped for performance, but the cap used to be silent --
-            // callers had no way to tell a genuinely short list from a truncated one.
-            // One extra row is fetched purely to detect the overflow, then dropped.
-            $resultsTruncated = count($allComponents) > self::COMPATIBLE_SCAN_LIMIT;
-            if ($resultsTruncated) {
-                $allComponents = array_slice($allComponents, 0, self::COMPATIBLE_SCAN_LIMIT);
+                // A-P2: the scan is capped for performance, but the cap used to be silent --
+                // callers had no way to tell a genuinely short list from a truncated one.
+                // One extra row is fetched purely to detect the overflow, then dropped.
+                $resultsTruncated = count($allComponents) > self::COMPATIBLE_SCAN_LIMIT;
+                if ($resultsTruncated) {
+                    $allComponents = array_slice($allComponents, 0, self::COMPATIBLE_SCAN_LIMIT);
+                }
             }
 
             // Debug info. A-P2: only assembled when the caller actually asked for it --
@@ -1298,7 +1358,9 @@ class ServerBuilder {
             $jsonValidationDetails = [];
 
             foreach ($allComponents as $component) {
-                $hasJSON = $componentDataService->validateComponentUuid($componentType, $component['UUID']);
+                // A bench candidate came FROM the spec catalog, so it is in the JSON by
+                // construction; asking again would only re-walk the file per model.
+                $hasJSON = $isSandbox || $componentDataService->validateComponentUuid($componentType, $component['UUID']);
 
                 if ($hasJSON) {
                     $componentsWithJSON[] = $component;
@@ -1429,9 +1491,11 @@ class ServerBuilder {
             $filtersApplied = [
                 'available_only' => $availableOnly,
                 'component_type' => $componentType,
-                'note' => $availableOnly
-                    ? 'Only available components shown (Status=1 and not assigned to another server).'
-                    : 'All physical components shown. Check available_for_use flag to see which can be added.'
+                'note' => $isSandbox
+                    ? 'Every catalogued model shown. A test build holds models, not stock, so availability does not apply.'
+                    : ($availableOnly
+                        ? 'Only available components shown (Status=1 and not assigned to another server).'
+                        : 'All physical components shown. Check available_for_use flag to see which can be added.')
             ];
 
             $compatibilitySummary = [
@@ -1454,7 +1518,9 @@ class ServerBuilder {
             )));
 
             $uuidInventorySummary = [];
-            if (!empty($summaryUuids)) {
+            // Not for a bench build: it is offered models, and a stock count beside a model
+            // it does not need to own would only suggest that it does.
+            if (!empty($summaryUuids) && !$isSandbox) {
                 $placeholders = implode(',', array_fill(0, count($summaryUuids), '?'));
                 $stmt = $this->pdo->prepare("
                     SELECT UUID, COUNT(*) as total_count,
@@ -1880,8 +1946,21 @@ class ServerBuilder {
                 $portCount = $nic['specifications']['ports'] ?? 0;
                 $portMapping = [];
 
+                // Cage per port, only for a card that states port_groups: the builder
+                // draws SFP cages from it. Absent, every port keeps today's shape.
+                $portCages = [];
+                if (!empty($nic['specifications']['port_groups'])) {
+                    require_once __DIR__ . '/../compatibility/NICPortTracker.php';
+                    if (method_exists('NICPortTracker', 'portLayout')) {
+                        $portCages = NICPortTracker::portLayout($nic['specifications']);
+                    }
+                }
+
                 for ($i = 1; $i <= $portCount; $i++) {
                     $portMapping[$i] = ['status' => 'empty', 'sfp' => null];
+                    if (isset($portCages[$i])) {
+                        $portMapping[$i]['cage'] = $portCages[$i];
+                    }
                 }
 
                 foreach ($sfps as $sfp) {
@@ -1891,6 +1970,9 @@ class ServerBuilder {
                             'sfp_uuid' => $sfp['uuid'],
                             'serial_number' => $sfp['serial_number'] ?? null
                         ];
+                        if (isset($portCages[$sfp['port_index']])) {
+                            $portMapping[$sfp['port_index']]['cage'] = $portCages[$sfp['port_index']];
+                        }
                     }
                 }
 
@@ -1943,11 +2025,34 @@ class ServerBuilder {
                 $onboardNics = $mbSpecs['networking']['onboard_nics'] ?? [];
                 $nicSpec = $onboardNics[$onboardIndex - 1] ?? null;
                 $portCount = (int)($nicSpec['ports'] ?? 0);
+                $portSpec = is_array($nicSpec) ? $nicSpec : [];
+            } elseif (!$nicRow && strpos((string)$nicUuid, 'onboard-') === 0) {
+                // An onboard port with no nicinventory row is a Compatibility Bench
+                // build's: recorded as a config row only, so the board spec is the
+                // whole source. Without this the port count comes back 0 and no SFP
+                // could ever be placed in an onboard cage on a bench.
+                require_once __DIR__ . '/../config/ResourceCatalog.php';
+                $nicSpec = method_exists('ResourceCatalog', 'virtualOnboardNicSpec')
+                    ? ResourceCatalog::virtualOnboardNicSpec((string)$nicUuid)
+                    : null;
+                $portCount = (int)($nicSpec['ports'] ?? 0);
+                $portSpec = is_array($nicSpec) ? $nicSpec : [];
             } else {
                 // Regular component NIC: get port count from NIC JSON
                 $dataService = ComponentDataService::getInstance();
                 $nicSpecs = $dataService->getComponentSpecifications('nic', $nicUuid);
                 $portCount = (int)($nicSpecs['ports'] ?? 0);
+                $portSpec = is_array($nicSpecs) ? $nicSpecs : [];
+            }
+
+            // A card with mixed ports (rNDC: 2x SFP+, 2x RJ45) only takes a module in
+            // its SFP ports. Null means "no port_groups, every port is a candidate".
+            $sfpPorts = null;
+            if (!empty($portSpec['port_groups'])) {
+                require_once __DIR__ . '/../compatibility/NICPortTracker.php';
+                if (method_exists('NICPortTracker', 'sfpPortIndexes')) {
+                    $sfpPorts = NICPortTracker::sfpPortIndexes($portSpec);
+                }
             }
 
             if ($portCount < 1) {
@@ -1979,12 +2084,15 @@ class ServerBuilder {
 
             // Step 3: Return first port not in occupied list
             for ($port = 1; $port <= $portCount; $port++) {
+                if ($sfpPorts !== null && !in_array($port, $sfpPorts, true)) {
+                    continue;
+                }
                 if (!in_array($port, $occupiedPorts)) {
                     return $port;
                 }
             }
 
-            error_log("autoAssignSFPPort: all $portCount port(s) occupied on NIC $nicUuid");
+            error_log("autoAssignSFPPort: no free SFP port among $portCount port(s) on NIC $nicUuid");
             return null;
 
         } catch (Exception $e) {

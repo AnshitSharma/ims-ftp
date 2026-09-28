@@ -270,9 +270,15 @@ class OnboardNICHandler {
                 ? ($row['SourceType'] ?? null) === 'onboard'
                 : strpos((string)$nicUuid, 'onboard-') === 0;
 
-            $specs = $isOnboard && $row && !empty($row['ParentComponentUUID'])
-                ? $this->getOnboardNICSpecs($row['ParentComponentUUID'], (int)($row['OnboardNICIndex'] ?? 1))
-                : $this->getComponentNICSpecs($nicUuid);
+            if ($isOnboard && $row && !empty($row['ParentComponentUUID'])) {
+                $specs = $this->getOnboardNICSpecs($row['ParentComponentUUID'], (int)($row['OnboardNICIndex'] ?? 1));
+            } elseif ($isOnboard && !$row) {
+                // No nicinventory row: a Compatibility Bench build's port, which is a
+                // config row only. The board spec is the whole source.
+                $specs = $this->getVirtualOnboardNICSpecs($nicUuid);
+            } else {
+                $specs = $this->getComponentNICSpecs($nicUuid);
+            }
 
             $filtered = $this->filterNICSpecs($specs);
             return (is_array($filtered) && !isset($filtered['error'])) ? $filtered : [];
@@ -280,6 +286,23 @@ class OnboardNICHandler {
             error_log("OnboardNICHandler::resolveNICSpecs($nicUuid): " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Specs for an onboard port that has no nicinventory row -- the unit-less
+     * "onboard-{mb8}-0-{n}" a Compatibility Bench build records for its board.
+     *
+     * @param string $nicUuid
+     * @return array NIC specifications, or ['error' => ...]
+     */
+    private function getVirtualOnboardNICSpecs($nicUuid) {
+        require_once __DIR__ . '/../config/ResourceCatalog.php';
+        if (!method_exists('ResourceCatalog', 'virtualOnboardNicSpec')) {
+            return ['error' => 'Onboard NIC specs not found'];
+        }
+
+        $spec = ResourceCatalog::virtualOnboardNicSpec((string)$nicUuid);
+        return $spec ?? ['error' => 'Onboard NIC specs not found'];
     }
 
     /**
@@ -335,7 +358,7 @@ class OnboardNICHandler {
         if (!is_array($specs) || isset($specs['error'])) {
             return $specs;
         }
-        $allowedKeys = ['controller', 'model', 'ports', 'port_type', 'speed', 'speeds', 'connector'];
+        $allowedKeys = ['controller', 'model', 'ports', 'port_type', 'speed', 'speeds', 'connector', 'port_groups'];
         return array_intersect_key($specs, array_flip($allowedKeys));
     }
 

@@ -282,6 +282,20 @@ final class RemoveComponentCommand extends BaseCommand
                     $this->actor
                 );
             }
+
+            // A bench build's board carries its onboard ports as rows with NO inventory
+            // identity (ConfigComponentWriter::attachVirtualOnboardNics), so the detach
+            // above -- which walks nicinventory -- never saw them and they would outlive
+            // the board. inventory_id NULL is what tells them apart: every port of a real
+            // board is backed by a nicinventory row and carries its id.
+            foreach ($repo->liveRows($this->configUuid) as $live) {
+                if (($live['component_type'] ?? null) === 'nic'
+                    && ($live['inventory_id'] ?? null) === null
+                    && strpos((string)($live['spec_uuid'] ?? ''), 'onboard-') === 0
+                ) {
+                    $repo->tombstone((int)$live['id'], $this->actor);
+                }
+            }
         }
 
         $sb->recalculateFormFactorLock($this->configUuid);

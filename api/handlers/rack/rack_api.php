@@ -27,6 +27,14 @@ require_once __DIR__ . '/../../../core/models/rack/ServerRelocation.php';
 require_once __DIR__ . '/../../../core/models/location/LocationResolver.php';
 require_once __DIR__ . '/../../../core/helpers/SchemaHelper.php';
 
+// Network devices (seeder 2026_09_29_001). A new file reaches production AFTER the
+// file that references it, so this is never a hard require: until it arrives the
+// device endpoints answer 503 and everything else here behaves as before.
+$rackDeviceModel = __DIR__ . '/../../../core/models/rack/RackNetworkDevice.php';
+if (is_readable($rackDeviceModel)) {
+    require_once $rackDeviceModel;
+}
+
 header('Content-Type: application/json');
 
 global $pdo, $user, $operation;
@@ -79,6 +87,15 @@ switch ($action) {
         break;
     case 'enclosure-remove':
         handleRackEnclosureRemove($pdo, $user);
+        break;
+    case 'device-assign':
+        handleRackDeviceAssign($pdo, $user);
+        break;
+    case 'device-unassign':
+        handleRackDeviceUnassign($pdo, $user);
+        break;
+    case 'placeable-devices':
+        handleRackPlaceableDevices($pdo, $user);
         break;
     default:
         send_json_response(0, 1, 400, "Invalid rack operation: $action");
@@ -181,6 +198,15 @@ function handleRackList($pdo, $user) {
             $occ[$row['rack_uuid']] = $row;
         }
 
+        // Network devices per rack, in one grouped query. Absent until the seeder.
+        $deviceCounts = [];
+        if (SchemaHelper::hasTable($pdo, 'rack_network_devices')) {
+            foreach ($pdo->query("SELECT rack_uuid, COUNT(*) AS c FROM rack_network_devices GROUP BY rack_uuid")
+                         ->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $deviceCounts[$row['rack_uuid']] = (int)$row['c'];
+            }
+        }
+
         // USED U IS NOT SUM(u_height). A sled mirrors its enclosure's U range,
         // so summing would report an FX2s holding four blades as 8U of a 48U
         // rack. RackPlacement::usedU counts DISTINCT occupied U instead, over
@@ -201,7 +227,7 @@ function handleRackList($pdo, $user) {
         $hasLocationUuid = SchemaHelper::hasColumn($pdo, 'racks', 'location_uuid');
         $hasFloor        = SchemaHelper::hasColumn($pdo, 'racks', 'floor');
 
-        $result = array_map(function ($r) use ($occ, $usedByRack, $gapsByRack, $pdo, $hasLocationUuid, $hasFloor) {
+        $result = array_map(function ($r) use ($occ, $usedByRack, $gapsByRack, $pdo, $hasLocationUuid, $hasFloor, $deviceCounts) {
             $o = $occ[$r['rack_uuid']] ?? ['server_count' => 0];
             $usedU = $usedByRack[$r['rack_uuid']] ?? 0;
             $gaps  = $gapsByRack[$r['rack_uuid']] ?? [];
@@ -226,6 +252,7 @@ function handleRackList($pdo, $user) {
                 'numbering_top_down' => (int)$r['numbering_top_down'],
                 'notes' => $r['notes'],
                 'server_count' => (int)$o['server_count'],
+                'device_count' => $deviceCounts[$r['rack_uuid']] ?? 0,
                 'used_u' => $usedU,
                 'free_u' => max(0, (int)$r['total_u'] - $usedU),
                 'largest_free_u' => $largestFree,
@@ -292,6 +319,17 @@ function handleRackGet($pdo, $user) {
 
         $enclosures = RackEnclosure::listForRack($pdo, $rackUuid);
 
+        // Routers, switches and MUXes. Empty until the seeder has run.
+        $networkDevices = [];
+        if (class_exists('RackNetworkDevice', false)) {
+            try {
+                $networkDevices = RackNetworkDevice::listForRack($pdo, $rackUuid);
+            } catch (Throwable $devError) {
+                // The servers and enclosures must still render.
+                error_log("handleRackGet network devices error: " . $devError->getMessage());
+            }
+        }
+
         // Distinct occupied U, not a sum of heights -- see handleRackList.
         $usedU = RackPlacement::usedU($pdo, $rackUuid);
 
@@ -314,11 +352,13 @@ function handleRackGet($pdo, $user) {
                 'used_u' => $usedU,
                 'free_u' => max(0, (int)$rack['total_u'] - $usedU),
                 'server_count' => count($servers) + $sledCount,
+                'device_count' => count($networkDevices),
                 'created_at' => $rack['created_at'],
                 'updated_at' => $rack['updated_at'],
             ],
             'servers' => $servers,
             'enclosures' => $enclosures,
+            'network_devices' => $networkDevices,
         ]);
     } catch (Throwable $e) {
         error_log("handleRackGet error: " . $e->getMessage());
@@ -563,6 +603,18 @@ function handleRackDelete($pdo, $user) {
             $encCount = (int)($encStmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
             if ($encCount > 0) {
                 send_json_response(0, 1, 400, "Cannot delete rack — it still has $encCount enclosure(s) installed. Remove them first.");
+            }
+        }
+
+        // Same reasoning for network devices: their placement row would be left
+        // holding U space in a rack that no longer exists. A read failure here
+        // refuses the delete rather than assuming the rack is empty.
+        if (SchemaHelper::hasTable($pdo, 'rack_network_devices')) {
+            $devStmt = $pdo->prepare("SELECT COUNT(*) AS c FROM rack_network_devices WHERE rack_uuid = ?");
+            $devStmt->execute([$rackUuid]);
+            $devCount = (int)($devStmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
+            if ($devCount > 0) {
+                send_json_response(0, 1, 400, "Cannot delete rack — it still has $devCount network device(s) installed. Remove them first.");
             }
         }
 
@@ -1030,5 +1082,107 @@ function handleRackPlaceableServers($pdo, $user) {
     } catch (Throwable $e) {
         error_log("handleRackPlaceableServers error: " . $e->getMessage());
         send_json_response(0, 1, 500, "Failed to list placeable servers");
+    }
+}
+
+/* ============================================================
+ * Network devices (routers, switches, MUXes)
+ *
+ * HTTP plumbing only. Every check and write lives in RackNetworkDevice, which the
+ * two Request actions (inventory.device.rack / .unrack) call as well, so a device
+ * cannot be placed by an approval in a way this path would have refused.
+ * ============================================================ */
+
+/**
+ * The class arrives with a new file, after this one, and its tables with a hand-run
+ * seeder. Say so plainly instead of fataling on a missing class.
+ */
+function rackDeviceModelReady() {
+    if (!class_exists('RackNetworkDevice', false)) {
+        send_json_response(0, 1, 503, "Network device placement is not available yet.");
+    }
+}
+
+/**
+ * Rack a network device, or move one that is already racked.
+ * Sending a rack_uuid/start_u for a racked device is a move.
+ */
+function handleRackDeviceAssign($pdo, $user) {
+    rackDeviceModelReady();
+
+    $inventoryId = (int)($_POST['inventory_id'] ?? 0);
+    $rackUuid    = trim($_POST['rack_uuid'] ?? '');
+    $startU      = (int)($_POST['start_u'] ?? 0);
+
+    if ($inventoryId < 1) {
+        send_json_response(0, 1, 400, "inventory_id is required");
+    }
+    if ($rackUuid === '') {
+        send_json_response(0, 1, 400, "rack_uuid is required");
+    }
+    if ($startU < 1) {
+        send_json_response(0, 1, 400, "start_u must be 1 or greater");
+    }
+
+    $result = RackNetworkDevice::place($pdo, $inventoryId, $rackUuid, $startU, [
+        'user_id' => $user['id'],
+        'reason'  => trim($_POST['reason'] ?? ''),
+    ]);
+
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
+    }
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
+}
+
+/**
+ * Take a network device out of its rack. It stays at the site, back in stock.
+ */
+function handleRackDeviceUnassign($pdo, $user) {
+    rackDeviceModelReady();
+
+    $inventoryId = (int)($_POST['inventory_id'] ?? 0);
+    if ($inventoryId < 1) {
+        send_json_response(0, 1, 400, "inventory_id is required");
+    }
+
+    $ctx = [
+        'user_id' => $user['id'],
+        'reason'  => trim($_POST['reason'] ?? ''),
+    ];
+    if (array_key_exists('store_location', $_POST)) {
+        $ctx['store_location'] = $_POST['store_location'];
+    }
+
+    $result = RackNetworkDevice::unrack($pdo, $inventoryId, $ctx);
+
+    if (!$result['success']) {
+        send_json_response(0, 1, $result['code'], $result['message']);
+    }
+
+    send_json_response(1, 1, 200, $result['message'], $result['data']);
+}
+
+/**
+ * Network devices that can be racked: available stock at any site. When rack_uuid
+ * is given, units already at that rack's site are flagged and listed first.
+ * `scope` widens the list -- 'racked' (units in a rack) or 'all' (both) -- for the
+ * Request forms, where placing an already-racked unit is a move.
+ */
+function handleRackPlaceableDevices($pdo, $user) {
+    rackDeviceModelReady();
+
+    $rackUuid = trim($_GET['rack_uuid'] ?? $_POST['rack_uuid'] ?? '');
+    $scope    = trim($_GET['scope'] ?? $_POST['scope'] ?? 'available');
+
+    try {
+        $devices = RackNetworkDevice::placeableUnits($pdo, $rackUuid !== '' ? $rackUuid : null, $scope);
+        send_json_response(1, 1, 200, "Placeable network devices retrieved successfully", [
+            'devices' => $devices,
+        ]);
+    } catch (Throwable $e) {
+        error_log("handleRackPlaceableDevices error: " . $e->getMessage());
+        send_json_response(0, 1, 500, "Failed to list placeable network devices");
     }
 }

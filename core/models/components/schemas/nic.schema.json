@@ -50,6 +50,10 @@
             "type": "string",
             "$comment": "present on 8 of 53 records"
         },
+        "port_groups": {
+            "type": "array",
+            "$comment": "cage type per run of ports, in physical order; counts must add up to ports. See NICPortTracker::portLayout()"
+        },
         "port_type": {
             "type": "string"
         },
