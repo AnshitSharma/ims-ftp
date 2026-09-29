@@ -24,15 +24,22 @@ require_once __DIR__ . '/../../shared/DataNormalizationUtils.php';
  *                                                      all 13 platform boards)
  *   module module_type          "RDIMM"                (all 33 RAM entries)
  *
- * Two findings, two severities, deliberately:
+ * Three findings, two severities, deliberately:
  *   - FORM FACTOR (DIMM vs SO-DIMM), derived from the board's module types, stays
  *     an ERROR. A SO-DIMM physically will not enter a DIMM slot; that is not
  *     advisory.
- *   - MODULE TYPE (a UDIMM in a board that only accepts RDIMM/LRDIMM) is reported
- *     at Severity::WARNING. It is a genuine electrical incompatibility, but this
- *     rule has never once fired in production, so promoting it straight to a hard
- *     block would newly refuse builds that are shipping today. Warning first is
- *     the same posture taken for the three storage rules in this pass.
+ *   - BUFFERING CLASS (2026-09-29, audit §2.6 / HC-02): registered (RDIMM, LRDIMM,
+ *     3DS, NVDIMM) vs unbuffered (UDIMM) is an ERROR. The two do not run in each
+ *     other's boards, and a WARNING here let get-compatible offer every server
+ *     RDIMM/LRDIMM in stock (~117 units) for the AM4 desktop board. Probed across
+ *     all 74 live configs before promoting: none carries this mismatch, so nothing
+ *     already built becomes frozen (an ADD blocks on ANY failed ERROR in the whole
+ *     config, not only the new part's).
+ *   - MODULE TYPE within one class (an LRDIMM in an RDIMM-only board) stays a
+ *     WARNING. Support there is the vendor's list, not electrical, and Y682 16U
+ *     (R750xs) runs LRDIMMs today pending an iDRAC check (audit §5); an ERROR
+ *     would block every later add on that server. A type neither class
+ *     recognises also stays a WARNING rather than being guessed at.
  *
  * A board that declares no module_types at all cannot constrain either check, and
  * says so, rather than falling back to a guess.
@@ -88,6 +95,7 @@ final class MemoryFormFactorRule implements RuleInterface
 
         $acceptedModuleTypes = [];
         $acceptedFormFactors = [];
+        $acceptedClasses = [];
         foreach ($moduleTypes as $moduleType) {
             $normalized = strtoupper(trim((string)$moduleType));
             if ($normalized === '') {
@@ -95,6 +103,10 @@ final class MemoryFormFactorRule implements RuleInterface
             }
             $acceptedModuleTypes[$normalized] = true;
             $acceptedFormFactors[DataNormalizationUtils::normalizeFormFactor($normalized)] = true;
+            $class = self::bufferClass($normalized);
+            if ($class !== null) {
+                $acceptedClasses[$class] = true;
+            }
         }
 
         $moduleTypeMismatch = null;
@@ -121,8 +133,23 @@ final class MemoryFormFactorRule implements RuleInterface
                     ]);
             }
 
-            // Keep looking for a hard form-factor mismatch before reporting a soft one.
             $ramModuleType = strtoupper(trim((string)($ramSpec['module_type'] ?? '')));
+            $ramClass = $ramModuleType === '' ? null : self::bufferClass($ramModuleType);
+            if ($ramClass !== null && !empty($acceptedClasses) && !isset($acceptedClasses[$ramClass])) {
+                // Registered vs unbuffered: will not run. Blocks (see class docblock).
+                return new RuleResult($this->id(), $this->severity(), false,
+                    "Memory module type $ramModuleType ($ramClass) will not run in this motherboard, which takes "
+                    . implode('/', array_keys($acceptedModuleTypes)),
+                    [
+                        'ram_id' => $ram['id'],
+                        'ram_module_type' => $ramModuleType,
+                        'motherboard_module_types' => array_keys($acceptedModuleTypes),
+                        'motherboard_uuid' => $boardUuid,
+                        'recommendation' => 'Use a ' . implode('/', array_keys($acceptedModuleTypes)) . ' module.',
+                    ]);
+            }
+
+            // Keep looking for a hard mismatch before reporting a soft one.
             if ($moduleTypeMismatch === null
                 && $ramModuleType !== ''
                 && !isset($acceptedModuleTypes[$ramModuleType])
@@ -139,7 +166,7 @@ final class MemoryFormFactorRule implements RuleInterface
         }
 
         if ($moduleTypeMismatch !== null) {
-            // Real, advisory (see class docblock).
+            // Same buffering class, not on the board's list: advisory (see class docblock).
             return new RuleResult($this->id(), Severity::WARNING, false,
                 "Memory module type {$moduleTypeMismatch['ram_module_type']} is not listed by this motherboard, which accepts "
                 . implode('/', $moduleTypeMismatch['motherboard_module_types']),
@@ -147,5 +174,20 @@ final class MemoryFormFactorRule implements RuleInterface
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'All RAM form factors compatible');
+    }
+
+    /**
+     * 'registered', 'unbuffered', or null when the type names neither. UDIMM is
+     * tested first; LRDIMM contains "RDIMM", UDIMM does not.
+     */
+    private static function bufferClass(string $moduleType): ?string
+    {
+        if (preg_match('/UDIMM|UNBUFFERED/', $moduleType)) {
+            return 'unbuffered';
+        }
+        if (preg_match('/RDIMM|NVDIMM|REGISTERED|3DS/', $moduleType)) {
+            return 'registered';
+        }
+        return null;
     }
 }

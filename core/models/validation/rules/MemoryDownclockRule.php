@@ -68,11 +68,16 @@ final class MemoryDownclockRule implements RuleInterface
         $cpus = $state->byType('cpu');
 
         // Per-generation CPU speed limits: 'DDR5' => ['speed' => 4800, 'cpu' => 'Platinum 8480+'].
-        // Slowest CPU wins within a generation; generations never constrain each other.
+        // A CPU's list is the set of rates it supports (E5-2670 v3: 2133, 1866,
+        // 1600), so its ceiling is the FASTEST entry per generation. Taking the
+        // slowest (until 2026-09-29, audit §2.8) told 27 E5 servers their RAM ran
+        // at 1600/1866. Across CPUs the slowest ceiling wins; generations never
+        // constrain each other.
         $cpuLimits = [];
         foreach ($cpus as $cpu) {
             $cpuSpec = $this->dataUtils->getCPUByUUID($cpu['spec_uuid']);
             $cpuModel = is_array($cpuSpec) ? ($cpuSpec['model'] ?? 'Unknown CPU') : 'Unknown CPU';
+            $ceilings = [];
             foreach ($this->dataUtils->getCpuMemoryTypes($cpuSpec) as $memType) {
                 if (!preg_match('/DDR\d+-(\d+)/', (string)$memType, $m)) {
                     continue; // generation with no published speed -- cannot constrain
@@ -82,6 +87,11 @@ final class MemoryDownclockRule implements RuleInterface
                     continue;
                 }
                 $speed = (int)$m[1];
+                if (!isset($ceilings[$generation]) || $speed > $ceilings[$generation]) {
+                    $ceilings[$generation] = $speed;
+                }
+            }
+            foreach ($ceilings as $generation => $speed) {
                 if (!isset($cpuLimits[$generation]) || $speed < $cpuLimits[$generation]['speed']) {
                     $cpuLimits[$generation] = ['speed' => $speed, 'cpu' => $cpuModel];
                 }
