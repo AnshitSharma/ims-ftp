@@ -19,7 +19,7 @@
  * math never depends on which source produced the component list.
  *
  * Provider resource row shape: resource, slot_ref (nullable), capacity,
- * owner_component_id. Discrete resources (pcie_slot, riser_slot) already
+ * owner_component_id, plus cpu_socket on a board pcie_slot that declares one. Discrete resources (pcie_slot, riser_slot) already
  * arrive from ResourceCatalog with one row per physical slot (slot_ref set).
  * sfp_port arrives from ResourceCatalog as one capacity-N row per NIC; this
  * class expands it into N per-NIC-scoped slot rows (slot_ref "port_1".."port_N",
@@ -150,12 +150,16 @@ final class TargetState
                     }
                     continue;
                 }
-                $rows[] = [
+                $row = [
                     'resource' => $p['resource'],
                     'slot_ref' => $p['slot_ref'],
                     'capacity' => $p['capacity'],
                     'owner_component_id' => $c['id'],
                 ];
+                if (isset($p['cpu_socket'])) {
+                    $row['cpu_socket'] = $p['cpu_socket'];
+                }
+                $rows[] = $row;
             }
         }
         $this->resourceRows = $rows;

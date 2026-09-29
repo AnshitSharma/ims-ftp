@@ -1704,8 +1704,9 @@ class ServerBuilder {
         try {
             $slotTracker = new UnifiedSlotTracker($this->pdo);
 
-            // Get PCIe slot availability (includes riser-provided slots)
-            $pcieAvailability = $slotTracker->getSlotAvailability($configUuid);
+            // PCIe slots come from the engine's own ledger, not the tracker -- see
+            // getPcieSlotLedger() for why.
+            $pcieAvailability = $this->getPcieSlotLedger($configUuid);
 
             // Get riser slot availability
             $riserAvailability = $slotTracker->getRiserSlotAvailability($configUuid);
@@ -1717,10 +1718,8 @@ class ServerBuilder {
             $result = [
                 'pcie' => [
                     'success' => $pcieAvailability['success'],
-                    // Why the tracker failed, not just that it did: "no PCIe slots
-                    // defined on this board" is a legitimate zero, while "specs not
-                    // found" is a real fault. BuildAffordances has to tell them apart
-                    // to decide between hiding the option and failing open.
+                    // Set only when the ledger could not be read, a real fault that
+                    // BuildAffordances answers by failing open.
                     'error' => $pcieAvailability['error'] ?? null,
                     'total_slots' => $pcieAvailability['total_slots'] ?? [],
                     'used_slots' => $pcieAvailability['used_slots'] ?? [],
@@ -1792,6 +1791,87 @@ class ServerBuilder {
                 'pcie' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0],
                 'riser' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0],
                 'm2' => ['success' => false, 'total_count' => 0, 'used_count' => 0, 'available_count' => 0]
+            ];
+        }
+    }
+
+    /**
+     * PCIe slots exactly as the validation engine sees them: the resource ledger
+     * TargetState builds from ResourceCatalog, the same one PcieSlotPlacementRule
+     * plans against when a card is added.
+     *
+     * This used to be UnifiedSlotTracker::getSlotAvailability(), a second slot model
+     * that drifted from the engine. It treated a board with no direct pcie_slots as a
+     * failure and returned before merging riser-provided slots, so every riser-only
+     * server (R630, DL380 Gen10, DL360 Gen9, DL325) showed zero PCIe slots and the
+     * builder hid NIC/HBA/PCIe card while the engine would have accepted one
+     * (HARDWARE-VERIFICATION-AUDIT-2026-09-29 §2.2). Reading the ledger means the
+     * builder can no longer disagree with the add path about where a card can go.
+     *
+     * A slot wired to a CPU socket that is not populated yet is left out while it is
+     * empty, as the tracker did; an occupied one stays, so its card is still shown.
+     *
+     * @return array success, total_slots / available_slots {width => [slot_ref]},
+     *               used_slots {slot_ref => occupant spec UUID}; on failure success
+     *               false with an error, which BuildAffordances treats as fail-open.
+     */
+    private function getPcieSlotLedger($configUuid) {
+        require_once __DIR__ . '/../validation/TargetStateBuilder.php';
+
+        try {
+            $state = TargetStateBuilder::fromCurrent($this->pdo, $configUuid);
+            $installedCpus = count($state->byType('cpu'));
+
+            $free = [];
+            foreach ($state->freeSlots('pcie_slot') as $row) {
+                $free[$row['owner_component_id'] . '|' . $row['slot_ref']] = true;
+            }
+
+            $occupantOf = [];
+            foreach ($state->components() as $component) {
+                $slotRef = $component['slot_ref'];
+                if ($slotRef !== null && !isset($occupantOf[$slotRef])) {
+                    $occupantOf[$slotRef] = $component['spec_uuid'];
+                }
+            }
+
+            $total = [];
+            $used = [];
+            $available = [];
+            foreach ($state->byResource('pcie_slot') as $row) {
+                $slotRef = (string)$row['slot_ref'];
+                $isFree = isset($free[$row['owner_component_id'] . '|' . $slotRef]);
+
+                if ($isFree && isset($row['cpu_socket']) && (int)$row['cpu_socket'] > $installedCpus) {
+                    continue;
+                }
+
+                // Width is the trailing token of every ledger slot_ref ("pcie_3_x8",
+                // "riser_11447_pcie_1_x16"), the same parse SlotPlanner::widthOf() uses.
+                $width = preg_match('/_(x\d+)$/i', $slotRef, $m) ? strtolower($m[1]) : 'x16';
+
+                $total[$width][] = $slotRef;
+                if ($isFree) {
+                    $available[$width][] = $slotRef;
+                } else {
+                    $used[$slotRef] = $occupantOf[$slotRef] ?? null;
+                }
+            }
+
+            return [
+                'success' => true,
+                'total_slots' => $total,
+                'used_slots' => $used,
+                'available_slots' => $available
+            ];
+        } catch (\Throwable $e) {
+            error_log("ServerBuilder::getPcieSlotLedger error for config $configUuid: " . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Failed to read PCIe slots',
+                'total_slots' => [],
+                'used_slots' => [],
+                'available_slots' => []
             ];
         }
     }

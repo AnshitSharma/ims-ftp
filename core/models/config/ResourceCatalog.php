@@ -628,8 +628,18 @@ class ResourceCatalog
                 throw new CatalogException("Motherboard $specUuid has a pcie_slots entry with an unrecognized type '$slotType'");
             }
             $width = 'x' . $m[1];
+            // Optional per-slot CPU affinity: a slot wired to socket N is dead until N
+            // CPUs are installed. Carried only when declared, so rows for every other
+            // board keep their exact shape. ServerBuilder::getPcieSlotLedger() applies it.
+            $cpuSocket = isset($slotConfig['cpu_socket']) && is_numeric($slotConfig['cpu_socket'])
+                ? (int)$slotConfig['cpu_socket']
+                : null;
             for ($i = 0; $i < (int)$count; $i++) {
-                $rows[] = ['resource' => 'pcie_slot', 'slot_ref' => "pcie_{$index}_{$width}", 'capacity' => 1];
+                $row = ['resource' => 'pcie_slot', 'slot_ref' => "pcie_{$index}_{$width}", 'capacity' => 1];
+                if ($cpuSocket !== null) {
+                    $row['cpu_socket'] = $cpuSocket;
+                }
+                $rows[] = $row;
                 $index++;
             }
         }

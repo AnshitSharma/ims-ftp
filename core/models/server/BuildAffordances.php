@@ -148,35 +148,24 @@ class BuildAffordances {
     }
 
     /**
-     * A tracker failure is not one thing, and the three cases want three answers.
+     * A tracker failure with a board present is a real fault (specs unreadable,
+     * exception) -> FAIL OPEN. The type stays offered and add-time validation
+     * remains the real gate, because a builder that silently loses half its
+     * options is a worse failure than an add that comes back with a clear message.
+     * With no board there is nothing to plug into, so the option is hidden.
      *
-     *   "no board"        the normal empty build -> hide, nothing to plug into
-     *   "no slots on it"  a legitimate ZERO, not a fault (7 of 23 boards in
-     *                     ims-data declare no pcie_slots at all — the riser-only
-     *                     designs) -> hide, which is the whole point of this class
-     *   anything else     a real fault: specs unreadable, exception -> FAIL OPEN.
-     *                     The type stays offered and add-time validation remains
-     *                     the real gate, because a builder that silently loses
-     *                     half its options is a worse failure than an add that
-     *                     comes back with a clear message.
-     *
-     * The zero case is matched on the tracker's own error text. That is a seam,
-     * not a preference: UnifiedSlotTracker reports "no slots defined" as
-     * success:false, so there is currently no other way to distinguish it. It
-     * collapses into the ordinary total_count === 0 path the moment the tracker
-     * reports that case as success:true — see the engine finding in
-     * tasks/dynamic-component-affordances.md.
+     * A board with no slots is not a failure: it arrives as success with
+     * total_count 0 and is hidden below. PCIe used to need a special case here,
+     * matching the tracker's "No PCIe slots defined" text, because that tracker
+     * reported riser-only boards as a failure. PCIe now comes from the engine's
+     * ledger (ServerBuilder::getPcieSlotLedger()), which reports that board's
+     * zero direct slots plus whatever its risers provide.
      */
-    const NO_SLOTS_DEFINED = 'No PCIe slots defined';
-
     private function slotOption(array $slotBlock, $hasMotherboard, $gate, $slotNoun) {
         $succeeded = !empty($slotBlock['success']);
 
         if (!$succeeded) {
-            $error = (string)($slotBlock['error'] ?? '');
-            $isLegitimateZero = stripos($error, self::NO_SLOTS_DEFINED) !== false;
-
-            if ($hasMotherboard && !$isLegitimateZero) {
+            if ($hasMotherboard) {
                 return $this->option(true, true, $gate, null, null, 'unknown');
             }
             return $this->option(false, false, $gate,
