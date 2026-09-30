@@ -1729,8 +1729,11 @@ class ServerBuilder {
                     'available_count' => 0
                 ],
                 'riser' => [
-                    'success' => $riserAvailability['success'],
-                    'error' => $riserAvailability['error'] ?? null,
+                    // A board with no riser bays is zero capacity, not a fault. Reported
+                    // as a failure it made BuildAffordances fail open and offer "Add
+                    // riser" on boards the engine then refuses a riser on.
+                    'success' => $riserAvailability['success'] || !empty($riserAvailability['no_slots']),
+                    'error' => !empty($riserAvailability['no_slots']) ? null : ($riserAvailability['error'] ?? null),
                     'total_slots' => $riserAvailability['total_slots'] ?? [],
                     'used_slots' => $riserAvailability['used_slots'] ?? [],
                     'available_slots' => $riserAvailability['available_slots'] ?? [],

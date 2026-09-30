@@ -218,6 +218,7 @@ class UnifiedSlotTracker {
                 return [
                     'success' => false,
                     'error' => $totalRiserSlots['error'],
+                    'no_slots' => !empty($totalRiserSlots['no_slots']),
                     'total_slots' => [],
                     'used_slots' => [],
                     'available_slots' => []
@@ -1138,6 +1139,9 @@ class UnifiedSlotTracker {
                 return [
                     'success' => false,
                     'error' => 'No riser slots defined in motherboard specifications',
+                    // A board without riser bays, not a fault. Callers that only want
+                    // capacity (the builder) read this; the rest keep success=false.
+                    'no_slots' => true,
                     'slots' => []
                 ];
             }
@@ -1178,6 +1182,7 @@ class UnifiedSlotTracker {
                 return [
                     'success' => false,
                     'error' => 'No riser slots defined in motherboard specifications',
+                    'no_slots' => true,
                     'slots' => []
                 ];
             }
