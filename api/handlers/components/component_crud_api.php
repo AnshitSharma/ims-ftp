@@ -19,13 +19,14 @@
 function handleComponentOperations($module, $operation, $user) {
     global $pdo;
 
-    // networkdevice arrives with a hand-run seeder (2026_09_29_001) while its code
-    // deploys ~20s after save. Say so, rather than the bare 500 a missing table
-    // would produce. Only for this type: every other table has always existed, and
-    // the probe would be a wasted query on every component request.
-    if ($module === 'networkdevice' && !SchemaHelper::hasTable($pdo, 'networkdeviceinventory')) {
+    // networkdevice (2026_09_29_001) and cable (2026_09_30_001) arrive with a
+    // hand-run seeder while their code deploys ~20s after save. Say so, rather
+    // than the bare 500 a missing table would produce. Only for these types:
+    // every other table has always existed.
+    $seederTypes = ['networkdevice' => 'Network devices', 'cable' => 'Cables'];
+    if (isset($seederTypes[$module]) && !SchemaHelper::hasTable($pdo, $module . 'inventory')) {
         send_json_response(0, 1, 503,
-            "Network devices are not available yet — the database migration for this feature has not been applied.");
+            $seederTypes[$module] . " are not available yet — the database migration for this feature has not been applied.");
     }
 
     switch ($operation) {

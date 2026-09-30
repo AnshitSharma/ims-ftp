@@ -1,0 +1,35 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "cable model",
+    "$comment": "Hand-authored 2026-09-30 for IMS 1.1. SpecValidator reports violations; it never blocks an upload.",
+    "type": "object",
+    "required": ["uuid", "model", "medium", "connector_a", "connector_b", "length_m"],
+    "properties": {
+        "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "$comment": "The catalogue SKU and the join key to cableinventory.UUID."
+        },
+        "model": { "type": "string" },
+        "part_number": { "type": ["string", "null"] },
+        "medium": { "enum": ["fibre", "copper"] },
+        "fibre_mode": { "enum": ["SMF", "MMF"] },
+        "fibre_grade": { "enum": ["OS1", "OS2", "OM1", "OM2", "OM3", "OM4", "OM5"] },
+        "fibre_count": { "type": "integer", "minimum": 1 },
+        "duplex": { "type": "boolean" },
+        "connector_a": { "enum": ["LC", "SC", "ST", "FC", "MPO-12", "MPO-16", "MPO-24", "RJ45"] },
+        "connector_b": { "enum": ["LC", "SC", "ST", "FC", "MPO-12", "MPO-16", "MPO-24", "RJ45"] },
+        "connector_a_gender": { "enum": ["pinned", "unpinned"] },
+        "connector_b_gender": { "enum": ["pinned", "unpinned"] },
+        "mpo_polarity": { "enum": ["A", "B", "C"] },
+        "polish": { "enum": ["UPC", "APC", "PC"] },
+        "copper_category": { "enum": ["Cat5e", "Cat6", "Cat6A", "Cat8"] },
+        "shielding": { "enum": ["U/UTP", "F/UTP", "U/FTP", "S/FTP"] },
+        "length_m": { "type": "number", "minimum": 0.1 },
+        "colour": { "type": "string" },
+        "jacket": { "type": "string" },
+        "max_insertion_loss_db": { "type": "number", "minimum": 0 },
+        "notes": { "type": "string" }
+    },
+    "additionalProperties": false
+}

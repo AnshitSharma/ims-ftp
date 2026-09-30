@@ -297,6 +297,11 @@ class TicketValidator
             return ['compatible' => true, 'notes' => 'Not checked at request time: a network device is racked, not installed in a server'];
         }
 
+        // A cable joins ports; it is never installed in a server.
+        if ($item['component_type'] === 'cable') {
+            return ['compatible' => true, 'notes' => 'Not checked at request time: a cable is not installed in a server'];
+        }
+
         try {
             require_once __DIR__ . '/../server/ServerBuilder.php';
             $builder = new ServerBuilder($this->pdo);

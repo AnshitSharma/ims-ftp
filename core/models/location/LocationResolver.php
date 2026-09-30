@@ -68,6 +68,9 @@ class LocationResolver
         // a ServerUUID, so the per-config loops that walk this list touch nothing
         // for it; its site is derived from rack_network_devices instead.
         'networkdevice',
+        // Stock that joins ports. Rows never carry a ServerUUID, so the
+        // per-config loops touch nothing for it; site counts and moves include it.
+        'cable',
     ];
 
     /**

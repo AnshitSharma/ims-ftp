@@ -39,7 +39,7 @@ class WorkflowConfig
             return VALID_COMPONENT_TYPES;
         }
 
-        return ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform', 'networkdevice'];
+        return ['cpu', 'ram', 'storage', 'motherboard', 'nic', 'caddy', 'chassis', 'pciecard', 'risercard', 'hbacard', 'sfp', 'serverplatform', 'networkdevice', 'cable'];
     }
 
     /**

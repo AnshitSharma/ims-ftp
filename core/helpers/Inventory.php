@@ -58,9 +58,10 @@ function getBuildableComponentTables() {
     if ($map === null) {
         $map = ['chassis' => 'chassisinventory'];
         foreach (VALID_COMPONENT_TYPES as $type) {
-            // networkdevice is racked beside servers, never built into one, so it
-            // is excluded here on the same grounds as serverplatform.
-            if ($type === 'serverplatform' || $type === 'chassis' || $type === 'networkdevice') {
+            // networkdevice is racked beside servers and a cable joins ports;
+            // neither is ever built into a server, so both are excluded here on
+            // the same grounds as serverplatform.
+            if ($type === 'serverplatform' || $type === 'chassis' || $type === 'networkdevice' || $type === 'cable') {
                 continue;
             }
             $map[$type] = $type . 'inventory';
@@ -111,6 +112,7 @@ function getComponentTypeManifest() {
         'sfp'            => ['label' => 'SFP Module',      'nesting' => 'brand[].series[].models[]'],
         'serverplatform' => ['label' => 'Server Platform', 'nesting' => 'brand[].models[]'],
         'networkdevice'  => ['label' => 'Network Device',  'nesting' => 'brand[].models[]'],
+        'cable'          => ['label' => 'Cable',           'nesting' => 'brand[].models[]'],
     ];
 
     $manifest = [];
@@ -221,6 +223,7 @@ function getComponentAssetTagCode($type) {
         'sfp'         => 'SFP',
         'serverplatform' => 'SPF',
         'networkdevice'  => 'NET',
+        'cable'          => 'CBL',
     ];
 
     if (!isset($codes[$type])) {

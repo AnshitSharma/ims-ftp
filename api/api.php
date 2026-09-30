@@ -278,6 +278,7 @@ try {
         case 'sfp':
         case 'serverplatform':
         case 'networkdevice':
+        case 'cable':
             requireModulePermission($module, $operation, $user);
             require_once(__DIR__ . '/handlers/components/component_crud_api.php');
             handleComponentOperations($module, $operation, $user);
