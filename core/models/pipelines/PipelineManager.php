@@ -403,6 +403,14 @@ class PipelineManager
             // History
             $this->historyService->logHistory($ticketId, 'pipeline_created', null, $template['name'], $userId, "Pipeline started from type '{$template['name']}'");
             $this->historyService->logHistory($ticketId, 'stage_activated', null, $resolvedStages[0]['name'], $userId, "Stage '{$resolvedStages[0]['name']}' activated");
+            $this->notifyStageOwners(
+                'stage_activated',
+                $ticketId,
+                $resolvedStages[0]['assigned_to_user_id'],
+                $resolvedStages[0]['assigned_to_role_id'],
+                $userId,
+                ['step' => $resolvedStages[0]['name']]
+            );
 
             // The part is not in stock. Written to the timeline as well as
             // returned, because the two serve different readers: the return
@@ -626,6 +634,14 @@ class PipelineManager
                     ->execute([$next['id'], $ticketId]);
 
                 $this->historyService->logHistory($ticketId, 'stage_activated', null, $next['name'], $userId, "Stage '{$next['name']}' activated");
+                $this->notifyStageOwners(
+                    'stage_activated',
+                    $ticketId,
+                    $next['assigned_to_user_id'],
+                    $next['assigned_to_role_id'],
+                    $userId,
+                    ['step' => $next['name']]
+                );
 
                 $this->pdo->commit();
                 return [
@@ -645,6 +661,7 @@ class PipelineManager
             ")->execute([$ticketId]);
 
             $this->historyService->logHistory($ticketId, 'pipeline_completed', null, 'completed', $userId, 'All stages completed — pipeline closed');
+            $this->notifyRequester('pipeline_completed', $ticketId, $userId);
 
             // If this request was somebody's prerequisite, its parent has just
             // stopped waiting. Called after the status UPDATE so the remaining-
@@ -708,6 +725,7 @@ class PipelineManager
             ")->execute([$userCol, $roleCol, $stageProgressId]);
 
             $this->historyService->logHistory($ticketId, 'stage_reassigned', $stage['name'], "$assigneeType:$assigneeId", $userId, "Reassigned stage '{$stage['name']}'");
+            $this->notifyStageOwners('stage_reassigned', $ticketId, $userCol, $roleCol, $userId, ['step' => $stage['name']]);
 
             $this->pdo->commit();
             return ['success' => true, 'errors' => []];
@@ -758,6 +776,7 @@ class PipelineManager
             ]);
 
             $this->historyService->logHistory($ticketId, 'pipeline_cancelled', $ticket['status'], 'cancelled', $userId, $reason ?: 'Pipeline cancelled');
+            $this->notifyRequester('pipeline_cancelled', $ticketId, $userId, ['reason' => $reason]);
 
             // A withdrawn prerequisite stops freezing its parent — there is
             // nothing left to wait for. Not a bypass: the parent still needs
@@ -964,6 +983,7 @@ class PipelineManager
                 $userId,
                 "Rejected at step '{$stage['name']}': $reason"
             );
+            $this->notifyRequester('pipeline_rejected', $ticketId, $userId, ['step' => $stage['name'], 'reason' => $reason]);
 
             // A REFUSED prerequisite keeps freezing its parent. It must never
             // read as a met one, so the parent does not quietly resume — see
@@ -2128,6 +2148,7 @@ class PipelineManager
             $userId,
             $note
         );
+        $this->notifyRequester('prerequisite_resolved', $parentId, $userId, ['note' => $note]);
 
         $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")->execute([$parentId]);
     }
@@ -2499,6 +2520,60 @@ class PipelineManager
     /**
      * Lock and fetch a stage row, ensuring it belongs to the pipeline.
      */
+    /**
+     * Tell a step's owners (the named user, or every member of the role) about
+     * an event. Like logHistory(), called inside the event's open transaction, so
+     * a rollback takes the notification with it.
+     */
+    private function notifyStageOwners($event, $ticketId, $ownerUserId, $ownerRoleId, $actorId, array $extra = [])
+    {
+        if (!$this->loadNotifications()) {
+            return;
+        }
+        NotificationService::requestEvent(
+            $this->pdo,
+            $event,
+            $ticketId,
+            NotificationService::stageOwnerIds($this->pdo, $ownerUserId, $ownerRoleId),
+            $actorId,
+            $extra
+        );
+    }
+
+    /**
+     * Tell the person who raised the Request.
+     */
+    private function notifyRequester($event, $ticketId, $actorId, array $extra = [])
+    {
+        if (!$this->loadNotifications()) {
+            return;
+        }
+        NotificationService::requestEvent(
+            $this->pdo,
+            $event,
+            $ticketId,
+            NotificationService::requesterIds($this->pdo, $ticketId),
+            $actorId,
+            $extra
+        );
+    }
+
+    /**
+     * NotificationService is a new file, so never a hard require: until it has
+     * deployed, events simply do not notify.
+     */
+    private function loadNotifications()
+    {
+        if (!class_exists('NotificationService')) {
+            $path = __DIR__ . '/../../helpers/NotificationService.php';
+            if (!is_readable($path)) {
+                return false;
+            }
+            require_once($path);
+        }
+        return class_exists('NotificationService');
+    }
+
     private function lockStage($ticketId, $stageProgressId)
     {
         $stmt = $this->pdo->prepare("

@@ -148,6 +148,21 @@ define('MS_CLIENT_SECRET', getenv('MS_CLIENT_SECRET') ?: '');
 define('MS_REDIRECT_URI', getenv('MS_REDIRECT_URI') ?: '');
 
 // =============================================================================
+// NOTIFICATIONS (email + Teams)
+// =============================================================================
+//
+// MAIL_SENDER_UPN is the mailbox Graph sends from. With it set, email goes out
+// through Microsoft Graph using the three MS_* app values above (the sign-in app,
+// granted Mail.Send). Without it, email falls back to PHP mail().
+//
+// TEAMS_WORKFLOW_URL is the Power Automate flow's trigger URL. It is a bearer
+// secret -- anyone holding it can post as the flow -- so it is never echoed or
+// logged. Empty means Teams delivery is off.
+
+define('MAIL_SENDER_UPN', getenv('MAIL_SENDER_UPN') ?: '');
+define('TEAMS_WORKFLOW_URL', getenv('TEAMS_WORKFLOW_URL') ?: '');
+
+// =============================================================================
 // CORS CONFIGURATION
 // =============================================================================
 

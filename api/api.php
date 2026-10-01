@@ -303,6 +303,17 @@ try {
             handleVendorOperations($operation, $user);
             break;
 
+        // The bell. Guarded require for the same deploy-ordering reason as `spec`.
+        case 'notification':
+            requireModulePermission('notification', $operation, $user);
+            $notificationHandler = __DIR__ . '/handlers/users/notification_api.php';
+            if (!is_readable($notificationHandler)) {
+                send_json_response(0, 1, 503, "Notifications are not available yet");
+            }
+            require_once($notificationHandler);
+            handleNotificationOperations($operation, $user);
+            break;
+
         default:
             error_log("Invalid module requested: $module");
             send_json_response(0, 1, 400, "Invalid module: $module");

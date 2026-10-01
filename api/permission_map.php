@@ -155,6 +155,19 @@ return [
         'delete'     => 'vendor.delete',
     ],
 
+    // Notifications (2026-10-02). Every operation is scoped to the caller inside
+    // the handler, so .view is "may have a bell at all"; seeder 2026_10_02_001
+    // grants it to every role. 'test' sends the caller one item on every channel.
+    'notification' => [
+        'list'            => 'notification.view',
+        'unread-count'    => 'notification.view',
+        'mark-read'       => 'notification.view',
+        'mark-all-read'   => 'notification.view',
+        'get-preferences' => 'notification.view',
+        'set-preferences' => 'notification.view',
+        'test'            => 'notification.manage',
+    ],
+
     // Shared template for the 10 component-type modules.
     'component' => [
         'list' => '{module}.view',
