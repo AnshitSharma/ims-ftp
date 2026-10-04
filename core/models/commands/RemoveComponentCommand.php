@@ -57,18 +57,26 @@ final class RemoveComponentCommand extends BaseCommand
     private $serialNumber;
     /** @var bool */
     private $cascade;
+    /**
+     * @var int|null names the exact inventory unit to remove. A serial cannot pick
+     * between several serial-less units of one model -- with no serial the loop in
+     * buildTarget() takes the FIRST row of the model, which may be a serialised unit
+     * the caller never meant to touch.
+     */
+    private $inventoryId;
     /** @var array|null the live row being removed, resolved by buildTarget() */
     private $targetRow;
     /** @var array[] pre-removal dependents (cascade subtree), resolved by buildTarget() */
     private $cascadeRows = [];
 
-    public function __construct(PDO $pdo, string $configUuid, string $componentType, string $componentUuid, ?string $serialNumber = null, bool $cascade = false, $actor = 0, ?int $expectedRevision = null)
+    public function __construct(PDO $pdo, string $configUuid, string $componentType, string $componentUuid, ?string $serialNumber = null, bool $cascade = false, $actor = 0, ?int $expectedRevision = null, ?int $inventoryId = null)
     {
         parent::__construct($pdo, $configUuid, $actor, $expectedRevision);
         $this->componentType = $componentType;
         $this->componentUuid = $componentUuid;
         $this->serialNumber = $serialNumber;
         $this->cascade = $cascade;
+        $this->inventoryId = $inventoryId;
     }
 
     protected function trigger(): string
@@ -106,6 +114,10 @@ final class RemoveComponentCommand extends BaseCommand
             if ($this->serialNumber !== null && $row['serial_number'] !== $this->serialNumber) {
                 continue;
             }
+            if ($this->inventoryId !== null
+                && (!isset($row['inventory_id']) || (int)$row['inventory_id'] !== $this->inventoryId)) {
+                continue;
+            }
             // A row backed by serverplatforminventory is not a unit that was added to
             // this build -- it is part of the compute platform box (its board, its
             // chassis, an embedded controller), removable only by removing the platform,
@@ -122,6 +134,9 @@ final class RemoveComponentCommand extends BaseCommand
         }
         if ($this->targetRow === null) {
             $serialInfo = $this->serialNumber ? " with SerialNumber '{$this->serialNumber}'" : '';
+            if ($this->inventoryId !== null) {
+                $serialInfo .= " with inventory ID {$this->inventoryId}";
+            }
             throw new CommandFailed('component_not_found', "Component not found in configuration$serialInfo", 404);
         }
 

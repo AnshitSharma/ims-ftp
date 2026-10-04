@@ -1193,7 +1193,13 @@ function handleRemoveComponent($serverBuilder, $user) {
         $cascade = filter_var($_POST['cascade'] ?? false, FILTER_VALIDATE_BOOLEAN);
         // U-A.2: optional If-Match-style revision check, same as add-component.
         $expectedRevision = isset($_POST['expected_revision']) ? (int)$_POST['expected_revision'] : null;
-        $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision);
+        // Optional: the exact inventory row to remove. The only way to pick one of
+        // several serial-less units of the same model -- without it a serial-less
+        // removal takes the first unit of that model, serialised or not.
+        $inventoryId = (isset($_POST['inventory_id']) && ctype_digit((string)$_POST['inventory_id']))
+            ? (int)$_POST['inventory_id']
+            : null;
+        $removeCommand = new RemoveComponentCommand($pdo, $configUuid, $componentType, $componentUuid, $_POST['serial_number'] ?? null, $cascade, (int)$user['id'], $expectedRevision, $inventoryId);
         try {
             $commandResult = $removeCommand->execute();
             $result = ['success' => true, 'revision' => $commandResult->revision];
