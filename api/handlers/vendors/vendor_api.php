@@ -41,6 +41,44 @@ function handleVendorOperations($operation, $user) {
                 $stmt = $pdo->prepare("SELECT * FROM vendors ORDER BY name ASC");
                 $stmt->execute();
                 $vendors = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // The vendor cards' numbers: parts on record, how many failed
+                // (Status 0), the newest purchase, and which types actually came
+                // from them. One grouped query per inventory table; a table that
+                // errors costs its own numbers, never the whole list.
+                $stats = [];
+                foreach (VALID_COMPONENT_TYPES as $type) {
+                    if (!inventoryTableExists($pdo, $type)) {
+                        continue;
+                    }
+                    $table = getComponentTableName($type);
+                    try {
+                        $rows = $pdo->query(
+                            "SELECT VendorID, COUNT(*) AS parts, SUM(Status = 0) AS failed,
+                                    MAX(COALESCE(PurchaseDate, DATE(CreatedAt))) AS last_delivery
+                               FROM $table WHERE VendorID IS NOT NULL GROUP BY VendorID"
+                        )->fetchAll(PDO::FETCH_ASSOC);
+                    } catch (Exception $e) {
+                        error_log("Vendor stats skipped $table: " . $e->getMessage());
+                        continue;
+                    }
+                    foreach ($rows as $row) {
+                        $id = (int)$row['VendorID'];
+                        $s = $stats[$id] ?? ['parts' => 0, 'failed' => 0, 'last_delivery' => null, 'supplied_types' => []];
+                        $s['parts'] += (int)$row['parts'];
+                        $s['failed'] += (int)$row['failed'];
+                        if ($row['last_delivery'] !== null && ($s['last_delivery'] === null || $row['last_delivery'] > $s['last_delivery'])) {
+                            $s['last_delivery'] = $row['last_delivery'];
+                        }
+                        $s['supplied_types'][] = $type;
+                        $stats[$id] = $s;
+                    }
+                }
+                foreach ($vendors as &$vendor) {
+                    $vendor += $stats[(int)$vendor['id']] ?? ['parts' => 0, 'failed' => 0, 'last_delivery' => null, 'supplied_types' => []];
+                }
+                unset($vendor);
+
                 send_json_response(1, 1, 200, "Vendors retrieved", [
                     'vendors' => $vendors,
                     'total_count' => count($vendors)

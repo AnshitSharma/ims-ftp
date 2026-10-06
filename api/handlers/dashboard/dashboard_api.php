@@ -53,6 +53,8 @@ function handleDashboardOperations($operation, $user) {
                 'user_id' => $_GET['user_id'] ?? $_POST['user_id'] ?? '',
                 'date_from' => $_GET['date_from'] ?? $_POST['date_from'] ?? '',
                 'date_to' => $_GET['date_to'] ?? $_POST['date_to'] ?? '',
+                // installs | moves | access | changes — the activity page's chips
+                'category' => $_GET['category'] ?? $_POST['category'] ?? '',
             ];
             [$where, $bindings] = buildInventoryLogFilters($filterParams);
             $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
