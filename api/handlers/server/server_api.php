@@ -2858,7 +2858,7 @@ function getConfigurationStatusText($statusCode) {
     $statusMap = [
         0 => 'Draft',
         1 => 'Validated',
-        2 => 'Built',
+        2 => 'Building',
         3 => 'Finalized'
     ];
 

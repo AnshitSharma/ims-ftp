@@ -109,7 +109,7 @@ switch ($action) {
  * Human-readable label for a server configuration_status.
  */
 function rackConfigStatusText($status) {
-    $map = [0 => 'Draft', 1 => 'Validated', 2 => 'Built', 3 => 'Finalized'];
+    $map = [0 => 'Draft', 1 => 'Validated', 2 => 'Building', 3 => 'Finalized'];
     return $map[(int)$status] ?? 'Unknown';
 }
 
