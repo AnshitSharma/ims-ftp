@@ -32,7 +32,9 @@ class CatalogException extends \RuntimeException
  *     (pcie_slots count + slot_type, mirroring UnifiedSlotTracker::loadRiserCardProvidedPCIeSlots()).
  *     NOTE (2026-08-14): risers used to be pciecard rows selected by
  *     component_subtype === 'Riser Card'; they are now their own component type, so
- *     'pciecard' provides nothing at all and 'risercard' always provides.
+ *     'risercard' always provides pcie_slot rows.
+ *   - pciecard -> m2_slot (spec's `m2_slots`, NVMe adapter cards only; added 2026-10-05,
+ *     mirrors UnifiedSlotTracker's expansion-card m2_slots_provided)
  *   - cpu -> pcie_lane (spec's `pcie_lanes` field, one row per physical CPU; mirrors
  *     PcieLaneBudgetValidator::evaluateAssembledStorageLaneBudget()'s field read — see U-L.4)
  *   - nic -> sfp_port (spec's `ports` field, mirrors NICPortTracker::getPortAssignmentInfo() — U-L.5)
@@ -244,10 +246,11 @@ class ResourceCatalog
                 return $this->providesCpu($specUuid);
             case 'nic':
                 return $this->providesNic($specUuid);
+            case 'pciecard':
+                return $this->providesPciecard($specUuid);
             case 'ram':
             case 'storage':
             case 'caddy':
-            case 'pciecard':
             case 'hbacard':
             case 'sfp':
                 return []; // confirmed: these types provide no resources today
@@ -672,6 +675,30 @@ class ResourceCatalog
             return [];
         }
         return [['resource' => 'm2_slot', 'slot_ref' => null, 'capacity' => $total]];
+    }
+
+    /**
+     * An M.2 NVMe adapter card provides its own M.2 slots (2026-10-05). Legacy
+     * already counted them -- UnifiedSlotTracker's expansion-card provider and
+     * StorageConnectionValidator's adapter path both read the card's `m2_slots` --
+     * but this returned [] for every pciecard, so storage.m2_capacity refused an
+     * M.2 drive on a board with no onboard M.2 even with an adapter installed.
+     *
+     * Fails open (returns []) on a missing spec or non-numeric count, which is
+     * exactly what every pciecard returned before; a card without `m2_slots` is
+     * an ordinary card and provides nothing.
+     */
+    private function providesPciecard(string $specUuid): array
+    {
+        $spec = $this->dataUtils->getPCIeCardByUUID($specUuid);
+        if (!is_array($spec)) {
+            return [];
+        }
+        $m2Slots = $spec['m2_slots'] ?? 0;
+        if (!is_numeric($m2Slots) || (int)$m2Slots <= 0) {
+            return [];
+        }
+        return [['resource' => 'm2_slot', 'slot_ref' => null, 'capacity' => (int)$m2Slots]];
     }
 
     /**

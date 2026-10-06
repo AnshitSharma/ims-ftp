@@ -90,14 +90,11 @@ final class StorageM2CapacityRule implements RuleInterface
         }
 
         if ($m2Count > $capacity) {
-            // Zero-capacity wording used to match ComponentValidator's blocking
-            // message verbatim for the parity diff, including its "(motherboard or
-            // NVMe adaptor)" aside. Dropped 2026-09-13: only a motherboard provides
-            // m2_slot capacity (ResourceCatalog::provides() returns [] for pciecard,
-            // deferred under U-L.2/RV-2), so naming an adaptor sent users looking for
-            // a part that could never change the answer.
+            // The adaptor aside was dropped 2026-09-13 while only a motherboard could
+            // provide m2_slot capacity. Restored 2026-10-05: ResourceCatalog now counts
+            // an NVMe adapter card's m2_slots, so installing one does change the answer.
             $message = $capacity === 0
-                ? 'No M.2 slots available on the installed motherboard for M.2 storage'
+                ? 'No M.2 slots available (motherboard or NVMe adapter) for M.2 storage'
                 : "M.2 slots exceeded: using $m2Count slots but only $capacity available";
 
             return new RuleResult($this->id(), $this->severity(), false, $message,
