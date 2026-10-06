@@ -172,6 +172,12 @@ return [
     'component' => [
         'list' => '{module}.view',
         'get' => '{module}.view',
+        // The list page's filter panel (values + unit counts). Same authority
+        // as reading the list it filters.
+        'filter-options' => '{module}.view',
+        // Every catalogue model of the type, with unique labels: the Excel
+        // import's sample file and Model-column lookup. Catalogue data, no rows.
+        'models' => '{module}.view',
         'add' => '{module}.create',
         'update' => '{module}.edit',
         'delete' => '{module}.delete',

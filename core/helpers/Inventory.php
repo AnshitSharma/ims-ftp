@@ -339,7 +339,7 @@ function getComponentFieldMap($type) {
  * Shared by getComponentsByType / getComponentCountByType so the row query
  * and the count query can never disagree on what matches.
  */
-function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo = null, $table = null, $status = null) {
+function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo = null, $table = null, $status = null, $filters = null) {
     $clauses = [];
 
     if ($search !== '') {
@@ -427,6 +427,36 @@ function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo
         $params[] = (int)$status;
     }
 
+    // Spec + inventory filters (brand, capacity, vendor, warranty...). See
+    // InventoryFilters. Here, not in the browser, for the same reason as status:
+    // the row query and the count query must agree.
+    //
+    // Guarded require for the same reason as ModelSearch above. A failure ignores
+    // the filters and logs; clauses() hands back its own params, so a throw cannot
+    // leave placeholders and values out of step.
+    if (!empty($filters) && $pdo !== null && $table !== null) {
+        try {
+            if (!class_exists('InventoryFilters', false)) {
+                $filtersFile = __DIR__ . '/InventoryFilters.php';
+                if (is_readable($filtersFile)) {
+                    require_once $filtersFile;
+                }
+            }
+            if (class_exists('InventoryFilters', false)) {
+                $type = preg_replace('/inventory$/', '', $table);
+                [$filterClauses, $filterParams] = InventoryFilters::clauses(
+                    $pdo, $table, $type, InventoryFilters::parse($filters, $type)
+                );
+                foreach ($filterClauses as $clause) {
+                    $clauses[] = $clause;
+                }
+                $params = array_merge($params, $filterParams);
+            }
+        } catch (Throwable $e) {
+            error_log("buildComponentSearchWhere: filters skipped: " . $e->getMessage());
+        }
+    }
+
     return empty($clauses) ? '' : 'WHERE ' . implode(' AND ', $clauses);
 }
 
@@ -434,12 +464,12 @@ function buildComponentSearchWhere($search, &$params, $locationUuid = null, $pdo
  * Get components by type.
  * $limit === null preserves the original return-everything behavior.
  */
-function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '', $locationUuid = null, $status = null) {
+function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = '', $locationUuid = null, $status = null, $filters = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status, $filters);
 
         $sql = "SELECT * FROM $tableName $where ORDER BY id DESC";
         if ($limit !== null) {
@@ -463,12 +493,12 @@ function getComponentsByType($pdo, $type, $limit = null, $offset = 0, $search = 
 /**
  * Count components of a type matching an optional search term.
  */
-function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null, $status = null) {
+function getComponentCountByType($pdo, $type, $search = '', $locationUuid = null, $status = null, $filters = null) {
     $tableName = getComponentTableName($type);
 
     try {
         $params = [];
-        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status);
+        $where = buildComponentSearchWhere($search, $params, $locationUuid, $pdo, $tableName, $status, $filters);
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM $tableName $where");
         $stmt->execute($params);
         return (int)$stmt->fetchColumn();
@@ -702,6 +732,210 @@ function applyComponentStatusPair(array &$safeData, array $allowedCols, ?array $
 }
 
 /**
+ * Everything addComponent() checks before it writes, and nothing that writes.
+ *
+ * Split out 2026-10-07 so the Excel import's dry run (bulk-add with dry_run=1)
+ * applies exactly the rules a real add applies -- UUID against the ims-data
+ * catalogue, field mapping, column whitelist, status pair, location required --
+ * without inserting. A rollback-based dry run was rejected: the INSERT would
+ * still consume auto-increment IDs, and asset tags are derived from them.
+ *
+ * @return array{table: string, data: array, uuid: string} the validated row
+ * @throws InvalidArgumentException naming what is wrong, in the operator's terms
+ */
+function prepareComponentInsert($pdo, $type, $data) {
+    // Get the correct table name
+    $tableName = getComponentTableName($type);
+
+    // Get dynamic field mapping for this component type (snake_case →
+    // CamelCase). Fields not in the map pass through untouched and
+    // rely on the column whitelist below.
+    $fieldMap = getComponentFieldMap($type);
+
+    // Convert field names to match database columns
+    $convertedData = [];
+    foreach ($data as $key => $value) {
+        $dbColumn = $fieldMap[$key] ?? $key;
+        $convertedData[$dbColumn] = $value;
+    }
+
+    // A UUID is REQUIRED, and it is always checked against the catalog. [M-03]
+    //
+    // This used to generate one when the caller sent none. A UUID on an
+    // inventory row is not that unit's identity — AssetTag is — it is WHICH
+    // CATALOGUE PART the unit is, the key every compatibility rule resolves
+    // specs through. A generated one names a part that does not exist, so the
+    // unit could never be validated against anything, could never be matched
+    // to a socket or a DIMM slot, and could not be explained to the person
+    // holding it. The root-level contract says this check is never bypassed;
+    // omitting the field was the bypass.
+    //
+    // Applies identically to the direct endpoint, bulk-add, and an approved
+    // inventory.component.add Request — all three call this function, which
+    // is what makes it ONE schema rather than three. [F-20]
+    if (!isset($convertedData['UUID']) || !is_string($convertedData['UUID'])
+        || trim($convertedData['UUID']) === '') {
+        throw new InvalidArgumentException(
+            "Choose which $type model this unit is — a catalog model is required."
+        );
+    }
+    $convertedData['UUID'] = trim($convertedData['UUID']);
+
+    // SECURITY: the UUID must reference a real component spec in ims-data/.
+    require_once(__DIR__ . '/../models/components/ComponentDataService.php');
+    $componentService = ComponentDataService::getInstance();
+    if (!$componentService->validateComponentUuid($type, $convertedData['UUID'])) {
+        throw new InvalidArgumentException(
+            "Component UUID not found in $type specifications"
+        );
+    }
+
+    // Serial policy, declared rather than assumed. [F-20]
+    //
+    // A unit with no readable serial is NORMAL here and always has been — a
+    // worn label, a white-box part, a pull — and such a unit stays addressable
+    // by its AssetTag, so a blanket serial requirement would refuse legitimate
+    // stock. The types below are the ones whose serial is treated as
+    // mandatory. The set is EMPTY on purpose: no such policy exists in this
+    // system yet, and inventing one here would reject parts the owner can
+    // actually hold in their hand. Name a type here when that policy is
+    // decided, and this enforces it everywhere at once.
+    $serialRequiredTypes = [];
+    if (in_array(strtolower((string)$type), $serialRequiredTypes, true)
+        && trim((string)($convertedData['SerialNumber'] ?? '')) === '') {
+        throw new InvalidArgumentException(
+            "A serial number is required for every $type unit."
+        );
+    }
+
+    // Whitelist against real table columns, then against the columns a
+    // client is allowed to write at all. [H-03 / F-10]
+    $allowedCols = getInventoryTableColumns($pdo, $tableName);
+    $blocked     = array_flip(getBlockedComponentColumns());
+    $editable    = array_flip(getEditableComponentColumns($type));
+
+    $safeData = [];
+    foreach ($convertedData as $col => $value) {
+        $lc = strtolower($col);
+        if (isset($blocked[$lc]) || !isset($editable[$lc])) {
+            continue;
+        }
+        if (!isset($allowedCols[$lc])) {
+            // Unknown column — silently drop rather than error so legacy
+            // clients sending extra fields don't break.
+            continue;
+        }
+        // Use the canonical casing from the DB schema
+        $safeData[$allowedCols[$lc]] = $value;
+    }
+
+    // UUID is not in the editable set — it is not metadata, it is which
+    // catalog part this unit IS — but insert is the one moment it is
+    // legitimately client-supplied, and it has already been generated or
+    // validated against the ims-data spec above.
+    if (isset($allowedCols['uuid'])) {
+        $safeData[$allowedCols['uuid']] = $convertedData['UUID'];
+    }
+
+    // A unit with no readable manufacturer serial is normal (worn label,
+    // white-box part, pull) — store that absence as NULL, never ''.
+    // SerialNumber carries a UNIQUE index: MySQL permits many NULLs but only
+    // ONE ''. An empty string from the form would therefore let the first
+    // serial-less unit save and make the *second* one die on a duplicate-key
+    // error. The unit stays addressable either way via its AssetTag.
+    if (array_key_exists('SerialNumber', $safeData)
+        && trim((string)$safeData['SerialNumber']) === '') {
+        $safeData['SerialNumber'] = null;
+    }
+
+    // status_v2 must be BORN paired with Status. [F-21]
+    //
+    // This function builds its INSERT purely from caller-supplied, whitelisted
+    // columns, and no caller has ever supplied status_v2 -- so every unit added
+    // since seeder 2026_07_10_001 created the column landed with status_v2 NULL
+    // while Status took its own column default of 1. Production held 22 such
+    // rows on 2026-07-27 (21 cpuinventory, 1 pciecardinventory), one more per
+    // component the owner adds.
+    //
+    // It stayed invisible because inventory_report's status_v2/Status agreement
+    // check deliberately inspects only rows WHERE status_v2 IS NOT NULL, so an
+    // unmigrated row was excused rather than flagged; and NULL is not a member
+    // of StatusMap::INVENTORY_V2_TO_LEGACY, so the state machine cannot read
+    // such a unit's state at all once it stops deferring to legacy Status.
+    //
+    // Same defect class as F-14 (OnboardNICHandler wrote Status with raw UPDATEs
+    // and never touched status_v2) and the same fix: the pair rides in ONE
+    // statement, so no window exists in which a row has one without the other.
+    // Derivation AND the {0,1} constraint now live in one shared helper so
+    // update cannot drift from insert the way it had. [H-03 / F-10]
+    applyComponentStatusPair($safeData, $allowedCols, null);
+
+    if (empty($safeData)) {
+        throw new InvalidArgumentException("No valid fields provided for $type component");
+    }
+
+    // A unit with no location is a unit nobody can go and find. Every way a
+    // component enters inventory lands here -- the Add Component form,
+    // bulk-add, and an approved inventory.component.add request -- so this
+    // function is the one place the rule has to exist.
+    //
+    // Either column satisfies it. The Location dropdown posts the site NAME
+    // and its location_uuid together, so an operator sees a single field;
+    // accepting the name on its own keeps a caller that knows only the
+    // legacy free-text column working.
+    $locationNameCol = $allowedCols['location'] ?? null;
+    $locationUuidCol = $allowedCols['location_uuid'] ?? null;
+    $hasLocation =
+        ($locationUuidCol !== null && trim((string)($safeData[$locationUuidCol] ?? '')) !== '')
+        || ($locationNameCol !== null && trim((string)($safeData[$locationNameCol] ?? '')) !== '');
+    if (!$hasLocation) {
+        throw new InvalidArgumentException(
+            "A location is required — select the site this component is at."
+        );
+    }
+
+    // Defence in depth: even though $safeData keys come from
+    // INFORMATION_SCHEMA we keep the identifier regex as a belt-and-
+    // braces check before the column names hit the SQL string.
+    $columns = array_keys($safeData);
+    foreach ($columns as $col) {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
+            throw new InvalidArgumentException("Invalid column name: $col");
+        }
+    }
+
+    return ['table' => $tableName, 'data' => $safeData, 'uuid' => $convertedData['UUID']];
+}
+
+/**
+ * Throw the same duplicate-serial message the INSERT would produce, without
+ * attempting the INSERT. For the import dry run: SerialNumber is UNIQUE, and
+ * that is otherwise only discovered when the write fails.
+ */
+function assertComponentSerialFree(PDO $pdo, $tableName, $type, array $safeData) {
+    $serial = isset($safeData['SerialNumber']) ? trim((string)$safeData['SerialNumber']) : '';
+    if ($serial === '') {
+        return;
+    }
+    $lookup = $pdo->prepare("SELECT AssetTag FROM `$tableName` WHERE SerialNumber = ? LIMIT 1");
+    $lookup->execute([$serial]);
+    $existing = $lookup->fetch(PDO::FETCH_ASSOC);
+    if ($existing === false) {
+        return;
+    }
+    if (!empty($existing['AssetTag'])) {
+        throw new InvalidArgumentException(
+            "Serial number '$serial' is already registered to " . $existing['AssetTag']
+            . ". If this is a different unit, leave the serial blank — it will be "
+            . "identified by its own asset tag."
+        );
+    }
+    throw new InvalidArgumentException(
+        "Serial number '$serial' is already registered to another " . $type . " unit."
+    );
+}
+
+/**
  * Add component
  *
  * Hardened against mass-assignment and UUID spoofing:
@@ -714,165 +948,12 @@ function applyComponentStatusPair(array &$safeData, array $allowedCols, ?array $
  */
 function addComponent($pdo, $type, $data, $userId) {
     try {
-        // Get the correct table name
-        $tableName = getComponentTableName($type);
-
-        // Get dynamic field mapping for this component type (snake_case →
-        // CamelCase). Fields not in the map pass through untouched and
-        // rely on the column whitelist below.
-        $fieldMap = getComponentFieldMap($type);
-
-        // Convert field names to match database columns
-        $convertedData = [];
-        foreach ($data as $key => $value) {
-            $dbColumn = $fieldMap[$key] ?? $key;
-            $convertedData[$dbColumn] = $value;
-        }
-
-        // A UUID is REQUIRED, and it is always checked against the catalog. [M-03]
-        //
-        // This used to generate one when the caller sent none. A UUID on an
-        // inventory row is not that unit's identity — AssetTag is — it is WHICH
-        // CATALOGUE PART the unit is, the key every compatibility rule resolves
-        // specs through. A generated one names a part that does not exist, so the
-        // unit could never be validated against anything, could never be matched
-        // to a socket or a DIMM slot, and could not be explained to the person
-        // holding it. The root-level contract says this check is never bypassed;
-        // omitting the field was the bypass.
-        //
-        // Applies identically to the direct endpoint, bulk-add, and an approved
-        // inventory.component.add Request — all three call this function, which
-        // is what makes it ONE schema rather than three. [F-20]
-        if (!isset($convertedData['UUID']) || !is_string($convertedData['UUID'])
-            || trim($convertedData['UUID']) === '') {
-            throw new InvalidArgumentException(
-                "Choose which $type model this unit is — a catalog model is required."
-            );
-        }
-        $convertedData['UUID'] = trim($convertedData['UUID']);
-
-        // SECURITY: the UUID must reference a real component spec in ims-data/.
-        require_once(__DIR__ . '/../models/components/ComponentDataService.php');
-        $componentService = ComponentDataService::getInstance();
-        if (!$componentService->validateComponentUuid($type, $convertedData['UUID'])) {
-            throw new InvalidArgumentException(
-                "Component UUID not found in $type specifications"
-            );
-        }
-
-        // Serial policy, declared rather than assumed. [F-20]
-        //
-        // A unit with no readable serial is NORMAL here and always has been — a
-        // worn label, a white-box part, a pull — and such a unit stays addressable
-        // by its AssetTag, so a blanket serial requirement would refuse legitimate
-        // stock. The types below are the ones whose serial is treated as
-        // mandatory. The set is EMPTY on purpose: no such policy exists in this
-        // system yet, and inventing one here would reject parts the owner can
-        // actually hold in their hand. Name a type here when that policy is
-        // decided, and this enforces it everywhere at once.
-        $serialRequiredTypes = [];
-        if (in_array(strtolower((string)$type), $serialRequiredTypes, true)
-            && trim((string)($convertedData['SerialNumber'] ?? '')) === '') {
-            throw new InvalidArgumentException(
-                "A serial number is required for every $type unit."
-            );
-        }
-
-        // Whitelist against real table columns, then against the columns a
-        // client is allowed to write at all. [H-03 / F-10]
-        $allowedCols = getInventoryTableColumns($pdo, $tableName);
-        $blocked     = array_flip(getBlockedComponentColumns());
-        $editable    = array_flip(getEditableComponentColumns($type));
-
-        $safeData = [];
-        foreach ($convertedData as $col => $value) {
-            $lc = strtolower($col);
-            if (isset($blocked[$lc]) || !isset($editable[$lc])) {
-                continue;
-            }
-            if (!isset($allowedCols[$lc])) {
-                // Unknown column — silently drop rather than error so legacy
-                // clients sending extra fields don't break.
-                continue;
-            }
-            // Use the canonical casing from the DB schema
-            $safeData[$allowedCols[$lc]] = $value;
-        }
-
-        // UUID is not in the editable set — it is not metadata, it is which
-        // catalog part this unit IS — but insert is the one moment it is
-        // legitimately client-supplied, and it has already been generated or
-        // validated against the ims-data spec above.
-        if (isset($allowedCols['uuid'])) {
-            $safeData[$allowedCols['uuid']] = $convertedData['UUID'];
-        }
-
-        // A unit with no readable manufacturer serial is normal (worn label,
-        // white-box part, pull) — store that absence as NULL, never ''.
-        // SerialNumber carries a UNIQUE index: MySQL permits many NULLs but only
-        // ONE ''. An empty string from the form would therefore let the first
-        // serial-less unit save and make the *second* one die on a duplicate-key
-        // error. The unit stays addressable either way via its AssetTag.
-        if (array_key_exists('SerialNumber', $safeData)
-            && trim((string)$safeData['SerialNumber']) === '') {
-            $safeData['SerialNumber'] = null;
-        }
-
-        // status_v2 must be BORN paired with Status. [F-21]
-        //
-        // This function builds its INSERT purely from caller-supplied, whitelisted
-        // columns, and no caller has ever supplied status_v2 -- so every unit added
-        // since seeder 2026_07_10_001 created the column landed with status_v2 NULL
-        // while Status took its own column default of 1. Production held 22 such
-        // rows on 2026-07-27 (21 cpuinventory, 1 pciecardinventory), one more per
-        // component the owner adds.
-        //
-        // It stayed invisible because inventory_report's status_v2/Status agreement
-        // check deliberately inspects only rows WHERE status_v2 IS NOT NULL, so an
-        // unmigrated row was excused rather than flagged; and NULL is not a member
-        // of StatusMap::INVENTORY_V2_TO_LEGACY, so the state machine cannot read
-        // such a unit's state at all once it stops deferring to legacy Status.
-        //
-        // Same defect class as F-14 (OnboardNICHandler wrote Status with raw UPDATEs
-        // and never touched status_v2) and the same fix: the pair rides in ONE
-        // statement, so no window exists in which a row has one without the other.
-        // Derivation AND the {0,1} constraint now live in one shared helper so
-        // update cannot drift from insert the way it had. [H-03 / F-10]
-        applyComponentStatusPair($safeData, $allowedCols, null);
-
-        if (empty($safeData)) {
-            throw new InvalidArgumentException("No valid fields provided for $type component");
-        }
-
-        // A unit with no location is a unit nobody can go and find. Every way a
-        // component enters inventory lands here -- the Add Component form,
-        // bulk-add, and an approved inventory.component.add request -- so this
-        // function is the one place the rule has to exist.
-        //
-        // Either column satisfies it. The Location dropdown posts the site NAME
-        // and its location_uuid together, so an operator sees a single field;
-        // accepting the name on its own keeps a caller that knows only the
-        // legacy free-text column working.
-        $locationNameCol = $allowedCols['location'] ?? null;
-        $locationUuidCol = $allowedCols['location_uuid'] ?? null;
-        $hasLocation =
-            ($locationUuidCol !== null && trim((string)($safeData[$locationUuidCol] ?? '')) !== '')
-            || ($locationNameCol !== null && trim((string)($safeData[$locationNameCol] ?? '')) !== '');
-        if (!$hasLocation) {
-            throw new InvalidArgumentException(
-                "A location is required — select the site this component is at."
-            );
-        }
-
-        // Defence in depth: even though $safeData keys come from
-        // INFORMATION_SCHEMA we keep the identifier regex as a belt-and-
-        // braces check before the column names hit the SQL string.
+        // Every rule is in prepareComponentInsert(), shared with the import
+        // dry run so the two can never disagree about what is valid.
+        $prepared = prepareComponentInsert($pdo, $type, $data);
+        $tableName = $prepared['table'];
+        $safeData = $prepared['data'];
         $columns = array_keys($safeData);
-        foreach ($columns as $col) {
-            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $col)) {
-                throw new InvalidArgumentException("Invalid column name: $col");
-            }
-        }
         $placeholders = array_fill(0, count($columns), '?');
         $values = array_values($safeData);
 
@@ -913,7 +994,7 @@ function addComponent($pdo, $type, $data, $userId) {
 
             return [
                 'id' => $newId,
-                'uuid' => $safeData['UUID'] ?? ($convertedData['UUID'] ?? null),
+                'uuid' => $safeData['UUID'] ?? $prepared['uuid'],
                 'asset_tag' => $assetTag
             ];
 

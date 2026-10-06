@@ -67,8 +67,12 @@ function handleComponentOperations($module, $operation, $user) {
             // unfiltered total. An out-of-range value is ignored, not rejected.
             $status = trim($_GET['status'] ?? $_POST['status'] ?? '');
             $status = in_array($status, ['0', '1', '2'], true) ? $status : null;
+            // Optional spec + inventory filters, JSON {key: [values]} -- see
+            // core/helpers/InventoryFilters.php. Malformed input is ignored.
+            $filters = $_GET['filters'] ?? $_POST['filters'] ?? '';
+            $filters = is_string($filters) ? $filters : '';
 
-            $components = getComponentsByType($pdo, $module, $limit, $offset, $search, $locationUuid !== '' ? $locationUuid : null, $status);
+            $components = getComponentsByType($pdo, $module, $limit, $offset, $search, $locationUuid !== '' ? $locationUuid : null, $status, $filters);
 
             // Resolve ModelName from JSON specs via UUID
             $componentService = null;
@@ -178,7 +182,7 @@ function handleComponentOperations($module, $operation, $user) {
             // total_count = all matching rows (not page size) so the dashboard's
             // pagination UI (built from total_count) reflects the real total
             $totalCount = ($limit !== null)
-                ? getComponentCountByType($pdo, $module, $search, $locationUuid !== '' ? $locationUuid : null, $status)
+                ? getComponentCountByType($pdo, $module, $search, $locationUuid !== '' ? $locationUuid : null, $status, $filters)
                 : count($components);
 
             $responseData = [
@@ -191,6 +195,112 @@ function handleComponentOperations($module, $operation, $user) {
             }
 
             send_json_response(1, 1, 200, ucfirst($module) . " components retrieved", $responseData);
+            break;
+
+        case 'filter-options':
+            // The list page's filter panel: each filter's values with unit counts
+            // over what search, site and status currently select. The filters
+            // themselves are not applied, so picking one value never hides its
+            // siblings. See core/helpers/InventoryFilters.php.
+            require_once __DIR__ . '/../../../core/helpers/InventoryFilters.php';
+
+            $search = trim((string)($_GET['search'] ?? $_POST['search'] ?? ''));
+            $locationUuid = trim((string)($_GET['location_uuid'] ?? $_POST['location_uuid'] ?? ''));
+            $status = trim((string)($_GET['status'] ?? $_POST['status'] ?? ''));
+            $status = in_array($status, ['0', '1', '2'], true) ? $status : null;
+
+            $tableName = getComponentTableName($module);
+            $params = [];
+            $where = buildComponentSearchWhere($search, $params, $locationUuid !== '' ? $locationUuid : null, $pdo, $tableName, $status);
+
+            send_json_response(1, 1, 200, ucfirst($module) . " filter options retrieved", [
+                'filters' => InventoryFilters::options($pdo, $module, $tableName, $where, $params)
+            ]);
+            break;
+
+        case 'models':
+            // Every catalogue model of this type, for the Excel import's sample
+            // file and for resolving the Model column back to a UUID (2026-10-07).
+            //
+            // `name` is what the inventory list shows (ComponentNamer, same call as
+            // 'list' above). Those names are not unique -- several RAM kits share
+            // "Samsung DDR4 32GB DIMM" -- so `label` is the name with the part
+            // number, or failing that the start of the UUID, appended only where
+            // two models would otherwise read the same. The import matches on
+            // label or UUID, never on a name that could mean two parts.
+            require_once __DIR__ . '/../../../core/models/components/SpecProjector.php';
+            require_once __DIR__ . '/../../../core/models/components/ComponentSpecPaths.php';
+            require_once __DIR__ . '/../../../core/models/components/ComponentDataService.php';
+            $namerFile = __DIR__ . '/../../../core/helpers/ComponentNamer.php';
+            if (is_readable($namerFile)) {
+                require_once $namerFile;
+            }
+
+            try {
+                $records = SpecProjector::projectType($module, ComponentSpecPaths::getPath($module));
+            } catch (Throwable $e) {
+                // No catalogue file for this type (cable), or it is unreadable.
+                $records = [];
+            }
+
+            $service = ComponentDataService::getInstance();
+            $models = [];
+            foreach ($records as $record) {
+                $name = null;
+                if (class_exists('ComponentNamer', false)) {
+                    try {
+                        $name = ComponentNamer::fromSpec($module, $service->findComponentByUuid($module, $record['spec_uuid']));
+                    } catch (Throwable $e) {
+                        $name = null;
+                    }
+                }
+                $details = [];
+                if (!empty($record['memory_type'])) $details[] = $record['memory_type'];
+                if (!empty($record['capacity_gb'])) {
+                    $gb = (int)$record['capacity_gb'];
+                    $details[] = $gb >= 1000 ? rtrim(rtrim(number_format($gb / 1000, 2, '.', ''), '0'), '.') . ' TB' : $gb . ' GB';
+                }
+                foreach (['socket', 'form_factor', 'interface'] as $field) {
+                    if (!empty($record[$field])) $details[] = $record[$field];
+                }
+                if (!empty($record['ports'])) $details[] = $record['ports'] . ($record['ports'] == 1 ? ' port' : ' ports');
+
+                $models[] = [
+                    'uuid' => $record['spec_uuid'],
+                    'name' => $name ?: $record['display_name'],
+                    'brand' => $record['brand'],
+                    'part_number' => $record['part_number'],
+                    'details' => implode(', ', array_unique($details)),
+                ];
+            }
+
+            // Unique labels: first by part number, then by UUID prefix.
+            $byName = [];
+            foreach ($models as $i => $m) {
+                $byName[mb_strtolower($m['name'])][] = $i;
+            }
+            foreach ($models as $i => &$m) {
+                $m['label'] = $m['name'];
+                if (count($byName[mb_strtolower($m['name'])]) > 1) {
+                    $m['label'] .= ' (' . (!empty($m['part_number']) ? $m['part_number'] : substr($m['uuid'], 0, 8)) . ')';
+                }
+            }
+            unset($m);
+            $byLabel = [];
+            foreach ($models as $i => $m) {
+                $byLabel[mb_strtolower($m['label'])][] = $i;
+            }
+            foreach ($models as $i => &$m) {
+                if (count($byLabel[mb_strtolower($m['label'])]) > 1) {
+                    $m['label'] .= ' [' . substr($m['uuid'], 0, 8) . ']';
+                }
+            }
+            unset($m);
+            usort($models, static function ($a, $b) {
+                return strnatcasecmp($a['label'], $b['label']);
+            });
+
+            send_json_response(1, 1, 200, ucfirst($module) . " models retrieved", ['models' => $models]);
             break;
 
         case 'get':
@@ -322,6 +432,57 @@ function handleComponentOperations($module, $operation, $user) {
             }
             if (count($items) > 100) {
                 send_json_response(0, 1, 400, "Bulk add is limited to 100 components per request");
+            }
+
+            // Dry run, for the Excel import (2026-10-07): every item goes through
+            // the same validation a real add applies (prepareComponentInsert) plus
+            // the serial-already-registered lookup the INSERT would otherwise be
+            // the first to notice -- and nothing is written. No idempotency claim,
+            // no transaction, no auto-increment consumed, so no asset tag skipped.
+            // A serial repeated within this request is reported too; repeats
+            // across requests are the caller's to catch.
+            if (($_POST['dry_run'] ?? '') === '1') {
+                $results = [];
+                $valid = 0;
+                $seenSerials = [];
+                foreach (array_values($items) as $i => $itemData) {
+                    $entry = ['index' => $i, 'valid' => false];
+                    if (!is_array($itemData) || empty($itemData)) {
+                        $entry['error'] = "Item must be a non-empty object";
+                        $results[] = $entry;
+                        continue;
+                    }
+                    unset($itemData['action']);
+                    try {
+                        $prepared = prepareComponentInsert($pdo, $module, $itemData);
+                        assertComponentSerialFree($pdo, $prepared['table'], $module, $prepared['data']);
+                        $serial = trim((string)($prepared['data']['SerialNumber'] ?? ''));
+                        // The UNIQUE index's collation is case-insensitive.
+                        $serialKey = strtolower($serial);
+                        if ($serial !== '' && isset($seenSerials[$serialKey])) {
+                            throw new InvalidArgumentException("Serial number '$serial' appears more than once in this import.");
+                        }
+                        if ($serial !== '') {
+                            $seenSerials[$serialKey] = true;
+                        }
+                        $entry['valid'] = true;
+                        $valid++;
+                    } catch (InvalidArgumentException $e) {
+                        $entry['error'] = $e->getMessage();
+                    } catch (Exception $e) {
+                        error_log("Error dry-running $module bulk add (index $i): " . $e->getMessage());
+                        $entry['error'] = "This row could not be checked";
+                    }
+                    $results[] = $entry;
+                }
+                $total = count($results);
+                send_json_response(1, 1, 200, ucfirst($module) . " bulk add dry run: $valid of $total valid", [
+                    'dry_run' => true,
+                    'total' => $total,
+                    'valid' => $valid,
+                    'invalid' => $total - $valid,
+                    'results' => $results
+                ]);
             }
 
             // I.4 (audit §9.5): each item commits in its own transaction with no
