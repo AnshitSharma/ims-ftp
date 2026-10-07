@@ -20,6 +20,11 @@
             "type": "array",
             "$comment": "present on 6 of 53 records"
         },
+        "dedicated_slot": {
+            "type": "string",
+            "enum": ["rndc", "bndc", "flexlom", "ocp3", "embedded_lom"],
+            "$comment": "Own connector, not a PCIe slot (SlotPlanner::dedicatedSlotKind, card.dedicated_slot). Absent = standard PCIe card."
+        },
         "features": {
             "type": "array",
             "$comment": "present on 49 of 53 records"

@@ -18,6 +18,7 @@ require_once __DIR__ . '/rules/MemorySlotCountRule.php';
 require_once __DIR__ . '/rules/MemoryEccRule.php';
 require_once __DIR__ . '/rules/MemoryDownclockRule.php';
 require_once __DIR__ . '/rules/PcieSlotPlacementRule.php';
+require_once __DIR__ . '/rules/DedicatedSlotRule.php';
 require_once __DIR__ . '/rules/PcieLaneBudgetRule.php';
 require_once __DIR__ . '/rules/StorageInterfacePathRule.php';
 require_once __DIR__ . '/rules/StorageBayCapacityRule.php';
@@ -64,6 +65,9 @@ class ValidationEngine
         MemoryDownclockRule::class,
         // U-R.3 pcie.slot_placement (docs/RULE_MAP.md)
         PcieSlotPlacementRule::class,
+        // card.dedicated_slot: one rNDC / FlexibleLOM / OCP / PERC Mini per connector
+        // (tasks/dedicated-slot-cards.md, 2026-10-07)
+        DedicatedSlotRule::class,
         // U-R.4 pcie.lane_budget (docs/RULE_MAP.md)
         PcieLaneBudgetRule::class,
         // U-R.5 storage.* (docs/RULE_MAP.md)

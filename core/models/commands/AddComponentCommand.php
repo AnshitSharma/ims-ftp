@@ -579,6 +579,12 @@ final class AddComponentCommand extends BaseCommand
             return ['ok' => false, 'slot_ref' => null, 'error' => 'spec not found', 'error_code' => 'spec_not_found'];
         }
 
+        // An rNDC, FlexibleLOM, OCP 3.0 card or PERC Mini sits in its own connector,
+        // not a PCIe slot. Its one-per-connector cap is card.dedicated_slot.
+        if (SlotPlanner::dedicatedSlotKind($spec) !== null) {
+            return ['ok' => true, 'slot_ref' => null, 'error' => null, 'error_code' => null];
+        }
+
         // Type is the riser test since the 2026-08-14 split; the subtype test stays
         // as a fallback for any pciecard row still labelled 'Riser Card'.
         $isRiser = $this->componentType === 'risercard'

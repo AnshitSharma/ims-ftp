@@ -43,6 +43,10 @@
             "type": "object",
             "$comment": "present on 25 of 26 records"
         },
+        "dedicated_slots": {
+            "type": "object",
+            "$comment": "Optional {kind: count} override of card.dedicated_slot's default of one connector per kind, e.g. {\"ocp3\": 2}. Absent everywhere today."
+        },
         "dimensions": {
             "type": "object"
         },

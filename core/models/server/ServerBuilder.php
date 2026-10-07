@@ -1069,6 +1069,9 @@ class ServerBuilder {
         if (!is_array($spec)) {
             return ['ok' => false, 'slot_ref' => null];
         }
+        if (SlotPlanner::dedicatedSlotKind($spec) !== null) {
+            return ['ok' => true, 'slot_ref' => null]; // own connector, not a PCIe slot
+        }
 
         $isRiser = $componentType === 'risercard' || ($spec['component_subtype'] ?? null) === 'Riser Card';
         $resource = $isRiser ? 'riser_slot' : 'pcie_slot';

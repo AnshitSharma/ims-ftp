@@ -17,7 +17,8 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * rows with slot_ref === null, excluding onboard NICs (spec_uuid prefix
  * "onboard-", which legitimately never get a discrete slot — mirrors
  * slot_report.php's slotless_card check exclusion) and platform-owned
- * embedded parts (see isPlatformOwned(), added 2026-09-13). Rows that already
+ * embedded parts (see isPlatformOwned(), added 2026-09-13) and cards whose spec
+ * names a dedicated_slot (added 2026-10-07; see DedicatedSlotRule). Rows that already
  * carry a slot_ref (placed via a prior legitimate add) are not re-planned.
  *
  * Divergence note: this rule judges PLACEMENT FEASIBILITY only — the chosen
@@ -87,6 +88,9 @@ final class PcieSlotPlacementRule implements RuleInterface
                 $spec = $this->specFor($type, $component['spec_uuid']);
                 if (!is_array($spec)) {
                     continue; // spec not found -- not this rule's concern (UUID validity is enforced elsewhere)
+                }
+                if (SlotPlanner::dedicatedSlotKind($spec) !== null) {
+                    continue; // own connector (rNDC, FlexibleLOM, PERC Mini...) -- card.dedicated_slot owns it
                 }
 
                 // Type is authoritative since the 2026-08-14 split; spec/UUID tests

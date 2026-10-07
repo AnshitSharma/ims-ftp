@@ -45,6 +45,26 @@ final class SlotPlanner
         return null;
     }
 
+    /**
+     * The dedicated connector a card sits in instead of a PCIe slot, or null for a
+     * standard PCIe card (dedicated-slot-cards, 2026-10-07).
+     *
+     * A Dell rNDC/bNDC, an HPE FlexibleLOM, an OCP 3.0 card or a PERC Mini has its
+     * own connector on the board; charging it a pcie_slot is what left the R630s
+     * unable to take their PERC once the rNDC held the one modelled slot. Read from
+     * the explicit spec field `dedicated_slot`, never inferred from the free-text
+     * form_factor, so a new standard card cannot be caught by accident. The cap of
+     * one card per connector is card.dedicated_slot (DedicatedSlotRule).
+     */
+    public static function dedicatedSlotKind(array $spec): ?string
+    {
+        $kind = $spec['dedicated_slot'] ?? null;
+        if (!is_string($kind) || trim($kind) === '') {
+            return null;
+        }
+        return strtolower(trim($kind));
+    }
+
     private static function widthOf(array $providerRow): ?string
     {
         if (preg_match('/_x(\d+)$/i', (string)$providerRow['slot_ref'], $m)) {

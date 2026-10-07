@@ -37,6 +37,11 @@
         "data_rate": {
             "type": "string"
         },
+        "dedicated_slot": {
+            "type": "string",
+            "enum": ["mini_perc", "front_perc", "ar_slot"],
+            "$comment": "Own connector, not a PCIe slot (SlotPlanner::dedicatedSlotKind, card.dedicated_slot). Absent = standard PCIe card."
+        },
         "dimensions_mm": {
             "type": "object",
             "$comment": "present on 16 of 22 records"

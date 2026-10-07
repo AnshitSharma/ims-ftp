@@ -496,6 +496,12 @@ final class ReplaceComponentCommand extends BaseCommand
             return null;
         }
 
+        // Dedicated-connector card (rNDC, FlexibleLOM, OCP 3.0, PERC Mini): no PCIe
+        // slot to inherit or plan. Its one-per-connector cap is card.dedicated_slot.
+        if (SlotPlanner::dedicatedSlotKind($spec) !== null) {
+            return null;
+        }
+
         // Type is the riser test since the 2026-08-14 split; the subtype test stays
         // as a fallback for any pciecard row still labelled 'Riser Card'.
         $isRiser = $this->componentType === 'risercard'
