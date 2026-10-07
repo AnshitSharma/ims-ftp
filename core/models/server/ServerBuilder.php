@@ -1299,6 +1299,39 @@ class ServerBuilder {
                 $whereClause = "WHERE Status IN (0, 1, 2)"; // All statuses
             }
 
+            // SITE FILTER (2026-10-08): offer only units that are where this server is.
+            //
+            // BaseCommand::assertUnitAtServerLocation() refuses to install a unit from
+            // another site, fail-closed. This scan had no such condition, so a build at
+            // CtrlS Noida was offered every drive at Noida Office -- probed live: 24 of 24
+            // storage and 98 of 106 RAM units -- and each one 409'd when clicked. The
+            // condition mirrors that gate exactly so the listing and the add cannot
+            // disagree: same source (server_configurations.location_uuid), a virtual
+            // build is exempt (it reserves no unit -- the Compatibility Bench and saved
+            // templates are both virtual), an onboard NIC is exempt, an unknown site on
+            // either side offers nothing, and a missing column means the seeder has not
+            // run, so nothing is filtered. Applied before the LIMIT, so the scan cap is
+            // spent on stock that can actually be fitted.
+            require_once __DIR__ . '/../../helpers/SchemaHelper.php';
+            $siteFiltered = !$isSandbox
+                && !$config->get('is_virtual')
+                && SchemaHelper::hasColumn($this->pdo, $table, 'location_uuid')
+                && SchemaHelper::hasColumn($this->pdo, 'server_configurations', 'location_uuid');
+            $siteLocationUuid = $siteFiltered ? trim((string)$config->get('location_uuid')) : '';
+            $siteParams = [];
+            $siteCondition = '';
+            if ($siteFiltered) {
+                $onboardExempt = SchemaHelper::hasColumn($this->pdo, $table, 'SourceType')
+                    ? " OR SourceType = 'onboard'" : '';
+                if ($siteLocationUuid !== '') {
+                    $siteCondition = "(location_uuid = ?{$onboardExempt})";
+                    $siteParams[] = $siteLocationUuid;
+                } else {
+                    $siteCondition = "(1 = 0{$onboardExempt})";
+                }
+                $whereClause .= " AND {$siteCondition}";
+            }
+
             if ($isSandbox) {
                 // One candidate per catalogued model. No stock is read, so there is no
                 // scan cap either: the catalog is at most a few dozen models per type.
@@ -1314,7 +1347,7 @@ class ServerBuilder {
                     ORDER BY (Status = 1) DESC, SerialNumber ASC
                     LIMIT " . (self::COMPATIBLE_SCAN_LIMIT + 1) . "
                 ");
-                $stmt->execute();
+                $stmt->execute($siteParams);
                 $allComponents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                 // A-P2: the scan is capped for performance, but the cap used to be silent --
@@ -1494,11 +1527,19 @@ class ServerBuilder {
             $filtersApplied = [
                 'available_only' => $availableOnly,
                 'component_type' => $componentType,
+                // Null when no site filter ran (bench, virtual, or pre-seeder); '' when
+                // it ran but the server has no site, so nothing could be offered.
+                'site_location_uuid' => $siteFiltered ? $siteLocationUuid : null,
                 'note' => $isSandbox
                     ? 'Every catalogued model shown. A test build holds models, not stock, so availability does not apply.'
-                    : ($availableOnly
+                    : (($availableOnly
                         ? 'Only available components shown (Status=1 and not assigned to another server).'
                         : 'All physical components shown. Check available_for_use flag to see which can be added.')
+                        . ($siteFiltered
+                            ? ($siteLocationUuid !== ''
+                                ? ' Limited to units at this server\'s site.'
+                                : ' This server has no site recorded, so no unit can be shown to be here. Set its location first.')
+                            : ''))
             ];
 
             $compatibilitySummary = [
@@ -1525,16 +1566,20 @@ class ServerBuilder {
             // it does not need to own would only suggest that it does.
             if (!empty($summaryUuids) && !$isSandbox) {
                 $placeholders = implode(',', array_fill(0, count($summaryUuids), '?'));
+                // "Available" means available HERE once the site filter applies, so a
+                // model's count agrees with the units listed for it. Total, in-use and
+                // failed stay whole-inventory.
+                $availableSite = $siteCondition !== '' ? " AND {$siteCondition}" : '';
                 $stmt = $this->pdo->prepare("
                     SELECT UUID, COUNT(*) as total_count,
-                           SUM(CASE WHEN Status = 1 THEN 1 ELSE 0 END) as available_count,
+                           SUM(CASE WHEN Status = 1{$availableSite} THEN 1 ELSE 0 END) as available_count,
                            SUM(CASE WHEN Status = 2 THEN 1 ELSE 0 END) as in_use_count,
                            SUM(CASE WHEN Status = 0 THEN 1 ELSE 0 END) as failed_count
                     FROM `$table`
                     WHERE UUID IN ($placeholders)
                     GROUP BY UUID
                 ");
-                $stmt->execute($summaryUuids);
+                $stmt->execute(array_merge($siteParams, $summaryUuids));
 
                 foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $inv) {
                     $uuidInventorySummary[$inv['UUID']] = [
