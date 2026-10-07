@@ -112,9 +112,12 @@ class RequestActionExecutor
             // forwarded with no occupancy check behind it, writing a placement
             // string no rack agreed with. A real destination is rack_uuid +
             // start_u, or enclosure_uuid + slot_index, and it is checked.
+            // u_height is the U the server reserves until its chassis is
+            // installed -- the Create Server form sends it, so a request raised
+            // from that form must be able to carry it too.
             'optional' => ['description', 'location', 'is_virtual', 'is_sandbox',
                            'serial_number', 'location_uuid',
-                           'rack_uuid', 'start_u', 'enclosure_uuid', 'slot_index',
+                           'rack_uuid', 'start_u', 'u_height', 'enclosure_uuid', 'slot_index',
                            'location_name', 'rack_name', 'enclosure_name'],
         ],
         'server.config.update' => [
@@ -999,7 +1002,7 @@ class RequestActionExecutor
 
         $input = ['server_name' => trim((string)$payload['server_name'])];
         foreach (['description', 'is_virtual', 'is_sandbox', 'serial_number', 'location_uuid',
-                  'rack_uuid', 'start_u', 'enclosure_uuid', 'slot_index'] as $key) {
+                  'rack_uuid', 'start_u', 'u_height', 'enclosure_uuid', 'slot_index'] as $key) {
             if (isset($payload[$key]) && $payload[$key] !== '') {
                 $input[$key] = $payload[$key];
             }
