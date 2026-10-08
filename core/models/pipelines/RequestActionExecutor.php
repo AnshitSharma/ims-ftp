@@ -288,7 +288,25 @@ class RequestActionExecutor
             case 'server.component.replace':
                 return "Replace {$type} in server {$where}";
             case 'server.config.create':
-                return 'Create server "' . (isset($payload['server_name']) ? $payload['server_name'] : '?') . '"';
+                $label = 'Create server "' . (isset($payload['server_name']) ? $payload['server_name'] : '?') . '"';
+                if (!empty($payload['is_virtual'])) {
+                    return $label . ' (template)';
+                }
+                // The serial and the destination, so an approver can check them
+                // against the machine before it is created.
+                if (!empty($payload['serial_number'])) {
+                    $label .= ', SN ' . $payload['serial_number'];
+                }
+                if (!empty($payload['location_uuid']) || !empty($payload['rack_uuid'])) {
+                    $label .= ' at ' . self::relocateTargetLabel($payload);
+                }
+                if (!empty($payload['slot_index'])) {
+                    $label .= " \u{00B7} " . (!empty($payload['enclosure_name']) ? $payload['enclosure_name'] . ' ' : '')
+                        . 'bay ' . (int)$payload['slot_index'];
+                } elseif (!empty($payload['u_height'])) {
+                    $label .= ' (' . (int)$payload['u_height'] . 'U)';
+                }
+                return $label;
             case 'server.config.update':
                 return "Update details of server {$where}";
             case 'server.config.transition':
