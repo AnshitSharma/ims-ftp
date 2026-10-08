@@ -346,12 +346,15 @@ class PipelineManager
                      VALUES (?, ?, ?, ?, 'pending', NOW())"
                 );
                 $position = 1;
+                // Display names are re-derived from their ids here, so the summary an
+                // approver reads cannot disagree with the rows the approval acts on.
+                $stamper = new RequestActionExecutor($this->pdo);
                 foreach ($actions as $action) {
                     $insertAction->execute([
                         $ticketId,
                         $position++,
                         $action['action_type'],
-                        json_encode($action['payload'])
+                        json_encode($stamper->stampDisplayNames($action['action_type'], $action['payload']))
                     ]);
                 }
             }

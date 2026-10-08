@@ -747,6 +747,90 @@ class RequestActionExecutor
         }
     }
 
+    /**
+     * Re-derive a request's display-only names from the ids beside them.
+     *
+     * The approver reads a summary built from these names, but the approval acts
+     * on the ids. Left as the client sent them, a name can disagree with its id,
+     * and the approver signs off on a site, rack or unit the work does not go to.
+     * Called once at submit, so the stored payload is what the approver sees.
+     * A name the database cannot back up is dropped, and the summary falls back
+     * to the id, which is what gets acted on.
+     *
+     * @return array the payload with its display-only names replaced
+     */
+    public function stampDisplayNames($actionType, array $payload)
+    {
+        $display = [];
+        $names = [];
+
+        switch ($actionType) {
+            case 'server.config.create':
+            case 'server.relocate':
+                $display = ['location_name', 'rack_name', 'enclosure_name'];
+                $names = [
+                    'location_name'  => $this->nameFor('SELECT name FROM locations WHERE location_uuid = ? LIMIT 1', $payload, 'location_uuid'),
+                    'rack_name'      => $this->nameFor('SELECT name FROM racks WHERE rack_uuid = ? LIMIT 1', $payload, 'rack_uuid'),
+                    'enclosure_name' => $this->nameFor('SELECT name FROM rack_enclosures WHERE enclosure_uuid = ? LIMIT 1', $payload, 'enclosure_uuid'),
+                ];
+                break;
+
+            case 'inventory.component.relocate':
+                // Nothing in the payload identifies the unit's current site or its
+                // serial, so those names are dropped and the summary uses the id.
+                $display = ['component_name', 'serial_number', 'from_location_name', 'to_location_name'];
+                $names = [
+                    'to_location_name' => $this->nameFor('SELECT name FROM locations WHERE location_uuid = ? LIMIT 1', $payload, 'location_uuid'),
+                ];
+                break;
+
+            case 'inventory.device.rack':
+                $display = ['device_name', 'serial_number', 'location_name', 'rack_name'];
+                $names = [
+                    'location_name' => $this->nameFor('SELECT l.name FROM racks r JOIN locations l ON l.location_uuid = r.location_uuid WHERE r.rack_uuid = ? LIMIT 1', $payload, 'rack_uuid'),
+                    'rack_name'     => $this->nameFor('SELECT name FROM racks WHERE rack_uuid = ? LIMIT 1', $payload, 'rack_uuid'),
+                ];
+                break;
+
+            case 'inventory.device.unrack':
+                // A device is removed from the rack it is in now, so the name comes
+                // from its placement rather than from the payload.
+                $display = ['device_name', 'serial_number', 'rack_name'];
+                $names = [
+                    'rack_name' => $this->nameFor('SELECT r.name FROM rack_network_devices rn JOIN racks r ON r.rack_uuid = rn.rack_uuid WHERE rn.inventory_id = ? LIMIT 1', $payload, 'inventory_id'),
+                ];
+                break;
+
+            default:
+                return $payload;
+        }
+
+        foreach ($display as $key) {
+            unset($payload[$key]);
+        }
+        foreach ($names as $key => $name) {
+            if ($name !== null) {
+                $payload[$key] = $name;
+            }
+        }
+        return $payload;
+    }
+
+    /**
+     * The name a single-row lookup finds for $payload[$key], or null when the
+     * payload has no id or the id matches nothing.
+     */
+    private function nameFor($sql, array $payload, $key)
+    {
+        if (empty($payload[$key])) {
+            return null;
+        }
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([$payload[$key]]);
+        $name = $stmt->fetchColumn();
+        return ($name === false || $name === null || $name === '') ? null : (string)$name;
+    }
+
     // ---------------------------------------------------------------- validation
 
     /**
