@@ -107,12 +107,28 @@ class RequestHelper
      */
     public static function pipelineId($message = 'pipeline_id is required and must be numeric')
     {
-        $id = $_POST['pipeline_id'] ?? $_GET['pipeline_id'] ?? $_POST['ticket_id'] ?? $_GET['ticket_id'] ?? null;
-        if (empty($id) || !is_numeric($id)) {
+        $id = self::positiveInt($_POST['pipeline_id'] ?? $_GET['pipeline_id'] ?? $_POST['ticket_id'] ?? $_GET['ticket_id'] ?? null);
+        if ($id === null) {
             send_json_response(false, true, 400, $message, null);
             exit;
         }
-        return (int)$id;
+        return $id;
+    }
+
+    /**
+     * A row id: a positive whole number, or null.
+     *
+     * Not is_numeric(): that accepts '363.9' and '1e3', and the (int) cast after
+     * it quietly turned them into a DIFFERENT id. FILTER_VALIDATE_INT also
+     * refuses a value past PHP_INT_MAX instead of clamping it.
+     *
+     * @param mixed $value
+     * @return int|null
+     */
+    public static function positiveInt($value)
+    {
+        $int = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        return $int === false ? null : $int;
     }
 
     /**
@@ -124,11 +140,11 @@ class RequestHelper
      */
     public static function requireNumeric($key, $message = null)
     {
-        $value = $_POST[$key] ?? $_GET[$key] ?? null;
-        if (empty($value) || !is_numeric($value)) {
+        $value = self::positiveInt($_POST[$key] ?? $_GET[$key] ?? null);
+        if ($value === null) {
             send_json_response(false, true, 400, $message ?: "$key is required and must be numeric", null);
             exit;
         }
-        return (int)$value;
+        return $value;
     }
 }

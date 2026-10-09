@@ -201,12 +201,42 @@ class PipelineManager
             $errors = array_merge($errors, $itemsValidation['errors']);
         }
 
+        // Explicit step owners. Each must name a step of this type and an owner
+        // that exists. The loop below used to drop a bad one and fall back to the
+        // type's default, which handed the step to someone the caller had not
+        // chosen and said nothing; pipeline-reassign has always refused instead.
+        $overrides = (isset($data['stage_overrides']) && is_array($data['stage_overrides'])) ? $data['stage_overrides'] : [];
+        $stageNames = [];
+        foreach ($template['stages'] as $stage) {
+            $stageNames[(int)$stage['id']] = $stage['name'];
+        }
+        foreach ($overrides as $stageKey => $override) {
+            $stageKeyId = filter_var($stageKey, FILTER_VALIDATE_INT);
+            if ($stageKeyId === false || !isset($stageNames[$stageKeyId])) {
+                $errors[] = "Step override '$stageKey' is not a step of this request type";
+                continue;
+            }
+            $label = "Step '{$stageNames[$stageKeyId]}'";
+            $type = is_array($override) ? ($override['assignee_type'] ?? null) : null;
+            $ownerId = is_array($override)
+                ? filter_var($override['assignee_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+                : false;
+            if (!in_array($type, PipelineConfig::getAssigneeTypes(), true)) {
+                $errors[] = "$label: assignee_type must be 'user' or 'role'";
+            } elseif ($ownerId === false) {
+                $errors[] = "$label: assignee_id must be a user or role id";
+            } elseif ($type === 'user' && !$this->userExists($ownerId)) {
+                $errors[] = "$label: assigned user not found";
+            } elseif ($type === 'role' && !$this->roleExists($ownerId)) {
+                $errors[] = "$label: assigned role not found";
+            }
+        }
+
         if (!empty($errors)) {
             return ['success' => false, 'errors' => $errors];
         }
 
         // Resolve per-stage owners (template defaults, optionally overridden)
-        $overrides = (isset($data['stage_overrides']) && is_array($data['stage_overrides'])) ? $data['stage_overrides'] : [];
 
         // A Hardware Handover names the person who will physically carry the
         // hardware, and that person -- nobody else -- owns the confirmation
@@ -310,10 +340,16 @@ class PipelineManager
                      . ($storeTypeName ? ", ?" : "")
                      . ($storeParent ? ", ?" : "") . ")
             ");
+            // Stored as typed. Text is escaped once, where it is rendered; it used
+            // to be escaped here as well, so the UI showed &quot; literally,
+            // search could not find what the requester had typed, and a title
+            // that passed the 255-character check above grew past the column
+            // and was silently cut. Pipeline text from before 2026-10-09 is
+            // decoded by seeder 2026_10_09_001.
             $insertParams = [
                 $ticketNumber,
-                htmlspecialchars($title, ENT_QUOTES, 'UTF-8'),
-                htmlspecialchars($description, ENT_QUOTES, 'UTF-8'),
+                $title,
+                $description,
                 $priority,
                 $targetServer,
                 $templateId,
@@ -520,6 +556,10 @@ class PipelineManager
                 WHERE id = ?
             ")->execute([$userId, $stageProgressId]);
 
+            // The list orders by the ticket's updated_at, so a claim has to
+            // touch it the way completing or cancelling does.
+            $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")->execute([$ticketId]);
+
             $this->historyService->logHistory($ticketId, 'stage_claimed', null, $stage['name'], $userId, "Claimed stage '{$stage['name']}'");
 
             $this->pdo->commit();
@@ -590,7 +630,7 @@ class PipelineManager
                 WHERE id = ?
             ")->execute([
                 $userId,
-                ($notes !== null && $notes !== '') ? htmlspecialchars($notes, ENT_QUOTES, 'UTF-8') : null,
+                ($notes !== null && $notes !== '') ? $notes : null,
                 $stageProgressId
             ]);
 
@@ -606,7 +646,7 @@ class PipelineManager
                 // only thing that can tell the approver WHICH action failed and
                 // why — the rows recording it were just rolled back with
                 // everything else, deliberately, so this is its only route.
-                $failure = ['success' => false, 'errors' => $effect['errors']];
+                $failure = ['success' => false, 'errors' => $effect['errors'], 'rolled_back' => true];
                 if (!empty($effect['execution'])) {
                     $failure['execution'] = $effect['execution'];
                 }
@@ -694,7 +734,7 @@ class PipelineManager
         if (!in_array($assigneeType, PipelineConfig::getAssigneeTypes(), true)) {
             return ['success' => false, 'errors' => ["assignee_type must be 'user' or 'role'"]];
         }
-        if (empty($assigneeId) || !is_numeric($assigneeId)) {
+        if (filter_var($assigneeId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
             return ['success' => false, 'errors' => ['assignee_id is required']];
         }
         if ($assigneeType === 'user' && !$this->userExists((int)$assigneeId)) {
@@ -726,6 +766,9 @@ class PipelineManager
                     claimed_by_user_id = NULL, claimed_at = NULL, updated_at = NOW()
                 WHERE id = ?
             ")->execute([$userCol, $roleCol, $stageProgressId]);
+
+            // Same reason as claimStage(): the list orders by updated_at.
+            $this->pdo->prepare("UPDATE tickets SET updated_at = NOW() WHERE id = ?")->execute([$ticketId]);
 
             $this->historyService->logHistory($ticketId, 'stage_reassigned', $stage['name'], "$assigneeType:$assigneeId", $userId, "Reassigned stage '{$stage['name']}'");
             $this->notifyStageOwners('stage_reassigned', $ticketId, $userCol, $roleCol, $userId, ['step' => $stage['name']]);
@@ -774,7 +817,7 @@ class PipelineManager
                     rejection_reason = ?, updated_at = NOW()
                 WHERE id = ?
             ")->execute([
-                ($reason !== null && $reason !== '') ? htmlspecialchars($reason, ENT_QUOTES, 'UTF-8') : null,
+                ($reason !== null && $reason !== '') ? $reason : null,
                 $ticketId
             ]);
 
@@ -962,7 +1005,7 @@ class PipelineManager
                 SET status = 'rejected', completed_at = NOW(), completed_by_user_id = ?,
                     notes = ?, started_at = COALESCE(started_at, NOW()), updated_at = NOW()
                 WHERE id = ?
-            ")->execute([$userId, htmlspecialchars($reason, ENT_QUOTES, 'UTF-8'), $stageProgressId]);
+            ")->execute([$userId, $reason, $stageProgressId]);
 
             // Steps that never got their turn are skipped, not rejected — they
             // were not the decision. Mirrors cancelPipeline().
@@ -976,7 +1019,7 @@ class PipelineManager
                 SET status = 'rejected', current_stage_progress_id = NULL,
                     rejection_reason = ?, completed_at = NOW(), updated_at = NOW()
                 WHERE id = ?
-            ")->execute([htmlspecialchars($reason, ENT_QUOTES, 'UTF-8'), $ticketId]);
+            ")->execute([$reason, $ticketId]);
 
             $this->historyService->logHistory(
                 $ticketId,
@@ -1227,7 +1270,14 @@ class PipelineManager
                 $where[] = $clause;
             }
 
-            if (!empty($filters['status'])) {
+            if (($filters['status'] ?? '') === 'closed') {
+                // Every terminal status, for the board's closed column. Asking
+                // for 'completed' alone left cancelled and rejected requests
+                // on no column at all.
+                $terminal = PipelineConfig::getTerminalStatuses();
+                $where[] = 't.status IN (' . implode(',', array_fill(0, count($terminal), '?')) . ')';
+                $params = array_merge($params, $terminal);
+            } elseif (!empty($filters['status'])) {
                 $where[] = 't.status = ?';
                 $params[] = $filters['status'];
             }
@@ -1335,8 +1385,9 @@ class PipelineManager
                 -- happens BEFORE the page is cut, page 1 of the All view could
                 -- be twenty completed rows with every actionable request pushed
                 -- off it -- the list grouping then had nothing to group.
+                -- The id breaks updated_at ties, so pages cut the same way twice.
                 ORDER BY (t.status IN ('completed', 'cancelled', 'rejected')) ASC,
-                         t.updated_at DESC
+                         t.updated_at DESC, t.id DESC
                 LIMIT ? OFFSET ?
             ");
             $stmt->execute(array_merge($params, [(int)$limit, (int)$offset]));

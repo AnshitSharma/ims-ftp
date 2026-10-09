@@ -42,7 +42,16 @@ try {
         }
         $payload['pipeline'] = $mgr->getPipeline((int)$pipelineId, true);
 
-        send_json_response(false, true, 400, "Approval was rolled back — nothing was changed", $payload);
+        // "Rolled back" only when the approval's work was attempted and undone.
+        // An ordinary refusal (the step already moved on, a prerequisite blocks
+        // it) changed nothing to roll back, and saying otherwise told an approver
+        // whose earlier click HAD succeeded that it had been undone.
+        $rolledBack = !empty($result['rolled_back']) || !empty($result['execution']);
+        $message = $rolledBack
+            ? "Approval was rolled back — nothing was changed"
+            : ($result['errors'][0] ?? "Failed to complete stage");
+
+        send_json_response(false, true, 400, $message, $payload);
         exit;
     }
 

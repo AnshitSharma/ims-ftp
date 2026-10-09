@@ -77,7 +77,7 @@ class TicketHistoryService
                 FROM ticket_history h
                 LEFT JOIN users u ON h.changed_by = u.id
                 WHERE h.ticket_id = ?
-                ORDER BY h.created_at DESC
+                ORDER BY h.created_at DESC, h.id DESC
             ");
             $stmt->execute([$ticketId]);
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -107,7 +107,10 @@ class TicketHistoryService
                 FROM ticket_history h
                 LEFT JOIN users u ON h.changed_by = u.id
                 WHERE h.ticket_id = ?
-                ORDER BY h.created_at DESC
+                -- created_at is second-resolution, and a claim, a completion and
+                -- the next step's activation are written in the same second. The
+                -- id is the insertion order, so it breaks the tie newest-first.
+                ORDER BY h.created_at DESC, h.id DESC
             ");
             $stmt->execute([$ticketId]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
