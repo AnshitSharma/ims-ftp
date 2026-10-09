@@ -421,10 +421,17 @@ function handlePipelineOperations($operation, $user) {
     //
     // 'reject' is deliberately NOT here: refusing a request outright is a bigger
     // act than confirming your own step, and it remains admin work.
+    //
+    // 'cancel' JOINED ON 2026-10-10 (role QA, QA-15) so a requester can withdraw
+    // a request they raised. pipeline-cancel.php now owns the role check: an
+    // admin or super_admin cancels anything, as before; anyone else only their
+    // own request, and only while none of its work has run. pipeline.cancel
+    // alone never reaches someone else's request — technician and manager hold
+    // it, which is exactly why the check could not simply move to ACL.
     $selfServiceOperations = [
         'create', 'list', 'get', 'template-list', 'servers',
         'component-location', 'users', 'inventory-record', 'component-options',
-        'claim', 'complete',
+        'claim', 'complete', 'cancel',
     ];
 
     if (!in_array($operation, $selfServiceOperations, true)) {

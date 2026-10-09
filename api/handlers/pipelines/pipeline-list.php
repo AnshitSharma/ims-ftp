@@ -37,6 +37,18 @@ try {
     // Resolve the caller's role ids for the my_queue (team) scope.
     $roleIds = array_map(function ($r) { return (int)$r['id']; }, $acl->getUserRoles($user_id));
 
+    // A step owned by the Administrator role is a super_admin's step too — the
+    // same "admin or super admin" the approval guard applies. No super_admin
+    // holds the admin role, so without this every hardware approval was missing
+    // from their queue (role QA 2026-10-10, QA-18). NotificationService::
+    // stageOwnerIds() applies the same rule to who is told.
+    if (userHasRole($pdo, $user_id, 'super_admin')) {
+        $adminRoleId = (int)$pdo->query("SELECT id FROM roles WHERE name = 'admin' LIMIT 1")->fetchColumn();
+        if ($adminRoleId > 0 && !in_array($adminRoleId, $roleIds, true)) {
+            $roleIds[] = $adminRoleId;
+        }
+    }
+
     $filters = [
         'scope' => $scope,
         'user_id' => $user_id,

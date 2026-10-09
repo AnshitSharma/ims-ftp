@@ -2,9 +2,15 @@
 /**
  * pipeline-cancel.php
  * Action: pipeline-cancel
- * Permission: pipeline.cancel | pipeline.manage
+ * Permission: admin/super_admin with pipeline.cancel | pipeline.manage — any request.
+ *             Anyone else with pipeline.create | pipeline.manage — only a request
+ *             they raised, and only while none of its work has run (QA-15).
  *
  * Cancel a pipeline (any non-terminal state).
+ *
+ * The admin role check lives HERE, not in api.php's gate, because a requester
+ * withdrawing their own request has to reach this file. pipeline.cancel alone is
+ * not enough to cancel someone else's request: technician and manager hold it.
  *
  * Body params: pipeline_id (alias ticket_id), reason (optional)
  */
@@ -15,7 +21,12 @@ require_once(__DIR__ . '/../../../core/helpers/RequestHelper.php');
 try {
     $_POST = RequestHelper::parseRequestData();
 
-    RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.cancel'], "Permission denied: pipeline.cancel required");
+    $isAdmin = userHasRole($pdo, $user_id, 'admin') || userHasRole($pdo, $user_id, 'super_admin');
+    if ($isAdmin) {
+        RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.cancel'], "Permission denied: pipeline.cancel required");
+    } else {
+        RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.create'], "Permission denied: pipeline.create required");
+    }
 
     $pipelineId = RequestHelper::pipelineId();
 
@@ -26,7 +37,7 @@ try {
     }
 
     $mgr = new PipelineManager($pdo);
-    $result = $mgr->cancelPipeline((int)$pipelineId, $user_id, $reason);
+    $result = $mgr->cancelPipeline((int)$pipelineId, $user_id, $reason, !$isAdmin);
 
     if (!$result['success']) {
         send_json_response(false, true, 400, "Failed to cancel pipeline", ['errors' => $result['errors']]);

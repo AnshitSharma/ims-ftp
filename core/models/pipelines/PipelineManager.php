@@ -550,6 +550,14 @@ class PipelineManager
                 return ['success' => false, 'errors' => ['This stage is not assigned to you or your team']];
             }
 
+            // Only an approver can complete a step that performs work, and a
+            // claim now binds pipeline.manage too (assertCanAct), so a
+            // technician's claim on one would only lock the admins out of it.
+            if (($stage['effect_type'] ?? null) === PipelineConfig::EFFECT_EXECUTE_REQUEST && !$this->isApprover($userId)) {
+                $this->pdo->rollBack();
+                return ['success' => false, 'errors' => ['Only an admin or super admin can take a step that performs work']];
+            }
+
             $this->pdo->prepare("
                 UPDATE ticket_stage_progress
                 SET claimed_by_user_id = ?, claimed_at = NOW(), updated_at = NOW()
@@ -597,6 +605,17 @@ class PipelineManager
             if ($authError !== null) {
                 $this->pdo->rollBack();
                 return ['success' => false, 'errors' => [$authError]];
+            }
+
+            // A step that performs the request's work may only be approved by
+            // an admin or super admin who did not raise it. Refused here, before
+            // anything is written, so it is not recorded as a failed execution.
+            if (($stage['effect_type'] ?? null) === PipelineConfig::EFFECT_EXECUTE_REQUEST) {
+                $refusal = $this->approverRefusal($ticketId, $userId);
+                if ($refusal !== null) {
+                    $this->pdo->rollBack();
+                    return ['success' => false, 'errors' => [$refusal]];
+                }
             }
 
             // Is this request frozen behind a prerequisite? Checked here —
@@ -786,13 +805,18 @@ class PipelineManager
 
     /**
      * Cancel a pipeline (any non-terminal state).
+     *
+     * @param bool $requesterOnly the caller is withdrawing a request they raised
+     *   rather than cancelling as an admin (QA-15): it must be theirs, and none of
+     *   its work may have run yet, because cancelling never undoes work. Both are
+     *   checked under the row lock so an approval cannot slip in between.
      */
-    public function cancelPipeline($ticketId, $userId, $reason = null)
+    public function cancelPipeline($ticketId, $userId, $reason = null, $requesterOnly = false)
     {
         try {
             $this->pdo->beginTransaction();
 
-            $stmt = $this->pdo->prepare("SELECT id, status, pipeline_template_id FROM tickets WHERE id = ? FOR UPDATE");
+            $stmt = $this->pdo->prepare("SELECT id, status, pipeline_template_id, created_by FROM tickets WHERE id = ? FOR UPDATE");
             $stmt->execute([$ticketId]);
             $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -803,6 +827,21 @@ class PipelineManager
             if (in_array($ticket['status'], PipelineConfig::getTerminalStatuses(), true)) {
                 $this->pdo->rollBack();
                 return ['success' => false, 'errors' => ['Pipeline is already ' . $ticket['status']]];
+            }
+
+            if ($requesterOnly) {
+                if ((int)$ticket['created_by'] !== (int)$userId) {
+                    $this->pdo->rollBack();
+                    return ['success' => false, 'errors' => ['You can only withdraw a request you raised']];
+                }
+                if ($this->supportsRequestActions()) {
+                    $ran = $this->pdo->prepare("SELECT COUNT(*) FROM ticket_actions WHERE ticket_id = ? AND status = 'executed'");
+                    $ran->execute([$ticketId]);
+                    if ((int)$ran->fetchColumn() > 0) {
+                        $this->pdo->rollBack();
+                        return ['success' => false, 'errors' => ['Part of this request has already been carried out, so only an admin can cancel it now']];
+                    }
+                }
             }
 
             // Mark any active stage as skipped
@@ -2311,49 +2350,20 @@ class PipelineManager
             return ['success' => false, 'errors' => ['This step\'s effect is misconfigured'], 'applied' => null];
         }
 
-        // Guard 1 -- only an admin or super_admin may make the system act,
-        // whoever happens to own the stage. Belt-and-braces on top of
-        // assertCanAct().
-        //
-        // userHasRole() lives in BaseFunctions, which api.php always loads
-        // before any handler reaches this class. If that ever stops being true,
-        // refuse rather than fatal: an approval that cannot verify the
-        // approver's role must not perform anything.
-        if (!function_exists('userHasRole')) {
-            error_log('PipelineManager: userHasRole() unavailable -- refusing to perform request actions');
-            return ['success' => false, 'errors' => ['Cannot verify approver role'], 'applied' => null];
+        // Guards 1-3 (admin or super_admin; the request has a creator; the
+        // approver is not that creator). completeStage() has already refused on
+        // these before touching the step; asking again here is the last line
+        // before anything executes, whoever reaches this method.
+        $refusal = $this->approverRefusal($ticketId, $userId);
+        if ($refusal !== null) {
+            return ['success' => false, 'errors' => [$refusal], 'applied' => null];
         }
 
-        if (!userHasRole($this->pdo, $userId, 'admin') && !userHasRole($this->pdo, $userId, 'super_admin')) {
-            return [
-                'success' => false,
-                'errors' => ['Only an admin or super admin can approve a request'],
-                'applied' => null
-            ];
-        }
-
-        // Guard 2 -- the work is performed on behalf of the request's CREATOR,
-        // never anyone named in the request body. Anything created belongs to
-        // them.
+        // The work is performed on behalf of the request's CREATOR, never anyone
+        // named in the request body. Anything created belongs to them.
         $stmt = $this->pdo->prepare("SELECT created_by FROM tickets WHERE id = ?");
         $stmt->execute([$ticketId]);
-        $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
-        $createdBy = isset($ticket['created_by']) ? $ticket['created_by'] : null;
-        if (!$createdBy) {
-            return ['success' => false, 'errors' => ['Cannot determine who this request belongs to'], 'applied' => null];
-        }
-
-        // Guard 3 -- nobody approves their own request. This mattered when
-        // approval handed out access; it matters just as much now that approval
-        // performs privileged work.
-        $sod = $this->validator->validateSeparationOfDuties((int)$createdBy, (int)$userId);
-        if (!$sod['valid']) {
-            return [
-                'success' => false,
-                'errors' => ['Cannot approve your own request (separation of duties)'],
-                'applied' => null
-            ];
-        }
+        $createdBy = $stmt->fetchColumn();
 
         if (!$this->supportsRequestActions()) {
             // The seeder has not been applied yet. Code reaches production ~20s
@@ -2665,35 +2675,94 @@ class PipelineManager
 
     /**
      * Authorization to COMPLETE/act on a stage:
-     *  - manage bypasses everything
-     *  - user-owned stage: must be that user
+     *  - the user a stage is assigned to by name can always act on it
+     *  - a claim by someone else binds everyone else, pipeline.manage included
+     *  - otherwise manage may act without claiming
      *  - role-owned stage: must be the claimer (claim-first enforced)
      * Returns null when allowed, or an error string.
+     *
+     * The claim used to stop only a second claimant: manage returned null before
+     * claimed_by was read, so an admin, technician or manager could complete a
+     * step somebody else had claimed (role QA 2026-10-10, QA-12). A stale claim
+     * is cleared by reassigning the step, which is admin work.
      */
     private function assertCanAct($stage, $userId, $hasManage)
     {
+        if (!empty($stage['assigned_to_user_id']) && (int)$stage['assigned_to_user_id'] === (int)$userId) {
+            return null;
+        }
+
+        if (!empty($stage['claimed_by_user_id']) && (int)$stage['claimed_by_user_id'] !== (int)$userId) {
+            return 'This step is claimed by another user. Ask them to finish it, or have an admin reassign it.';
+        }
+
         if ($hasManage) {
             return null;
         }
 
-        // User-owned stage
+        // User-owned stage, and not this user
         if (!empty($stage['assigned_to_user_id'])) {
-            return ((int)$stage['assigned_to_user_id'] === (int)$userId)
-                ? null
-                : 'This stage is assigned to another user';
+            return 'This stage is assigned to another user';
         }
 
-        // Role-owned stage — must be claimed by the actor first
+        // Role-owned stage — must be claimed by the actor first (a claim by
+        // anyone else was refused above)
         if (!empty($stage['assigned_to_role_id'])) {
-            if (empty($stage['claimed_by_user_id'])) {
-                return 'Accept (claim) this stage before completing it';
-            }
-            return ((int)$stage['claimed_by_user_id'] === (int)$userId)
-                ? null
-                : 'This stage is claimed by another team member';
+            return empty($stage['claimed_by_user_id'])
+                ? 'Accept (claim) this stage before completing it'
+                : null;
         }
 
         return 'This stage has no owner';
+    }
+
+    /**
+     * Admin or super_admin: the only roles that may make the system act. Refuses
+     * rather than fatals if BaseFunctions has not loaded userHasRole().
+     */
+    private function isApprover($userId)
+    {
+        if (!function_exists('userHasRole')) {
+            error_log('PipelineManager: userHasRole() unavailable -- treating caller as not an approver');
+            return false;
+        }
+        return userHasRole($this->pdo, $userId, 'admin') || userHasRole($this->pdo, $userId, 'super_admin');
+    }
+
+    /**
+     * Why this user may not approve a step that performs this request's work,
+     * or null when they may.
+     *
+     * Asked by completeStage() BEFORE the step is touched, so a refusal is only a
+     * refusal: nothing is attempted, nothing rolls back, and no execution_failed
+     * row tells the requester their work failed when it never ran (QA-11 — a
+     * technician's click used to mark the request "Last approval rolled back").
+     * applyStageEffect() asks again as the last line before anything executes.
+     */
+    private function approverRefusal($ticketId, $userId)
+    {
+        // Guard 1 -- only an admin or super_admin may make the system act,
+        // whoever happens to own the stage.
+        if (!$this->isApprover($userId)) {
+            return 'Only an admin or super admin can approve a request';
+        }
+
+        // Guard 2 -- the work is performed on behalf of the request's CREATOR,
+        // so the request must have one.
+        $stmt = $this->pdo->prepare("SELECT created_by FROM tickets WHERE id = ?");
+        $stmt->execute([$ticketId]);
+        $createdBy = $stmt->fetchColumn();
+        if (!$createdBy) {
+            return 'Cannot determine who this request belongs to';
+        }
+
+        // Guard 3 -- nobody approves their own request.
+        $sod = $this->validator->validateSeparationOfDuties((int)$createdBy, (int)$userId);
+        if (!$sod['valid']) {
+            return 'Cannot approve your own request (separation of duties)';
+        }
+
+        return null;
     }
 
     private function userInRole($userId, $roleId)

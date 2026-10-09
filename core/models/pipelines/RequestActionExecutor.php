@@ -1547,7 +1547,7 @@ class RequestActionExecutor
         try {
             $result = addComponent($this->pdo, $payload['component_type'], $payload['data'], $subjectUserId);
         } catch (InvalidArgumentException $e) {
-            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => null];
+            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => self::requestDataRejected($e)];
         }
 
         if (empty($result) || empty($result['id'])) {
@@ -1568,6 +1568,19 @@ class RequestActionExecutor
                 'uuid'           => isset($result['uuid']) ? $result['uuid'] : null,
             ],
         ];
+    }
+
+    /**
+     * The result of an inventory write refused for what the REQUEST says — a
+     * serial another unit already holds, no location, a field the client may not
+     * set. Approving again sends the same payload and fails the same way, so the
+     * code lets the approver's banner say "reject it" instead of "try again"
+     * (role QA 2026-10-10, QA-17). The rows are rolled back either way; this only
+     * travels out in the response and the execution_failed history entry.
+     */
+    private static function requestDataRejected(InvalidArgumentException $e)
+    {
+        return ['error_code' => 'request_data_rejected', 'message' => $e->getMessage()];
     }
 
     /**
@@ -1628,7 +1641,7 @@ class RequestActionExecutor
         } catch (InvalidArgumentException $e) {
             // Editable-column allowlist, the Status constraint, or a row that
             // vanished between the check above and the locked read. [H-03/F-10]
-            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => null];
+            return ['success' => false, 'errors' => [$e->getMessage()], 'result' => self::requestDataRejected($e)];
         }
 
         if (!$ok) {

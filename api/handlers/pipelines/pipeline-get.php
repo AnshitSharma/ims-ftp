@@ -59,8 +59,10 @@ try {
             }
         }
 
+        // The same 404 as an id that does not exist. A distinct 403 told a viewer
+        // which request ids are real (role QA 2026-10-10, QA-16).
         if (!$involved) {
-            send_json_response(false, true, 403, "Permission denied: you are not involved in this pipeline", null);
+            send_json_response(false, true, 404, "Pipeline not found", null);
             exit;
         }
     }

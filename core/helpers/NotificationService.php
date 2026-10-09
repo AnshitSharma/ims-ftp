@@ -150,7 +150,11 @@ class NotificationService
 
     /**
      * The users who own a step: the named user, or every active member of the
-     * owning role.
+     * owning role. A step owned by the Administrator role is owned by every
+     * active super_admin as well — the same "admin or super admin" the approval
+     * guard applies, and the same rule pipeline-list uses for My queue. No
+     * super_admin holds the admin role, so without it they were never told about
+     * a hardware approval (role QA 2026-10-10, QA-18).
      *
      * @return int[]
      */
@@ -164,11 +168,15 @@ class NotificationService
         }
         try {
             $stmt = $pdo->prepare(
-                "SELECT ur.user_id FROM user_roles ur
+                "SELECT DISTINCT ur.user_id FROM user_roles ur
                    JOIN users u ON u.id = ur.user_id
-                  WHERE ur.role_id = ? AND u.status = 'active'"
+                   JOIN roles r ON r.id = ur.role_id
+                  WHERE u.status = 'active'
+                    AND (ur.role_id = ?
+                         OR (r.name = 'super_admin'
+                             AND EXISTS (SELECT 1 FROM roles owner WHERE owner.id = ? AND owner.name = 'admin')))"
             );
-            $stmt->execute([(int)$roleId]);
+            $stmt->execute([(int)$roleId, (int)$roleId]);
             return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
         } catch (\Throwable $e) {
             error_log('NotificationService::stageOwnerIds failed: ' . $e->getMessage());
