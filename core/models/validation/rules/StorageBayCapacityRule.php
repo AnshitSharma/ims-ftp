@@ -27,9 +27,8 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  *     ":1032-1035" no bay type supports this form factor). Its count-based
  *     branch (ComponentCompatibility.php:4696-4715) is documented dead code --
  *     $usedBays is never populated -- so legacy never blocks on overflow.
- * Overflow is therefore reported as a passing result carrying details, so the
- * signal survives for the post-cutover tightening pass without diverging from
- * legacy at enforce. 3.5" drives get NO 2.5" fallback (legacy has no such
+ * Overflow was therefore reported without blocking; since QA-03 (2026-10-10) it
+ * blocks validate/finalize but still never an edit -- see evaluate(). 3.5" drives get NO 2.5" fallback (legacy has no such
  * branch). M.2/U.2 storage bypasses bay validation entirely (both spellings
  * of "2.5"/"3.5" are excluded by definition since neither substring matches).
  */
@@ -81,50 +80,57 @@ final class StorageBayCapacityRule implements RuleInterface
             // M.2/U.2/unknown: bypasses bay validation (matches legacy exactly).
         }
 
-        // Eligible bay pools per form factor. A 2.5" drive may occupy a 3.5" bay
-        // via a caddy adapter (ComponentValidator.php:1024-1029); a 3.5" drive
-        // has no equivalent fallback.
-        $eligible = [
-            'drive_bay_2_5' => ['drive_bay_2_5', 'drive_bay_3_5'],
-            'drive_bay_3_5' => ['drive_bay_3_5'],
-        ];
+        $bays = ['drive_bay_2_5' => 0, 'drive_bay_3_5' => 0];
+        foreach (array_keys($bays) as $pool) {
+            foreach ($state->byResource($pool) as $row) {
+                $bays[$pool] += (int)$row['capacity'];
+            }
+        }
 
+        // Legacy's only blocking condition: no bay of any eligible type exists. A 2.5"
+        // drive may occupy a 3.5" bay via a caddy adapter (ComponentValidator.php:
+        // 1024-1029); a 3.5" drive has no equivalent fallback.
+        if ($counts['drive_bay_3_5'] > 0 && $bays['drive_bay_3_5'] === 0) {
+            return new RuleResult($this->id(), $this->severity(), false,
+                'No chassis bay supports drive_bay_3_5 storage',
+                ['resource' => 'drive_bay_3_5', 'count' => $counts['drive_bay_3_5'], 'capacity' => 0]);
+        }
+        if ($counts['drive_bay_2_5'] > 0 && $bays['drive_bay_2_5'] + $bays['drive_bay_3_5'] === 0) {
+            return new RuleResult($this->id(), $this->severity(), false,
+                'No chassis bay supports drive_bay_2_5 storage',
+                ['resource' => 'drive_bay_2_5', 'count' => $counts['drive_bay_2_5'], 'capacity' => 0]);
+        }
+
+        // One drive, one bay (QA-03, 2026-10-10). The two pools used to be judged
+        // independently, so a 2.5" drive was offered every 3.5" bay even when 3.5"
+        // drives already filled them: 9 x 2.5" + 4 x 3.5" passed in 8 + 4 bays. The
+        // 3.5" drives have nowhere else to go, so they take the 3.5" bays first and
+        // the 2.5" drives get the 2.5" bays plus whatever 3.5" bays are left.
+        $spare35 = max(0, $bays['drive_bay_3_5'] - $counts['drive_bay_3_5']);
+        $capacityFor = [
+            'drive_bay_3_5' => $bays['drive_bay_3_5'],
+            'drive_bay_2_5' => $bays['drive_bay_2_5'] + $spare35,
+        ];
         $overflow = [];
         foreach ($counts as $resource => $count) {
-            if ($count === 0) {
-                continue;
-            }
-            $capacity = 0;
-            foreach ($eligible[$resource] as $pool) {
-                foreach ($state->byResource($pool) as $row) {
-                    $capacity += (int)$row['capacity'];
-                }
-            }
-            // Legacy's only blocking condition: no bay of any eligible type exists.
-            if ($capacity === 0) {
-                return new RuleResult($this->id(), $this->severity(), false,
-                    "No chassis bay supports $resource storage",
-                    ['resource' => $resource, 'count' => $count, 'capacity' => 0]);
-            }
-            if ($count > $capacity) {
-                $overflow[] = ['resource' => $resource, 'count' => $count, 'capacity' => $capacity];
+            if ($count > $capacityFor[$resource]) {
+                $overflow[] = ['resource' => $resource, 'count' => $count, 'capacity' => $capacityFor[$resource]];
             }
         }
 
         if (!empty($overflow)) {
-            // REAL, NON-BLOCKING (2026-09-01). Oversubscription used to be reported as
-            // a PASSING result, and a passing result never reaches
-            // Verdict::failures() -- so the one thing this branch computes was
-            // invisible to warnings(), to the add response, and to the operator. It
-            // now fails at Severity::WARNING: blocking() ignores WARNING under every
-            // trigger, so the legacy-parity posture the 2026-07-25 correction
-            // established is unchanged, but the finding is finally reported.
+            // BLOCKS VALIDATE/FINALIZE, NOT EDITS (QA-03, 2026-10-10). A drive with no
+            // bay cannot be seated, so a build that oversubscribes its bays is not
+            // deployable. VALIDATION_FAILURE keeps the 2026-07-25 legacy-parity
+            // posture for edits -- an ADD is never refused on overflow -- while
+            // validate-config and finalize now refuse. Swept across all 80 live builds
+            // first: none oversubscribes.
             $parts = [];
             foreach ($overflow as $o) {
                 $size = $o['resource'] === 'drive_bay_2_5' ? '2.5"' : '3.5"';
                 $parts[] = "{$o['count']} $size drive(s) against {$o['capacity']} eligible bay(s)";
             }
-            return new RuleResult($this->id(), Severity::WARNING, false,
+            return new RuleResult($this->id(), Severity::VALIDATION_FAILURE, false,
                 'Chassis drive bays are oversubscribed: ' . implode('; ', $parts),
                 [
                     'overflow' => $overflow,

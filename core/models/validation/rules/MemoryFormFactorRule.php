@@ -40,6 +40,10 @@ require_once __DIR__ . '/../../shared/DataNormalizationUtils.php';
  *     (R750xs) runs LRDIMMs today pending an iDRAC check (audit §5); an ERROR
  *     would block every later add on that server. A type neither class
  *     recognises also stays a WARNING rather than being guessed at.
+ *   - MIXING within the registered class (QA-01, 2026-10-10): RDIMMs and LRDIMMs
+ *     in one build. Each module alone is fine, so the per-module checks above
+ *     never saw it, but the set will not run together (Dell R630 memory rules,
+ *     and the same rule on every RDIMM/LRDIMM platform). Judged on the whole set.
  *
  * A board that declares no module_types at all cannot constrain either check, and
  * says so, rather than falling back to a guess.
@@ -110,6 +114,7 @@ final class MemoryFormFactorRule implements RuleInterface
         }
 
         $moduleTypeMismatch = null;
+        $registeredTypes = []; // module type => one ram row id carrying it
 
         foreach ($state->byType('ram') as $ram) {
             $ramSpec = $this->dataUtils->getRAMByUUID($ram['spec_uuid']);
@@ -149,6 +154,10 @@ final class MemoryFormFactorRule implements RuleInterface
                     ]);
             }
 
+            if ($ramClass === 'registered') {
+                $registeredTypes[$ramModuleType] = $registeredTypes[$ramModuleType] ?? $ram['id'];
+            }
+
             // Keep looking for a hard mismatch before reporting a soft one.
             if ($moduleTypeMismatch === null
                 && $ramModuleType !== ''
@@ -163,6 +172,20 @@ final class MemoryFormFactorRule implements RuleInterface
                         . ' module — this board does not accept ' . $ramModuleType . '.',
                 ];
             }
+        }
+
+        if (count($registeredTypes) > 1) {
+            // Mixed registered types (see class docblock). An ERROR: swept across all
+            // 80 live builds on 2026-10-10 first, none carries the mix, so none freezes.
+            $types = array_keys($registeredTypes);
+            return new RuleResult($this->id(), $this->severity(), false,
+                'Memory module types cannot be mixed in one server: ' . implode(' and ', $types) . ' installed together',
+                [
+                    'ram_module_types' => $types,
+                    'ram_ids' => array_values($registeredTypes),
+                    'motherboard_uuid' => $boardUuid,
+                    'recommendation' => 'Use one module type throughout — all ' . $types[0] . ' or all ' . $types[1] . '.',
+                ]);
         }
 
         if ($moduleTypeMismatch !== null) {

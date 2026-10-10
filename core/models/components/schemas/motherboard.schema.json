@@ -45,7 +45,7 @@
         },
         "dedicated_slots": {
             "type": "object",
-            "$comment": "Optional {kind: count} override of card.dedicated_slot's default of one connector per kind, e.g. {\"ocp3\": 2}. Absent everywhere today."
+            "$comment": "{kind: count} of the board's dedicated connectors (card.dedicated_slot), e.g. {\"rndc\": 1, \"mini_perc\": 1}; {} = none. A kind left out is 0 (QA-04, 2026-10-10)."
         },
         "dimensions": {
             "type": "object"

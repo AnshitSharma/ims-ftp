@@ -19,7 +19,8 @@ require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
  * slot_report.php's slotless_card check exclusion) and platform-owned
  * embedded parts (see isPlatformOwned(), added 2026-09-13) and cards whose spec
  * names a dedicated_slot (added 2026-10-07; see DedicatedSlotRule). Rows that already
- * carry a slot_ref (placed via a prior legitimate add) are not re-planned.
+ * carry a slot_ref (placed via a prior legitimate add) are not re-planned, but since
+ * QA-06 (2026-10-10) their slot must exist and hold them alone.
  *
  * Divergence note: this rule judges PLACEMENT FEASIBILITY only — the chosen
  * slot_ref rides in RuleResult::details() for a future command layer (U-C.2)
@@ -73,16 +74,56 @@ final class PcieSlotPlacementRule implements RuleInterface
         // slot_ref NULL, PCIe slot capacity was not enforced at all.
         $planned = [];
 
+        // PLACED cards are judged too (QA-06, 2026-10-10). Every row with a slot_ref
+        // was skipped as "already placed", so two cards persisted in one slot, or a
+        // card in a slot the build no longer has, validated clean. A placed card's
+        // slot must exist among this build's providers and hold that card alone.
+        $held = [];
+        foreach (['nic', 'pciecard', 'risercard', 'hbacard'] as $type) {
+            foreach ($state->byType($type) as $component) {
+                if ($component['slot_ref'] === null || $this->occupiesNoSlot($type, $component)) {
+                    continue;
+                }
+                $spec = $this->specFor($type, $component['spec_uuid']);
+                if (!is_array($spec)) {
+                    continue;
+                }
+                $resource = $this->resourceFor($type, $spec, $component);
+                $slotRef = (string)$component['slot_ref'];
+                $exists = false;
+                foreach ($state->byResource($resource) as $row) {
+                    if ($row['slot_ref'] === $slotRef) {
+                        $exists = true;
+                        break;
+                    }
+                }
+                // Both faults are the rule's ERROR: swept across all 80 live builds on
+                // 2026-10-10 first, none carries either.
+                if (!$exists) {
+                    return new RuleResult($this->id(), $this->severity(), false,
+                        "A $type is recorded in $resource $slotRef, which this build does not have",
+                        ['component_id' => $component['id'], 'component_type' => $type,
+                            'resource' => $resource, 'slot_ref' => $slotRef,
+                            'recommendation' => 'Re-seat the card in a slot this build provides, or restore the riser that provided that slot.']);
+                }
+                $key = $resource . '|' . $slotRef;
+                if (isset($held[$key])) {
+                    return new RuleResult($this->id(), $this->severity(), false,
+                        "Two cards are recorded in $resource $slotRef",
+                        ['component_ids' => [$held[$key], $component['id']], 'resource' => $resource, 'slot_ref' => $slotRef,
+                            'recommendation' => 'Move one of the cards to a free slot.']);
+                }
+                $held[$key] = $component['id'];
+            }
+        }
+
         foreach (['nic', 'pciecard', 'risercard', 'hbacard'] as $type) {
             foreach ($state->byType($type) as $component) {
                 if ($component['slot_ref'] !== null) {
-                    continue; // already placed
+                    continue; // already placed -- judged above
                 }
-                if ($type === 'nic' && strpos((string)$component['spec_uuid'], 'onboard-') === 0) {
-                    continue; // onboard NICs never get a discrete slot
-                }
-                if ($this->isPlatformOwned($component)) {
-                    continue; // bolted into the box -- occupies no expansion slot
+                if ($this->occupiesNoSlot($type, $component)) {
+                    continue;
                 }
 
                 $spec = $this->specFor($type, $component['spec_uuid']);
@@ -93,12 +134,7 @@ final class PcieSlotPlacementRule implements RuleInterface
                     continue; // own connector (rNDC, FlexibleLOM, PERC Mini...) -- card.dedicated_slot owns it
                 }
 
-                // Type is authoritative since the 2026-08-14 split; spec/UUID tests
-                // remain for legacy pciecard rows still labelled as risers.
-                $isRiser = $type === 'risercard'
-                    || ($spec['component_subtype'] ?? null) === 'Riser Card'
-                    || strpos((string)$component['spec_uuid'], 'riser-') === 0;
-                $resource = $isRiser ? 'riser_slot' : 'pcie_slot';
+                $resource = $this->resourceFor($type, $spec, $component);
                 $width = SlotPlanner::extractCardWidth($spec);
 
                 $exclude = $planned[$resource] ?? [];
@@ -112,7 +148,27 @@ final class PcieSlotPlacementRule implements RuleInterface
             }
         }
 
-        return new RuleResult($this->id(), $this->severity(), true, 'All unplaced cards have a feasible slot');
+        return new RuleResult($this->id(), $this->severity(), true, 'All cards have a slot of their own');
+    }
+
+    /** Onboard NICs and platform-owned parts never take an expansion slot. */
+    private function occupiesNoSlot(string $type, array $component): bool
+    {
+        return ($type === 'nic' && strpos((string)$component['spec_uuid'], 'onboard-') === 0)
+            || $this->isPlatformOwned($component);
+    }
+
+    /**
+     * riser_slot for a riser, pcie_slot for every other card. Type is authoritative
+     * since the 2026-08-14 split; spec/UUID tests remain for legacy pciecard rows
+     * still labelled as risers.
+     */
+    private function resourceFor(string $type, array $spec, array $component): string
+    {
+        $isRiser = $type === 'risercard'
+            || ($spec['component_subtype'] ?? null) === 'Riser Card'
+            || strpos((string)$component['spec_uuid'], 'riser-') === 0;
+        return $isRiser ? 'riser_slot' : 'pcie_slot';
     }
 
     /**

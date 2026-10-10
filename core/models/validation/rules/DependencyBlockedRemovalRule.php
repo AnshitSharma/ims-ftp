@@ -35,6 +35,10 @@ require_once __DIR__ . '/../Trigger.php';
  *      chassis are enforced singletons (system.singleton, U-R.7), "no
  *      provider type left" unambiguously means "the one that existed was
  *      just removed" for those two anchor types.
+ *   3. STRANDED BY CAPACITY (QA-09, 2026-10-10): the removed row provided M.2
+ *      slots or PCIe/riser slots that remaining rows still need -- see
+ *      strandedByRemoval(). withRemove() now hands the removed rows over, so
+ *      this one does look at what changed.
  *
  * DOCUMENTED SIMPLIFICATION (flagged, not hidden): mechanism 2 is type-level
  * presence, not per-row attachment. storage->hbacard|backplane|motherboard
@@ -124,6 +128,11 @@ final class DependencyBlockedRemovalRule implements RuleInterface
             }
         }
 
+        // Mechanism 3: capacity the removed row provided that something still uses.
+        foreach ($this->strandedByRemoval($state) as $row) {
+            $dependents[] = $row;
+        }
+
         if (!empty($dependents)) {
             // de-duplicate (a row could match both mechanisms in principle)
             $byId = [];
@@ -143,6 +152,76 @@ final class DependencyBlockedRemovalRule implements RuleInterface
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'No dependents block this removal');
+    }
+
+    /**
+     * Mechanism 3 (QA-09, 2026-10-10): rows left without the capacity the removal took.
+     *
+     * Mechanism 2 asks only whether ANY provider TYPE survives, so removing a four-slot
+     * M.2 adapter passed while four M.2 drives stayed behind (a motherboard was still
+     * present), and removing a riser passed while a NIC sat in the slot it provided.
+     * Keyed on what the removed row itself provided (TargetState::removedProvision()),
+     * so a build that is short of capacity for some other reason never blocks the
+     * removal of an unrelated part -- or of the drives that would fix it.
+     *
+     * @return array[] the stranded rows
+     */
+    private function strandedByRemoval(TargetState $state): array
+    {
+        $takenM2 = 0;
+        $takenSlots = [];
+        foreach ($state->removedProvision() as $p) {
+            if ($p['resource'] === 'm2_slot') {
+                $takenM2 += (int)$p['capacity'];
+            } elseif (in_array($p['resource'], ['pcie_slot', 'riser_slot'], true) && $p['slot_ref'] !== null) {
+                $takenSlots[$p['slot_ref']] = true;
+            }
+        }
+
+        $stranded = [];
+        if ($takenSlots) {
+            foreach ($state->byResource('pcie_slot') as $row) {
+                unset($takenSlots[$row['slot_ref']]); // still provided by something that stays
+            }
+            foreach ($state->byResource('riser_slot') as $row) {
+                unset($takenSlots[$row['slot_ref']]);
+            }
+            foreach ($state->components() as $c) {
+                if ($c['slot_ref'] !== null && isset($takenSlots[$c['slot_ref']])
+                    && in_array($c['component_type'], ['nic', 'pciecard', 'hbacard', 'risercard'], true)) {
+                    $stranded[] = $c;
+                }
+            }
+        }
+
+        if ($takenM2 > 0) {
+            $m2Drives = [];
+            foreach ($state->byType('storage') as $storage) {
+                $spec = self::dataUtils()->getStorageByUUID($storage['spec_uuid']);
+                $formFactor = strtolower((string)(is_array($spec) ? ($spec['form_factor'] ?? '') : ''));
+                if (strpos($formFactor, 'm.2') !== false || strpos($formFactor, 'm2') !== false) {
+                    $m2Drives[] = $storage;
+                }
+            }
+            $capacity = 0;
+            foreach ($state->byResource('m2_slot') as $row) {
+                $capacity += (int)$row['capacity'];
+            }
+            if (count($m2Drives) > $capacity) {
+                foreach ($m2Drives as $drive) {
+                    $stranded[] = $drive;
+                }
+            }
+        }
+
+        return $stranded;
+    }
+
+    private static function dataUtils(): DataExtractionUtilities
+    {
+        require_once __DIR__ . '/../../shared/DataExtractionUtilities.php';
+        static $dataUtils = null;
+        return $dataUtils = $dataUtils ?? new DataExtractionUtilities();
     }
 
     /**

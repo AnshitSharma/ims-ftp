@@ -944,6 +944,13 @@ function handleAddComponent($serverBuilder, $user) {
                 $commandResult = $addCommand->execute();
             }
             $result = ['success' => true, 'slot_position' => null, 'revision' => $commandResult->revision];
+            // QA-10 (2026-10-10): the verdict the add passed carries every non-blocking
+            // finding (a downclock, an oversubscribed bay, an unpathed SAS drive), but
+            // nothing ever read it here, so a successful add reported none of them.
+            // A successful verdict is non-blocking, so every failure on it is advisory.
+            foreach ($commandResult->verdict->failures() as $finding) {
+                $validationWarnings[] = $finding->message();
+            }
         } catch (CommandFailed $commandFailure) {
             if ($commandFailure->errorType === 'revision_mismatch') {
                 $stmt = $pdo->prepare('SELECT revision FROM server_configurations WHERE config_uuid = ?');
@@ -1112,9 +1119,10 @@ function handleAddComponent($serverBuilder, $user) {
                 }
             }
 
-            // Add validation results
-            if (isset($validationWarnings) && !empty($validationWarnings)) {
-                $responseData['validation_warnings'] = $validationWarnings;
+            // `warnings` is the key the builder's add path reads (configuration.js);
+            // nothing ever read the old `validation_warnings` spelling.
+            if (!empty($validationWarnings)) {
+                $responseData['warnings'] = array_values(array_unique($validationWarnings));
             }
 
             // Log the component addition
@@ -1461,9 +1469,7 @@ function handleGetConfiguration($serverBuilder, $user) {
             send_json_response(0, 1, 500, "Failed to retrieve configuration: " . $details['error']);
         }
         
-        // Use validation results from database
         $configuration = $details['configuration'];
-        $validationResults = $configuration['validation_results'] ?? [];
         // $individualComponentChecks and $configurationValid were computed here and
         // never read by anything. Removed 2026-09-01.
 
@@ -1491,12 +1497,11 @@ function handleGetConfiguration($serverBuilder, $user) {
         // Get unified network configuration
         $networkConfig = $serverBuilder->getNetworkConfiguration($configUuid);
 
-        // Get configuration warnings
-        // U-D.2: the advisory warning list now comes from the ValidationEngine
-        // registry, the same rules every write path is judged by, instead of
-        // ServerBuilder's own parallel M.2/caddy/required-set logic.
+        // Validity, errors and warnings from one evaluation of the build as it is now
+        // (QA-12). U-D.2: from the ValidationEngine registry, the same rules every
+        // write path is judged by.
         require_once __DIR__ . '/../../../core/models/validation/ValidateConfigService.php';
-        $configWarnings = ValidateConfigService::warnings($pdo, $configUuid);
+        $currentValidation = ValidateConfigService::current($pdo, $configUuid);
 
         // Get storage connectivity tracking
         $storageConnectivity = $serverBuilder->getStorageConnectivity($configUuid, $details['components'] ?? []);
@@ -1575,21 +1580,8 @@ function handleGetConfiguration($serverBuilder, $user) {
                 'motherboard_spec' => $motherboardSpec
             ],
             'component_options' => $componentOptions,
-            'validation' => [
-                // Was `!empty($validationResults)`, which is TRUE whenever validation
-                // has EVER run, whatever it concluded -- so an INVALID configuration
-                // reported is_valid: true to every consumer of this endpoint. Read the
-                // stored verdict itself. null means "never validated", which is a
-                // different fact from both "valid" and "invalid".
-                'is_valid' => is_array($validationResults) && array_key_exists('valid', $validationResults)
-                    ? (bool)$validationResults['valid']
-                    : null,
-                'last_validated' => $configuration['updated_at'] ?? $configuration['created_at'],
-                'warnings' => $configWarnings,
-                'errors' => is_array($validationResults) && !empty($validationResults['errors'])
-                    ? array_values($validationResults['errors'])
-                    : []
-            ]
+            // Current, never stored: see ValidateConfigService::current().
+            'validation' => $currentValidation
         ]);
         
     } catch (Exception $e) {

@@ -137,6 +137,17 @@ final class StorageInterfacePathRule implements RuleInterface
         $subject = $state->subject();
         if ($subject !== null) {
             $unpathed = $this->unpathedCount($state, $hasSasHba, $sasBackplane);
+            $nvmeUnpathed = count($this->unpathedNvme($state));
+            if ($unpathed === 0 && $nvmeUnpathed > 0) {
+                // Same posture as SAS below: told on every add, judged at validate.
+                return new RuleResult($this->id(), Severity::WARNING, false,
+                    self::nvmeMessage($nvmeUnpathed) . ' yet',
+                    [
+                        'deferred_unpathed_nvme' => $nvmeUnpathed,
+                        'subject_type' => $subject['component_type'] ?? null,
+                        'recommendation' => self::NVME_RECOMMENDATION . ' This is not enforced until validate/finalize.',
+                    ]);
+            }
             if ($unpathed === 0) {
                 return new RuleResult($this->id(), $this->severity(), true,
                     'Storage connection paths are judged at validate/finalize, not per add (legacy parity)');
@@ -191,7 +202,29 @@ final class StorageInterfacePathRule implements RuleInterface
                 ['storage_id' => $storage['id'], 'interface' => $interface]);
         }
 
+        // NVMe after SAS, so a SAS failure is never masked (QA-07). The rule's ERROR at
+        // validate/finalize: swept across all 80 live builds on 2026-10-10 first, none
+        // holds an NVMe drive without a path.
+        $nvme = $this->unpathedNvme($state);
+        if (!empty($nvme)) {
+            return new RuleResult($this->id(), $this->severity(), false,
+                self::nvmeMessage(count($nvme)),
+                [
+                    'storage_ids' => array_column($nvme, 'id'),
+                    'recommendation' => self::NVME_RECOMMENDATION,
+                ]);
+        }
+
         return new RuleResult($this->id(), $this->severity(), true, 'All storage has a viable connection path');
+    }
+
+    const NVME_RECOMMENDATION = 'Use a chassis whose backplane supports NVMe, a board with U.2 ports, '
+        . 'or add a tri-mode HBA or U.2 adapter card.';
+
+    private static function nvmeMessage(int $count): string
+    {
+        return ($count === 1 ? '1 NVMe drive has' : "$count NVMe drives have")
+            . ' no connection path (no NVMe backplane, U.2 port or NVMe-capable controller)';
     }
 
     /**
@@ -267,6 +300,76 @@ final class StorageInterfacePathRule implements RuleInterface
         }
 
         return null;
+    }
+
+    /**
+     * NVMe drives (U.2/U.3, not M.2) that have no way to reach the host (QA-07,
+     * 2026-10-10). This rule judged SAS only, so a U.2 drive in a build with no
+     * NVMe backplane, no U.2 port and no tri-mode controller validated as having
+     * "a viable connection path" while get-config's connectivity said not_connected.
+     *
+     * A path is any of: a controller that speaks NVMe (an HBA whose protocol names
+     * it, as tri-mode cards do, or a PCIe card declaring support_u2), U.2 ports on
+     * the board (storage.nvme.u2_slots.count), or -- for a drive that sits in a bay
+     * -- a backplane with supports_nvme. M.2 is storage.m2_capacity's job.
+     *
+     * @return array[] the storage rows with no NVMe path
+     */
+    private function unpathedNvme(TargetState $state): array
+    {
+        $drives = [];
+        foreach ($state->byType('storage') as $storage) {
+            $spec = $this->dataUtils->getStorageByUUID($storage['spec_uuid']);
+            if (!is_array($spec)) {
+                continue;
+            }
+            $formFactor = strtolower((string)($spec['form_factor'] ?? ''));
+            if (stripos((string)($spec['interface'] ?? ''), 'nvme') === false
+                || strpos($formFactor, 'm.2') !== false) {
+                continue;
+            }
+            $drives[] = ['row' => $storage, 'uses_bays' => $this->usesChassisBays($formFactor)];
+        }
+        if (empty($drives)) {
+            return [];
+        }
+
+        foreach ($state->byType('hbacard') as $hba) {
+            $spec = $this->dataUtils->getHBACardByUUID($hba['spec_uuid']);
+            if (is_array($spec) && stripos((string)($spec['protocol'] ?? ''), 'nvme') !== false) {
+                return [];
+            }
+        }
+        foreach ($state->byType('pciecard') as $card) {
+            $spec = $this->dataUtils->getPCIeCardByUUID($card['spec_uuid']);
+            if (is_array($spec) && !empty($spec['support_u2'])) {
+                return [];
+            }
+        }
+        foreach ($state->byType('motherboard') as $board) {
+            $spec = $this->dataUtils->getMotherboardByUUID($board['spec_uuid']);
+            $u2 = is_array($spec) ? ($spec['storage']['nvme']['u2_slots']['count'] ?? 0) : 0;
+            if (is_numeric($u2) && (int)$u2 > 0) {
+                return [];
+            }
+        }
+
+        $nvmeBackplane = false;
+        foreach ($state->byType('chassis') as $chassis) {
+            $spec = $this->dataUtils->getChassisSpecifications($chassis['spec_uuid']);
+            if (is_array($spec) && !empty($spec['backplane']['supports_nvme'])) {
+                $nvmeBackplane = true;
+                break;
+            }
+        }
+
+        $unpathed = [];
+        foreach ($drives as $drive) {
+            if (!($nvmeBackplane && $drive['uses_bays'])) {
+                $unpathed[] = $drive['row'];
+            }
+        }
+        return $unpathed;
     }
 
     /**

@@ -84,8 +84,18 @@ final class NetSfpPortRule implements RuleInterface
                 $portsSeenPerParent[$key] = true;
             }
 
-            $nicSpec = $this->dataUtils->getNICByUUID($parentNic['spec_uuid']);
+            // An onboard port has no NIC catalog entry: its "onboard-…" uuid always
+            // missed getNICByUUID(), so every check below was skipped and an optical
+            // module passed on a copper LOM (QA-05). Its ports and connector come from
+            // the board in this state instead, the same source providesOnboardNic() uses.
+            $isOnboard = strpos((string)$parentNic['spec_uuid'], 'onboard-') === 0;
+            $nicSpec = $isOnboard
+                ? $this->onboardNicSpec($state, (string)$parentNic['spec_uuid'])
+                : $this->dataUtils->getNICByUUID($parentNic['spec_uuid']);
             $sfpSpec = $this->dataUtils->getSFPByUUID($sfp['spec_uuid']);
+            // Onboard ports are judged at the rule's ERROR: swept across all 80 live
+            // builds on 2026-10-10 first, none holds a module an onboard port refuses.
+            $failSeverity = $this->severity();
 
             // The port INDEX must exist on this NIC. Occupancy alone never checked
             // that: replacing an 8-port NIC with a 4-port one left the modules on
@@ -98,7 +108,7 @@ final class NetSfpPortRule implements RuleInterface
                 if (preg_match('/^(?:port_)?(\d+)$/i', (string)$sfp['slot_ref'], $m)) {
                     $portIndex = (int)$m[1];
                     if ($portIndex < 1 || $portIndex > $portCount) {
-                        return new RuleResult($this->id(), $this->severity(), false,
+                        return new RuleResult($this->id(), $failSeverity, false,
                             "Port {$sfp['slot_ref']} does not exist on NIC {$parentNic['id']}, which has $portCount port(s)",
                             ['sfp_id' => $sfp['id'], 'nic_id' => $parentNic['id'],
                                 'port' => $sfp['slot_ref'], 'nic_port_count' => $portCount]);
@@ -143,13 +153,54 @@ final class NetSfpPortRule implements RuleInterface
                 continue;
             }
 
-            if (!NICPortTracker::isCompatible($nicPortType, $sfpType)) {
-                return new RuleResult($this->id(), $this->severity(), false,
-                    "SFP module type '$sfpType' is incompatible with NIC port type '$nicPortType'",
-                    ['sfp_id' => $sfp['id'], 'nic_id' => $parentNic['id'], 'sfp_type' => $sfpType, 'nic_port_type' => $nicPortType]);
+            // A combo connector ("SFP28 / RJ45", "KR / SFP+") names the cages the port
+            // may be built with; the module fits if any of them takes it. Passed whole,
+            // isCompatible() refused every combo because the string contains "RJ45".
+            $accepted = false;
+            foreach (explode('/', (string)$nicPortType) as $cage) {
+                if (trim($cage) !== '' && NICPortTracker::isCompatible($cage, $sfpType)) {
+                    $accepted = true;
+                    break;
+                }
+            }
+            if (!$accepted) {
+                return new RuleResult($this->id(), $failSeverity, false,
+                    "SFP module type '$sfpType' is incompatible with "
+                    . ($isOnboard ? 'onboard ' : '') . "NIC port type '$nicPortType'",
+                    ['sfp_id' => $sfp['id'], 'nic_id' => $parentNic['id'], 'sfp_type' => $sfpType, 'nic_port_type' => $nicPortType,
+                        'recommendation' => 'Move the module to a NIC with an SFP cage that accepts ' . $sfpType . '.']);
             }
         }
 
         return new RuleResult($this->id(), $this->severity(), true, 'All SFP ports valid');
+    }
+
+    /**
+     * {ports, port_type} for an onboard port, from networking.onboard_nics[n-1] of the
+     * board in this state whose spec uuid the onboard uuid names. Null when it cannot
+     * be resolved, which leaves the module unjudged exactly as before.
+     */
+    private function onboardNicSpec(TargetState $state, string $onboardUuid): ?array
+    {
+        require_once __DIR__ . '/../../config/ResourceCatalog.php';
+        $parsed = ResourceCatalog::parseOnboardNicUuid($onboardUuid);
+        if ($parsed === null) {
+            return null;
+        }
+        foreach ($state->byType('motherboard') as $board) {
+            if (stripos((string)$board['spec_uuid'], (string)$parsed['board_prefix']) !== 0) {
+                continue;
+            }
+            $spec = $this->dataUtils->getMotherboardByUUID($board['spec_uuid']);
+            $entry = is_array($spec) ? ($spec['networking']['onboard_nics'][$parsed['index'] - 1] ?? null) : null;
+            if (!is_array($entry)) {
+                return null;
+            }
+            return [
+                'ports' => $entry['ports'] ?? null,
+                'port_type' => $entry['port_type'] ?? $entry['connector'] ?? null,
+            ];
+        }
+        return null;
     }
 }

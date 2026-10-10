@@ -84,10 +84,16 @@ final class TargetStateBuilder
             }
         }
 
-        $remaining = array_values(array_filter($state->components(), function ($c) use ($toRemove) {
-            return !isset($toRemove[$c['id']]);
-        }));
-        return new TargetState($remaining);
+        $remaining = [];
+        $removed = [];
+        foreach ($state->components() as $c) {
+            if (isset($toRemove[$c['id']])) {
+                $removed[] = $c;
+            } else {
+                $remaining[] = $c;
+            }
+        }
+        return new TargetState($remaining, null, null, $removed);
     }
 
     /**

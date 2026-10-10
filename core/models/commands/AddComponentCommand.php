@@ -284,11 +284,35 @@ final class AddComponentCommand extends BaseCommand
         }
 
         $plan = $this->planSlot($current);
-        // A plan failure (no free slot / unknown width) leaves slot_ref null;
+        // QA-06 (2026-10-10): a slot the caller NAMED that cannot be honoured is
+        // refused. It used to become null like any failed plan, the rule then found
+        // the card some other slot and passed, and the response echoed the bogus
+        // slot back while the card was persisted with none at all.
+        if (!$plan['ok'] && $this->requestedSlotRef() !== null) {
+            throw new CommandFailed('invalid_slot', $plan['error'], 422);
+        }
+        // Any other plan failure (no free slot / unknown width) leaves slot_ref null;
         // PcieSlotPlacementRule (U-R.3) judges that as infeasible and blocks
         // the trigger via the SAME registry evaluate() every rule runs
         // through — this command does not duplicate that judgment.
         return $plan['ok'] ? $plan['slot_ref'] : null;
+    }
+
+    /**
+     * The slot the caller asked for, when it names one in the engine's own slot-ref
+     * shape (pcie_2_x16, riser_1_x16, riser_<row>_pcie_1_x8). Anything else is not a
+     * slot request: the frontend sends '' by default, and a Request's free-text
+     * "slot position" ("Slot 2") is a label for the technician, not a ledger key.
+     * Those are placed automatically, as they always effectively were.
+     */
+    private function requestedSlotRef(): ?string
+    {
+        $manual = $this->options['slot_position'] ?? null;
+        if (!is_string($manual)) {
+            return null;
+        }
+        $manual = trim($manual);
+        return preg_match('/^(?:pcie|riser)_[a-z0-9_]*_x\d+$/i', $manual) ? $manual : null;
     }
 
     /**
@@ -601,14 +625,8 @@ final class AddComponentCommand extends BaseCommand
         // NULL, and PcieSlotPlacementRule then re-planned the card and passed it.
         // Result: every PCIe card in production carries slot_ref NULL, the slot
         // occupancy key never fires, and slot capacity is not enforced at all.
-        $manual = $this->options['slot_position'] ?? null;
-        if (is_string($manual)) {
-            $manual = trim($manual);
-        }
-        if ($manual === '' || $manual === false) {
-            $manual = null;
-        }
-
-        return SlotPlanner::plan($current, $resource, $width, $manual);
+        // requestedSlotRef() now also treats a free-text label as no request, so a
+        // card added with one is placed and persisted instead of left slotless.
+        return SlotPlanner::plan($current, $resource, $width, $this->requestedSlotRef());
     }
 }

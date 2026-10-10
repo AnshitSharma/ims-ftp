@@ -36,6 +36,8 @@ final class TargetState
     private $catalog;
     /** @var int|string|null id of the component this operation is ABOUT, if any */
     private $subjectId;
+    /** @var array[] rows a removal took out of the state this one was derived from */
+    private $removed;
 
     /**
      * @param array[] $components normalized component row tuples (see class docblock)
@@ -43,12 +45,48 @@ final class TargetState
      *        (TargetStateBuilder::withAdd/withReplace set it). Null means "no single
      *        subject": a fromCurrent() snapshot, a finalize-time VALIDATE, or a
      *        removal, whose post-state no longer contains the row that changed.
+     * @param array[] $removed the rows a removal took out (TargetStateBuilder::withRemove),
+     *        so a rule can ask what the removal took away. Empty everywhere else.
      */
-    public function __construct(array $components, ?ResourceCatalog $catalog = null, $subjectId = null)
+    public function __construct(array $components, ?ResourceCatalog $catalog = null, $subjectId = null, array $removed = [])
     {
         $this->components = array_values($components);
         $this->catalog = $catalog ?? new ResourceCatalog();
         $this->subjectId = $subjectId;
+        $this->removed = array_values($removed);
+    }
+
+    /** @return array[] rows the removal that produced this state took out; [] otherwise */
+    public function removed(): array
+    {
+        return $this->removed;
+    }
+
+    /**
+     * Resource rows the removed components were providing -- what the removal took
+     * away. Same catalog call resources() makes; a removed row whose spec no longer
+     * resolves provided nothing we can name, so it contributes no rows.
+     *
+     * @return array[] {resource, slot_ref, capacity, owner_component_id}
+     */
+    public function removedProvision(): array
+    {
+        $rows = [];
+        foreach ($this->removed as $c) {
+            if ($c['component_type'] === 'nic' && ResourceCatalog::isOnboardNicUuid((string)$c['spec_uuid'])) {
+                continue;
+            }
+            try {
+                $provided = $this->catalog->provides($c['component_type'], $c['spec_uuid'], $c['id']);
+            } catch (\Throwable $e) {
+                continue;
+            }
+            foreach ($provided as $p) {
+                $rows[] = ['resource' => $p['resource'], 'slot_ref' => $p['slot_ref'],
+                    'capacity' => $p['capacity'], 'owner_component_id' => $c['id']];
+            }
+        }
+        return $rows;
     }
 
     /** @return array[] */

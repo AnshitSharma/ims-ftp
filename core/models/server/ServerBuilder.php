@@ -2184,6 +2184,16 @@ class ServerBuilder {
                 if (method_exists('NICPortTracker', 'sfpPortIndexes')) {
                     $sfpPorts = NICPortTracker::sfpPortIndexes($portSpec);
                 }
+            } else {
+                // A card that is copper and nothing else has no cage at all (QA-05): an
+                // onboard BCM5720 was offered as the home for an optical module. Only a
+                // pure RJ45 cage is ruled out here; combos ("SFP+ / RJ45") and cages
+                // the matrix does not list keep every port, as before.
+                $cage = strtoupper(trim((string)($portSpec['port_type'] ?? $portSpec['connector'] ?? '')));
+                if (strpos($cage, '/') === false
+                    && (strpos($cage, 'RJ45') !== false || strpos($cage, 'RJ-45') !== false)) {
+                    $sfpPorts = [];
+                }
             }
 
             if ($portCount < 1) {

@@ -14,7 +14,7 @@ require_once __DIR__ . '/Verdict.php';
  * Replaces the two legacy ServerBuilder methods that P9 deleted:
  *
  *   validateConfigurationComprehensive()  ->  evaluate()   (server-validate-config)
- *   getConfigurationWarnings()            ->  warnings()   (server-get-config)
+ *   getConfigurationWarnings()            ->  current()    (server-get-config)
  *
  * Both were ~500 lines of hand-rolled per-type checks that duplicated, and
  * sometimes contradicted, the registry every WRITE path already evaluates
@@ -88,25 +88,66 @@ final class ValidateConfigService
     }
 
     /**
-     * The advisory warning list `server-get-config` renders beside a build.
-     *
-     * Keeps legacy getConfigurationWarnings()' element shape
-     * ({type, severity, message, recommendation}) so the response contract is
-     * unchanged, but sources every entry from a rule rather than from the
-     * duplicated M.2 / caddy / required-set logic the old method carried —
-     * logic the registry already owns as storage.m2_capacity,
-     * storage.caddy_pairing and system.required_set.
-     *
-     * `type` is the registry rule id, which is a stable identifier; the legacy
-     * ad-hoc slugs ('m2_slots_exceeded', 'missing_component') were not.
+     * Kept for workers still running cached bytecode of the pre-QA-12 get-config,
+     * which called this. Removing it on 2026-10-10 produced intermittent 500s while
+     * that bytecode lingered. Delete only once no caller can be running the old file.
      *
      * @return array[] each {type, severity, message, recommendation}
      */
     public static function warnings(PDO $pdo, string $configUuid): array
     {
+        return self::current($pdo, $configUuid)['warnings'];
+    }
+
+    /**
+     * The `validation` block `server-get-config` returns: validity, errors and the
+     * warning list, all from ONE evaluation of the configuration as it is now.
+     *
+     * QA-12 (2026-10-10): get-config used to evaluate the engine for `warnings` but
+     * take `is_valid` and `errors` from the stored `validation_results`, which only
+     * `server-validate-config` writes. After a corrective edit the response said
+     * invalid and repeated an error the build no longer had, beside a warning list
+     * that had already moved on. `last_validated` was the config's updated_at, a
+     * mutation time rather than an evaluation time.
+     *
+     * Same engine pass get-config already paid for, so this costs nothing extra.
+     * The stored column is still written by validate-config; nothing reads it here.
+     *
+     * @return array{is_valid:bool, last_validated:string, warnings:array[], errors:string[]}
+     */
+    public static function current(PDO $pdo, string $configUuid): array
+    {
         $state = TargetStateBuilder::fromCurrent($pdo, $configUuid);
         $verdict = (new ValidationEngine())->evaluate($state, Trigger::VALIDATE);
 
+        $errors = [];
+        foreach ($verdict->failures() as $result) {
+            if ($result->severity() !== Severity::WARNING) {
+                $errors[] = $result->message();
+            }
+        }
+
+        return [
+            'is_valid'       => !$verdict->blocking(),
+            'last_validated' => date('Y-m-d H:i:s'),
+            'warnings'       => self::warningEntries($verdict),
+            'errors'         => $errors,
+        ];
+    }
+
+    /**
+     * The finding list `server-get-config` renders beside a build, every failed
+     * result including the blocking ones.
+     *
+     * Keeps legacy getConfigurationWarnings()' element shape
+     * ({type, severity, message, recommendation}) so the response contract is
+     * unchanged. `type` is the registry rule id, which is a stable identifier; the
+     * legacy ad-hoc slugs ('m2_slots_exceeded', 'missing_component') were not.
+     *
+     * @return array[] each {type, severity, message, recommendation}
+     */
+    private static function warningEntries(Verdict $verdict): array
+    {
         $out = [];
         foreach ($verdict->failures() as $result) {
             $details = $result->details();
