@@ -149,8 +149,13 @@ class SpecValidator
             }
         }
 
+        // json_decode(..., true) turns {} into [], so an empty array is an empty object
+        // wherever the schema expects one -- `"dedicated_slots": {}` is not a list.
+        $isObject = is_array($value) && (!self::isList($value)
+            || ($value === [] && in_array('object', (array)($schema['type'] ?? []), true)));
+
         // -- arrays -------------------------------------------------------------------------
-        if (self::isList($value)) {
+        if (self::isList($value) && !$isObject) {
             if (isset($schema['minItems']) && count($value) < $schema['minItems']) {
                 $errors[] = $where . 'has ' . count($value) . ' items, needs ' . $schema['minItems'];
             }
@@ -162,7 +167,7 @@ class SpecValidator
         }
 
         // -- objects ------------------------------------------------------------------------
-        if (is_array($value) && !self::isList($value)) {
+        if ($isObject) {
             foreach ($schema['required'] ?? [] as $key) {
                 if (!array_key_exists($key, $value)) {
                     $errors[] = $where . "missing required key '$key'";
@@ -201,7 +206,7 @@ class SpecValidator
                 case 'integer': if (is_int($value)) return true; break;
                 case 'number':  if (is_int($value) || is_float($value)) return true; break;
                 case 'array':   if (self::isList($value)) return true; break;
-                case 'object':  if (is_array($value) && !self::isList($value)) return true; break;
+                case 'object':  if (is_array($value) && ($value === [] || !self::isList($value))) return true; break;
             }
         }
         return false;
