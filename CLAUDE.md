@@ -221,79 +221,30 @@ be the same deploy, because there is no safe intermediate state once a resolver 
 `php` isn't on PATH; XAMPP's is at `/c/xampp/php/php.exe`. Lint changed files with `php -l`
 before they auto-upload — a syntax error here is a live 500.
 
-- `php tests/run_tests.php` — full suite (55 discovered, including `tests/` root files as of
-  2026-08-30 — BACKLOG §B-17), needs real MariaDB on a pristine datadir. 52 passed / 0 failed /
-  3 ran nothing as of 2026-08-30, against a database with the nine columns already dropped —
-  which is the shape production is in now.
-- `tests/regression/component_delete_guard_test.php` — pins the `deleteComponent()` in-use guard
-  (BACKLOG §B-16). Needs **no** database; it drives recording PDO fakes.
-- `tests/fixture_scenarios_real.php` — **DISABLED**, exits 2 (`NOT_A_SUITE`, not swept). Both its
-  subjects are gone: P9 deleted the three validate* methods it drives, and U-D.3c dropped the
-  columns its fixtures insert. Its R1–R10 scenario table is kept because the rule unit tests
-  cite its UUIDs.
-- `tests/lane_authority_unit.php`, `tests/nic_sfp_authority_unit.php`,
-  `tests/storage_bay_authority_unit.php`, `tests/state_machine_unit.php`,
-  `tests/getDashboardDataShapeTest.php` — the `tests/` root suites `run_tests.php` now discovers
-  (label `root`). `state_machine_unit.php` refuses to run unless its DB name contains `scratch`
-  and none of `golden`/`compat`/`prod` — it unconditionally DROPs whatever database it is given.
-- `tests/characterize_compatibility.php` — golden master over real `server_configurations` rows
-  into `tests/golden/`. **Permanently unusable as a parity gate, not just currently**: P9/U-D.3a
-  deleted all four methods it characterises (`validateConfiguration`,
-  `validateConfigurationEnhanced`, `extractComponentsFromJson`, `validateComponentAddition`), and
-  this is independent of data source — confirmed 2026-08-30 that even a from-scratch local clone
-  with every seeder replayed still records "Call to undefined method" for every configuration
-  (BACKLOG B-4, closed SUPERSEDED). The checked-in `compatibility_baseline.json` is a pre-P9
-  artefact (12 configs, not 18) and **must not be regenerated** — a `DO NOT RUN` banner sits at
-  the top of the file. Rewriting it against `ValidationEngine` is logged as new work (BACKLOG
-  B-18), out of migration scope.
-- `scripts/audit-orphans.php` — orphaned-record audit, and the only thing that checks a
-  configuration's claims against real inventory rows. Reads `config_components` since
-  U-D.3c, so it resolves each claim to ONE unit by `inventory_id` instead of sampling any
-  unit of the model — which is how it found config `1f61541b` claiming `sfpinventory` ID 99,
-  a row that no longer exists. `tests/backfill/` is empty on purpose; see its README.
+Four tests are left; none needs a database. There is no suite runner — run each directly.
 
-## Deeper reference (local-only, never deployed)
+- `tests/catalogue_uuid_gate.php` — every catalogue UUID is unique (or allow-listed) and all
+  13 spec files were read; exit 1 otherwise.
+- `tests/nic_port_layout_unit.php` — `NICPortTracker` per-port cages for mixed SFP/RJ45 cards.
+- `tests/cable_catalogue_check.php [path]` — the cable catalogue. `ims-data/cable/` doesn't
+  exist yet, so it exits 2 today.
+- `tests/spec_repository_equivalence.php` — `SpecRepository` returns what
+  `ComponentDataService` returns; exit 1 on any difference.
 
-`BACKLOG.md`, `database/seeders/*.sql` as schema history, and `docs/`:
+## Deleted tooling (history only)
 
-| File | What it is |
-|---|---|
-| `ARCHITECTURE.md`, `OPERATIONS.md` | written 2026-08-24, every claim `file:line` cited |
-| `ARCHITECTURAL_INVARIANTS.md` | INV-1..INV-12. **Executable** — `scripts/ci/inv_extract.php` parses its CHECK blocks verbatim, so editing it changes what the gate enforces with no code change |
-| `RULE_MAP.md` | which validation rule implements which unit; cited by ~30 files, including every rule class |
-| `API-DEPRECATION.md` | the documented add/remove deviation; read at run time by `tests/api/add_remove_response_shape_test.php` |
-| `PERF-BASELINE-REBLESS.md` | the quiet-machine capture procedure `performance_report.php --rebless` points the operator at |
-| `PLAN_VERIFICATION_REVIEW.md` | F-5 (virtual configs excluded) and friends, cited by `audit-orphans.php` and `inventory_report.php` |
-| `FINDING-20260824-replaceOnboardNIC-not-superseded.md` | the whole content of BACKLOG C-5, which is still OPEN |
-
-Where a doc contradicts the code, the code wins; flag the stale doc.
+`docs/`, `scripts/`, `reports/`, `BACKLOG.md` and every other suite under `tests/` were deleted
+on 2026-09-08 (commit 09551e7, "cleaning"): the architecture/operations docs, `RULE_MAP.md`,
+the INV-n invariants and their gate, `scripts/verify/run_all.php` and the nightly battery,
+`audit-orphans.php`, `tests/run_tests.php` and the unit, regression and golden suites. Schema
+history lives in `database/seeders/*.sql`. `git show 09551e7^:<path>` prints any deleted file.
+Code comments still cite them (`BACKLOG §B-16`, `RULE_MAP.md`, INV-n): dead pointers, not
+evidence the code is wrong. Where an old doc contradicts the code, the code wins.
 
 **`migration/` is gone** — 140 execution packs, handoffs, phase plans and `phase-status.json`,
-deleted 2026-08-31 once the migration completed. The six files above were pulled out of it
-first, because live code reads or cites them. Comments elsewhere in the tree still say things
+deleted 2026-08-31 once the migration completed. Comments elsewhere in the tree still say things
 like "see `migration/handoffs/U-1.1-20260706.md` for the full reasoning": those pointers are
 dead paths, not missing files — the content is in git (`git show HEAD:<path>` while the
 deletion is still uncommitted; afterwards `git log --diff-filter=D --name-only -- migration/`
 finds the deleting commit and `git show <sha>^:<path>` prints the file). Do not go hunting the
 filesystem for them, and do not treat a dead pointer as evidence the code is wrong.
-
-## The verification gates, after the 2026-08-31 cleanup
-
-`scripts/verify/run_all.php` is the gate runner (`--quick`, or `--gate P<N>`). What survives is
-what can still measure something: `schema`, `inventory`, `orphan`, `slot`, `ledger`,
-`performance`, `invariants`, `regression`. `scripts/ci/nightly.sh` is the daily battery on top
-of it, with an alert-on-red hook.
-
-Deleted 2026-08-31, with the migration they gated: `parity`, `command_parity` and `read` (their
-only input was `reports/shadow/*.jsonl`, which nothing has written since P9 deleted
-`ShadowRunner`), `deadcode` and `deploy_skew` (P9's deletion authority and the check on its
-corpus — both discharged, and both dependent on the `server-debug-deadcode` endpoint removed the
-same day), `prune_shadow_log` and `soak_status` (shadow-log maintenance and soak-streak counting
-for soaks the owner waived). The three `server-debug-*` diagnostics and the orphan
-`debug-motherboard-nics` permission-map entry went with them. `reports/` keeps
-`perf-baseline.json`, `archive/` and the signoff documents; its ~425 generated run artifacts are
-gone. **None of these deletions reached production** — but not for the reason BACKLOG.md B-3 gives.
-`watcher.autoDelete` is on and live (proven 2026-09-16), so a local delete does remove the
-remote file. These particular files survived because they are under `scripts/`, `reports/` and
-`tests/`, which the watcher never uploads in the first place. A deletion anywhere it *does*
-upload will be followed in production, so renames must be additive.

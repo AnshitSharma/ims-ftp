@@ -284,6 +284,12 @@ class PipelineTemplateManager
             }
         }
 
+        // Create's limit. validateTemplate() skips the name on a partial update, so it is
+        // checked here, before anything is written.
+        if (isset($data['name']) && mb_strlen(trim($data['name'])) > 120) {
+            return ['success' => false, 'errors' => ['Name must be 120 characters or less']];
+        }
+
         // Validate only when stages are being replaced; otherwise validate scalars.
         $replacingStages = array_key_exists('stages', $data);
         if ($replacingStages) {
@@ -546,14 +552,15 @@ class PipelineTemplateManager
             }
 
             $type = $stage['assignee_type'] ?? null;
-            $id = $stage['assignee_id'] ?? null;
+            // A positive integer: is_numeric let "2.9" through and insertStages() stored user 2.
+            $id = filter_var($stage['assignee_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
             if (!in_array($type, ['user', 'role'], true)) {
                 $errors[] = "$label: assignee_type must be 'user' or 'role'";
-            } elseif (empty($id) || !is_numeric($id)) {
+            } elseif ($id === false) {
                 $errors[] = "$label: a default owner (assignee_id) is required";
-            } elseif ($type === 'user' && !$this->userExists((int)$id)) {
+            } elseif ($type === 'user' && !$this->userExists($id)) {
                 $errors[] = "$label: assigned user not found";
-            } elseif ($type === 'role' && !$this->roleExists((int)$id)) {
+            } elseif ($type === 'role' && !$this->roleExists($id)) {
                 $errors[] = "$label: assigned role not found";
             }
 

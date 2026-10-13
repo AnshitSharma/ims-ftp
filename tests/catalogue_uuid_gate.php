@@ -18,7 +18,7 @@
  *   data. The gate treats the catalogue as one namespace.
  *
  * Run:  php ims-ftp/tests/catalogue_uuid_gate.php
- * Exit: 0 clean, 1 unexpected duplicates found.
+ * Exit: 0 clean, 1 unexpected duplicates found or a catalogue file missing/unparseable.
  *
  * This file is NOT deployed (tests/ is never uploaded) -- it is a pre-upload check.
  */
@@ -106,9 +106,11 @@ function collect(array $node, string $type, string $trail, array &$seen): void
 }
 
 $fileCount = 0;
+$missing = [];
 foreach ($paths as $type => $path) {
     if (!is_readable($path)) {
         fwrite(STDERR, "MISSING: $type -> $path\n");
+        $missing[] = $type;
         continue;
     }
     $blob = json_decode(file_get_contents($path), true);
@@ -152,6 +154,14 @@ if ($unexpected) {
     }
 
     fwrite(STDERR, sprintf("FAIL: %d unexpected duplicate uuid(s)\n", count($unexpected)));
+    exit(1);
+}
+
+// A file that could not be read was never checked, so it cannot pass. (QA-CX-01: with every
+// path unreadable this once printed OK and exited 0 having scanned 0 files.)
+if ($missing) {
+    fwrite(STDERR, sprintf("FAIL: %d catalogue file(s) missing, not checked: %s\n",
+        count($missing), implode(', ', $missing)));
     exit(1);
 }
 

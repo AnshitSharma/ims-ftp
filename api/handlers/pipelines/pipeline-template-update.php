@@ -22,11 +22,9 @@ try {
 
     RequestHelper::requirePipelinePermission($acl, $user_id, ['pipeline.template_manage'], "Permission denied: pipeline.template_manage required");
 
-    $templateId = $_POST['template_id'] ?? null;
-    if (empty($templateId) || !is_numeric($templateId)) {
-        send_json_response(false, true, 400, "template_id is required and must be numeric", null);
-        exit;
-    }
+    // A positive integer, as template-get/delete require: is_numeric let "23.5" and "2.3e1"
+    // through and the cast below turned them into a different, real type.
+    $templateId = RequestHelper::requireNumeric('template_id', "template_id is required and must be numeric");
 
     $data = [];
     if (array_key_exists('name', $_POST)) {
