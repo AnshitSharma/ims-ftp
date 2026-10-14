@@ -7,7 +7,7 @@ set -euo pipefail
 : "${SSH_HOST:?}" "${SSH_USER:?}" "${SSH_PRIVATE_KEY:?}" "${SSH_KNOWN_HOSTS:?}" "${DEPLOY_PATH:?}"
 DRY_RUN="${DRY_RUN:-0}"
 
-# Mirrors the ignore list in .vscode/sftp.json, plus .github itself.
+# Paths that never deploy: tooling, docs, tests, logs, SQL and this .github folder itself.
 excluded() {
   case "$1" in
     .git/*|.github/*|.vscode/*|node_modules/*|dist/*|.claude/*|claude/*|.codex/*|.agent/*) return 0 ;;
