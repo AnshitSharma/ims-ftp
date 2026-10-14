@@ -104,6 +104,8 @@ abstract class BaseCommand
     protected $actor;
     /** @var int|null null = skip the revision check (legacy adapters); U-A.2 exposes If-Match */
     protected $expectedRevision;
+    /** @var bool true only inside dryRun() -- see assertUnitAtServerLocation() */
+    private $dryRunning = false;
 
     public function __construct(PDO $pdo, string $configUuid, $actor = 0, ?int $expectedRevision = null)
     {
@@ -324,6 +326,19 @@ abstract class BaseCommand
             );
         }
         if ($unitSite !== $serverSite) {
+            // Not a refusal in a DRY RUN. RequestActionExecutor::preflight()
+            // dry-runs a Request's action at submit, and the fix for a part at
+            // another site is a Hardware Handover raised as a prerequisite OF
+            // that Request -- which cannot exist until the Request does. Throwing
+            // here refused every such Request outright (seen live 2026-10-14), so
+            // neither the handover panel nor the post-submit offer could ever
+            // run. execute() never sets the flag: approval still refuses until
+            // the part has been moved. Returning rather than throwing also lets
+            // the dry run reach the compatibility check, so an incompatible part
+            // is still refused before anyone carries it anywhere.
+            if ($this->dryRunning) {
+                return;
+            }
             $where = trim((string)($inventoryData['Location'] ?? '')) ?: 'another site';
             throw new CommandFailed(
                 'location_mismatch',
@@ -423,7 +438,9 @@ abstract class BaseCommand
      * @return Verdict
      * @throws CommandFailed if the config isn't found / StateGuard blocks /
      *         revision mismatches — the same fail-closed failures execute()
-     *         would raise before ever reaching evaluate()
+     *         would raise before ever reaching evaluate(). The one exception is
+     *         a unit at another site, which a dry run lets through: see
+     *         assertUnitAtServerLocation().
      */
     final public function dryRun(): Verdict
     {
@@ -432,6 +449,7 @@ abstract class BaseCommand
             $this->pdo->beginTransaction();
         }
         try {
+            $this->dryRunning = true;
             $lockedRow = $this->lockAndLoadConfigRow();
             if ($lockedRow === null) {
                 throw new CommandFailed('config_not_found', "Configuration {$this->configUuid} not found", 404);
@@ -446,6 +464,7 @@ abstract class BaseCommand
             $target = $this->buildTarget($current, $lockedRow);
             $verdict = (new ValidationEngine())->evaluate($target, $this->trigger());
         } finally {
+            $this->dryRunning = false;
             if ($ownTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
