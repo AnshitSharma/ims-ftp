@@ -42,8 +42,25 @@ printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
 chmod 600 ~/.ssh/deploy_key
 printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-tar -czf - -C "$stage" . | ssh -i ~/.ssh/deploy_key \
-  -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-  "$SSH_USER@$SSH_HOST" \
-  'd=$(mktemp -d "$HOME/.deploy-tmp.XXXXXX") || exit 1; tar -xzf - -C "$d" && bash "$d/apply.sh" "$d"; rc=$?; rm -rf "$d"; exit $rc'
+bundle="$(mktemp)"
+tar -czf "$bundle" -C "$stage" .
+
+# The server resets new SSH connections for a while after recent ones ("kex_exchange_identification:
+# Connection reset"). ssh exits 255 only for connection failures, and apply.sh is safe to rerun
+# because it compares bytes, so retry those with growing waits.
+for attempt in 1 2 3 4 5; do
+  rc=0
+  ssh -i ~/.ssh/deploy_key \
+    -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+    "$SSH_USER@$SSH_HOST" \
+    'd=$(mktemp -d "$HOME/.deploy-tmp.XXXXXX") || exit 1; tar -xzf - -C "$d" && bash "$d/apply.sh" "$d"; rc=$?; rm -rf "$d"; exit $rc' \
+    < "$bundle" || rc=$?
+  [ "$rc" -ne 255 ] && exit "$rc"
+  [ "$attempt" -eq 5 ] && break
+  wait=$((attempt * 30))
+  echo "ssh connection failed (attempt $attempt of 5), retrying in ${wait}s"
+  sleep "$wait"
+done
+echo "could not connect to the server after 5 attempts"
+exit 255
