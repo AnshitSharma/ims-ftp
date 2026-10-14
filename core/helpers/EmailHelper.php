@@ -2,9 +2,14 @@
 /**
  * EmailHelper - Utility for sending emails
  *
- * Uses PHP's native mail() function for zero-dependency email delivery.
- * Requires server to have sendmail/postfix configured.
+ * Sends through GraphMailer, so the reset email goes out via Microsoft Graph
+ * once MAIL_SENDER_UPN is set and via PHP mail() until then. If GraphMailer
+ * cannot be loaded, it calls mail() directly.
  */
+if (is_readable(__DIR__ . '/GraphMailer.php')) {
+    require_once(__DIR__ . '/GraphMailer.php');
+}
+
 class EmailHelper {
     /**
      * Send password reset email to user
@@ -22,18 +27,25 @@ class EmailHelper {
 
         $htmlBody = self::getPasswordResetEmailTemplate($username, $resetLink);
 
-        $headers = "MIME-Version: 1.0\r\n";
-        $headers .= "Content-type: text/html; charset=UTF-8\r\n";
-        $headers .= "From: {$fromName} <{$fromAddress}>\r\n";
+        $error = null;
+        if (class_exists('GraphMailer') && method_exists('GraphMailer', 'sendHtml')) {
+            list($success, $error) = GraphMailer::sendHtml($email, $subject, $htmlBody);
+        } else {
+            $headers = "MIME-Version: 1.0\r\n";
+            $headers .= "Content-type: text/html; charset=UTF-8\r\n";
+            $headers .= "From: {$fromName} <{$fromAddress}>\r\n";
 
-        $success = mail($email, $subject, $htmlBody, $headers);
+            $success = mail($email, $subject, $htmlBody, $headers);
+        }
 
         // Outcome only. This used to log the recipient address AND the reset
         // link itself (2026-09-13): anyone who could read the error log held a
         // working, unexpired account-takeover link for every reset requested.
+        // GraphMailer's error is a status and code, never the link.
         error_log(sprintf(
-            "[EmailHelper] Password reset email %s",
-            $success ? 'sent' : 'FAILED'
+            "[EmailHelper] Password reset email %s%s",
+            $success ? 'sent' : 'FAILED',
+            $error ? " ($error)" : ''
         ));
 
         return $success;

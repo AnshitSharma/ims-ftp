@@ -11,8 +11,8 @@
  * The token is fetched once per PHP request and held in memory only. It is not
  * cached to disk: unlike the JWKS, it is a credential.
  *
- * Fallback: with MAIL_SENDER_UPN unset, mail() -- the same transport the
- * password-reset email already uses.
+ * Fallback: with MAIL_SENDER_UPN unset, mail(). The password-reset email goes
+ * through sendHtml(), so it follows whichever transport is configured.
  *
  * @package BDC_IMS
  * @subpackage Helpers
@@ -48,7 +48,17 @@ class GraphMailer
      */
     public static function send($to, $subject, $title, $body, $link = null)
     {
-        $html = self::template($title, $body, $link);
+        return self::sendHtml($to, $subject, self::template($title, $body, $link));
+    }
+
+    /**
+     * Send ready-made HTML through the same transport -- for an email that
+     * needs its own template, such as the password reset.
+     *
+     * @return array [bool ok, string|null error]
+     */
+    public static function sendHtml($to, $subject, $html)
+    {
         return self::usesGraph()
             ? self::sendViaGraph($to, $subject, $html)
             : self::sendViaMail($to, $subject, $html);
